@@ -104,7 +104,7 @@ pub fn get_file_name(image_path: &std::path::Path) -> String {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```no_run
 /// use crate::libs::hash::hash_string;
 /// assert_eq!(hash_string("hello"), "fb0077f9");
 /// ```

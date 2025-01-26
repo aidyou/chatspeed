@@ -91,8 +91,10 @@ pub async fn run() -> Result<()> {
         .plugin(tauri_plugin_autostart::init(
             #[cfg(target_os = "macos")]
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            #[cfg(not(target_os = "macos"))]
-            (), // for Windows and Linux
+            #[cfg(target_os = "linux")]
+            tauri_plugin_autostart::LinuxLauncher::SystemdUser,
+            #[cfg(target_os = "windows")]
+            tauri_plugin_autostart::WindowsLauncher::Startup,
             None::<Vec<&str>>,
         ))
         .plugin(tauri_plugin_dialog::init())

@@ -76,12 +76,9 @@ pub async fn fix_window_visual(
 /// - `app`: A reference to the Tauri application handle.
 ///
 /// # Example
-///
-/// This function is typically triggered by a global shortcut (e.g., Alt+X) as shown below:
-///
-/// ```rust
-/// // Triggered by the global shortcut handler
-/// toggle_assistant_window(app);
+/// ```no_run
+/// use tauri::App;
+/// toggle_assistant_window(&app);
 /// ```
 pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     let window_label = "assistant";

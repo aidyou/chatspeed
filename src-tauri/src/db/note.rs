@@ -293,13 +293,10 @@ impl MainStore {
     /// - `Err(StoreError)`: If there was an error executing the database query.
     ///
     /// # Example
-    ///
-    /// ```rust
+    /// ```no_run
+    /// use crate::db::MainStore;
     /// let store = MainStore::new()?;
-    /// let notes = store.search_notes("rust programming")?;
-    /// for note in notes {
-    ///     println!("Found note: {}", note.title);
-    /// }
+    /// let notes = store.search_notes("keyword")?;
     /// ```
     pub fn search_notes(&self, kw: &str) -> Result<Vec<Note>, StoreError> {
         let mut stmt = self

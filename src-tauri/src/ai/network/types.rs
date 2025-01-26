@@ -23,7 +23,7 @@ impl ApiConfig {
     /// Creates a new ApiConfig with minimal required parameters
     ///
     /// # Example
-    /// ```
+    /// ```no_run
     /// let config = ApiConfig::new(
     ///     Some("https://api.example.com"),
     ///     Some("your-api-key"),
