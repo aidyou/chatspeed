@@ -1,0 +1,136 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "chatspeed",
+  "version": "0.1.0",
+  "identifier": "ai.aidyou.chatspeed",
+  "build": {
+    "beforeDevCommand": "yarn dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "yarn build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "ChatSpeed",
+        "url": "/",
+        "width": 800,
+        "minWidth": 450,
+        "height": 600,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "dragDropEnabled": true,
+        "transparent": true,
+        "hiddenTitle": true,
+        "create": true
+      },
+      {
+        "label": "note",
+        "title": "Notes",
+        "url": "/note",
+        "width": 1024,
+        "minWidth": 600,
+        "height": 600,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "dragDropEnabled": true,
+        "transparent": true,
+        "hiddenTitle": true,
+        "create": false
+      },
+      {
+        "label": "assistant",
+        "title": "Assistant",
+        "url": "/assistant",
+        "width": 400,
+        "minWidth": 400,
+        "height": 500,
+        "minHeight": 400,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "create": true
+      },
+      {
+        "label": "toolbar",
+        "title": "Toolbar",
+        "url": "/toolbar",
+        "width": 300,
+        "height": 50,
+        "titleBarStyle": "Overlay",
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "create": false
+      },
+      {
+        "label": "settings",
+        "title": "",
+        "url": "/settings",
+        "width": 650,
+        "maxWidth": 650,
+        "minWidth": 650,
+        "height": 700,
+        "minHeight": 600,
+        "minimizable": false,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "transparent": true,
+        "skipTaskbar": true,
+        "create": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "copyright": "",
+    "category": "DeveloperTool",
+    "shortDescription": "",
+    "longDescription": "",
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://cdn.jsdelivr.net/gh/aidyou/chatspeed/releases/{{target}}/{{current_version}}",
+        "https://github.com/aidyou/chatspeed/releases/download/{{current_version}}/{{target}}",
+        "https://releases.aidyou.ai/chatspeed/{{target}}/{{current_version}}"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBNjhFQzBGNjVCNzE2Q0EKUldUS0ZyZGxEK3hvS25xRUZPaStNL2FyUkhpdmtrN0QwN0VycXF6L1dZdGc0ZnE5WVRQWkZFK0QK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

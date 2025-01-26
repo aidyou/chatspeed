@@ -1,0 +1,669 @@
+@font-face {
+  font-family: "chatspeed"; /* Project id 4710661 */
+  src: url('@/components/icon/iconfont.woff2') format('woff2');
+}
+
+.chatspeed {
+  font-family: "chatspeed" !important;
+  font-size: 16px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.cs-link:before {
+  content: "\e682";
+}
+
+.cs-double-arrow-down:before {
+  content: "\e642";
+}
+
+.cs-note:before {
+  content: "\e63c";
+}
+
+.cs-minimize:before {
+  content: "\e640";
+}
+
+.cs-fullscreen-off:before {
+  content: "\e686";
+}
+
+.cs-fullscreen:before {
+  content: "\e685";
+}
+
+.cs-close:before {
+  content: "\e6a5";
+}
+
+.cs-assistant:before {
+  content: "\e6d0";
+}
+
+.cs-quit:before {
+  content: "\e7e5";
+}
+
+.cs-skill-plan1:before {
+  content: "\e6f1";
+}
+
+.cs-skill-plan:before {
+  content: "\e68c";
+}
+
+.cs-skill-plan2:before {
+  content: "\e665";
+}
+
+.cs-skill-plan3:before {
+  content: "\e711";
+}
+
+.cs-ai-grok:before {
+  content: "\e602";
+}
+
+.cs-download:before {
+  content: "\e7ea";
+}
+
+.cs-enter:before {
+  content: "\e6ca";
+}
+
+.cs-enter1:before {
+  content: "\e62b";
+}
+
+.cs-quote:before {
+  content: "\e67d";
+}
+
+.cs-resend:before {
+  content: "\e6f7";
+}
+
+.cs-reply:before {
+  content: "\ea18";
+}
+
+.cs-ai-midjourney:before {
+  content: "\e6e4";
+}
+
+.cs-ai-minimax:before {
+  content: "\e6be";
+}
+
+.cs-ai-common:before {
+  content: "\e636";
+}
+
+.cs-ai-baichuan:before {
+  content: "\e68f";
+}
+
+.cs-ai-deepseek:before {
+  content: "\e6bf";
+}
+
+.cs-ai-moonshot:before {
+  content: "\e693";
+}
+
+.cs-ai-gpt:before {
+  content: "\e634";
+}
+
+.cs-upload-image:before {
+  content: "\e61b";
+}
+
+.cs-favourite1:before {
+  content: "\e68d";
+}
+
+.cs-menu:before {
+  content: "\e678";
+}
+
+.cs-logo-groq:before {
+  content: "\e606";
+}
+
+.cs-trash:before {
+  content: "\e61a";
+}
+
+.cs-search:before {
+  content: "\e633";
+}
+
+.cs-favourite-fill:before {
+  content: "\e659";
+}
+
+.cs-favourite:before {
+  content: "\e68e";
+}
+
+.cs-delete:before {
+  content: "\e651";
+}
+
+.cs-error:before {
+  content: "\e7a5";
+}
+
+.cs-ai-chatglm:before {
+  content: "\e74d";
+}
+
+.cs-ai-baai:before {
+  content: "\e619";
+}
+
+.cs-stop:before {
+  content: "\e637";
+}
+
+.cs-loading:before {
+  content: "\e891";
+}
+
+.cs-check:before {
+  content: "\e620";
+}
+
+.cs-send:before {
+  content: "\e705";
+}
+
+.cs-skill-chat:before {
+  content: "\e64e";
+}
+
+.cs-skill-ask-square:before {
+  content: "\e6a4";
+}
+
+.cs-skill-chat1:before {
+  content: "\e8be";
+}
+
+.cs-skill-ask-circle:before {
+  content: "\e630";
+}
+
+.cs-skill-chat-square:before {
+  content: "\e68a";
+}
+
+.cs-skill-mindmap-circle:before {
+  content: "\e664";
+}
+
+.cs-skill-chat-fill:before {
+  content: "\e645";
+}
+
+.cs-skill-chat3:before {
+  content: "\e647";
+}
+
+.cs-skill-chat-square1:before {
+  content: "\e632";
+}
+
+.cs-skill-mindmap-left:before {
+  content: "\e6f6";
+}
+
+.cs-skill-mindmap-right:before {
+  content: "\e773";
+}
+
+.cs-skill-mindmap-line:before {
+  content: "\ea4d";
+}
+
+.cs-skill-pie-chart-square:before {
+  content: "\e63e";
+}
+
+.cs-skill-write1:before {
+  content: "\e611";
+}
+
+.cs-skill-code-json:before {
+  content: "\e7bd";
+}
+
+.cs-skill-code-shell:before {
+  content: "\e644";
+}
+
+.cs-skill-write-circle:before {
+  content: "\e697";
+}
+
+.cs-skill-chart-area:before {
+  content: "\e7af";
+}
+
+.cs-skill-chart-spider:before {
+  content: "\e7dc";
+}
+
+.cs-skill-code-java:before {
+  content: "\f1d7";
+}
+
+.cs-skill-code-php:before {
+  content: "\e787";
+}
+
+.cs-skill-code-css:before {
+  content: "\e612";
+}
+
+.cs-skill-code-jsx:before {
+  content: "\e614";
+}
+
+.cs-skill-chart-linebar:before {
+  content: "\e61f";
+}
+
+.cs-skill-relation-chart:before {
+  content: "\e78d";
+}
+
+.cs-skill-code-html-square:before {
+  content: "\e63f";
+}
+
+.cs-skill-pie-chart-hollow:before {
+  content: "\e615";
+}
+
+.cs-skill-chart-spider1:before {
+  content: "\e617";
+}
+
+.cs-skill-terminal:before {
+  content: "\e616";
+}
+
+.cs-skill-write-pen:before {
+  content: "\e641";
+}
+
+.cs-skill-code-python:before {
+  content: "\e730";
+}
+
+.cs-skill-code-shell-fill:before {
+  content: "\e631";
+}
+
+.cs-logo-write:before {
+  content: "\e660";
+}
+
+.cs-skill-code-go:before {
+  content: "\e62d";
+}
+
+.cs-skill-code-js:before {
+  content: "\e63b";
+}
+
+.cs-skill-code-html:before {
+  content: "\e618";
+}
+
+.cs-skill-code-go1:before {
+  content: "\eba6";
+}
+
+.cs-skill-chart-bar:before {
+  content: "\e667";
+}
+
+.cs-skill-piechart:before {
+  content: "\e668";
+}
+
+.cs-skill-piechart1:before {
+  content: "\e677";
+}
+
+.cs-skill-write-paper:before {
+  content: "\e600";
+}
+
+.cs-skill-write-paper1:before {
+  content: "\e6ec";
+}
+
+.cs-skill-code-java-square:before {
+  content: "\e623";
+}
+
+.cs-skill-code-rust-square:before {
+  content: "\e624";
+}
+
+.cs-skill-code-php-square:before {
+  content: "\e625";
+}
+
+.cs-skill-code-js-square:before {
+  content: "\e627";
+}
+
+.cs-skill-write-paper2:before {
+  content: "\e628";
+}
+
+.cs-skill-code-shell-square:before {
+  content: "\e629";
+}
+
+.cs-skill-code-python1:before {
+  content: "\e63a";
+}
+
+.cs-skill-code-rust:before {
+  content: "\ec1c";
+}
+
+.cs-skill-piechart2:before {
+  content: "\e826";
+}
+
+.cs-skill-chart-bar-axis:before {
+  content: "\e827";
+}
+
+.cs-skill-chart-bar-horizontal:before {
+  content: "\e62a";
+}
+
+.cs-skill-write-paper-fill:before {
+  content: "\e62e";
+}
+
+.cs-skill-terminal1:before {
+  content: "\e830";
+}
+
+.cs-skill-code-vue:before {
+  content: "\eaf3";
+}
+
+.cs-skill-format-txt:before {
+  content: "\e736";
+}
+
+.cs-skill-translation1:before {
+  content: "\e61c";
+}
+
+.cs-skill-format1:before {
+  content: "\e6d2";
+}
+
+.cs-skill-format2:before {
+  content: "\e7a3";
+}
+
+.cs-microphone:before {
+  content: "\e62f";
+}
+
+.cs-skill-code:before {
+  content: "\e62c";
+}
+
+.cs-skill-code1:before {
+  content: "\e60e";
+}
+
+.cs-skill-translation2:before {
+  content: "\e61d";
+}
+
+.cs-skill-code2:before {
+  content: "\e6a7";
+}
+
+.cs-skill-format3:before {
+  content: "\e7f8";
+}
+
+.cs-skill-translate2:before {
+  content: "\e699";
+}
+
+.cs-skill-code3:before {
+  content: "\e643";
+}
+
+.cs-skill-translate3:before {
+  content: "\e65d";
+}
+
+.cs-skill-translation4:before {
+  content: "\e61e";
+}
+
+.cs-skill-code4:before {
+  content: "\e638";
+}
+
+.cs-skill-translation5:before {
+  content: "\ea53";
+}
+
+.cs-skill-formatsize:before {
+  content: "\e873";
+}
+
+.cs-skill-textformat:before {
+  content: "\e789";
+}
+
+.cs-skill-format:before {
+  content: "\e6da";
+}
+
+.cs-skill-tts:before {
+  content: "\e626";
+}
+
+.cs-skill-ocr-idcard:before {
+  content: "\e772";
+}
+
+.cs-skill-ocr-card:before {
+  content: "\e777";
+}
+
+.cs-skill-ocr-briefcase:before {
+  content: "\e77b";
+}
+
+.cs-skil-ocr-file:before {
+  content: "\e780";
+}
+
+.cs-skill-ocr-sim:before {
+  content: "\e796";
+}
+
+.cs-skill-tts-ts:before {
+  content: "\e79b";
+}
+
+.cs-skill-ocr:before {
+  content: "\e658";
+}
+
+.cs-edit:before {
+  content: "\e622";
+}
+
+.cs-new-chat:before {
+  content: "\e6d1";
+}
+
+.cs-caret-right:before {
+  content: "\e6b9";
+}
+
+.cs-add:before {
+  content: "\e673";
+}
+
+.cs-skill-write:before {
+  content: "\e60d";
+}
+
+.cs-skill:before {
+  content: "\e72a";
+}
+
+.cs-sound:before {
+  content: "\e60f";
+}
+
+.cs-about:before {
+  content: "\e635";
+}
+
+.cs-setting:before {
+  content: "\e621";
+}
+
+.cs-model:before {
+  content: "\e66e";
+}
+
+.cs-pin:before {
+  content: "\e755";
+}
+
+.cs-caret-down:before {
+  content: "\e6b8";
+}
+
+.cs-cut:before {
+  content: "\e6e3";
+}
+
+.cs-privacy:before {
+  content: "\e639";
+}
+
+.cs-copy:before {
+  content: "\e610";
+}
+
+.cs-sidebar:before {
+  content: "\ef19";
+}
+
+.cs-switch:before {
+  content: "\12615";
+}
+
+.cs-skill-translate:before {
+  content: "\e613";
+}
+
+.cs-ai-llama:before {
+  content: "\e60b";
+}
+
+.cs-ai-stable-diffusion:before {
+  content: "\e60c";
+}
+
+.cs-ai-gemma:before {
+  content: "\e605";
+}
+
+.cs-ai-yi:before {
+  content: "\e607";
+}
+
+.cs-ai-internlm:before {
+  content: "\e608";
+}
+
+.cs-ai-flux:before {
+  content: "\e609";
+}
+
+.cs-ai-phi:before {
+  content: "\e604";
+}
+
+.cs-ai-moondream:before {
+  content: "\e603";
+}
+
+.cs-ai-cohere:before {
+  content: "\e6bd";
+}
+
+.cs-ai-qwen:before {
+  content: "\e63d";
+}
+
+.cs-ai-deepL:before {
+  content: "\e6e2";
+}
+
+.cs-ai-360:before {
+  content: "\e674";
+}
+
+.cs-ai-xinghuo:before {
+  content: "\e672";
+}
+
+.cs-ai-ollama:before {
+  content: "\e675";
+}
+
+.cs-ai-doubao:before {
+  content: "\e65c";
+}
+
+.cs-ai-claude:before {
+  content: "\e735";
+}
+
+.cs-ai-yiyan:before {
+  content: "\e69c";
+}
+
+.cs-ai-gemini:before {
+  content: "\e601";
+}
+
+.cs-ai-hunyuan:before {
+  content: "\e60a";
+}
+
+.cs-ai-mixtral:before {
+  content: "\e6bc";
+}
+

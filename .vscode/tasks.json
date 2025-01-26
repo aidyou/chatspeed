@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "prepare-debug",
+      "type": "shell",
+      "command": "make prepare-debug",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "start-dev-server",
+      "type": "shell",
+      "command": "yarn dev",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*VITE.*",
+          "endsPattern": ".*ready in.*"
+        }
+      }
+    },
+    {
+      "label": "debug-environment",
+      "dependsOrder": "sequence",
+      "dependsOn": ["prepare-debug", "start-dev-server"],
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+- In production code, avoid using `unwrap` or `expect`, as they may cause a panic. Instead, return an appropriate error. These methods are acceptable in test code.
+- Manage all prompt information using i18n; do not hardcode strings directly into Rust code.
+- The `mod.rs` file is only for defining and exporting modules.
+- Trait definitions in Rust should be placed in `traits.rs`, and struct definitions can be placed in `types.rs` if there are many.
+- There is a significant difference between Tauri v1 and v2. Currently, we are using Tauri v2, so refer to the Tauri v2 documentation before generating code.
+- After generating code, carefully review the Rust code syntax. Ensure it adheres to proper lifetimes and variable usage to avoid errors.
+- The project frontend uses Vue 3, and the Vue pages should follow the Composition API approach.
+- Prefer using a `<script setup>` style within the Vue pages.
+- Use Yarn as the package manager for frontend development. When providing package installation instructions, use Yarn commands.
+- The frontend UI framework uses Element Plus, so styles should be implemented using Element Plus components and classes.
+- CSS code should use SCSS nested syntax to ensure a clearer and more organized structure.
+- Generate method, function, and code block comments in English. **Avoid starting comments with phrases like "this function" or "this class"**! Ensure comments are clear and concise, providing context and explanations where necessary.
+- Please do not remove necessary comments from the original code.
+- All comments, including code comments, must be in English.

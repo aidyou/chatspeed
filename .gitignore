@@ -1,0 +1,51 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# element-plus forward scss
+style/element/*.css
+dev_data/
+
+# Python
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+src-tauri/src/workflow-old/
+src-tauri/src/ai/chat/bak/
+plugin_review.md
+
+# temp files or folder
+*.bak
+test/
+
+docs/
+src-tauri/src/workflow
+src-tauri/src/plugins

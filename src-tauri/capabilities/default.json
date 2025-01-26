@@ -1,0 +1,73 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main",
+    "assistant",
+    "toolbar",
+    "settings",
+    "note"
+  ],
+  "permissions": [
+    "autostart:allow-disable",
+    "autostart:allow-enable",
+    "autostart:allow-is-enabled",
+    "core:default",
+    "core:window:allow-center",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-is-maximized",
+    "core:window:allow-is-minimized",
+    "core:window:allow-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-show",
+    "core:window:allow-start-dragging",
+    "core:window:allow-unmaximize",
+    "core:window:allow-unminimize",
+    "core:window:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "fs:allow-download-write-recursive",
+    "fs:allow-download-write",
+    "fs:allow-write-file",
+    "shell:allow-open"
+  ],
+  "plugins": {
+    "fs": {
+      "scope": [
+        "**/*"
+      ]
+    }
+  },
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APP/*",
+          "$APPDATA/*",
+          "$LOCALAPPDATA/*"
+        ]
+      },
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: ipc: http://ipc.localhost asset: http://asset.localhost blob:; img-src 'self' data: asset: http://asset.localhost blob: canvas-blob:; connect-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; canvas-src 'self' blob: data:;"
+    }
+  },
+  "macOS": {
+    "entitlements": {
+      "com.apple.security.automation.apple-events": true,
+      "com.apple.security.temporary-exception.apple-events": [
+        "com.apple.systempreferences"
+      ],
+      "com.apple.security.accessibility": true,
+      "com.apple.security.screen-capture": true
+    },
+    "info": {
+      "NSAccessibilityUsageDescription": "Required for monitoring text selection",
+      "NSScreenCaptureUsageDescription": "Required for screen capture functionality"
+    }
+  }
+}

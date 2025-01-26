@@ -1,0 +1,99 @@
+[package]
+name        = "chatspeed"
+version     = "0.1.0"
+description = "Quickly solve problems with the help of AI"
+authors     = ["Ezool Network"]
+edition     = "2021"
+build       = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name       = "chatspeed_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+anyhow                       = "1.0.95"
+async-trait                  = "0.1.85"
+base64                       = "0.22.1"
+bytes                        = "1.9.0"
+chrono                       = "0.4.39"
+dashmap                      = "6.1.0"
+dirs                         = "6.0"
+futures                      = { version = "0.3", features = ["std"] }
+futures-util                 = "0.3"
+global-hotkey                = "0.6.2"
+image                        = "0.25.5"
+lazy_static                  = "1.4"
+locale_config                = "0.3.0"
+log                          = "0.4.25"
+parking_lot                  = "0.12"
+phf                          = "0.11.3"
+regex                        = "1.10.3"
+reqwest                      = { version = "0.12.11", features = ["blocking", "stream", "multipart", "cookies"] }
+rusqlite                     = { version = "0.32", features = ["bundled", "backup"] }
+rust-i18n                    = "3.1.2"
+scraper                      = "0.22.0"
+semver                       = "1.0"
+serde                        = { version = "1.0.217", features = ["derive"] }
+serde_json                   = "1.0.135"
+serde_yaml                   = "0.9.34-deprecated"
+sha2                         = "0.10"
+simplelog                    = "0.12"
+tauri                        = { version = "2.2.2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-dialog          = "2.2"
+tauri-plugin-fs              = "2.2"
+tauri-plugin-global-shortcut = "2.2"
+tauri-plugin-shell           = "2.2"
+tauri-plugin-updater         = "2.2"
+time                         = { version = "0.3", features = ["formatting"] }
+thiserror                    = "2.0.11"
+tokio                        = { version = "1.43", features = ["full"] }
+tracing                      = "0.1.41"
+arboard                      = "3.3"
+tracing-subscriber           = { version = "0.3.19", features = ["env-filter"] }
+url                          = "2.5.4"
+uuid                         = { version = "1.12", features = ["v4"] }
+walkdir                      = "2.4.0"
+warp                         = "0.3.7"
+whatlang                     = "0.16.4"
+xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
+zip                          = "2.2.2"
+# uncomment when deno and python runtime is ready
+# deno_core                    = { version = "0.331", default-features = false }
+# pyo3                         = { version = "0.23.3", features = ["auto-initialize"] }
+# v8                           = { version = "130.0.1", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(unix)'.dependencies]
+# Linux/macOS 特定依赖
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2.2.0"
+
+# [target.'cfg(target_os = "macos")'.dependencies]
+# snap_rs = { path = "../../snap_rs" }
+
+# [target.'cfg(target_os = "windows")'.dependencies]
+# snap_rs = { path = "../../snap_rs" }
+
+# [target.'cfg(target_os = "linux")'.dependencies]
+# snap_rs = { path = "../../snap_rs" }
+
+# [features]
+# x11     = ["snap_rs/x11"]
+# wayland = ["snap_rs/wayland"]
+
+[target.'cfg(windows)'.build-dependencies]
+vcpkg = "0.2"
+
+[dev-dependencies]
+tempfile = "3.15.0"
