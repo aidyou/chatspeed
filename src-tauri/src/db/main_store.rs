@@ -146,7 +146,7 @@ impl MainStore {
             let app_local_data_dir = _app
                 .path()
                 .app_data_dir()
-                .expect(t!("db.failed_to_get_app_data_dir").into());
+                .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
             std::fs::create_dir_all(&app_local_data_dir)
                 .map_err(|e| StoreError::StringError(e.to_string()))?;
             app_local_data_dir.join("chatspeed.db")
@@ -384,7 +384,7 @@ impl MainStore {
             let app_local_data_dir = _app
                 .path()
                 .app_data_dir()
-                .expect(t!("db.failed_to_get_app_data_dir").into());
+                .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
             std::fs::create_dir_all(&app_local_data_dir)
                 .map_err(|e| StoreError::StringError(e.to_string()))?;
             app_local_data_dir

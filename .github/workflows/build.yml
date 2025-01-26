@@ -14,100 +14,24 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS
-          - platform: macos-latest
-            target: universal-apple-darwin
-            os: macos
-
-          # Windows
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            os: windows
-
-          # Ubuntu
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            os: ubuntu
-            container: ubuntu:latest
-
-          # Debian
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            os: debian
-            container: debian:stable
-
-          # Fedora
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            os: fedora
-            container: fedora:latest
-
-          # Arch Linux
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            os: arch
-            container: archlinux:latest
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
 
     runs-on: ${{ matrix.platform }}
-    container: ${{ matrix.container }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        if: matrix.os != 'windows' && matrix.os != 'macos'
-        shell: bash
-        run: |
-          case "${{ matrix.os }}" in
-            "ubuntu"|"debian")
-              apt-get update
-              apt-get install -y curl build-essential libssl-dev pkg-config libgtk-3-dev \
-                libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf \
-                libsqlite3-dev libbz2-dev rsync
-              ;;
-            "fedora")
-              dnf -y update
-              dnf -y groupinstall "Development Tools"
-              dnf -y install gtk3-devel webkit2gtk3-devel libappindicator-gtk3-devel librsvg2-devel \
-                patchelf openssl-devel sqlite-devel bzip2-devel rsync
-              ;;
-            "arch")
-              pacman -Syu --noconfirm
-              pacman -S --noconfirm base-devel gtk3 webkit2gtk libappindicator-gtk3 librsvg patchelf openssl sqlite rsync
-              ;;
-          esac
-
-      # Add Windows SQLite3 support
-      - name: Install Windows SQLite3
-        if: matrix.os == 'windows'
-        shell: bash
-        run: |
-          # install vcpkg
-          git clone https://github.com/microsoft/vcpkg
-          ./vcpkg/bootstrap-vcpkg.bat
-          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
-          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
-
-      # Add macOS SQLite3 support (usually pre-installed, but ensure it's there)
-      - name: Install macOS SQLite3
-        if: matrix.os == 'macos'
-        run: |
-          brew install sqlite3 bzip2 rsync
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -115,16 +39,54 @@ jobs:
           node-version: 'lts/*'
           cache: 'yarn'
 
-      - name: Install frontend dependencies
-        run: yarn install --frozen-lockfile
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Prepare i18n files
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
-          mkdir -p src/i18n/locales
-          cp src-tauri/i18n/available_language.json src/i18n/locales/copy_from_rust_src_i18n.json
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libsqlite3-dev libbz2-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew install sqlite3 bzip2
+          echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
+          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix sqlite3)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include" >> $GITHUB_ENV
+
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg
+          ./vcpkg/bootstrap-vcpkg.bat
+          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
+          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
+          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
+          echo "SQLITE3_DIR=$GITHUB_WORKSPACE/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
+          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
+
+      - name: Run tests
+        working-directory: ./src-tauri
+        run: cargo test
+
+      - name: Install frontend dependencies
+        run: yarn install
 
       - name: Build the app
-        uses: tauri-apps/tauri-action@v0.4.4
+        uses: tauri-apps/tauri-action@v0.5.19
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -141,13 +103,4 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
-          args: --target ${{ matrix.target }}
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Run tests
-        run: cargo test
+          args: ${{ matrix.args }}
