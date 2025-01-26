@@ -59,7 +59,8 @@ jobs:
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
-          brew install sqlite3 bzip2
+          brew list sqlite3 || brew install sqlite3
+          brew list bzip2 || brew install bzip2
           echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
           echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
           echo "LDFLAGS=-L$(brew --prefix sqlite3)/lib" >> $GITHUB_ENV
@@ -76,11 +77,13 @@ jobs:
           git clone https://github.com/microsoft/vcpkg
           ./vcpkg/bootstrap-vcpkg.bat
           ./vcpkg/vcpkg integrate install
-          ./vcpkg/vcpkg install sqlite3:x64-windows
-          ./vcpkg/vcpkg install bzip2:x64-windows
+          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
+          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $GITHUB_ENV
-          echo "VCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg/installed" >> $GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
+          echo "SQLITE3_DIR=$GITHUB_WORKSPACE/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
+          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
 
       - name: Run tests
         working-directory: ./src-tauri
