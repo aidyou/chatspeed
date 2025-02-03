@@ -9,15 +9,10 @@ fn main() {
     println!("cargo:warning=Build script is running on Windows");
 
     // Use vcpkg to find the sqlite3 library
-    match vcpkg::find_package("sqlite3") {
-        Ok(_) => {
-            println!("cargo:warning=Successfully found sqlite3 via vcpkg");
-        }
-        Err(e) => {
-            println!("cargo:warning=Failed to find sqlite3: {}", e);
-            panic!("Failed to find sqlite3 via vcpkg: {}", e);
-        }
-    }
+    let mut config = vcpkg::Config::new();
+    config.target_triplet("x64-windows-static-md");
+    let lib = config.find_package("sqlite3").unwrap();
+    println!("cargo:warning=Successfully found sqlite3 via vcpkg");
 
     // Use vcpkg to manage bzip2 dependency
     vcpkg::find_package("bzip2").unwrap();
