@@ -4,9 +4,27 @@ on:
   push:
     tags:
       - 'v*'
-    branches: [main]
-  pull_request:
-    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        type: choice
+        required: true
+        default: 'test'
+        options:
+          - test
+          - release
+      platform:
+        description: 'Target platform (leave empty for all platforms)'
+        type: choice
+        required: false
+        default: 'all'
+        options:
+          - all
+          - linux
+          - macos
+          - windows
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,42 +40,70 @@ jobs:
         include:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
+            type: 'macos'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
+            type: 'macos'
           - platform: 'ubuntu-22.04'
             args: ''
+            type: 'linux'
           - platform: 'windows-latest'
             args: ''
+            type: 'windows'
 
     runs-on: ${{ matrix.platform }}
+
     steps:
+      - name: Check if should run
+        id: should_run
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]] || \
+             [[ "${{ github.event_name }}" == "workflow_dispatch" && \
+                ("${{ github.event.inputs.platform }}" == "all" || \
+                 "${{ github.event.inputs.platform }}" == "${{ matrix.type }}") ]]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
       - uses: actions/checkout@v4
+        if: steps.should_run.outputs.run == 'true'
 
       - name: Setup Node
+        if: steps.should_run.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
           cache: 'yarn'
 
       - name: Install Rust
+        if: steps.should_run.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust Cache
+        if: steps.should_run.outputs.run == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libsqlite3-dev libbz2-dev
+            libsqlite3-dev libbz2-dev rpm libfuse2 fuse squashfs-tools
+
+      - name: Setup AppImage tools (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
+        run: |
+          sudo wget -O /usr/local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
 
       - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos-latest'
+        if: matrix.platform == 'macos-latest' && steps.should_run.outputs.run == 'true'
         run: |
           brew list sqlite3 || brew install sqlite3
           brew list bzip2 || brew install bzip2
@@ -71,7 +117,7 @@ jobs:
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install dependencies (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: bash
         run: |
           git clone https://github.com/microsoft/vcpkg
@@ -87,13 +133,16 @@ jobs:
           echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
 
       - name: Run tests
+        if: steps.should_run.outputs.run == 'true'
         working-directory: ./src-tauri
         run: cargo test
 
       - name: Install frontend dependencies
+        if: steps.should_run.outputs.run == 'true'
         run: yarn install
 
       - name: Build Rust project
+        if: steps.should_run.outputs.run == 'true'
         uses: tauri-apps/tauri-action@v0.5.19
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,11 +152,17 @@ jobs:
           CARGO_TERM_COLOR: always
           CARGO_NET_GIT_FETCH_WITH_CLI: true
         with:
-          tagName: v__VERSION__
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
           releaseName: 'ChatSpeed v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseBody: |
+            See the assets to download this version and install.
+            
+            Available packages:
+            - Windows: .msi, .exe
+            - macOS: .dmg (Intel and Apple Silicon)
+            - Linux: .deb, .rpm, .AppImage
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
-          args: ${{ matrix.args }}
