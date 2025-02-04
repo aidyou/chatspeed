@@ -120,6 +120,14 @@ jobs:
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: bash
         run: |
+          # Install Visual Studio build tools
+          curl -fsSL -o vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe
+          ./vs_buildtools.exe --quiet --wait --norestart --nocache \
+            --installPath "C:\BuildTools" \
+            --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+            --add Microsoft.VisualStudio.Component.Windows10SDK.19041 \
+            || IF "%ERRORLEVEL%"=="3010" EXIT 0
+
           git clone https://github.com/microsoft/vcpkg
           ./vcpkg/bootstrap-vcpkg.bat
           ./vcpkg/vcpkg integrate install
