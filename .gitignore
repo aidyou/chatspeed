@@ -46,6 +46,9 @@ plugin_review.md
 *.bak
 test/
 
-docs/
+# 本地文档和品牌相关文件
+/docs/
+/brand.md
+
 src-tauri/src/workflow
 src-tauri/src/plugins
