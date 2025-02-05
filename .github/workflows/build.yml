@@ -128,17 +128,41 @@ jobs:
             --add Microsoft.VisualStudio.Component.Windows10SDK.19041 \
             || IF "%ERRORLEVEL%"=="3010" EXIT 0
 
+          # Setup vcpkg
           git clone https://github.com/microsoft/vcpkg
           ./vcpkg/bootstrap-vcpkg.bat
           ./vcpkg/vcpkg integrate install
-          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
+
+          # Install dependencies in correct order
           ./vcpkg/vcpkg install bzip2:x64-windows-static-md
+          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
+
+          # Set environment variables
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
           echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
           echo "VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
           echo "SQLITE3_DIR=$GITHUB_WORKSPACE/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
           echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
           echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
+
+      - name: Cache vcpkg
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg
+            C:/vcpkg/installed
+            C:/vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Cache VS Build Tools
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        uses: actions/cache@v3
+        with:
+          path: C:\BuildTools
+          key: ${{ runner.os }}-vs-buildtools-17
 
       - name: Run tests
         if: steps.should_run.outputs.run == 'true'
