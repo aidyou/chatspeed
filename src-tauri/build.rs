@@ -1,5 +1,12 @@
 #[cfg(windows)]
 fn main() {
+    // Set environment variables for LLVM/Clang
+    if cfg!(target_env = "msvc") {
+        println!("cargo:rustc-env=CC=clang");
+        println!("cargo:rustc-env=CXX=clang++");
+        println!("cargo:rustc-env=LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin");
+    }
+
     // must be installed vcpkg and dependencies:
     // git clone https://github.com/microsoft/vcpkg
     // cd vcpkg
@@ -44,7 +51,7 @@ fn main() {
         println!("cargo:rustc-link-lib=static=shell32");
     }
 
-    tauri_build::build().expect("Failed to run tauri-build");
+    tauri_build::build();
 }
 
 #[cfg(target_os = "linux")]
@@ -56,7 +63,7 @@ fn main() {
     // Static link bzip2
     println!("cargo:rustc-link-lib=static=bz2");
 
-    tauri_build::build().expect("Failed to run tauri-build");
+    tauri_build::build();
 }
 
 #[cfg(target_os = "macos")]
@@ -73,5 +80,5 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib");
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/lib");
 
-    tauri_build::build().expect("Failed to run tauri-build");
+    tauri_build::build();
 }
