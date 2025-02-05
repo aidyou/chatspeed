@@ -21,10 +21,30 @@ fn main() {
         .expect("Failed to find bzip2 via vcpkg. Please ensure bzip2:x64-windows-static-md is installed.");
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
-    // Static link MSVC runtime
-    println!("cargo:rustc-link-arg=/MT");
+    if cfg!(target_env = "msvc") {
+        let libs = ["sqlite3", "bzip2"];
+        let mut errors = Vec::new();
 
-    tauri_build::build()
+        for lib in libs {
+            vcpkg::find_package(lib)
+                .map(|lib| {
+                    println!("cargo:rustc-link-search=native={}", lib.link_paths[0].display());
+                })
+                .map_err(|e| errors.push((lib, e)))
+                .ok();
+        }
+
+        if !errors.is_empty() {
+            for (lib, e) in errors {
+                eprintln!("Error finding {}: {}", lib, e);
+            }
+            std::process::exit(1);
+        }
+
+        println!("cargo:rustc-link-lib=static=shell32");
+    }
+
+    tauri_build::build().expect("Failed to run tauri-build");
 }
 
 #[cfg(target_os = "linux")]
@@ -36,7 +56,7 @@ fn main() {
     // Static link bzip2
     println!("cargo:rustc-link-lib=static=bz2");
 
-    tauri_build::build()
+    tauri_build::build().expect("Failed to run tauri-build");
 }
 
 #[cfg(target_os = "macos")]
@@ -53,5 +73,5 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib");
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/lib");
 
-    tauri_build::build()
+    tauri_build::build().expect("Failed to run tauri-build");
 }
