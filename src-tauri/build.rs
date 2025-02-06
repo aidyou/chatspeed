@@ -1,5 +1,13 @@
 #[cfg(windows)]
 fn main() {
+    use std::env;
+
+    // 检测目标架构
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+    let is_arm64 = target_arch == "aarch64";
+    
+    println!("cargo:warning=Target architecture: {}", target_arch);
+
     // Set environment variables for LLVM/Clang
     if cfg!(target_env = "msvc") {
         println!("cargo:rustc-env=CC=clang");
@@ -18,14 +26,24 @@ fn main() {
 
     // Use vcpkg to find the sqlite3 library
     let mut config = vcpkg::Config::new();
-    config.target_triplet("x64-windows-static-md");
+    
+    // 根据架构设置正确的 triplet
+    let triplet = if is_arm64 {
+        "arm64-windows-static-md"
+    } else {
+        "x64-windows-static-md"
+    };
+    
+    println!("cargo:warning=Using vcpkg triplet: {}", triplet);
+    config.target_triplet(triplet);
+
     let lib = config.find_package("sqlite3")
-        .expect("Failed to find sqlite3 via vcpkg. Please ensure sqlite3:x64-windows-static-md is installed.");
+        .unwrap_or_else(|_| panic!("Failed to find sqlite3 via vcpkg. Please ensure sqlite3:{} is installed.", triplet));
     println!("cargo:warning=Successfully found sqlite3 via vcpkg");
 
     // Use vcpkg to manage bzip2 dependency
     config.find_package("bzip2")
-        .expect("Failed to find bzip2 via vcpkg. Please ensure bzip2:x64-windows-static-md is installed.");
+        .unwrap_or_else(|_| panic!("Failed to find bzip2 via vcpkg. Please ensure bzip2:{} is installed.", triplet));
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
     if cfg!(target_env = "msvc") {

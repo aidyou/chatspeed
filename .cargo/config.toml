@@ -5,5 +5,5 @@ rustflags = ["-C", "target-feature=+crt-static"]
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [env]
-CC = "cl.exe"
-CXX = "cl.exe"
+CC = { value = "cl.exe", relative = true }
+CXX = { value = "cl.exe", relative = true }
