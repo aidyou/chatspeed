@@ -164,6 +164,53 @@ jobs:
           path: C:\BuildTools
           key: ${{ runner.os }}-vs-buildtools-17
 
+      - name: Setup Windows build environment
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        shell: pwsh
+        run: |
+          # Get Visual Studio installation path
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          $vcToolsVersion = Get-Content $vcToolsVersionFile
+
+          # Get Windows SDK information
+          $sdkRegPath = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0"
+          $sdkProps = Get-ItemProperty $sdkRegPath
+          $sdkDir = $sdkProps.InstallationFolder
+          $sdkVersion = $sdkProps.ProductVersion + ".0"
+
+          # Set environment variables
+          echo "VSINSTALLDIR=$vsPath" >> $env:GITHUB_ENV
+          echo "VCToolsVersion=$vcToolsVersion" >> $env:GITHUB_ENV
+          echo "WindowsSdkDir=$sdkDir" >> $env:GITHUB_ENV
+          echo "WindowsSdkVersion=$sdkVersion" >> $env:GITHUB_ENV
+          echo "VCINSTALLDIR=$vsPath\VC\" >> $env:GITHUB_ENV
+
+          # Set include paths
+          $includePaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\include",
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\atlmfc\include",
+            "$sdkDir\Include\$sdkVersion\ucrt",
+            "$sdkDir\Include\$sdkVersion\um",
+            "$sdkDir\Include\$sdkVersion\shared"
+          ) -join ";"
+          echo "INCLUDE=$includePaths" >> $env:GITHUB_ENV
+
+          # Set library paths
+          $libPaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\lib\x64",
+            "$sdkDir\Lib\$sdkVersion\um\x64",
+            "$sdkDir\Lib\$sdkVersion\ucrt\x64"
+          ) -join ";"
+          echo "LIB=$libPaths" >> $env:GITHUB_ENV
+
+          # Set tool paths
+          $toolPaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\bin\HostX64\x64",
+            "$sdkDir\bin\$sdkVersion\x64"
+          )
+          echo "$($toolPaths -join [System.IO.Path]::PathSeparator)" >> $env:GITHUB_PATH
+
       - name: Run tests
         if: steps.should_run.outputs.run == 'true'
         working-directory: ./src-tauri
@@ -189,7 +236,7 @@ jobs:
           releaseName: 'ChatSpeed v__VERSION__'
           releaseBody: |
             See the assets to download this version and install.
-            
+
             Available packages:
             - Windows: .msi, .exe
             - macOS: .dmg (Intel and Apple Silicon)

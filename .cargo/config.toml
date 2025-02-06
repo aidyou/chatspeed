@@ -1,9 +1,11 @@
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
-
-[target.aarch64-pc-windows-msvc]
+[build]
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [env]
-CC = { value = "cl.exe", relative = true }
-CXX = { value = "cl.exe", relative = true }
+# 让 build.rs 来设置这些变量
+VCINSTALLDIR              = { value = "", relative = false }
+WindowsSdkDir             = { value = "", relative = false }
+WindowsSDKVersion         = { value = "", relative = false }
+VCToolsInstallDir         = { value = "", relative = false }
+VCToolsVersion            = { value = "", relative = false }
+PreferredToolArchitecture = { value = "x64", relative = false }
