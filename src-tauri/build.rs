@@ -37,7 +37,7 @@ fn main() {
     println!("cargo:warning=Using vcpkg triplet: {}", triplet);
     config.target_triplet(triplet);
 
-    // 设置 vcpkg 搜索路径
+    // Set vcpkg search path
     if let Ok(vcpkg_root) = env::var("VCPKG_ROOT") {
         use std::path::PathBuf;
         config.vcpkg_root(PathBuf::from(vcpkg_root));
@@ -61,7 +61,7 @@ fn main() {
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
     if cfg!(target_env = "msvc") {
-        // 设置 Platform 和 PreferredToolArchitecture
+        // Set Platform and PreferredToolArchitecture
         if is_arm64 {
             println!("cargo:rustc-env=Platform=ARM64");
         } else {
@@ -69,7 +69,7 @@ fn main() {
         }
         println!("cargo:rustc-env=PreferredToolArchitecture=x64");
 
-        // 从环境变量获取 Visual Studio 和 Windows SDK 路径
+        // Get Visual Studio and Windows SDK paths from environment variables
         if let Ok(tools_version) = env::var("VCToolsVersion") {
             if let Ok(vs_path) = env::var("VSINSTALLDIR") {
                 let msvc_lib = format!(
@@ -81,23 +81,23 @@ fn main() {
             }
         }
 
-        // 从环境变量获取 Windows SDK 路径
+        // Get Windows SDK paths from environment variables
         if let Ok(windows_sdk_dir) = env::var("WindowsSdkDir") {
             if let Ok(windows_sdk_version) = env::var("WindowsSDKVersion") {
                 let sdk_version = windows_sdk_version.trim_end_matches('\\');
                 let windows_sdk_dir = windows_sdk_dir.trim_end_matches('\\');
 
-                // Windows SDK UM 库路径
+                // Windows SDK UM library path
                 let sdk_um_path = format!("{}\\Lib\\{}\\um\\x64", windows_sdk_dir, sdk_version);
                 println!("cargo:rustc-link-search=native={}", sdk_um_path);
 
-                // Windows SDK UCRT 库路径
+                // Windows SDK UCRT library path
                 let sdk_ucrt_path = format!("{}\\Lib\\{}\\ucrt\\x64", windows_sdk_dir, sdk_version);
                 println!("cargo:rustc-link-search=native={}", sdk_ucrt_path);
             }
         }
 
-        // 添加必要的系统库
+        // Add required system libraries
         let system_libs = ["shell32", "user32", "advapi32", "userenv", "ws2_32"];
         for lib in system_libs {
             println!("cargo:rustc-link-lib={}", lib);
@@ -136,12 +136,20 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
-    // Static link C++ standard library
+    // Static link C++ standard library and runtime
     println!("cargo:rustc-link-arg=-static-libstdc++");
     println!("cargo:rustc-link-arg=-static-libgcc");
+    
+    // Add library search paths
+    println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
+    println!("cargo:rustc-link-search=native=/lib/x86_64-linux-gnu");
 
-    // Static link bzip2
+    // Static link dependencies
+    println!("cargo:rustc-link-lib=static=sqlite3");
     println!("cargo:rustc-link-lib=static=bz2");
+
+    // Add symbolic linking for better compatibility
+    println!("cargo:rustc-link-arg=-Wl,-Bsymbolic");
 
     tauri_build::build();
 }

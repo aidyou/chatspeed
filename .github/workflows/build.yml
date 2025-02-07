@@ -94,7 +94,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libsqlite3-dev libbz2-dev rpm libfuse2 fuse squashfs-tools
+            libsqlite3-dev libbz2-dev rpm libfuse2 fuse squashfs-tools build-essential gcc-multilib g++-multilib
+
+          # Set environment variables for Linux build
+          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
+          echo "SQLITE3_DIR=/usr" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+          echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          
+          # Install static libraries
+          sudo apt-get install -y libsqlite3-static libbz2-static
 
       - name: Setup AppImage tools (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
