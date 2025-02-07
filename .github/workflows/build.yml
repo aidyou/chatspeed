@@ -101,10 +101,11 @@ jobs:
           echo "SQLITE3_DIR=/usr" >> $GITHUB_ENV
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
           echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-          
-          # Install static libraries
-          sudo apt-get install -y libsqlite3-static libbz2-static
+          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig" >> $GITHUB_ENV
+
+          # Create symbolic links for static libraries if they don't exist
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libsqlite3.a /usr/lib/libsqlite3.a
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libbz2.a /usr/lib/libbz2.a
 
       - name: Setup AppImage tools (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'

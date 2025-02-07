@@ -141,6 +141,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-static-libgcc");
     
     // Add library search paths
+    println!("cargo:rustc-link-search=native=/usr/lib");
     println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
     println!("cargo:rustc-link-search=native=/lib/x86_64-linux-gnu");
 
