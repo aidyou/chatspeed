@@ -36,7 +36,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="editSkill(element.id)">
+              <div class="icon" @click="editSkill(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
@@ -45,7 +45,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="copySkill(element.id)">
+              <div class="icon" @click="copySkill(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
@@ -54,7 +54,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="deleteSkill(element.id)">
+              <div class="icon" @click="deleteSkill(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
               </div>
             </el-tooltip>

@@ -233,27 +233,29 @@ const setTheme = () => {
 }
 
 const handleShortcut = async event => {
-  // ctrl+, common+x open setting
-  if (event.metaKey && event.code === 'Comma') {
-    // Invoke the command to open the settings window for model configuration
-    invoke('open_setting_window', { settingType: 'general' }).catch(error => {
-      console.error('Failed to open settings window:', error)
-    })
-  }
+  // ctrl+(Windows/Linux), common+,(macOS) open setting
+  if (event.metaKey || event.ctrlKey) {
+    if (event.code === 'Comma') {
+      // Invoke the command to open the settings window for model configuration
+      invoke('open_setting_window', { settingType: 'general' }).catch(error => {
+        console.error('Failed to open settings window:', error)
+      })
+    }
 
-  // command+w (macOS) or ctrl+w (Windows/Linux) to close window
-  if ((event.metaKey || event.ctrlKey) && event.code === 'KeyW') {
-    const currentWindow = getCurrentWebviewWindow()
-    const label = currentWindow.label
+    // command+w (macOS) or ctrl+w (Windows/Linux) to close window
+    else if (event.code === 'KeyW') {
+      const currentWindow = getCurrentWebviewWindow()
+      const label = currentWindow.label
 
-    // Only handle the close event of the current window
-    if (label === 'main' || label === 'settings' || label === 'note') {
-      // Check if the current window is indeed the active window
-      const isFocused = await currentWindow.isFocused()
-      if (isFocused) {
-        currentWindow.close().catch(error => {
-          console.error('Failed to close window:', error)
-        })
+      // Only handle the close event of the current window
+      if (label === 'main' || label === 'settings' || label === 'note') {
+        // Check if the current window is indeed the active window
+        const isFocused = await currentWindow.isFocused()
+        if (isFocused) {
+          currentWindow.close().catch(error => {
+            console.error('Failed to close window:', error)
+          })
+        }
       }
     }
   }

@@ -32,7 +32,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="editModel(element.id)">
+              <div class="icon" @click="editModel(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
@@ -41,7 +41,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="copyModel(element.id)">
+              <div class="icon" @click="copyModel(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
@@ -50,7 +50,7 @@
               placement="top"
               :hide-after="0"
               transition="none">
-              <div class="icon" @click="deleteModel(element.id)">
+              <div class="icon" @click="deleteModel(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
               </div>
             </el-tooltip>
