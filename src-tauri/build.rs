@@ -19,8 +19,8 @@ fn main() {
     // git clone https://github.com/microsoft/vcpkg
     // cd vcpkg
     // .\bootstrap-vcpkg.bat
-    // .\vcpkg install bzip2:x64-windows-static-md
     // .\vcpkg install sqlite3:x64-windows-static-md
+    // .\vcpkg install bzip2:x64-windows-static-md
     // .\vcpkg install sqlite3:arm64-windows-static-md # for arm64
     println!("cargo:warning=Build script is running on Windows");
 

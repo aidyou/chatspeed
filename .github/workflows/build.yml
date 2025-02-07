@@ -133,17 +133,19 @@ jobs:
           ./vcpkg/bootstrap-vcpkg.bat
           ./vcpkg/vcpkg integrate install
 
-          # Install dependencies in correct order
-          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
-          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
-
-          # Set environment variables
+          # Set vcpkg environment variables first
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
           echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
           echo "VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
+
+          # Install dependencies
+          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
+          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
+
+          # Set SQLite environment variables
           echo "SQLITE3_DIR=$GITHUB_WORKSPACE/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
           echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
-          echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
 
       - name: Cache vcpkg
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
@@ -151,8 +153,8 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/vcpkg
-            C:/vcpkg/installed
-            C:/vcpkg/packages
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
           key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-
@@ -232,8 +234,8 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
         with:
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: 'ChatSpeed v__VERSION__'
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'dev' }}
+          releaseName: ChatSpeed ${{ github.event_name == 'push' && github.ref_name || 'dev' }}
           releaseBody: |
             See the assets to download this version and install.
 
@@ -242,6 +244,6 @@ jobs:
             - macOS: .dmg (Intel and Apple Silicon)
             - Linux: .deb, .rpm, .AppImage
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ github.event_name != 'push' }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
