@@ -1,7 +1,7 @@
-[build]
+[target.'cfg(windows)'.build]
 rustflags = ["-C", "target-feature=+crt-static"]
 
-[env]
+[target.'cfg(target_os = "windows")'.env]
 # 让 build.rs 来设置这些变量
 VCINSTALLDIR              = { value = "", relative = false }
 WindowsSdkDir             = { value = "", relative = false }
