@@ -221,7 +221,11 @@ jobs:
           echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
           echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
           echo "VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static -C link-args=/NODEFAULTLIB:libcmt.lib /DEFAULTLIB:msvcrt.lib" >> $env:GITHUB_ENV
+          
+          # Set additional environment variables for static linking
+          echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
+          echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
 
       - name: Setup vcpkg
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
@@ -280,7 +284,10 @@ jobs:
           RUST_BACKTRACE: 1
           CARGO_TERM_COLOR: always
           CARGO_NET_GIT_FETCH_WITH_CLI: true
+          CARGO_HOME: ${{ matrix.platform == 'ubuntu-22.04' && format('{0}/.cargo', github.workspace) || '' }}
         with:
+          projectPath: ${{ matrix.platform == 'ubuntu-22.04' && '.' || '' }}
+          distPath: .
           args: ${{ matrix.args }}
           tagName: ${{ github.event_name == 'push' && github.ref_name || 'dev' }}
           releaseName: ChatSpeed ${{ github.event_name == 'push' && github.ref_name || 'dev' }}
