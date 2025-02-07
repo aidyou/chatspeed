@@ -1,14 +1,11 @@
-[target.'cfg(windows)'.build]
+[target.'cfg(target_os = "windows")']
 rustflags = ["-C", "target-feature=+crt-static"]
-
-[target.'cfg(target_os = "windows")'.env]
-# Let build.rs set these variables
-VCINSTALLDIR              = { value = "", relative = false }
-WindowsSdkDir             = { value = "", relative = false }
-WindowsSDKVersion         = { value = "", relative = false }
-VCToolsInstallDir         = { value = "", relative = false }
-VCToolsVersion            = { value = "", relative = false }
-PreferredToolArchitecture = { value = "x64", relative = false }
+VCINSTALLDIR = ""
+WindowsSdkDir = ""
+WindowsSDKVersion = ""
+VCToolsInstallDir = ""
+VCToolsVersion = ""
+PreferredToolArchitecture = "x64"
 
 [target.'cfg(target_os = "linux")']
 rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
