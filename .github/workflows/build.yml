@@ -129,60 +129,46 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        shell: bash
+        shell: pwsh
         run: |
-          # Install Visual Studio build tools
-          curl -fsSL -o vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.exe
-          ./vs_buildtools.exe --quiet --wait --norestart --nocache \
-            --installPath "C:\BuildTools" \
-            --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
-            --add Microsoft.VisualStudio.Component.Windows10SDK.19041 \
-            || IF "%ERRORLEVEL%"=="3010" EXIT 0
+          # Download and install VS Build Tools
+          Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile vs_buildtools.exe
+          Start-Process -FilePath .\vs_buildtools.exe -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", `
+            "--installPath", "C:\BuildTools", `
+            "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", `
+            "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041" `
+            -NoNewWindow -Wait
 
-          # Setup vcpkg
-          git clone https://github.com/microsoft/vcpkg
-          ./vcpkg/bootstrap-vcpkg.bat
-          ./vcpkg/vcpkg integrate install
-
-          # Set vcpkg environment variables first
-          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> $GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
-          echo "VCPKG_DEFAULT_HOST_TRIPLET=x64-windows-static-md" >> $GITHUB_ENV
-          echo "VCPKGRS_DYNAMIC=1" >> $GITHUB_ENV
-
-          # Install dependencies
-          ./vcpkg/vcpkg install sqlite3:x64-windows-static-md
-          ./vcpkg/vcpkg install bzip2:x64-windows-static-md
-
-          # Set SQLite environment variables
-          echo "SQLITE3_DIR=$GITHUB_WORKSPACE/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
-          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
-
-      - name: Cache vcpkg
+      - name: Setup vcpkg
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        uses: actions/cache@v3
-        with:
-          path: |
-            ${{ github.workspace }}/vcpkg
-            ${{ github.workspace }}/vcpkg/installed
-            ${{ github.workspace }}/vcpkg/packages
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-
+        shell: pwsh
+        run: |
+          # Clone and setup vcpkg
+          git clone https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+          .\vcpkg.exe integrate install
 
-      - name: Cache VS Build Tools
-        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        uses: actions/cache@v3
-        with:
-          path: C:\BuildTools
-          key: ${{ runner.os }}-vs-buildtools-17
+          # Set vcpkg environment variables
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
 
-      - name: Setup Windows build environment
+          # Install required packages
+          .\vcpkg.exe install sqlite3:x64-windows-static-md
+          .\vcpkg.exe install bzip2:x64-windows-static-md
+
+      - name: Setup Windows SDK and MSVC
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: pwsh
         run: |
           # Get Visual Studio installation path
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio installation not found"
+          }
+
+          # Get VC Tools version
           $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
           $vcToolsVersion = Get-Content $vcToolsVersionFile
 
@@ -193,11 +179,19 @@ jobs:
           $sdkVersion = $sdkProps.ProductVersion + ".0"
 
           # Set environment variables
-          echo "VSINSTALLDIR=$vsPath" >> $env:GITHUB_ENV
-          echo "VCToolsVersion=$vcToolsVersion" >> $env:GITHUB_ENV
-          echo "WindowsSdkDir=$sdkDir" >> $env:GITHUB_ENV
-          echo "WindowsSdkVersion=$sdkVersion" >> $env:GITHUB_ENV
-          echo "VCINSTALLDIR=$vsPath\VC\" >> $env:GITHUB_ENV
+          $envVars = @{
+            "VSINSTALLDIR" = $vsPath
+            "VCToolsVersion" = $vcToolsVersion
+            "WindowsSdkDir" = $sdkDir
+            "WindowsSdkVersion" = $sdkVersion
+            "VCINSTALLDIR" = "$vsPath\VC\"
+            "Platform" = "x64"
+            "PreferredToolArchitecture" = "x64"
+          }
+
+          foreach ($key in $envVars.Keys) {
+            echo "$key=$($envVars[$key])" >> $env:GITHUB_ENV
+          }
 
           # Set include paths
           $includePaths = @(
@@ -217,12 +211,31 @@ jobs:
           ) -join ";"
           echo "LIB=$libPaths" >> $env:GITHUB_ENV
 
-          # Set tool paths
+          # Add to PATH
           $toolPaths = @(
             "$vsPath\VC\Tools\MSVC\$vcToolsVersion\bin\HostX64\x64",
             "$sdkDir\bin\$sdkVersion\x64"
           )
           echo "$($toolPaths -join [System.IO.Path]::PathSeparator)" >> $env:GITHUB_PATH
+
+      - name: Cache vcpkg
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Cache VS Build Tools
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        uses: actions/cache@v3
+        with:
+          path: C:\BuildTools
+          key: ${{ runner.os }}-vs-buildtools-17
 
       - name: Run tests
         if: steps.should_run.outputs.run == 'true'
