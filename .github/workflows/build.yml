@@ -143,6 +143,76 @@ jobs:
             "--add", "Microsoft.VisualStudio.Component.Windows10SDK.19041" `
             -NoNewWindow -Wait
 
+      - name: Setup Windows SDK and MSVC
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        shell: pwsh
+        run: |
+          # Get Visual Studio installation path
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if (-not $vsPath) {
+            throw "Visual Studio installation not found"
+          }
+
+          # Get VC Tools version
+          $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          $vcToolsVersion = Get-Content $vcToolsVersionFile
+
+          # Get Windows SDK information
+          $sdkRegPath = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0"
+          $sdkProps = Get-ItemProperty $sdkRegPath
+          $sdkDir = $sdkProps.InstallationFolder
+          $sdkVersion = "$($sdkProps.ProductVersion).0"
+
+          # Set basic environment variables
+          echo "VSINSTALLDIR=$vsPath" >> $env:GITHUB_ENV
+          echo "VCINSTALLDIR=$vsPath\VC\" >> $env:GITHUB_ENV
+          echo "VCToolsInstallDir=$vsPath\VC\Tools\MSVC\$vcToolsVersion\" >> $env:GITHUB_ENV
+          echo "VCToolsVersion=$vcToolsVersion" >> $env:GITHUB_ENV
+          echo "WindowsSdkDir=$sdkDir" >> $env:GITHUB_ENV
+          echo "WindowsSDKVersion=$sdkVersion" >> $env:GITHUB_ENV
+          echo "WindowsLibPath=$sdkDir\UnionMetadata\$sdkVersion;$sdkDir\References\$sdkVersion" >> $env:GITHUB_ENV
+          echo "PreferredToolArchitecture=x64" >> $env:GITHUB_ENV
+          echo "Platform=x64" >> $env:GITHUB_ENV
+
+          # Set include paths
+          $includePaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\include",
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\atlmfc\include",
+            "$sdkDir\Include\$sdkVersion\ucrt",
+            "$sdkDir\Include\$sdkVersion\um",
+            "$sdkDir\Include\$sdkVersion\shared"
+          )
+          echo "INCLUDE=$($includePaths -join ';')" >> $env:GITHUB_ENV
+
+          # Set library paths
+          $libPaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\lib\x64",
+            "$sdkDir\Lib\$sdkVersion\um\x64",
+            "$sdkDir\Lib\$sdkVersion\ucrt\x64"
+          )
+          echo "LIB=$($libPaths -join ';')" >> $env:GITHUB_ENV
+
+          # Add to PATH
+          $toolPaths = @(
+            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\bin\HostX64\x64",
+            "$sdkDir\bin\$sdkVersion\x64"
+          )
+          echo "$($toolPaths -join [System.IO.Path]::PathSeparator)" >> $env:GITHUB_PATH
+
+          # Set LLVM path
+          $llvmPath = "C:\Program Files\LLVM"
+          if (-not (Test-Path $llvmPath)) {
+              # Install LLVM if not present
+              winget install -e --id LLVM.LLVM
+          }
+          echo "LLVM_PATH=$llvmPath" >> $env:GITHUB_ENV
+
+          # Print environment info for debugging
+          echo "Environment setup complete:"
+          echo "VS Installation: $vsPath"
+          echo "VC Tools Version: $vcToolsVersion"
+          echo "Windows SDK: $sdkDir"
+
       - name: Setup Windows build env
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: pwsh
@@ -171,66 +241,6 @@ jobs:
 
           # Verify installation
           .\vcpkg.exe list
-
-      - name: Setup Windows SDK and MSVC
-        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        shell: pwsh
-        run: |
-          # Get Visual Studio installation path
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          if (-not $vsPath) {
-            throw "Visual Studio installation not found"
-          }
-
-          # Get VC Tools version
-          $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
-          $vcToolsVersion = Get-Content $vcToolsVersionFile
-
-          # Get Windows SDK information
-          $sdkRegPath = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0"
-          $sdkProps = Get-ItemProperty $sdkRegPath
-          $sdkDir = $sdkProps.InstallationFolder
-          $sdkVersion = $sdkProps.ProductVersion + ".0"
-
-          # Set environment variables
-          $envVars = @{
-            "VSINSTALLDIR" = $vsPath
-            "VCToolsVersion" = $vcToolsVersion
-            "WindowsSdkDir" = $sdkDir
-            "WindowsSdkVersion" = $sdkVersion
-            "VCINSTALLDIR" = "$vsPath\VC\"
-            "Platform" = "x64"
-            "PreferredToolArchitecture" = "x64"
-          }
-
-          foreach ($key in $envVars.Keys) {
-            echo "$key=$($envVars[$key])" >> $env:GITHUB_ENV
-          }
-
-          # Set include paths
-          $includePaths = @(
-            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\include",
-            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\atlmfc\include",
-            "$sdkDir\Include\$sdkVersion\ucrt",
-            "$sdkDir\Include\$sdkVersion\um",
-            "$sdkDir\Include\$sdkVersion\shared"
-          ) -join ";"
-          echo "INCLUDE=$includePaths" >> $env:GITHUB_ENV
-
-          # Set library paths
-          $libPaths = @(
-            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\lib\x64",
-            "$sdkDir\Lib\$sdkVersion\um\x64",
-            "$sdkDir\Lib\$sdkVersion\ucrt\x64"
-          ) -join ";"
-          echo "LIB=$libPaths" >> $env:GITHUB_ENV
-
-          # Add to PATH
-          $toolPaths = @(
-            "$vsPath\VC\Tools\MSVC\$vcToolsVersion\bin\HostX64\x64",
-            "$sdkDir\bin\$sdkVersion\x64"
-          )
-          echo "$($toolPaths -join [System.IO.Path]::PathSeparator)" >> $env:GITHUB_PATH
 
       - name: Cache vcpkg
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
