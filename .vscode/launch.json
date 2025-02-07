@@ -19,17 +19,7 @@
       "terminal": "integrated",
       "env": {
         "RUST_BACKTRACE": "1"
-      },
-      "initCommands": [
-        "settings set target.process.thread.step-avoid-regexp \"\"",
-        "settings set target.process.thread.step-avoid-libraries false"
-      ],
-      "preRunCommands": [
-        "command script import \"~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_lookup.py\"",
-        "command source \"~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_commands\"",
-        "type summary add --no-value --python-function lldb_lookup.print_val -x \".*\" --category Rust",
-        "type category enable Rust"
-      ]
+      }
     },
     {
       "type": "lldb",
