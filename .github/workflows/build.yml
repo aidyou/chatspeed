@@ -99,7 +99,7 @@ jobs:
           # Set environment variables for Linux build
           echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
           echo "SQLITE3_DIR=/usr" >> $GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static -C link-arg=-Wl,--allow-multiple-definition" >> $GITHUB_ENV
           echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig" >> $GITHUB_ENV
 
