@@ -8,11 +8,39 @@ fn main() {
 
     println!("cargo:warning=Target architecture: {}", target_arch);
 
-    // Set environment variables for LLVM/Clang
+    // Set environment variables for Windows build
     if cfg!(target_env = "msvc") {
+        // Set compiler environment variables
         println!("cargo:rustc-env=CC=clang");
         println!("cargo:rustc-env=CXX=clang++");
-        println!("cargo:rustc-env=LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin");
+        
+        // Get LLVM path from environment variable or use default
+        let llvm_path = env::var("LLVM_PATH").unwrap_or_else(|_| "C:\\Program Files\\LLVM".to_string());
+        println!("cargo:rustc-env=LIBCLANG_PATH={}/bin", llvm_path);
+
+        // Link against required Windows libraries
+        println!("cargo:rustc-link-lib=shell32");
+        println!("cargo:rustc-link-lib=user32");
+        println!("cargo:rustc-link-lib=advapi32");
+        println!("cargo:rustc-link-lib=userenv");
+        println!("cargo:rustc-link-lib=ws2_32");
+        println!("cargo:rustc-link-lib=msvcrt");
+        println!("cargo:rustc-link-lib=ucrt");
+        println!("cargo:rustc-link-lib=vcruntime");
+
+        // Set Visual Studio environment variables if not already set
+        if env::var("VCINSTALLDIR").is_err() {
+            println!("cargo:rustc-env=PreferredToolArchitecture=x64");
+            
+            // These variables will be set by GitHub Actions or Visual Studio environment
+            // We only set them if they're not already set
+            for var in &["VCINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", 
+                        "VCToolsInstallDir", "VCToolsVersion"] {
+                if let Ok(value) = env::var(var) {
+                    println!("cargo:rustc-env={}={}", var, value);
+                }
+            }
+        }
     }
 
     // must be installed vcpkg and dependencies:
@@ -58,6 +86,7 @@ fn main() {
             triplet
         )
     });
+    println!("cargo:rustc-link-search=native={}", config.find_package("bzip2").unwrap().link_paths[0].display());
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
     if cfg!(target_env = "msvc") {
@@ -95,12 +124,6 @@ fn main() {
                 let sdk_ucrt_path = format!("{}\\Lib\\{}\\ucrt\\x64", windows_sdk_dir, sdk_version);
                 println!("cargo:rustc-link-search=native={}", sdk_ucrt_path);
             }
-        }
-
-        // Add required system libraries
-        let system_libs = ["shell32", "user32", "advapi32", "userenv", "ws2_32"];
-        for lib in system_libs {
-            println!("cargo:rustc-link-lib={}", lib);
         }
 
         let libs = ["sqlite3", "bzip2"];
