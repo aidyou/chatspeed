@@ -3,10 +3,7 @@ fn main() {
     use std::env;
 
     // Detect target architecture
-    let target_arch = match env::var("CARGO_CFG_TARGET_ARCH") {
-        Ok(val) => val,
-        Err(_) => "x86_64".to_string(),
-    };
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
     let is_arm64 = target_arch == "aarch64";
 
     println!("cargo:warning=Target architecture: {}", target_arch);
@@ -46,26 +43,21 @@ fn main() {
         config.vcpkg_root(PathBuf::from(vcpkg_root));
     }
 
-    // Find and link sqlite3
-    if let Err(e) = config.find_package("sqlite3") {
-        println!("cargo:warning=Failed to find sqlite3: {}", e);
-        println!(
-            "cargo:warning=Please ensure sqlite3:{} is installed via vcpkg.",
+    config.find_package("sqlite3").unwrap_or_else(|_| {
+        panic!(
+            "Failed to find sqlite3 via vcpkg. Please ensure sqlite3:{} is installed.",
             triplet
-        );
-        std::process::exit(1);
-    }
+        )
+    });
     println!("cargo:warning=Successfully found sqlite3 via vcpkg");
 
-    // Find and link bzip2
-    if let Err(e) = config.find_package("bzip2") {
-        println!("cargo:warning=Failed to find bzip2: {}", e);
-        println!(
-            "cargo:warning=Please ensure bzip2:{} is installed via vcpkg.",
+    // Use vcpkg to manage bzip2 dependency
+    config.find_package("bzip2").unwrap_or_else(|_| {
+        panic!(
+            "Failed to find bzip2 via vcpkg. Please ensure bzip2:{} is installed.",
             triplet
-        );
-        std::process::exit(1);
-    }
+        )
+    });
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
     if cfg!(target_env = "msvc") {
@@ -115,19 +107,20 @@ fn main() {
         let mut errors = Vec::new();
 
         for lib in libs {
-            if let Err(e) = vcpkg::find_package(lib) {
-                errors.push((lib, e));
-            } else if let Ok(lib_info) = vcpkg::find_package(lib) {
-                println!(
-                    "cargo:rustc-link-search=native={}",
-                    lib_info.link_paths[0].display()
-                );
-            }
+            vcpkg::find_package(lib)
+                .map(|lib| {
+                    println!(
+                        "cargo:rustc-link-search=native={}",
+                        lib.link_paths[0].display()
+                    );
+                })
+                .map_err(|e| errors.push((lib, e)))
+                .ok();
         }
 
         if !errors.is_empty() {
             for (lib, e) in errors {
-                println!("cargo:warning=Error finding {}: {}", lib, e);
+                eprintln!("Error finding {}: {}", lib, e);
             }
             std::process::exit(1);
         }
@@ -146,7 +139,7 @@ fn main() {
     // Static link C++ standard library and runtime
     println!("cargo:rustc-link-arg=-static-libstdc++");
     println!("cargo:rustc-link-arg=-static-libgcc");
-    
+
     // Add library search paths
     println!("cargo:rustc-link-search=native=/usr/lib");
     println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
