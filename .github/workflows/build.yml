@@ -77,17 +77,34 @@ jobs:
           node-version: 'lts/*'
           cache: 'yarn'
 
-      - name: Install dependencies (ubuntu only)
+      - name: Install dependencies (ubuntu)
         if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libsqlite3-dev
-          
-          # 确保静态链接
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsqlite3-dev \
+            libbz2-dev \
+            clang \
+            lld
+
+          echo "System information:"
+          uname -a
+          lsb_release -a
+
+          echo "Installed packages:"
+          dpkg -l | grep -E 'sqlite|bzip2|clang|lld'
+
+          echo "Library paths:"
+          ldconfig -p | grep -E 'sqlite|bzip2'
+
           echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
-          echo "SQLITE3_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+          echo "BZIP2_STATIC=1" >> $GITHUB_ENV
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
-          echo "SQLX_STATIC=1" >> $GITHUB_ENV
 
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos-latest' && steps.should_run.outputs.run == 'true'
@@ -105,10 +122,35 @@ jobs:
 
       - name: Install dependencies (windows only)
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        shell: pwsh
         run: |
-          vcpkg install sqlite3:x64-windows-static
+          Write-Host "Installing dependencies via vcpkg..."
+          vcpkg install sqlite3:x64-windows-static-md
+          vcpkg install bzip2:x64-windows-static-md
+
+          Write-Host "Installed vcpkg packages:"
+          vcpkg list
+
+          Write-Host "Setting environment variables..."
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
+          echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+
+          Write-Host "Visual Studio information:"
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "VS Path: $vsPath"
+
+          if ($vsPath) {
+              $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+              if (Test-Path $vcToolsVersionFile) {
+                  $vcToolsVersion = Get-Content $vcToolsVersionFile
+                  Write-Host "VC Tools Version: $vcToolsVersion"
+              }
+          }
+
+          Write-Host "Environment variables:"
+          Get-ChildItem env: | Format-Table -AutoSize
 
       - name: Rust setup
         if: steps.should_run.outputs.run == 'true'
@@ -133,8 +175,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Release ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          releaseName: 'Release ${{ github.ref_name }}'
+          releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
