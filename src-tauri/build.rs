@@ -78,6 +78,12 @@ fn main() {
         )
     });
     println!("cargo:warning=Successfully found sqlite3 via vcpkg");
+    
+    // Add link directive for sqlite3
+    if let Ok(lib) = config.find_package("sqlite3") {
+        println!("cargo:rustc-link-search=native={}", lib.link_paths[0].display());
+        println!("cargo:rustc-link-lib=sqlite3");
+    }
 
     // Use vcpkg to manage bzip2 dependency
     config.find_package("bzip2").unwrap_or_else(|_| {
@@ -86,7 +92,10 @@ fn main() {
             triplet
         )
     });
-    println!("cargo:rustc-link-search=native={}", config.find_package("bzip2").unwrap().link_paths[0].display());
+    if let Ok(lib) = config.find_package("bzip2") {
+        println!("cargo:rustc-link-search=native={}", lib.link_paths[0].display());
+        println!("cargo:rustc-link-lib=bz2");
+    }
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
 
     if cfg!(target_env = "msvc") {
@@ -124,28 +133,6 @@ fn main() {
                 let sdk_ucrt_path = format!("{}\\Lib\\{}\\ucrt\\x64", windows_sdk_dir, sdk_version);
                 println!("cargo:rustc-link-search=native={}", sdk_ucrt_path);
             }
-        }
-
-        let libs = ["sqlite3", "bzip2"];
-        let mut errors = Vec::new();
-
-        for lib in libs {
-            vcpkg::find_package(lib)
-                .map(|lib| {
-                    println!(
-                        "cargo:rustc-link-search=native={}",
-                        lib.link_paths[0].display()
-                    );
-                })
-                .map_err(|e| errors.push((lib, e)))
-                .ok();
-        }
-
-        if !errors.is_empty() {
-            for (lib, e) in errors {
-                eprintln!("Error finding {}: {}", lib, e);
-            }
-            std::process::exit(1);
         }
     }
 
