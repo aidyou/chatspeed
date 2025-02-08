@@ -221,7 +221,6 @@ jobs:
         run: |
           rustup target add x86_64-unknown-linux-gnu
           echo "CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu" >> $GITHUB_ENV
-          components: rust-src
 
       - name: Rust cache
         if: steps.should_run.outputs.run == 'true'
