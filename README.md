@@ -1,13 +1,37 @@
-# Tauri + Vue 3
+# ChatSpeed
 
-This template should help get you started developing with Tauri + Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+🚧 **Project Status: Under Active Development** 🚧
 
-## Requirements
+ChatSpeed is an innovative desktop AI chat application built with Tauri and Vue 3, focusing on performance, privacy, and user experience. The project is currently under active development and not yet ready for production use.
 
+## Current Status
+
+- 🏗️ Core Features Development
+  - Multi-model AI chat support
+  - Basic conversation interface
+  - Note-taking functionality
+  - Multi-language support
+
+- ⚠️ Please Note
+  - This repository is in active development
+  - Features and APIs may change significantly
+  - Not recommended for production use yet
+  - Documentation is being worked on
+
+## Coming Soon
+
+- 📚 Comprehensive documentation
+- 🔄 Auto-update system
+- 🎨 Theme customization
+- 🌐 Official website
+
+## Development Requirements
+
+### System Dependencies
 - sqlite3: Required for database operations
 - bzip2: Required for compression functionality
 
-## Recommended IDE Setup
+### Recommended IDE Setup
 
 - [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
 
