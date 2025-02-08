@@ -150,25 +150,25 @@ jobs:
           Write-Host "Installing dependencies via vcpkg..."
           vcpkg remove sqlite3:x64-windows-static-md --recurse
           vcpkg remove bzip2:x64-windows-static-md --recurse
-          vcpkg install sqlite3:x64-windows-static-md --clean-after-build
-          vcpkg install bzip2:x64-windows-static-md --clean-after-build
           
-          Write-Host "Installed vcpkg packages:"
-          vcpkg list
-          
-          Write-Host "Vcpkg root:"
-          $vcpkgRoot = "C:\vcpkg"
-          if (Test-Path env:VCPKG_INSTALLATION_ROOT) {
-              $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          }
+          # Ensure correct vcpkg root directory
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
           
-          Write-Host "Setting environment variables..."
+          # Install dependencies
+          vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
+          
+          # Set environment variables and ensure correct library paths
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
           echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
+          echo "RUSTFLAGS=-C target-feature=+crt-static -L $vcpkgRoot\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
+          
+          # Verifying library locations
+          Write-Host "Verifying library locations:"
+          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
           
           Write-Host "Visual Studio information:"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
@@ -213,6 +213,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          components: rust-src,rustc-dev,llvm-tools-preview
+
+      # Add a new step for Ubuntu platform
+      - name: Setup Ubuntu Rust target
+        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          echo "CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu" >> $GITHUB_ENV
+          components: rust-src
 
       - name: Rust cache
         if: steps.should_run.outputs.run == 'true'
