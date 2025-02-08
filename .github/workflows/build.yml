@@ -157,7 +157,10 @@ jobs:
           vcpkg list
           
           Write-Host "Vcpkg root:"
-          $vcpkgRoot = $env:VCPKG_ROOT
+          $vcpkgRoot = "C:\vcpkg"
+          if (Test-Path env:VCPKG_INSTALLATION_ROOT) {
+              $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          }
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
           
           Write-Host "Setting environment variables..."
@@ -191,8 +194,16 @@ jobs:
           }
           
           Write-Host "Checking SQLite3 installation:"
-          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "sqlite3.h"
-          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "*.lib" | Where-Object { $_.Name -like "*sqlite*" }
+          if (Test-Path "$vcpkgRoot\installed\x64-windows-static-md") {
+              Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "sqlite3.h"
+              Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "*.lib" | Where-Object { $_.Name -like "*sqlite*" }
+          } else {
+              Write-Host "Warning: x64-windows-static-md installation directory not found!"
+              Write-Host "Available directories in $vcpkgRoot\installed:"
+              if (Test-Path "$vcpkgRoot\installed") {
+                  Get-ChildItem "$vcpkgRoot\installed"
+              }
+          }
           
           Write-Host "Environment variables:"
           Get-ChildItem env: | Format-Table -AutoSize
