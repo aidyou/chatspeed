@@ -99,7 +99,14 @@ jobs:
             wget \
             file \
             cmake \
-            pkg-config
+            pkg-config \
+            libpango1.0-dev \
+            libgdk-pixbuf2.0-dev \
+            libatk1.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libcairo2-dev \
+            libglib2.0-dev
 
           echo "System information:"
           uname -a
