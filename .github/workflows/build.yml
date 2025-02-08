@@ -144,31 +144,59 @@ jobs:
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: pwsh
         run: |
+          Write-Host "Vcpkg integration status:"
+          vcpkg integrate status
+          
+          Write-Host "Vcpkg version:"
+          vcpkg version
+          
           Write-Host "Installing dependencies via vcpkg..."
-          vcpkg install sqlite3:x64-windows-static-md
-          vcpkg install bzip2:x64-windows-static-md
-
+          vcpkg remove sqlite3:x64-windows-static-md --recurse
+          vcpkg remove bzip2:x64-windows-static-md --recurse
+          vcpkg install sqlite3:x64-windows-static-md --clean-after-build
+          vcpkg install bzip2:x64-windows-static-md --clean-after-build
+          
           Write-Host "Installed vcpkg packages:"
           vcpkg list
-
+          
+          Write-Host "Vcpkg root:"
+          $vcpkgRoot = $env:VCPKG_ROOT
+          Write-Host "VCPKG_ROOT: $vcpkgRoot"
+          
           Write-Host "Setting environment variables..."
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
           echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
-
+          echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          
           Write-Host "Visual Studio information:"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS Path: $vsPath"
-
+          
           if ($vsPath) {
               $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
               if (Test-Path $vcToolsVersionFile) {
                   $vcToolsVersion = Get-Content $vcToolsVersionFile
                   Write-Host "VC Tools Version: $vcToolsVersion"
+                  
+                  $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+                  if (Test-Path $vcvarsallPath) {
+                      Write-Host "Setting up VS environment..."
+                      cmd /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
+                          if ($_ -match '=') {
+                              $v = $_.split('=')
+                              Set-Item -Force "env:$($v[0])" -Value "$($v[1])"
+                          }
+                      }
+                  }
               }
           }
-
+          
+          Write-Host "Checking SQLite3 installation:"
+          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "sqlite3.h"
+          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "*.lib" | Where-Object { $_.Name -like "*sqlite*" }
+          
           Write-Host "Environment variables:"
           Get-ChildItem env: | Format-Table -AutoSize
 
