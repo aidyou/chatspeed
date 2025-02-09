@@ -119,6 +119,19 @@ fn register_shortcuts(
     for (shortcut_type, shortcut) in shortcuts {
         if !shortcut.is_empty() {
             if let Ok(hotkey) = Shortcut::from_str(&shortcut) {
+                // Check if the shortcut is already registered
+                if shortcut_manager.is_registered(hotkey.clone()) {
+                    log::debug!(
+                        "Unregistering existing shortcut: {} for {}",
+                        shortcut,
+                        shortcut_type
+                    );
+                    if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
+                        log::error!("Failed to unregister shortcut '{}': {}", shortcut, err);
+                        continue;
+                    }
+                }
+
                 log::debug!("Registering shortcut: {} for {}", shortcut, shortcut_type);
 
                 shortcut_manager.on_shortcut(hotkey, move |app_handle, _shortcut, _event| {
@@ -180,8 +193,19 @@ pub fn update_shortcut(
     if let Some(old_shortcut) = shortcuts.get(shortcut_type) {
         if !old_shortcut.is_empty() {
             if let Ok(old_hotkey) = Shortcut::from_str(old_shortcut) {
-                log::debug!("Unregistering old shortcut: {}", old_shortcut);
-                shortcut_manager.unregister(old_hotkey)?;
+                if shortcut_manager.is_registered(old_hotkey.clone()) {
+                    log::debug!("Unregistering old shortcut: {}", old_shortcut);
+                    if let Err(err) = shortcut_manager.unregister(old_hotkey) {
+                        log::error!(
+                            "Failed to unregister old shortcut '{}': {}",
+                            old_shortcut,
+                            err
+                        );
+                        return Err(format!("Failed to unregister old shortcut: {}", err).into());
+                    }
+                } else {
+                    log::debug!("Old shortcut {} was not registered", old_shortcut);
+                }
             }
         }
     }
@@ -189,6 +213,15 @@ pub fn update_shortcut(
     // register new shortcut
     if !new_shortcut.is_empty() {
         if let Ok(hotkey) = Shortcut::from_str(new_shortcut) {
+            // Check if the new shortcut is already registered
+            if shortcut_manager.is_registered(hotkey.clone()) {
+                log::debug!("Unregistering existing shortcut: {}", new_shortcut);
+                if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
+                    log::error!("Failed to unregister shortcut '{}': {}", new_shortcut, err);
+                    return Err(format!("Failed to unregister existing shortcut: {}", err).into());
+                }
+            }
+
             log::debug!("Registering new shortcut: {}", new_shortcut);
             let shortcut_type = shortcut_type.to_string();
 

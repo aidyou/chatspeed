@@ -298,6 +298,7 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
         false
     }
 }
+
 /// Quit the application
 ///
 /// # Parameters

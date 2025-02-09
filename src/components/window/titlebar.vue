@@ -53,11 +53,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { invoke } from '@tauri-apps/api/core'
 import { useWindowStore } from '@/stores/window'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const { t } = useI18n()
 
@@ -109,55 +109,13 @@ const menus = computed(() => {
   })
 })
 
-const isFullscreen = ref(false)
-
 const showTitlebar = computed(() => {
   return !(windowStore.os === 'macos' && isFullscreen.value)
 })
 
-// Get current window instance
+const isFullscreen = ref(false)
 const appWindow = getCurrentWindow()
-
-// Minimize the window
-const minimizeWindow = async () => {
-  await appWindow.minimize()
-}
-
-// Toggle maximize/unmaximize
-const toggleMaximize = async () => {
-  try {
-    const currentFullscreen = await appWindow.isFullscreen()
-
-    if (!currentFullscreen) {
-      document.documentElement.style.transition = 'all 0.3s ease-in-out'
-      document.documentElement.style.transform = 'scale(0.98)'
-      await new Promise(resolve => setTimeout(resolve, 50))
-
-      await appWindow.setFullscreen(true)
-
-      setTimeout(() => {
-        document.documentElement.style.transform = 'scale(1)'
-        setTimeout(() => {
-          document.documentElement.style.transition = ''
-          document.documentElement.style.transform = ''
-        }, 300)
-      }, 50)
-    } else {
-      await appWindow.setFullscreen(false)
-    }
-
-    isFullscreen.value = !currentFullscreen
-  } catch (error) {
-    console.error('Failed to toggle fullscreen:', error)
-    document.documentElement.style.transition = ''
-    document.documentElement.style.transform = ''
-  }
-}
-
-// Close the window
-const closeWindow = async () => {
-  await appWindow.close()
-}
+const isWindows = computed(() => windowStore.os === 'windows')
 
 // Check initial fullscreen state
 const checkInitialFullscreen = async () => {
@@ -218,6 +176,65 @@ const init = async () => {
     await checkInitialFullscreen()
   } catch (error) {
     console.error('Failed to initialize:', error)
+  }
+}
+
+// Minimize the window
+const minimizeWindow = async () => {
+  try {
+    await appWindow.minimize()
+  } catch (error) {
+    console.error('Failed to minimize window:', error)
+  }
+}
+
+// Toggle maximize/unmaximize
+const toggleMaximize = async () => {
+  try {
+    if (isWindows.value) {
+      const isMaximized = await appWindow.isMaximized()
+      if (isMaximized) {
+        await appWindow.unmaximize()
+      } else {
+        await appWindow.maximize()
+      }
+      isFullscreen.value = isMaximized
+    } else {
+      const currentFullscreen = await appWindow.isFullscreen()
+
+      if (!currentFullscreen) {
+        document.documentElement.style.transition = 'all 0.3s ease-in-out'
+        document.documentElement.style.transform = 'scale(0.98)'
+        await new Promise(resolve => setTimeout(resolve, 50))
+
+        await appWindow.setFullscreen(true)
+
+        setTimeout(() => {
+          document.documentElement.style.transform = 'scale(1)'
+          setTimeout(() => {
+            document.documentElement.style.transition = ''
+            document.documentElement.style.transform = ''
+          }, 300)
+        }, 50)
+      } else {
+        await appWindow.setFullscreen(false)
+      }
+
+      isFullscreen.value = !currentFullscreen
+    }
+  } catch (error) {
+    console.error('Failed to toggle maximize:', error)
+    document.documentElement.style.transition = ''
+    document.documentElement.style.transform = ''
+  }
+}
+
+// Close the window
+const closeWindow = async () => {
+  try {
+    await appWindow.close()
+  } catch (error) {
+    console.error('Failed to close window:', error)
   }
 }
 
