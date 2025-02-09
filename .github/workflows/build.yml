@@ -106,7 +106,14 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
             libcairo2-dev \
-            libglib2.0-dev
+            libglib2.0-dev \
+            libpangocairo-1.0-0 \
+            libpangocairo1.0-dev \
+            libgdk-3-dev \
+            libgdk-3-0
+
+          # Ensure all dependencies are correctly linked
+          sudo ldconfig
 
           echo "System information:"
           uname -a
@@ -150,43 +157,43 @@ jobs:
         run: |
           Write-Host "Vcpkg integration status:"
           vcpkg integrate status
-          
+
           Write-Host "Vcpkg version:"
           vcpkg version
-          
+
           Write-Host "Installing dependencies via vcpkg..."
           vcpkg remove sqlite3:x64-windows-static-md --recurse
           vcpkg remove bzip2:x64-windows-static-md --recurse
-          
+
           # Ensure correct vcpkg root directory
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
-          
+
           # Install dependencies
           vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
-          
+
           # Set environment variables and ensure correct library paths
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
           echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static -L $vcpkgRoot\installed\x64-windows-static-md\lib" >> $env:GITHUB_ENV
-          
+          echo "RUSTFLAGS=-C target-feature=+crt-static -Ctarget-feature=+crt-static -Clink-arg=/NODEFAULTLIB:libvcruntime.lib -Clink-arg=/NODEFAULTLIB:vcruntime.lib" >> $env:GITHUB_ENV
+
           # Verifying library locations
           Write-Host "Verifying library locations:"
           Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
-          
+
           Write-Host "Visual Studio information:"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS Path: $vsPath"
-          
+
           if ($vsPath) {
               $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
               if (Test-Path $vcToolsVersionFile) {
                   $vcToolsVersion = Get-Content $vcToolsVersionFile
                   Write-Host "VC Tools Version: $vcToolsVersion"
-                  
+
                   $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
                   if (Test-Path $vcvarsallPath) {
                       Write-Host "Setting up VS environment..."
@@ -199,7 +206,7 @@ jobs:
                   }
               }
           }
-          
+
           Write-Host "Checking SQLite3 installation:"
           if (Test-Path "$vcpkgRoot\installed\x64-windows-static-md") {
               Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "sqlite3.h"
@@ -211,7 +218,7 @@ jobs:
                   Get-ChildItem "$vcpkgRoot\installed"
               }
           }
-          
+
           Write-Host "Environment variables:"
           Get-ChildItem env: | Format-Table -AutoSize
 
@@ -229,9 +236,9 @@ jobs:
           rustup target add x86_64-unknown-linux-gnu
           echo "CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu" >> $GITHUB_ENV
 
-      - name: Rust cache
+      - name: Setup Rust cache
         if: steps.should_run.outputs.run == 'true'
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.7.3
         with:
           workspaces: './src-tauri -> target'
 
