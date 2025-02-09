@@ -192,10 +192,8 @@ fn main() {
 fn get_windows_sdk_and_msvc_paths() -> (Option<String>, Option<String>) {
     use std::path::PathBuf;
 
-    let vswhom_path = match vswhom::VsFindResult::search() {
-        Ok(result) => Some(PathBuf::from(result.vs_path)),
-        Err(_) => None,
-    };
+    let vswhom_path = vswhom::VsFindResult::search()
+        .and_then(|result| result.vs_library_path.map(|path| PathBuf::from(path)));
 
     let msvc_path = vswhom_path.map(|vs_path| {
         vs_path
@@ -204,25 +202,30 @@ fn get_windows_sdk_and_msvc_paths() -> (Option<String>, Option<String>) {
             .into_owned()
     });
 
-    let windows_sdk_path = std::env::var("WindowsSdkDir").ok().or_else(|| {
-        if let Ok(output) = std::process::Command::new("reg")
-            .args(&[
-                "query",
-                "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots",
-                "/v",
-                "KitsRoot10",
-            ])
-            .output()
-        {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .find(|line| line.contains("KitsRoot10"))
-                .and_then(|line| line.split_whitespace().last())
-                .map(String::from)
-        } else {
-            None
-        }
-    });
+    // 直接从 VsFindResult 获取 Windows SDK 路径
+    let windows_sdk_path = vswhom::VsFindResult::search()
+        .and_then(|result| result.windows_sdk_root)
+        .map(|path| path.to_string_lossy().into_owned())
+        .or_else(|| std::env::var("WindowsSdkDir").ok())
+        .or_else(|| {
+            if let Ok(output) = std::process::Command::new("reg")
+                .args(&[
+                    "query",
+                    "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots",
+                    "/v",
+                    "KitsRoot10",
+                ])
+                .output()
+            {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find(|line| line.contains("KitsRoot10"))
+                    .and_then(|line| line.split_whitespace().last())
+                    .map(String::from)
+            } else {
+                None
+            }
+        });
 
     (windows_sdk_path, msvc_path)
 }
