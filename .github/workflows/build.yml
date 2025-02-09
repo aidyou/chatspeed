@@ -77,34 +77,33 @@ jobs:
           node-version: 'lts/*'
           cache: 'yarn'
 
-      - name: Install dependencies (ubuntu)
+      - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
             libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libsqlite3-dev \
-            libbz2-dev \
-            clang \
-            lld \
-            libssl-dev \
+            libgtk-3-dev \
             libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libatk1.0-dev \
+            libpango1.0-dev \
+            libgdk-pixbuf2.0-dev \
+            libglib2.0-dev \
+            libcairo2-dev \
+            librsvg2-dev \
             build-essential \
             curl \
             wget \
             file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            libsqlite3-dev \
+            libbz2-dev \
             cmake \
-            pkg-config \
-            libpango1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            libcairo2-dev \
-            libatk1.0-dev \
-            libglib2.0-dev \
+            clang \
+            lld \
             libfontconfig-dev \
             libfreetype-dev \
             libfribidi-dev \
@@ -161,56 +160,63 @@ jobs:
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: pwsh
         run: |
-          Write-Host "Vcpkg integration status:"
-          vcpkg integrate status
-
-          Write-Host "Vcpkg version:"
-          vcpkg version
+          Write-Host "Setting up Visual Studio environment..."
+          
+          # 设置 Visual Studio 环境变量
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          
+          # 导入 Visual Studio 环境变量
+          cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
+              if ($_ -match "=") {
+                  $name, $value = $_ -split "=", 2
+                  [System.Environment]::SetEnvironmentVariable($name, $value)
+              }
+          }
 
           Write-Host "Installing dependencies via vcpkg..."
-          vcpkg remove sqlite3:x64-windows-static-md --recurse
-          vcpkg remove bzip2:x64-windows-static-md --recurse
-
-          # Ensure correct vcpkg root directory
+          
+          # 设置 vcpkg 环境
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
 
-          # Install dependencies
+          # 清理并重新安装依赖
+          vcpkg remove sqlite3:x64-windows-static-md --recurse
+          vcpkg remove bzip2:x64-windows-static-md --recurse
           vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
 
-          # Set environment variables and ensure correct library paths
+          # 设置环境变量
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
           echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
           echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
           
-          # 修改 RUSTFLAGS，添加必要的链接器标志
-          $rustflags = "-C target-feature=+crt-static " +
-                      "-Ctarget-feature=+crt-static " +
-                      "-Clink-arg=/DEFAULTLIB:libvcruntime.lib " +
-                      "-Clink-arg=/DEFAULTLIB:libcmt.lib " +
-                      "-Clink-arg=/DEFAULTLIB:oldnames.lib " +
-                      "-Clink-arg=/DEFAULTLIB:libcpmt.lib"
-          echo "RUSTFLAGS=$rustflags" >> $env:GITHUB_ENV
-
-          # 设置 Visual C++ 环境变量
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Write-Host "VS Path: $vsPath"
+          # 设置 Rust 链接标志
+          $rustflags = @(
+              "-C target-feature=+crt-static",
+              "-Ctarget-feature=+crt-static",
+              "-Clink-arg=/DEFAULTLIB:libcmt.lib",
+              "-Clink-arg=/DEFAULTLIB:oldnames.lib",
+              "-Clink-arg=/DEFAULTLIB:libvcruntime.lib",
+              "-Clink-arg=/DEFAULTLIB:libucrt.lib",
+              "-Clink-arg=/DEFAULTLIB:libcpmt.lib",
+              "-Clink-arg=/DEFAULTLIB:msvcrt.lib",
+              "-Clink-arg=/NODEFAULTLIB:libvcruntimed.lib",
+              "-Clink-arg=/NODEFAULTLIB:vcruntime.lib",
+              "-Clink-arg=/NODEFAULTLIB:vcruntimed.lib",
+              "-Clink-arg=/NODEFAULTLIB:msvcrtd.lib",
+              "-Clink-arg=/NODEFAULTLIB:msvcprtd.lib"
+          )
           
-          if ($vsPath) {
-              $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
-              if (Test-Path $vcvarsallPath) {
-                  Write-Host "Found vcvarsall.bat at: $vcvarsallPath"
-                  cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
-                      if ($_ -match "=") {
-                          $name, $value = $_ -split "=", 2
-                          [System.Environment]::SetEnvironmentVariable($name, $value)
-                      }
-                  }
-              }
-          }
+          $rustflagsStr = $rustflags -join " "
+          echo "RUSTFLAGS=$rustflagsStr" >> $env:GITHUB_ENV
 
+          # 设置 Visual C++ 工具链环境变量
+          echo "CL=/MD" >> $env:GITHUB_ENV
+          echo "CFLAGS=/MD" >> $env:GITHUB_ENV
+          echo "CXXFLAGS=/MD" >> $env:GITHUB_ENV
+          
           # 验证库文件位置
           Write-Host "Verifying library locations:"
           Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
