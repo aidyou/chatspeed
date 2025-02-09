@@ -89,35 +89,20 @@ jobs:
             libatk1.0-dev \
             libpango1.0-dev \
             libgdk-pixbuf2.0-dev \
-            libglib2.0-dev \
-            libcairo2-dev \
-            librsvg2-dev \
+            libasound2-dev \
+            libpangocairo-1.0-0 \
+            libgdk-pixbuf-2.0-0 \
+            libsoup-3.0-0 \
+            libjavascriptcoregtk-4.1-0 \
             build-essential \
             curl \
             wget \
             file \
             libssl-dev \
             libayatana-appindicator3-dev \
-            patchelf \
-            libsqlite3-dev \
-            libbz2-dev \
-            cmake \
-            clang \
-            lld \
-            libfontconfig-dev \
-            libfreetype-dev \
-            libfribidi-dev \
-            libharfbuzz-dev \
-            libthai-dev \
-            libx11-dev \
-            libxft-dev \
-            libxrender-dev \
-            libpixman-1-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shm0-dev
+            patchelf
 
-          # Ensure all dependencies are correctly linked
+          # 确保所有库都正确链接
           sudo ldconfig
 
           echo "System information:"
@@ -161,11 +146,11 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Setting up Visual Studio environment..."
-          
+
           # 设置 Visual Studio 环境变量
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
-          
+
           # 导入 Visual Studio 环境变量
           cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
               if ($_ -match "=") {
@@ -175,7 +160,7 @@ jobs:
           }
 
           Write-Host "Installing dependencies via vcpkg..."
-          
+
           # 设置 vcpkg 环境
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
@@ -185,13 +170,13 @@ jobs:
           vcpkg remove bzip2:x64-windows-static-md --recurse
           vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
 
-          # 设置环境变量
+          # Set environment variables and ensure correct library paths
           echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
           echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
           echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
-          
+
           # 设置 Rust 链接标志
           $rustflags = @(
               "-C target-feature=+crt-static",
@@ -208,7 +193,7 @@ jobs:
               "-Clink-arg=/NODEFAULTLIB:msvcrtd.lib",
               "-Clink-arg=/NODEFAULTLIB:msvcprtd.lib"
           )
-          
+
           $rustflagsStr = $rustflags -join " "
           echo "RUSTFLAGS=$rustflagsStr" >> $env:GITHUB_ENV
 
@@ -216,7 +201,7 @@ jobs:
           echo "CL=/MD" >> $env:GITHUB_ENV
           echo "CFLAGS=/MD" >> $env:GITHUB_ENV
           echo "CXXFLAGS=/MD" >> $env:GITHUB_ENV
-          
+
           # 验证库文件位置
           Write-Host "Verifying library locations:"
           Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
