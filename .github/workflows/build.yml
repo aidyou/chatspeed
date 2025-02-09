@@ -102,15 +102,21 @@ jobs:
             pkg-config \
             libpango1.0-dev \
             libgdk-pixbuf2.0-dev \
-            libatk1.0-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev \
             libcairo2-dev \
+            libatk1.0-dev \
             libglib2.0-dev \
-            libpangocairo-1.0-0 \
-            libpangocairo1.0-dev \
-            libgdk-3-dev \
-            libgdk-3-0
+            libfontconfig-dev \
+            libfreetype-dev \
+            libfribidi-dev \
+            libharfbuzz-dev \
+            libthai-dev \
+            libx11-dev \
+            libxft-dev \
+            libxrender-dev \
+            libpixman-1-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shm0-dev
 
           # Ensure all dependencies are correctly linked
           sudo ldconfig
@@ -178,49 +184,36 @@ jobs:
           echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static -Ctarget-feature=+crt-static -Clink-arg=/NODEFAULTLIB:libvcruntime.lib -Clink-arg=/NODEFAULTLIB:vcruntime.lib" >> $env:GITHUB_ENV
+          
+          # 修改 RUSTFLAGS，添加必要的链接器标志
+          $rustflags = "-C target-feature=+crt-static " +
+                      "-Ctarget-feature=+crt-static " +
+                      "-Clink-arg=/DEFAULTLIB:libvcruntime.lib " +
+                      "-Clink-arg=/DEFAULTLIB:libcmt.lib " +
+                      "-Clink-arg=/DEFAULTLIB:oldnames.lib " +
+                      "-Clink-arg=/DEFAULTLIB:libcpmt.lib"
+          echo "RUSTFLAGS=$rustflags" >> $env:GITHUB_ENV
 
-          # Verifying library locations
-          Write-Host "Verifying library locations:"
-          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
-
-          Write-Host "Visual Studio information:"
+          # 设置 Visual C++ 环境变量
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS Path: $vsPath"
-
+          
           if ($vsPath) {
-              $vcToolsVersionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
-              if (Test-Path $vcToolsVersionFile) {
-                  $vcToolsVersion = Get-Content $vcToolsVersionFile
-                  Write-Host "VC Tools Version: $vcToolsVersion"
-
-                  $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
-                  if (Test-Path $vcvarsallPath) {
-                      Write-Host "Setting up VS environment..."
-                      cmd /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
-                          if ($_ -match '=') {
-                              $v = $_.split('=')
-                              Set-Item -Force "env:$($v[0])" -Value "$($v[1])"
-                          }
+              $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+              if (Test-Path $vcvarsallPath) {
+                  Write-Host "Found vcvarsall.bat at: $vcvarsallPath"
+                  cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
+                      if ($_ -match "=") {
+                          $name, $value = $_ -split "=", 2
+                          [System.Environment]::SetEnvironmentVariable($name, $value)
                       }
                   }
               }
           }
 
-          Write-Host "Checking SQLite3 installation:"
-          if (Test-Path "$vcpkgRoot\installed\x64-windows-static-md") {
-              Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "sqlite3.h"
-              Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md" -Filter "*.lib" | Where-Object { $_.Name -like "*sqlite*" }
-          } else {
-              Write-Host "Warning: x64-windows-static-md installation directory not found!"
-              Write-Host "Available directories in $vcpkgRoot\installed:"
-              if (Test-Path "$vcpkgRoot\installed") {
-                  Get-ChildItem "$vcpkgRoot\installed"
-              }
-          }
-
-          Write-Host "Environment variables:"
-          Get-ChildItem env: | Format-Table -AutoSize
+          # 验证库文件位置
+          Write-Host "Verifying library locations:"
+          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
 
       - name: Rust setup
         if: steps.should_run.outputs.run == 'true'
