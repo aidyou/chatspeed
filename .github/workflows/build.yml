@@ -77,33 +77,57 @@ jobs:
           node-version: 'lts/*'
           cache: 'yarn'
 
+      - name: Clean GitHub Actions cache (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
+        run: |
+          rm -rf ~/.cargo/registry/cache/
+          rm -rf ~/.cargo/git/db/
+          rm -rf target/
+
       - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
         run: |
+          # Clean apt cache
+          sudo rm -rf /var/lib/apt/lists/*
+          
+          # Add additional package sources
+          sudo add-apt-repository -y ppa:webkit-team/ppa
+          
+          # Update package index
+          sudo apt-get clean
           sudo apt-get update
+          
+          # Ensure all required packages are installed
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libatk1.0-dev \
-            libpango1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            libasound2-dev \
-            libpangocairo-1.0-0 \
-            libgdk-pixbuf-2.0-0 \
-            libsoup-3.0-0 \
-            libjavascriptcoregtk-4.1-0 \
             build-essential \
             curl \
             wget \
             file \
             libssl-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
             patchelf
 
-          # 确保所有库都正确链接
+          # Install other required development packages
+          sudo apt-get install -y \
+            libgdk-3-dev \
+            libpango1.0-dev \
+            libpangocairo-1.0-dev \
+            libgdk-pixbuf2.0-dev \
+            libgdk-pixbuf-2.0-0 \
+            libatk1.0-dev \
+            libasound2-dev
+
+          # Ensure all libraries are correctly linked
           sudo ldconfig
+
+          # Verify libraries are correctly installed
+          echo "Verifying installed libraries..."
+          ldconfig -p | grep -E "webkit2gtk|gtk-3|gdk-3|pangocairo|pango|atk|gdk_pixbuf|soup-3.0|javascriptcoregtk"
 
           echo "System information:"
           uname -a
@@ -141,17 +165,29 @@ jobs:
           echo "RUSTFLAGS=-C target-feature=+cxx-exceptions" >> $GITHUB_ENV
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
+      - name: Install Windows dependencies
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        run: |
+          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+          choco install windows-sdk-10-version-2004-all
+
+      - name: Setup Visual Studio Developer Command Prompt
+        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Install dependencies (windows only)
         if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
         shell: pwsh
         run: |
           Write-Host "Setting up Visual Studio environment..."
 
-          # 设置 Visual Studio 环境变量
+          # Setup Visual Studio environment variables
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
 
-          # 导入 Visual Studio 环境变量
+          # Import Visual Studio environment variables
           cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
               if ($_ -match "=") {
                   $name, $value = $_ -split "=", 2
@@ -161,11 +197,11 @@ jobs:
 
           Write-Host "Installing dependencies via vcpkg..."
 
-          # 设置 vcpkg 环境
+          # Setup vcpkg environment
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
 
-          # 清理并重新安装依赖
+          # Clean and reinstall dependencies
           vcpkg remove sqlite3:x64-windows-static-md --recurse
           vcpkg remove bzip2:x64-windows-static-md --recurse
           vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
@@ -177,7 +213,7 @@ jobs:
           echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
 
-          # 设置 Rust 链接标志
+          # Set Rust linking flags
           $rustflags = @(
               "-C target-feature=+crt-static",
               "-Ctarget-feature=+crt-static",
@@ -197,12 +233,12 @@ jobs:
           $rustflagsStr = $rustflags -join " "
           echo "RUSTFLAGS=$rustflagsStr" >> $env:GITHUB_ENV
 
-          # 设置 Visual C++ 工具链环境变量
+          # Set Visual C++ toolchain environment variables
           echo "CL=/MD" >> $env:GITHUB_ENV
           echo "CFLAGS=/MD" >> $env:GITHUB_ENV
           echo "CXXFLAGS=/MD" >> $env:GITHUB_ENV
 
-          # 验证库文件位置
+          # Verify library file locations
           Write-Host "Verifying library locations:"
           Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
 

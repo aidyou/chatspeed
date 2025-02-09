@@ -48,15 +48,35 @@ fn main() {
             }
         }
 
-        // 添加 MSVC 运行时库链接
-        println!("cargo:rustc-link-lib=dylib=msvcrt");
-        println!("cargo:rustc-link-lib=dylib=ucrt");
-        println!("cargo:rustc-link-search=native=C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22000.0\\ucrt\\x64");
-
-        // Windows specific libraries
+        // Get Windows SDK and MSVC paths
+        let (windows_sdk_path, msvc_path) = get_windows_sdk_and_msvc_paths();
+        
+        // Add basic Windows link libraries
         println!("cargo:rustc-link-lib=user32");
         println!("cargo:rustc-link-lib=gdi32");
         println!("cargo:rustc-link-lib=shell32");
+
+        // Add MSVC runtime library configurations
+        println!("cargo:rustc-link-lib=msvcrt");
+        println!("cargo:rustc-link-lib=ucrt");
+        println!("cargo:rustc-link-lib=vcruntime");
+        
+        // Dynamically add search paths
+        if let Some(sdk_path) = windows_sdk_path {
+            println!("cargo:rustc-link-search=native={}/Lib/10.0/ucrt/x64", sdk_path);
+        }
+        
+        if let Some(msvc_path) = msvc_path {
+            if let Ok(entries) = std::fs::read_dir(&msvc_path) {
+                if let Some(latest_version) = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .max() {
+                    println!("cargo:rustc-link-search=native={}/{}/lib/x64", msvc_path, latest_version);
+                }
+            }
+        }
     }
 
     // must be installed vcpkg and dependencies:
@@ -159,6 +179,39 @@ fn main() {
     }
 
     tauri_build::build();
+}
+
+fn get_windows_sdk_and_msvc_paths() -> (Option<String>, Option<String>) {
+    use std::path::PathBuf;
+
+    let vswhom_path = match vswhom::VsFindResult::search() {
+        Ok(result) => Some(PathBuf::from(result.vs_path)),
+        Err(_) => None,
+    };
+
+    let msvc_path = vswhom_path.map(|vs_path| {
+        vs_path.join("VC\\Tools\\MSVC")
+            .to_string_lossy()
+            .into_owned()
+    });
+
+    let windows_sdk_path = std::env::var("WindowsSdkDir")
+        .ok()
+        .or_else(|| {
+            if let Ok(output) = std::process::Command::new("reg")
+                .args(&["query", "HKLM\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "/v", "KitsRoot10"])
+                .output() {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find(|line| line.contains("KitsRoot10"))
+                    .and_then(|line| line.split_whitespace().last())
+                    .map(String::from)
+            } else {
+                None
+            }
+        });
+
+    (windows_sdk_path, msvc_path)
 }
 
 #[cfg(target_os = "linux")]
