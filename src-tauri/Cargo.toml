@@ -95,6 +95,7 @@ tauri-plugin-autostart = "2.2.0"
 
 [target.'cfg(windows)'.build-dependencies]
 vcpkg = "0.2"
+vswhom = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3.15.0"
