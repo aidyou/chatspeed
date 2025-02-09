@@ -13,9 +13,10 @@ fn main() {
         // Set compiler environment variables
         println!("cargo:rustc-env=CC=clang");
         println!("cargo:rustc-env=CXX=clang++");
-        
+
         // Get LLVM path from environment variable or use default
-        let llvm_path = env::var("LLVM_PATH").unwrap_or_else(|_| "C:\\Program Files\\LLVM".to_string());
+        let llvm_path =
+            env::var("LLVM_PATH").unwrap_or_else(|_| "C:\\Program Files\\LLVM".to_string());
         println!("cargo:rustc-env=LIBCLANG_PATH={}/bin", llvm_path);
 
         // Link against required Windows libraries
@@ -31,16 +32,31 @@ fn main() {
         // Set Visual Studio environment variables if not already set
         if env::var("VCINSTALLDIR").is_err() {
             println!("cargo:rustc-env=PreferredToolArchitecture=x64");
-            
+
             // These variables will be set by GitHub Actions or Visual Studio environment
             // We only set them if they're not already set
-            for var in &["VCINSTALLDIR", "WindowsSdkDir", "WindowsSDKVersion", 
-                        "VCToolsInstallDir", "VCToolsVersion"] {
+            for var in &[
+                "VCINSTALLDIR",
+                "WindowsSdkDir",
+                "WindowsSDKVersion",
+                "VCToolsInstallDir",
+                "VCToolsVersion",
+            ] {
                 if let Ok(value) = env::var(var) {
                     println!("cargo:rustc-env={}={}", var, value);
                 }
             }
         }
+
+        // 添加 MSVC 运行时库链接
+        println!("cargo:rustc-link-lib=dylib=msvcrt");
+        println!("cargo:rustc-link-lib=dylib=ucrt");
+        println!("cargo:rustc-link-search=native=C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22000.0\\ucrt\\x64");
+
+        // Windows specific libraries
+        println!("cargo:rustc-link-lib=user32");
+        println!("cargo:rustc-link-lib=gdi32");
+        println!("cargo:rustc-link-lib=shell32");
     }
 
     // must be installed vcpkg and dependencies:
@@ -78,10 +94,13 @@ fn main() {
         )
     });
     println!("cargo:warning=Successfully found sqlite3 via vcpkg");
-    
+
     // Add link directive for sqlite3
     if let Ok(lib) = config.find_package("sqlite3") {
-        println!("cargo:rustc-link-search=native={}", lib.link_paths[0].display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            lib.link_paths[0].display()
+        );
         println!("cargo:rustc-link-lib=sqlite3");
     }
 
@@ -93,7 +112,10 @@ fn main() {
         )
     });
     if let Ok(lib) = config.find_package("bzip2") {
-        println!("cargo:rustc-link-search=native={}", lib.link_paths[0].display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            lib.link_paths[0].display()
+        );
         println!("cargo:rustc-link-lib=bz2");
     }
     println!("cargo:warning=Successfully found bzip2 via vcpkg");
@@ -134,11 +156,6 @@ fn main() {
                 println!("cargo:rustc-link-search=native={}", sdk_ucrt_path);
             }
         }
-    }
-
-    // Add shell32 library for Windows
-    if cfg!(target_os = "windows") {
-        println!("cargo:rustc-link-lib=shell32");
     }
 
     tauri_build::build();
