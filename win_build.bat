@@ -22,24 +22,18 @@ rem Note: This script is specifically designed for Windows platform.
 rem For other platforms, please refer to the project documentation.
 rem
 rem Usage:
-rem   .\build.bat
+rem   .\build.bat
 rem
 rem The script will handle all necessary environment setup and build
 rem steps automatically.
 rem ================================================================
 
-echo Setting up build environment...
-call powershell -ExecutionPolicy Bypass -File "%~dp0setup-env.ps1"
+echo Setting up build environment and starting build...
+powershell -ExecutionPolicy Bypass -Command ". '%~dp0setup-env.ps1'; yarn tauri build"
 if errorlevel 1 (
-    echo Failed to set up environment variables.
-    exit /b 1
-)
-
-echo Starting Tauri build...
-call yarn tauri build
-if errorlevel 1 (
-    echo Build failed.
-    exit /b 1
+    echo Build failed.
+    exit /b 1
 )
 
 echo Build completed successfully!
+

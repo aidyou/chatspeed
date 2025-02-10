@@ -947,8 +947,9 @@ const handleTitleGenerated = payload => {
   if (payload?.is_done) {
     if (title.value.trim().length > 0) {
       // remove leading and trailing double quotes
-      title.value = title.value.replace(/^"|"$/g, '')
+      title.value = title.value.replace(/^"|"$/g, '').replace(/<think>[\s\S]+?<\/think>/, '')
       if (title.value.length > 0) {
+        console.log('conversation title:', title.value)
         chatStore.updateConversation(payload?.metadata?.conversationId, title.value)
       }
     }

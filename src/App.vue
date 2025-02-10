@@ -1,5 +1,5 @@
 <template>
-  <div class="app-container" :class="windowType">
+  <div class="app-container" :class="[windowType, windowStore.os]">
     <div class="titlebar" data-tauri-drag-region></div>
     <router-view></router-view>
 
@@ -43,6 +43,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
 import { useSkillStore } from '@/stores/skill'
 import { useUpdateStore } from '@/stores/update'
+import { useWindowStore } from '@/stores/window'
 
 // Import update management components
 import UpdateDialog from '@/components/updater/UpdateDialog.vue'
@@ -54,6 +55,7 @@ const settingStore = useSettingStore()
 const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const updateStore = useUpdateStore()
+const windowStore = useWindowStore()
 const listener = ref(null)
 
 const { settings } = storeToRefs(settingStore)
@@ -307,6 +309,16 @@ body {
     top: 0;
     left: 0;
     z-index: var(--cs-titlebar-zindex);
+  }
+
+  &.windows {
+    border-radius: unset;
+    backdrop-filter: unset;
+    border: unset;
+
+    &.titlebar {
+      border-radius: unset;
+    }
   }
 }
 </style>

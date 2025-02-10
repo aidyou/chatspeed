@@ -41,29 +41,32 @@ pub async fn fix_window_visual(
     window: &tauri::WebviewWindow,
     size: Option<WindowSize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut size = size
-        .map(|s| LogicalSize::new(s.width as f64, s.height as f64))
-        .unwrap_or_else(|| {
-            window
-                .inner_size()
-                .unwrap_or(PhysicalSize::new(0, 0))
-                .to_logical(window.scale_factor().unwrap_or(1.0))
-        });
+    #[cfg(target_os = "macos")]
+    {
+        let mut size = size
+            .map(|s| LogicalSize::new(s.width as f64, s.height as f64))
+            .unwrap_or_else(|| {
+                window
+                    .inner_size()
+                    .unwrap_or(PhysicalSize::new(0, 0))
+                    .to_logical(window.scale_factor().unwrap_or(1.0))
+            });
 
-    if size.width == 0.0 || size.height == 0.0 {
-        return Ok(());
+        if size.width == 0.0 || size.height == 0.0 {
+            return Ok(());
+        }
+
+        size.height += 1.0;
+        window.set_size(tauri::Size::Logical(size))?;
+        log::info!("Window size set to: {}x{}", size.width, size.height);
+
+        // wait for window to be resized
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        size.height -= 1.0;
+        log::info!("Window size restored to: {}x{}", size.width, size.height);
+        window.set_size(tauri::Size::Logical(size))?;
     }
-
-    size.height += 1.0;
-    window.set_size(tauri::Size::Logical(size))?;
-    log::info!("Window size set to: {}x{}", size.width, size.height);
-
-    // wait for window to be resized
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-    size.height -= 1.0;
-    log::info!("Window size restored to: {}x{}", size.width, size.height);
-    window.set_size(tauri::Size::Logical(size))?;
     Ok(())
 }
 
