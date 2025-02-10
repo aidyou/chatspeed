@@ -3,7 +3,6 @@ use tauri::Manager;
 use tauri::PhysicalSize;
 use tauri::WebviewWindowBuilder;
 
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 pub struct WindowSize {
     pub width: u32,
