@@ -1,9 +1,9 @@
 use log::{error, warn};
-use tauri::LogicalSize;
 use tauri::Manager;
 use tauri::PhysicalSize;
 use tauri::WebviewWindowBuilder;
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 pub struct WindowSize {
     pub width: u32,
@@ -38,18 +38,19 @@ pub struct WindowSize {
 /// This function can be removed once Tauri fixes the transparent window initialization issue
 /// 当 Tauri 修复透明窗口初始化问题后，可以移除此函数
 pub async fn fix_window_visual(
-    window: &tauri::WebviewWindow,
-    size: Option<WindowSize>,
+    _window: &tauri::WebviewWindow,
+    _size: Option<WindowSize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     {
-        let mut size = size
+        use tauri::LogicalSize;
+        let mut size = _size
             .map(|s| LogicalSize::new(s.width as f64, s.height as f64))
             .unwrap_or_else(|| {
-                window
+                _window
                     .inner_size()
                     .unwrap_or(PhysicalSize::new(0, 0))
-                    .to_logical(window.scale_factor().unwrap_or(1.0))
+                    .to_logical(_window.scale_factor().unwrap_or(1.0))
             });
 
         if size.width == 0.0 || size.height == 0.0 {
@@ -57,7 +58,7 @@ pub async fn fix_window_visual(
         }
 
         size.height += 1.0;
-        window.set_size(tauri::Size::Logical(size))?;
+        _window.set_size(tauri::Size::Logical(size))?;
         log::info!("Window size set to: {}x{}", size.width, size.height);
 
         // wait for window to be resized
@@ -65,7 +66,7 @@ pub async fn fix_window_visual(
 
         size.height -= 1.0;
         log::info!("Window size restored to: {}x{}", size.width, size.height);
-        window.set_size(tauri::Size::Logical(size))?;
+        _window.set_size(tauri::Size::Logical(size))?;
     }
     Ok(())
 }
