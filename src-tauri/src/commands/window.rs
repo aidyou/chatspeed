@@ -96,6 +96,13 @@ pub fn open_setting_window(
 ///
 /// # Parameters
 /// - `app_handle` - Tauri application handle
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// await invoke('open_note_window');
+/// ```
 #[command]
 pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let label = "note";

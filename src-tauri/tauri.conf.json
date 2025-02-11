@@ -107,10 +107,11 @@
     "longDescription": "",
     "macOS": {
       "frameworks": [],
-      "minimumSystemVersion": "",
+      "minimumSystemVersion": "10.13",
       "exceptionDomain": "",
-      "signingIdentity": null,
-      "entitlements": null
+      "signingIdentity": "-",
+      "entitlements": null,
+      "providerShortName": null
     },
     "windows": {
       "certificateThumbprint": null,

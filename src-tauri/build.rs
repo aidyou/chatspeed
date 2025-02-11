@@ -111,6 +111,8 @@ fn main() {
     // Set up libc++ linking on macOS
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib");
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/lib");
+    // 添加应用程序框架路径
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
 
     tauri_build::build();
 }
