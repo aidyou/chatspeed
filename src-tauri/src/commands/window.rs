@@ -90,21 +90,16 @@ pub fn open_setting_window(
     Ok(())
 }
 
-/// Open or focus the note window
+/// Internal function to create or open note window
 ///
 /// This function is used to open a new note window, or if the window already exists, it displays and focuses the window.
 ///
 /// # Parameters
 /// - `app_handle` - Tauri application handle
 ///
-/// # Example
-/// ```js
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// await invoke('open_note_window');
-/// ```
-#[command]
-pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+/// # Returns
+/// - `Result<(), String>` - Ok if successful, Err with error message if failed
+pub(crate) async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let label = "note";
     #[cfg(debug_assertions)]
     log::debug!("Opening note window");
@@ -190,6 +185,35 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String
             }
         });
     }
+    Ok(())
+}
+
+/// Opens the note window via event system
+///
+/// This function emits an event to the main window to create or focus the note window.
+/// This approach helps avoid potential deadlocks on Windows when creating windows from IPC handlers.
+///
+/// # Parameters
+/// - `app_handle` - Tauri application handle
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// await invoke('open_note_window');
+/// ```
+#[command]
+pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    // Get the main window to emit the event
+    let main_window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| t!("main.window_not_ready"))?;
+
+    // Emit an event to create the window on the main thread
+    main_window
+        .emit("create-note-window", ())
+        .map_err(|e| t!("main.failed_to_emit_event", error = e))?;
+
     Ok(())
 }
 
