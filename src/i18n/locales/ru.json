@@ -25,7 +25,8 @@
     "mindmap": "Ментальная карта",
     "alwaysOnTop": "Поверх всех окон",
     "autoHide": "Автоматически скрывать при потере фокуса",
-    "clear": "Очистить"
+    "clear": "Очистить",
+    "noData": "Нет данных"
   },
   "settings": {
     "type": {
@@ -54,6 +55,7 @@
       "shortcutSettings": "Настройки горячих клавиш",
       "mainWindowVisibleShortcut": "Горячая клавиша для главного окна",
       "assistantWindowVisibleShortcut": "Горячая клавиша для окна помощника",
+      "noteWindowVisibleShortcut": "Горячая клавиша для показа окна заметок",
       "shortcutNeedsModifier": "Буквы и цифры должны использоваться с модификаторами (Ctrl, Alt, Shift)",
       "pressKeysToSet": "Нажмите комбинацию клавиш...",
       "updateShortcutFailed": "Ошибка обновления горячих клавиш: {error}",
@@ -229,7 +231,9 @@
     "showFavoriteConversations": "Показать избранные разговоры",
     "resendMessage": "Повторно отправить сообщение",
     "quoteMessage": "Цитировать сообщение",
-    "quoteMessagePrompt": "= = = = = = = = = = =\n\nВыше ваш предыдущий ответ. Ниже мой ответ или новый вопрос\n\n= = = = = = = = = = =",
+    "quoteMessagePrompt": "= = = = = = = = = = =\n\nВыше ваш предыдущий ответ. Ниже мой ответ или новый вопрос.\n\n= = = = = = = = = = =",
+    "reasoning": "Размышляю...",
+    "reasoningProcess": "Процесс размышления",
     "transaction": {
       "autoDetection": "Автоопределение",
       "errorOnDetectLanguage": "Ошибка определения языка. Пожалуйста, выберите исходный язык вручную. Ошибка: {error}"
@@ -239,12 +243,47 @@
     "diagramError": "Ошибка отрисовки блок-схемы",
     "mindmapError": "Ошибка отрисовки ментальной карты",
     "goToChat": "Продолжить задавать вопросы",
-    "errorOnGoToChat": "Ошибка перехода к окну чата: {error}"
+    "errorOnGoToChat": "Ошибка перехода к окну чата: {error}",
+    "takeNote": "Сохранить в заметках",
+    "errorOnDeleteNote": "Ошибка при удалении заметки: {error}",
+    "errorOnGenerateTitle": "Ошибка при генерации заголовка: {error}",
+    "noteDeleteConfirmContent": "Вы уверены, что хотите удалить эту заметку?",
+    "noteDeleteConfirmTitle": "Подтверждение удаления",
+    "noteSaveFailed": "Ошибка при сохранении заметки: {error}",
+    "noteSaved": "Заметка сохранена",
+    "noteTags": "Теги",
+    "noteTagsPlaceholder": "Разделите теги запятыми",
+    "noteTagsRequired": "Пожалуйста, введите теги",
+    "noteTitle": "Заголовок",
+    "noteTitlePlaceholder": "Введите заголовок заметки",
+    "noteTitleRequired": "Пожалуйста, введите заголовок",
+    "copyMessage": "Копировать сообщение",
+    "deleteMessage": "Удалить сообщение"
   },
   "assistant": {
     "ask": "Спросить ИИ",
     "askDescription": "Здравствуйте! Чем могу помочь?",
     "chatPlaceholder": "Спрашивать, переводить, писать, программировать и т.д... Используйте ↑↓ для выбора навыков\nНажмите alt+q для ответа на сообщения ИИ, alt+c для копирования сообщений",
     "haveNoModel": "Вы не добавили ни одной модели. Пожалуйста, добавьте их в центре настроек"
+  },
+  "note": {
+    "searchNotePlaceholder": "Поиск заметок"
+  },
+  "update": {
+    "autoRestartIn": "Автоматический перезапуск через {seconds} секунд",
+    "cancel": "Не обновлять сейчас",
+    "cancelDownload": "Отменить загрузку",
+    "confirm": "Обновить сейчас",
+    "downloadCompleted": "Загрузка завершена",
+    "downloadFailed": "Ошибка загрузки",
+    "downloading": "Загрузка обновления",
+    "newVersion": "Найдена новая версия",
+    "readyMessage": "Новая версия готова, требуется перезапуск приложения для завершения обновления.",
+    "readyTitle": "Обновление готово",
+    "releaseNotes": "Примечания к выпуску",
+    "restartLater": "Перезапустить позже",
+    "restartNow": "Перезапустить сейчас",
+    "skipVersion": "Пропустить эту версию",
+    "viewOnGitHub": "Смотреть больше примечаний к выпуску на GitHub"
   }
 }

@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Ошибка чтения потока данных: %{error}"
 
 db:
+  already_exists: "Данные уже существуют"
   conversion_not_found: "Разговор не найден"
   database_error: "Ошибка базы данных: %{error}"
   failed_to_backup_chat_database: "Не удалось создать резервную копию базы данных чата: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Не удалось создать хранилище конфигурации: %{error}"
   failed_to_create_log_directory: "Не удалось создать директорию журналов"
   failed_to_create_log_file: "Не удалось создать файл журнала"
+  failed_to_create_note_window: "Не удалось создать окно заметок: %{error}"
+  failed_to_create_settings_window: "Не удалось создать окно настроек: %{error}"
   failed_to_create_tray: "Не удалось создать системный трей: %{error}"
   failed_to_create_webview_window: "Не удалось создать окно WebView: %{error}"
   failed_to_find_window_with_label: "Не удалось найти окно с меткой: %{label}"
+  failed_to_fix_note_window_visual: "Не удалось исправить визуальное отображение окна заметок: %{error}"
+  failed_to_fix_window_visual: "Не удалось исправить визуальное отображение окна: %{error}"
   failed_to_initialize_logger: "Не удалось инициализировать регистратор"
+  failed_to_navigate_to_settings: "Не удалось перейти к настройкам: %{error}"
   failed_to_navigate_to_url: "Не удалось перейти по URL: %{url}, ошибка: %{error}"
   failed_to_retrieve_log_directory: "Не удалось получить директорию журналов приложения"
+  failed_to_set_max_window_size: "Не удалось установить максимальный размер окна: %{error}"
   failed_to_set_window_always_on_top: "Не удалось установить окно поверх всех окон: %{error}"
+  failed_to_set_window_focus: "Не удалось установить фокус окна: %{error}"
+  failed_to_show_window: "Не удалось показать окно: %{error}"
   failed_to_start_up_application: "Не удалось запустить приложение"
+  failed_to_check_window_visibility: "Не удалось проверить видимость окна: %{error}"
 
 network:
   client_build_error: "Ошибка создания HTTP-клиента: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Запрос не выполнен: %{error}"
   response_read_error: "Ошибка чтения ответа: %{error}"
   stream_decode_error: "Ошибка декодирования потока данных: %{error}"
+
+note:
+  already_exists: "Вы уже добавили эту заметку"
 
 setting:
   file_not_exists: "Файл не существует: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Выход"
   settings: "Настройки"
   skill: "Навыки"
+
+updater:
+  check_failed: "Не удалось проверить обновления: %{error}"
+  config_error: "Ошибка конфигурации: %{error}"
+  download_failed: "Не удалось загрузить: %{error}"
+  install_failed: "Не удалось установить обновление: %{error}"
+  invalid_current_version_format: "Недопустимый формат текущей версии: %{error}"
+  invalid_version_format: "Недопустимый формат версии: %{error}"
+  update_not_found: "Обновление не найдено"
+  version_check_failed: "Не удалось проверить версию: %{error}"
+  version_mismatch: "Версии не совпадают"

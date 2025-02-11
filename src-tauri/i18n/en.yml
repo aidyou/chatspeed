@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Failed to read stream data: %{error}"
 
 db:
+  already_exists: "Data already exists"
   conversion_not_found: "Conversion not found"
   database_error: "Database error: %{error}"
   failed_to_backup_chat_database: "Failed to backup chat database: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Failed to create config store: %{error}"
   failed_to_create_log_directory: "Failed to create the log directory"
   failed_to_create_log_file: "Failed to create the log file"
+  failed_to_create_note_window: "Failed to create note window: %{error}"
+  failed_to_create_settings_window: "Failed to create settings window: %{error}"
   failed_to_create_tray: "Failed to create tray: %{error}"
   failed_to_create_webview_window: "Failed to create webview window: %{error}"
   failed_to_find_window_with_label: "Failed to find window with label: %{label}"
+  failed_to_fix_note_window_visual: "Failed to fix note window visual: %{error}"
+  failed_to_fix_window_visual: "Failed to fix window visual: %{error}"
   failed_to_initialize_logger: "Failed to initialize the logger"
+  failed_to_navigate_to_settings: "Failed to navigate to settings page: %{error}"
   failed_to_navigate_to_url: "Failed to navigate to URL: %{url}, error: %{error}"
   failed_to_retrieve_log_directory: "Failed to retrieve the application log directory"
+  failed_to_set_max_window_size: "Failed to set maximum window size: %{error}"
   failed_to_set_window_always_on_top: "Failed to set window always on top: %{error}"
+  failed_to_set_window_focus: "Failed to set window focus: %{error}"
+  failed_to_show_window: "Failed to show window: %{error}"
   failed_to_start_up_application: "Failed to start up the application"
+  failed_to_check_window_visibility: "Failed to check window visibility: %{error}"
 
 network:
   client_build_error: "Failed to create HTTP client: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Request failed: %{error}"
   response_read_error: "Failed to read response: %{error}"
   stream_decode_error: "Failed to decode stream data: %{error}"
+
+note:
+  already_exists: "You have already added this note"
 
 setting:
   file_not_exists: "File does not exist: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Quit"
   settings: "Settings"
   skill: "Skills"
+
+updater:
+  check_failed: "Failed to check for updates: %{error}"
+  config_error: "Configuration error: %{error}"
+  download_failed: "Download failed: %{error}"
+  install_failed: "Failed to install update: %{error}"
+  invalid_current_version_format: "Invalid current version format: %{error}"
+  invalid_version_format: "Invalid version format: %{error}"
+  update_not_found: "No update found"
+  version_check_failed: "Version check failed: %{error}"
+  version_mismatch: "Version mismatch"

@@ -25,7 +25,8 @@
     "mindmap": "Mapa mental",
     "alwaysOnTop": "Siempre visible",
     "autoHide": "Ocultar automáticamente al perder el foco",
-    "clear": "Limpiar"
+    "clear": "Limpiar",
+    "noData": "Sin datos"
   },
   "settings": {
     "type": {
@@ -54,6 +55,7 @@
       "shortcutSettings": "Configuración de atajos",
       "mainWindowVisibleShortcut": "Atajo para mostrar ventana principal",
       "assistantWindowVisibleShortcut": "Atajo para mostrar ventana del asistente",
+      "noteWindowVisibleShortcut": "Atajo para mostrar ventana de NotaIntel",
       "shortcutNeedsModifier": "Las letras y números deben usarse con modificadores (Ctrl, Alt, Shift)",
       "pressKeysToSet": "Presione la combinación de teclas...",
       "updateShortcutFailed": "Error al actualizar el atajo: {error}",
@@ -221,30 +223,67 @@
       "lastYear": "Año pasado",
       "earlier": "Anterior"
     },
-    "searchChat": "Buscar chats",
-    "inputMessagePlaceholder": "Ingrese {at} para invocar habilidades",
-    "editConversationTitle": "Editar título de la conversación",
-    "conversationTitle": "Título de la conversación",
-    "conversationTitleUpdated": "Título de la conversación actualizado",
+    "searchChat": "Buscar en conversaciones",
+    "inputMessagePlaceholder": "Ingrese {at} para invocar una habilidad",
+    "editConversationTitle": "Editar tema de conversación",
+    "conversationTitle": "Tema de conversación",
+    "conversationTitleUpdated": "Tema de conversación actualizado",
     "showFavoriteConversations": "Mostrar conversaciones favoritas",
     "resendMessage": "Reenviar mensaje",
     "quoteMessage": "Citar mensaje",
-    "quoteMessagePrompt": "= = = = = = = = = = =\n\nArriba está su respuesta anterior. Abajo está mi respuesta o nueva pregunta\n\n= = = = = = = = = = =",
+    "quoteMessagePrompt": "= = = = = = = = = = =\n\nArriba está su respuesta anterior, abajo está mi respuesta o nueva pregunta\n\n= = = = = = = = = = =",
     "transaction": {
       "autoDetection": "Detección automática",
       "errorOnDetectLanguage": "Error al detectar el idioma. Por favor seleccione el idioma de origen manualmente. Error: {error}"
     },
     "generatingDiagram": "Generando diagrama de flujo...",
     "generatingMindmap": "Generando mapa mental...",
-    "diagramError": "Error al renderizar diagrama de flujo",
-    "mindmapError": "Error al renderizar mapa mental",
+    "diagramError": "Error al renderizar el diagrama de flujo",
+    "mindmapError": "Error al renderizar el mapa mental",
     "goToChat": "Continuar preguntando",
-    "errorOnGoToChat": "Error al saltar a la ventana de chat: {error}"
+    "errorOnGoToChat": "Error al saltar a la ventana de chat: {error}",
+    "copyMessage": "Copiar mensaje",
+    "deleteMessage": "Eliminar mensaje",
+    "noteDeleteConfirmContent": "¿Está seguro de que desea eliminar esta nota?",
+    "noteDeleteConfirmTitle": "Confirmar eliminación",
+    "noteSaveFailed": "Error al guardar la nota: {error}",
+    "noteSaved": "Nota guardada",
+    "noteTags": "Etiquetas",
+    "noteTagsPlaceholder": "Separe múltiples etiquetas con comas",
+    "noteTagsRequired": "Por favor ingrese etiquetas",
+    "noteTitle": "Título",
+    "noteTitlePlaceholder": "Por favor ingrese el título de la nota",
+    "noteTitleRequired": "Por favor ingrese un título",
+    "reasoning": "Razonando...",
+    "reasoningProcess": "Proceso de razonamiento",
+    "takeNote": "Guardar en NotaIntel",
+    "errorOnDeleteNote": "Error al eliminar la nota: {error}",
+    "errorOnGenerateTitle": "Error al generar el título: {error}"
   },
   "assistant": {
     "ask": "Preguntar a la IA",
     "askDescription": "¡Hola! ¿En qué puedo ayudarte?",
     "chatPlaceholder": "Preguntar, traducir, escribir, programar, etc... Use ↑↓ para seleccionar habilidades\nPresione alt+q para responder a mensajes de IA, alt+c para copiar mensajes",
     "haveNoModel": "No ha agregado ningún modelo. Por favor agréguelos desde el centro de configuración"
+  },
+  "note": {
+    "searchNotePlaceholder": "Buscar en NotaIntel"
+  },
+  "update": {
+    "autoRestartIn": "Reinicio automático en {seconds} segundos",
+    "cancel": "No actualizar ahora",
+    "cancelDownload": "Cancelar descarga",
+    "confirm": "Actualizar ahora",
+    "downloadCompleted": "Descarga completada",
+    "downloadFailed": "Error en la descarga",
+    "downloading": "Descargando actualización",
+    "newVersion": "Nueva versión encontrada",
+    "readyMessage": "La nueva versión está lista, la aplicación debe reiniciarse para completar la actualización.",
+    "readyTitle": "Actualización lista",
+    "releaseNotes": "Notas de la versión",
+    "restartLater": "Reiniciar más tarde",
+    "restartNow": "Reiniciar ahora",
+    "skipVersion": "Omitir esta versión",
+    "viewOnGitHub": "Ver más notas de la versión en GitHub"
   }
 }

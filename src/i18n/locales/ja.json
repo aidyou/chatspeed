@@ -25,7 +25,8 @@
     "mindmap": "マインドマップ",
     "alwaysOnTop": "常に最前面に表示",
     "autoHide": "フォーカス外時に自動非表示",
-    "clear": "クリア"
+    "clear": "クリア",
+    "noData": "データなし"
   },
   "settings": {
     "type": {
@@ -54,6 +55,7 @@
       "shortcutSettings": "ショートカット設定",
       "mainWindowVisibleShortcut": "メインウィンドウを表示するショートカット",
       "assistantWindowVisibleShortcut": "アシスタントウィンドウを表示するショートカット",
+      "noteWindowVisibleShortcut": "智書ウィンドウを表示するショートカット",
       "shortcutNeedsModifier": "文字と数字は修飾キー（Ctrl、Alt、Shift）と組み合わせて使用する必要があります",
       "pressKeysToSet": "キーの組み合わせを押してください...",
       "updateShortcutFailed": "ショートカットの更新に失敗しました: {error}",
@@ -223,9 +225,9 @@
     },
     "searchChat": "チャットを検索",
     "inputMessagePlaceholder": "{at}を入力してスキルを呼び出します",
-    "editConversationTitle": "会話タイトルを編集",
-    "conversationTitle": "会話タイトル",
-    "conversationTitleUpdated": "会話タイトルが更新されました",
+    "editConversationTitle": "会話テーマを編集",
+    "conversationTitle": "会話テーマ",
+    "conversationTitleUpdated": "会話テーマが更新されました",
     "showFavoriteConversations": "お気に入りの会話を表示",
     "resendMessage": "メッセージを再送信",
     "quoteMessage": "メッセージを引用",
@@ -239,12 +241,49 @@
     "diagramError": "フローチャートのレンダリングに失敗しました",
     "mindmapError": "マインドマップのレンダリングに失敗しました",
     "goToChat": "質問を続ける",
-    "errorOnGoToChat": "チャットウィンドウへのジャンプに失敗しました: {error}"
+    "errorOnGoToChat": "チャットウィンドウへのジャンプに失敗しました: {error}",
+    "copyMessage": "メッセージをコピー",
+    "deleteMessage": "メッセージを削除",
+    "errorOnDeleteNote": "ノートの削除に失敗しました：{error}",
+    "errorOnGenerateTitle": "タイトルの生成に失敗しました：{error}",
+    "noteDeleteConfirmContent": "このノートを削除してもよろしいですか？",
+    "noteDeleteConfirmTitle": "削除の確認",
+    "noteSaveFailed": "ノートの保存に失敗しました：{error}",
+    "noteSaved": "ノートが保存されました",
+    "noteTags": "タグ",
+    "noteTagsPlaceholder": "複数のタグはカンマで区切ってください",
+    "noteTagsRequired": "タグを入力してください",
+    "noteTitle": "タイトル",
+    "noteTitlePlaceholder": "ノートのタイトルを入力してください",
+    "noteTitleRequired": "タイトルを入力してください",
+    "reasoning": "思考中...",
+    "reasoningProcess": "思考プロセス",
+    "takeNote": "智書に保存"
   },
   "assistant": {
     "ask": "AIに質問",
     "askDescription": "こんにちは！ どうお手伝いできますか？",
     "chatPlaceholder": "質問、翻訳、執筆、コードなど... ↑↓を使用してスキルを選択\nalt+qでAIメッセージに返信、alt+cでメッセージをコピー",
     "haveNoModel": "モデルが追加されていません。設定センターから追加してください"
+  },
+  "note": {
+    "searchNotePlaceholder": "智書を検索"
+  },
+  "update": {
+    "autoRestartIn": "{seconds}秒後に自動的に再起動します",
+    "cancel": "今はアップデートしない",
+    "cancelDownload": "ダウンロードをキャンセル",
+    "confirm": "今すぐアップデート",
+    "downloadCompleted": "ダウンロード完了",
+    "downloadFailed": "ダウンロード失敗",
+    "downloading": "アップデートをダウンロード中",
+    "newVersion": "新しいバージョンが見つかりました",
+    "readyMessage": "新しいバージョンの準備ができました。アップデートを完了するにはアプリを再起動する必要があります。",
+    "readyTitle": "アップデート準備完了",
+    "releaseNotes": "リリースノート",
+    "restartLater": "後で再起動",
+    "restartNow": "今すぐ再起動",
+    "skipVersion": "このバージョンをスキップ",
+    "viewOnGitHub": "GitHubでより詳しいリリースノートを見る"
   }
 }

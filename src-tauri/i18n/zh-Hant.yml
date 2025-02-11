@@ -10,6 +10,7 @@ chat:
   stream_read_error: "讀取串流資料失敗：%{error}"
 
 db:
+  already_exists: "資料已存在"
   conversion_not_found: "對話未找到"
   database_error: "資料庫錯誤：%{error}"
   failed_to_backup_chat_database: "無法備份聊天資料庫：%{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "無法建立設定儲存：%{error}"
   failed_to_create_log_directory: "無法建立日誌目錄"
   failed_to_create_log_file: "無法建立日誌檔案"
+  failed_to_create_note_window: "無法建立筆記視窗：%{error}"
+  failed_to_create_settings_window: "無法建立設定視窗：%{error}"
   failed_to_create_tray: "無法建立系統匣：%{error}"
   failed_to_create_webview_window: "無法建立WebView視窗：%{error}"
   failed_to_find_window_with_label: "無法找到指定標籤的視窗：%{label}"
+  failed_to_fix_note_window_visual: "無法修正筆記視窗顯示：%{error}"
+  failed_to_fix_window_visual: "無法修正視窗顯示：%{error}"
   failed_to_initialize_logger: "無法初始化日誌系統"
+  failed_to_navigate_to_settings: "無法導航至設定：%{error}"
   failed_to_navigate_to_url: "無法導航至URL：%{url}，錯誤：%{error}"
   failed_to_retrieve_log_directory: "無法取得應用程式日誌目錄"
+  failed_to_set_max_window_size: "無法設定視窗最大尺寸：%{error}"
   failed_to_set_window_always_on_top: "無法將視窗置頂：%{error}"
+  failed_to_set_window_focus: "無法設定視窗焦點：%{error}"
+  failed_to_show_window: "無法顯示視窗：%{error}"
   failed_to_start_up_application: "無法啟動應用程式"
+  failed_to_check_window_visibility: "無法檢查視窗可見性：%{error}"
 
 network:
   client_build_error: "建立HTTP客戶端失敗：%{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "請求失敗：%{error}"
   response_read_error: "讀取回應失敗：%{error}"
   stream_decode_error: "解碼串流資料失敗：%{error}"
+
+note:
+  already_exists: "您已經添加過此筆記"
 
 setting:
   file_not_exists: "檔案不存在：%{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "退出"
   settings: "設定"
   skill: "技能"
+
+updater:
+  check_failed: "檢查更新失敗：%{error}"
+  config_error: "設定錯誤：%{error}"
+  download_failed: "下載失敗：%{error}"
+  install_failed: "安裝更新失敗：%{error}"
+  invalid_current_version_format: "無效的當前版本格式：%{error}"
+  invalid_version_format: "無效的版本格式：%{error}"
+  update_not_found: "未找到更新"
+  version_check_failed: "版本檢查失敗：%{error}"
+  version_mismatch: "版本不匹配"

@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Streaming-Daten konnten nicht gelesen werden: %{error}"
 
 db:
+  already_exists: "Daten existieren bereits"
   conversion_not_found: "Konversation nicht vorhanden"
   database_error: "Datenbankfehler: %{error}"
   failed_to_backup_chat_database: "Chat-Datenbank konnte nicht gesichert werden: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Konfigurations-Speicher konnte nicht erstellt werden: %{error}"
   failed_to_create_log_directory: "Protokollverzeichnis konnte nicht erstellt werden"
   failed_to_create_log_file: "Protokolldatei konnte nicht erstellt werden"
+  failed_to_create_note_window: "Notizfenster konnte nicht erstellt werden: %{error}"
+  failed_to_create_settings_window: "Einstellungsfenster konnte nicht erstellt werden: %{error}"
   failed_to_create_tray: "Taskleistensymbol konnte nicht erstellt werden: %{error}"
   failed_to_create_webview_window: "Webview-Fenster konnte nicht erstellt werden: %{error}"
   failed_to_find_window_with_label: "Fenster mit Bezeichnung nicht gefunden: %{label}"
+  failed_to_fix_note_window_visual: "Visuelle Darstellung des Notizfensters konnte nicht korrigiert werden: %{error}"
+  failed_to_fix_window_visual: "Visuelle Darstellung des Fensters konnte nicht korrigiert werden: %{error}"
   failed_to_initialize_logger: "Protokollierungssystem konnte nicht initialisiert werden"
+  failed_to_navigate_to_settings: "Navigation zu den Einstellungen nicht möglich: %{error}"
   failed_to_navigate_to_url: "Navigation zur URL nicht möglich: %{url}, Fehler: %{error}"
   failed_to_retrieve_log_directory: "Anwendungsprotokolle-Verzeichnis konnte nicht abgerufen werden"
+  failed_to_set_max_window_size: "Maximale Fenstergröße konnte nicht festgelegt werden: %{error}"
   failed_to_set_window_always_on_top: "Fenster konnte nicht im Vordergrund gehalten werden: %{error}"
+  failed_to_set_window_focus: "Fensterfokus konnte nicht gesetzt werden: %{error}"
+  failed_to_show_window: "Fenster konnte nicht angezeigt werden: %{error}"
   failed_to_start_up_application: "Anwendung konnte nicht gestartet werden"
+  failed_to_check_window_visibility: "Fenstersichtbarkeit konnte nicht überprüft werden: %{error}"
 
 network:
   client_build_error: "HTTP-Client konnte nicht erstellt werden: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Anfrage fehlgeschlagen: %{error}"
   response_read_error: "Antwort konnte nicht gelesen werden: %{error}"
   stream_decode_error: "Streaming-Daten konnten nicht dekodiert werden: %{error}"
+
+note:
+  already_exists: "Sie haben diese Notiz bereits hinzugefügt"
 
 setting:
   file_not_exists: "Datei existiert nicht: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Beenden"
   settings: "Einstellungen"
   skill: "Fähigkeiten"
+
+updater:
+  check_failed: "Update-Prüfung fehlgeschlagen: %{error}"
+  config_error: "Konfigurationsfehler: %{error}"
+  download_failed: "Download fehlgeschlagen: %{error}"
+  install_failed: "Update-Installation fehlgeschlagen: %{error}"
+  invalid_current_version_format: "Ungültiges aktuelles Versionsformat: %{error}"
+  invalid_version_format: "Ungültiges Versionsformat: %{error}"
+  update_not_found: "Kein Update gefunden"
+  version_check_failed: "Versionsprüfung fehlgeschlagen: %{error}"
+  version_mismatch: "Versionen stimmen nicht überein"

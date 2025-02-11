@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Échec de la lecture des données du flux : %{error}"
 
 db:
+  already_exists: "Les données existent déjà"
   conversion_not_found: "Conversation introuvable"
   database_error: "Erreur de base de données : %{error}"
   failed_to_backup_chat_database: "Échec de la sauvegarde de la base de données de chat : %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Échec de la création du stockage de configuration : %{error}"
   failed_to_create_log_directory: "Échec de la création du répertoire de journaux"
   failed_to_create_log_file: "Échec de la création du fichier journal"
+  failed_to_create_note_window: "Échec de la création de la fenêtre de notes : %{error}"
+  failed_to_create_settings_window: "Échec de la création de la fenêtre des paramètres : %{error}"
   failed_to_create_tray: "Échec de la création de l'icône de la barre d'état : %{error}"
   failed_to_create_webview_window: "Échec de la création de la fenêtre webview : %{error}"
   failed_to_find_window_with_label: "Fenêtre introuvable avec l'étiquette : %{label}"
+  failed_to_fix_note_window_visual: "Échec de la correction de l'affichage de la fenêtre de notes : %{error}"
+  failed_to_fix_window_visual: "Échec de la correction de l'affichage de la fenêtre : %{error}"
   failed_to_initialize_logger: "Échec de l'initialisation du système de journalisation"
+  failed_to_navigate_to_settings: "Échec de la navigation vers les paramètres : %{error}"
   failed_to_navigate_to_url: "Échec de la navigation vers l'URL : %{url}, erreur : %{error}"
   failed_to_retrieve_log_directory: "Échec de la récupération du répertoire des journaux de l'application"
+  failed_to_set_max_window_size: "Échec de la définition de la taille maximale de la fenêtre : %{error}"
   failed_to_set_window_always_on_top: "Échec du maintien de la fenêtre au premier plan : %{error}"
+  failed_to_set_window_focus: "Échec de la mise au premier plan de la fenêtre : %{error}"
+  failed_to_show_window: "Échec de l'affichage de la fenêtre : %{error}"
   failed_to_start_up_application: "Échec du démarrage de l'application"
+  failed_to_check_window_visibility: "Échec de la vérification de la visibilité de la fenêtre : %{error}"
 
 network:
   client_build_error: "Échec de la création du client HTTP : %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Requête échouée : %{error}"
   response_read_error: "Échec de la lecture de la réponse : %{error}"
   stream_decode_error: "Échec du décodage des données du flux : %{error}"
+
+note:
+  already_exists: "Vous avez déjà ajouté cette note"
 
 setting:
   file_not_exists: "Le fichier n'existe pas : %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Quitter"
   settings: "Paramètres"
   skill: "Compétences"
+
+updater:
+  check_failed: "Échec de la vérification des mises à jour : %{error}"
+  config_error: "Erreur de configuration : %{error}"
+  download_failed: "Échec du téléchargement : %{error}"
+  install_failed: "Échec de l'installation de la mise à jour : %{error}"
+  invalid_current_version_format: "Format de la version actuelle invalide : %{error}"
+  invalid_version_format: "Format de version invalide : %{error}"
+  update_not_found: "Aucune mise à jour trouvée"
+  version_check_failed: "Échec de la vérification de la version : %{error}"
+  version_mismatch: "Versions incompatibles"

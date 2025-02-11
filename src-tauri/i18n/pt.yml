@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Erro ao ler dados do stream: %{error}"
 
 db:
+  already_exists: "Os dados já existem"
   conversion_not_found: "Conversa não encontrada"
   database_error: "Erro de base de dados: %{error}"
   failed_to_backup_chat_database: "Falha ao fazer backup do banco de dados de chat: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Falha ao criar armazenamento de configuração: %{error}"
   failed_to_create_log_directory: "Falha ao criar diretório de registros"
   failed_to_create_log_file: "Falha ao criar arquivo de registro"
+  failed_to_create_note_window: "Falha ao criar janela de notas: %{error}"
+  failed_to_create_settings_window: "Falha ao criar janela de configurações: %{error}"
   failed_to_create_tray: "Falha ao criar bandeja do sistema: %{error}"
   failed_to_create_webview_window: "Falha ao criar janela WebView: %{error}"
   failed_to_find_window_with_label: "Falha ao encontrar janela com rótulo: %{label}"
+  failed_to_fix_note_window_visual: "Falha ao corrigir visual da janela de notas: %{error}"
+  failed_to_fix_window_visual: "Falha ao corrigir visual da janela: %{error}"
   failed_to_initialize_logger: "Falha ao inicializar registrador"
+  failed_to_navigate_to_settings: "Falha ao navegar para configurações: %{error}"
   failed_to_navigate_to_url: "Falha ao navegar para URL: %{url}, erro: %{error}"
   failed_to_retrieve_log_directory: "Falha ao recuperar diretório de registros do aplicativo"
+  failed_to_set_max_window_size: "Falha ao definir tamanho máximo da janela: %{error}"
   failed_to_set_window_always_on_top: "Falha ao configurar janela sempre visível: %{error}"
+  failed_to_set_window_focus: "Falha ao definir foco da janela: %{error}"
+  failed_to_show_window: "Falha ao mostrar janela: %{error}"
   failed_to_start_up_application: "Falha ao iniciar aplicação"
+  failed_to_check_window_visibility: "Falha ao verificar visibilidade da janela: %{error}"
 
 network:
   client_build_error: "Erro ao criar cliente HTTP: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Falha na solicitação: %{error}"
   response_read_error: "Erro ao ler resposta: %{error}"
   stream_decode_error: "Erro ao decodificar dados do stream: %{error}"
+
+note:
+  already_exists: "Você já adicionou esta nota"
 
 setting:
   file_not_exists: "Arquivo não existe: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Sair"
   settings: "Configurações"
   skill: "Habilidades"
+
+updater:
+  check_failed: "Falha ao verificar atualizações: %{error}"
+  config_error: "Erro de configuração: %{error}"
+  download_failed: "Falha ao baixar: %{error}"
+  install_failed: "Falha ao instalar atualização: %{error}"
+  invalid_current_version_format: "Formato de versão atual inválido: %{error}"
+  invalid_version_format: "Formato de versão inválido: %{error}"
+  update_not_found: "Atualização não encontrada"
+  version_check_failed: "Falha ao verificar versão: %{error}"
+  version_mismatch: "Versões não correspondem"

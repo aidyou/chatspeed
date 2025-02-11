@@ -10,6 +10,7 @@ chat:
   stream_read_error: "ストリームデータの読み取りに失敗しました：%{error}"
 
 db:
+  already_exists: "データがすでに存在します"
   conversion_not_found: "会話が存在しません"
   database_error: "データベースエラー：%{error}"
   failed_to_backup_chat_database: "チャットデータベースのバックアップに失敗しました：%{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "設定ストアの作成に失敗しました：%{error}"
   failed_to_create_log_directory: "ログディレクトリの作成に失敗しました"
   failed_to_create_log_file: "ログファイルの作成に失敗しました"
+  failed_to_create_note_window: "ノートウィンドウの作成に失敗しました：%{error}"
+  failed_to_create_settings_window: "設定ウィンドウの作成に失敗しました：%{error}"
   failed_to_create_tray: "システムトレイアイコンの作成に失敗しました：%{error}"
   failed_to_create_webview_window: "Webviewウィンドウの作成に失敗しました：%{error}"
   failed_to_find_window_with_label: "指定されたラベルのウィンドウが見つかりません：%{label}"
+  failed_to_fix_note_window_visual: "ノートウィンドウの表示修正に失敗しました：%{error}"
+  failed_to_fix_window_visual: "ウィンドウの表示修正に失敗しました：%{error}"
   failed_to_initialize_logger: "ログシステムの初期化に失敗しました"
+  failed_to_navigate_to_settings: "設定画面への移動に失敗しました：%{error}"
   failed_to_navigate_to_url: "URLへの移動に失敗しました：%{url}、エラー：%{error}"
   failed_to_retrieve_log_directory: "アプリケーションログディレクトリの取得に失敗しました"
+  failed_to_set_max_window_size: "ウィンドウの最大サイズ設定に失敗しました：%{error}"
   failed_to_set_window_always_on_top: "ウィンドウの最前面表示設定に失敗しました：%{error}"
+  failed_to_set_window_focus: "ウィンドウのフォーカス設定に失敗しました：%{error}"
+  failed_to_show_window: "ウィンドウの表示に失敗しました：%{error}"
   failed_to_start_up_application: "アプリケーションの起動に失敗しました"
+  failed_to_check_window_visibility: "ウィンドウの可視性確認に失敗しました：%{error}"
 
 network:
   client_build_error: "HTTPクライアントの作成に失敗しました：%{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "リクエストが失敗しました：%{error}"
   response_read_error: "レスポンスの読み取りに失敗しました：%{error}"
   stream_decode_error: "ストリームデータのデコードに失敗しました：%{error}"
+
+note:
+  already_exists: "このノートはすでに追加されています"
 
 setting:
   file_not_exists: "ファイルが存在しません：%{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "終了"
   settings: "設定"
   skill: "スキル"
+
+updater:
+  check_failed: "アップデートの確認に失敗しました：%{error}"
+  config_error: "設定エラー：%{error}"
+  download_failed: "ダウンロードに失敗しました：%{error}"
+  install_failed: "アップデートのインストールに失敗しました：%{error}"
+  invalid_current_version_format: "現在のバージョンの形式が無効です：%{error}"
+  invalid_version_format: "無効なバージョン形式：%{error}"
+  update_not_found: "アップデートが見つかりません"
+  version_check_failed: "バージョンの確認に失敗しました：%{error}"
+  version_mismatch: "バージョンが一致しません"

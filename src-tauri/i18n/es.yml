@@ -10,6 +10,7 @@ chat:
   stream_read_error: "Error al leer datos del stream: %{error}"
 
 db:
+  already_exists: "Los datos ya existen"
   conversion_not_found: "Conversación no encontrada"
   database_error: "Error de base de datos: %{error}"
   failed_to_backup_chat_database: "Error al respaldar la base de datos de chat: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "Error al crear almacén de configuración: %{error}"
   failed_to_create_log_directory: "Error al crear directorio de registros"
   failed_to_create_log_file: "Error al crear archivo de registro"
+  failed_to_create_note_window: "Error al crear ventana de notas: %{error}"
+  failed_to_create_settings_window: "Error al crear ventana de configuración: %{error}"
   failed_to_create_tray: "Error al crear bandeja del sistema: %{error}"
   failed_to_create_webview_window: "Error al crear ventana WebView: %{error}"
   failed_to_find_window_with_label: "Error al encontrar ventana con etiqueta: %{label}"
+  failed_to_fix_note_window_visual: "Error al corregir visualización de ventana de notas: %{error}"
+  failed_to_fix_window_visual: "Error al corregir visualización de ventana: %{error}"
   failed_to_initialize_logger: "Error al inicializar el registrador"
+  failed_to_navigate_to_settings: "Error al navegar a configuración: %{error}"
   failed_to_navigate_to_url: "Error al navegar a URL: %{url}, error: %{error}"
   failed_to_retrieve_log_directory: "Error al recuperar directorio de registros de la aplicación"
+  failed_to_set_max_window_size: "Error al establecer tamaño máximo de ventana: %{error}"
   failed_to_set_window_always_on_top: "Error al configurar ventana siempre visible: %{error}"
+  failed_to_set_window_focus: "Error al establecer foco de ventana: %{error}"
+  failed_to_show_window: "Error al mostrar ventana: %{error}"
   failed_to_start_up_application: "Error al iniciar la aplicación"
+  failed_to_check_window_visibility: "Error al verificar visibilidad de ventana: %{error}"
 
 network:
   client_build_error: "Error al crear cliente HTTP: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "Solicitud fallida: %{error}"
   response_read_error: "Error al leer respuesta: %{error}"
   stream_decode_error: "Error al decodificar datos del stream: %{error}"
+
+note:
+  already_exists: "Ya has añadido esta nota"
 
 setting:
   file_not_exists: "El archivo no existe: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "Salir"
   settings: "Ajustes"
   skill: "Habilidades"
+
+updater:
+  check_failed: "Error al verificar actualizaciones: %{error}"
+  install_failed: "Error al instalar actualización: %{error}"
+  version_check_failed: "Error al verificar versión: %{error}"
+  download_failed: "Error al descargar: %{error}"
+  config_error: "Error de configuración: %{error}"
+  version_mismatch: "Versiones no coinciden"
+  update_not_found: "No se encontró actualización"
+  invalid_version_format: "Formato de versión inválido: %{error}"
+  invalid_current_version_format: "Formato de versión actual inválido: %{error}"

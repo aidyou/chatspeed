@@ -11,6 +11,7 @@
     "conversationNotFound": "Conversation does not exist or has been deleted",
     "conversationTitle": "Conversation Title",
     "conversationTitleUpdated": "Conversation title updated",
+    "copyMessage": "Copy Message",
     "date": {
       "earlier": "Earlier",
       "lastMonth": "Last Month",
@@ -23,11 +24,13 @@
       "twoDaysAgo": "The Day Before Yesterday",
       "yesterday": "Yesterday"
     },
+    "deleteMessage": "Delete Message",
     "diagramError": "Flowchart rendering failed",
     "editConversationTitle": "Edit Conversation Title",
     "errorOnCopyMessage": "Failed to copy message: {error}",
     "errorOnDeleteConversation": "Failed to delete conversation: {error}",
     "errorOnDeleteMessage": "Failed to delete message: {error}",
+    "errorOnDeleteNote": "Failed to delete note: {error}",
     "errorOnGenerateTitle": "Failed to generate title: {error}",
     "errorOnGetCurrentConversationId": "Failed to retrieve current conversation ID: {error}",
     "errorOnGoToChat": "Failed to jump to chat window: {error}",
@@ -48,11 +51,24 @@
     },
     "mindmapError": "Mind map rendering failed",
     "newConversation": "New Conversation",
+    "noteDeleteConfirmContent": "Are you sure you want to delete this note?",
+    "noteDeleteConfirmTitle": "Delete Confirmation",
+    "noteSaveFailed": "Failed to save note: {error}",
+    "noteSaved": "Note saved",
+    "noteTags": "Tags",
+    "noteTagsPlaceholder": "Separate multiple tags with commas",
+    "noteTagsRequired": "Please enter tags",
+    "noteTitle": "Title",
+    "noteTitlePlaceholder": "Please enter note title",
+    "noteTitleRequired": "Please enter title",
     "quoteMessage": "Quote Message",
     "quoteMessagePrompt": "= = = = = = = = = = =\n\nAbove is your previous reply. Below is my reply or a new question.\n\n= = = = = = = = = = =",
+    "reasoning": "Reasoning...",
+    "reasoningProcess": "Reasoning Process",
     "resendMessage": "Resend Message",
     "searchChat": "Search Chats",
     "showFavoriteConversations": "Show Favorite Conversations",
+    "takeNote": "Save to IntelNote",
     "transaction": {
       "autoDetection": "Auto Detection",
       "errorOnDetectLanguage": "Failed to detect language. Please manually select the source language. Error: {error}"
@@ -74,6 +90,7 @@
     "downloadPng": "Download PNG",
     "downloadSvg": "Download SVG",
     "mindmap": "Mind Map",
+    "noData": "No Data",
     "save": "Save",
     "upload": "Upload",
     "uploadFailed": "File upload failed"
@@ -82,10 +99,13 @@
     "about": "About",
     "assistant": "Desktop Assistant",
     "model": "AI Engine",
-    "note": "InsightNote",
+    "note": "IntelNote",
     "quit": "Quit",
     "setting": "Settings",
     "skill": "Skills"
+  },
+  "note": {
+    "searchNotePlaceholder": "Search notes"
   },
   "settings": {
     "apiProvider": {
@@ -120,6 +140,7 @@
       "lightTheme": "Light Theme",
       "mainWindowVisibleShortcut": "Show Main Window Shortcut",
       "networkSettings": "Network Settings",
+      "noteWindowVisibleShortcut": "Show Note Window Shortcut",
       "pressKeysToSet": "Press key combination...",
       "primaryLanguage": "Primary Language",
       "primaryLanguageTooltip": "Preferred option when automatic language detection fails",
@@ -259,9 +280,10 @@
     "newVersion": "New Version Available",
     "readyMessage": "The new version is ready to install. Restart the application to complete the update.",
     "readyTitle": "Update Ready",
-    "releaseNotes": "Please view release notes on GitHub",
+    "releaseNotes": "Release Notes",
     "restartLater": "Later",
     "restartNow": "Restart Now",
-    "skipVersion": "Skip this version"
+    "skipVersion": "Skip this version",
+    "viewOnGitHub": "View more release notes on GitHub"
   }
 }

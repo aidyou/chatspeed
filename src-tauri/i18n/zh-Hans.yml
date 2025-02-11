@@ -52,17 +52,26 @@ main:
   failed_to_create_config_store: "无法创建配置存储: %{error}"
   failed_to_create_log_directory: "无法创建日志目录"
   failed_to_create_log_file: "无法创建日志文件"
+  failed_to_create_note_window: "无法创建笔记窗口: %{error}"
+  failed_to_create_settings_window: "无法创建设置窗口: %{error}"
   failed_to_create_tray: "无法创建托盘: %{error}"
   failed_to_create_webview_window: "无法创建WebView窗口: %{error}"
   failed_to_find_window_with_label: "无法找到带有标签的窗口: %{label}"
+  failed_to_fix_note_window_visual: "无法修复笔记窗口视觉效果: %{error}"
+  failed_to_fix_window_visual: "无法修复窗口视觉效果: %{error}"
   failed_to_initialize_logger: "无法初始化记录器"
+  failed_to_navigate_to_settings: "无法导航到设置页面: %{error}"
   failed_to_navigate_to_url: "无法导航到URL: %{url}，错误：%{error}"
   failed_to_retrieve_log_directory: "无法检索应用程序日志目录"
+  failed_to_set_max_window_size: "无法设置最大窗口大小: %{error}"
   failed_to_set_window_always_on_top: "无法置顶窗口：%{error}"
+  failed_to_set_window_focus: "无法设置窗口焦点: %{error}"
+  failed_to_show_window: "无法显示窗口: %{error}"
   failed_to_start_up_application: "无法启动应用程序"
+  failed_to_check_window_visibility: "无法检查窗口可见性: %{error}"
 
 note:
-  already_exists: "您已添加过改笔记"
+  already_exists: "您已添加过该笔记"
 
 network:
   client_build_error: "创建HTTP客户端失败: %{error}"

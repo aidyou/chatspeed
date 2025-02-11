@@ -10,6 +10,7 @@ chat:
   stream_read_error: "스트림 데이터 읽기 실패: %{error}"
 
 db:
+  already_exists: "데이터가 이미 존재합니다"
   conversion_not_found: "대화를 찾을 수 없습니다"
   database_error: "데이터베이스 오류: %{error}"
   failed_to_backup_chat_database: "채팅 데이터베이스 백업 실패: %{error}"
@@ -51,14 +52,23 @@ main:
   failed_to_create_config_store: "설정 저장소 생성 실패: %{error}"
   failed_to_create_log_directory: "로그 디렉토리 생성 실패"
   failed_to_create_log_file: "로그 파일 생성 실패"
+  failed_to_create_note_window: "노트 창 생성 실패: %{error}"
+  failed_to_create_settings_window: "설정 창 생성 실패: %{error}"
   failed_to_create_tray: "트레이 생성 실패: %{error}"
   failed_to_create_webview_window: "WebView 창 생성 실패: %{error}"
   failed_to_find_window_with_label: "레이블이 있는 창을 찾을 수 없음: %{label}"
+  failed_to_fix_note_window_visual: "노트 창 시각적 수정 실패: %{error}"
+  failed_to_fix_window_visual: "창 시각적 수정 실패: %{error}"
   failed_to_initialize_logger: "로거 초기화 실패"
+  failed_to_navigate_to_settings: "설정으로 이동 실패: %{error}"
   failed_to_navigate_to_url: "URL로 이동 실패: %{url}, 오류: %{error}"
   failed_to_retrieve_log_directory: "애플리케이션 로그 디렉토리를 검색할 수 없음"
+  failed_to_set_max_window_size: "최대 창 크기 설정 실패: %{error}"
   failed_to_set_window_always_on_top: "창을 항상 위에 표시하도록 설정 실패: %{error}"
+  failed_to_set_window_focus: "창 포커스 설정 실패: %{error}"
+  failed_to_show_window: "창 표시 실패: %{error}"
   failed_to_start_up_application: "애플리케이션 시작 실패"
+  failed_to_check_window_visibility: "창 가시성 확인 실패: %{error}"
 
 network:
   client_build_error: "HTTP 클라이언트 생성 실패: %{error}"
@@ -69,6 +79,9 @@ network:
   request_failed: "요청 실패: %{error}"
   response_read_error: "응답 읽기 실패: %{error}"
   stream_decode_error: "스트림 데이터 디코딩 실패: %{error}"
+
+note:
+  already_exists: "이미 이 노트를 추가했습니다"
 
 setting:
   file_not_exists: "파일이 존재하지 않음: %{file_path}"
@@ -82,3 +95,14 @@ tray:
   quit: "종료"
   settings: "설정"
   skill: "스킬"
+
+updater:
+  check_failed: "업데이트 확인 실패: %{error}"
+  config_error: "설정 오류: %{error}"
+  download_failed: "다운로드 실패: %{error}"
+  install_failed: "업데이트 설치 실패: %{error}"
+  invalid_current_version_format: "현재 버전 형식이 잘못되었습니다: %{error}"
+  invalid_version_format: "잘못된 버전 형식: %{error}"
+  update_not_found: "업데이트를 찾을 수 없습니다"
+  version_check_failed: "버전 확인 실패: %{error}"
+  version_mismatch: "버전이 일치하지 않습니다"
