@@ -1,5 +1,7 @@
 use tauri::Manager;
 
+use crate::commands::window::quit_window;
+
 /// Create system tray menu
 ///
 /// # Parameters
@@ -164,7 +166,7 @@ fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             crate::open_setting_window(app.clone(), Some(setting_type));
         }
         "quit" => {
-            app.exit(0);
+            quit_window(app.clone());
         }
         _ => {}
     }

@@ -305,5 +305,10 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
 /// - `app` - The app handle
 #[command]
 pub fn quit_window(app: tauri::AppHandle) {
-    app.exit(0);
+    for (_, window) in app.webview_windows() {
+        if let Err(e) = window.close() {
+            log::error!("Failed to close window: {}", e);
+        }
+    }
+    std::process::exit(0);
 }
