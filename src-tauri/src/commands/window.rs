@@ -132,25 +132,22 @@ pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
                 .build()
                 .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
 
-        webview_window.on_window_event(|event| {
-            match event {
+        #[cfg(debug_assertions)]
+        {
+            webview_window.on_window_event(|event| match event {
                 tauri::WindowEvent::Focused(focused) => {
-                    #[cfg(debug_assertions)]
-                    if focused {
+                    if *focused {
                         log::debug!("Note window focused");
                     }
                 }
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_default();
-                }
                 _ => {}
-            }
-        });
+            });
+        }
 
         webview_window
             .show()
             .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        
+
         webview_window
             .set_focus()
             .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
@@ -159,19 +156,6 @@ pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
         tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
                 log::error!("{}", t!("main.failed_to_fix_note_window_visual", error = e));
-            } else {
-                #[cfg(debug_assertions)]
-                log::debug!("Note window visual fixed");
-
-                // 检查窗口状态
-                if let Ok(is_visible) = window_clone.is_visible() {
-                    #[cfg(debug_assertions)]
-                    log::debug!("Note window visibility: {}", is_visible);
-                }
-                if let Ok(inner_size) = window_clone.inner_size() {
-                    #[cfg(debug_assertions)]
-                    log::debug!("Note window size: {}x{}", inner_size.width, inner_size.height);
-                }
             }
         });
     }
