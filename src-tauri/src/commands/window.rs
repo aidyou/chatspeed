@@ -140,13 +140,36 @@ pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
                         log::debug!("Note window focused");
                     }
                 }
+                tauri::WindowEvent::Resized(size) => {
+                    log::debug!("Note window resized: {}x{}", size.width, size.height);
+                }
+                tauri::WindowEvent::ThemeChanged(theme) => {
+                    log::debug!("Note window theme changed: {:?}", theme);
+                }
+                tauri::WindowEvent::ScaleFactorChanged {
+                    scale_factor,
+                    new_inner_size,
+                } => {
+                    log::debug!(
+                        "Note window scale factor changed: {}, new size: {}x{}",
+                        scale_factor,
+                        new_inner_size.width,
+                        new_inner_size.height
+                    );
+                }
                 _ => {}
             });
         }
 
+        #[cfg(debug_assertions)]
+        log::debug!("Showing note window...");
+
         webview_window
             .show()
             .map_err(|e| t!("main.failed_to_show_window", error = e))?;
+
+        #[cfg(debug_assertions)]
+        log::debug!("Setting note window focus...");
 
         webview_window
             .set_focus()
