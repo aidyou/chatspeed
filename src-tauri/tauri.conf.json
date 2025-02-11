@@ -38,10 +38,7 @@
         "dragDropEnabled": true,
         "transparent": true,
         "hiddenTitle": true,
-        "create": true,
-        "visible": true,
-        "alwaysOnTop": true,
-        "focus": true
+        "create": false
       },
       {
         "label": "assistant",

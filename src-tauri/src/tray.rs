@@ -155,7 +155,9 @@ fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         "note" => {
-            crate::open_note_window(app.clone());
+            if let Err(e) = crate::open_note_window(app.clone()) {
+                log::error!("Failed to open note window: {}", e);
+            }
         }
         "settings" | "model" | "skill" | "about" => {
             let setting_type = if menu_id.as_str() == "settings" {
@@ -163,10 +165,14 @@ fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             } else {
                 menu_id.as_str()
             };
-            crate::open_setting_window(app.clone(), Some(setting_type));
+            if let Err(e) = crate::open_setting_window(app.clone(), Some(setting_type)) {
+                log::error!("Failed to open setting window: {}", e);
+            }
         }
         "quit" => {
-            quit_window(app.clone());
+            if let Err(e) = quit_window(app.clone()) {
+                log::error!("Failed to quit application: {}", e);
+            }
         }
         _ => {}
     }

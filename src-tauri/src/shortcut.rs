@@ -90,7 +90,11 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
     match shortcut_type {
         CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => toggle_main_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
-        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => open_note_window(app.app_handle().clone()),
+        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => {
+            if let Err(e) = open_note_window(app.app_handle().clone()) {
+                log::error!("Failed to open note window: {}", e);
+            }
+        }
         // Add new shortcut handlers here
         // "new_window_shortcut" => toggle_new_window(app),
         _ => error!("Unknown shortcut type: {}", shortcut_type),

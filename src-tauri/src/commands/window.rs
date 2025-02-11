@@ -22,19 +22,31 @@ use tauri::{command, Emitter, LogicalSize, Manager, Runtime, WebviewWindowBuilde
 /// await invoke('open_setting_window', { settingType: 'model' });
 /// ```
 #[command]
-pub fn open_setting_window(app_handle: tauri::AppHandle, setting_type: Option<&str>) {
+pub fn open_setting_window(
+    app_handle: tauri::AppHandle,
+    setting_type: Option<&str>,
+) -> Result<(), String> {
     let label = "settings";
     if let Some(window) = app_handle.get_webview_window(label) {
         if let Some(setting_type) = setting_type {
-            let _ = window.eval(&format!(
-                "window.location.href = '/settings/{}';console.log('/settings/{}')",
-                setting_type, setting_type
-            ));
+            window
+                .eval(&format!(
+                    "window.location.href = '/settings/{}';console.log('/settings/{}')",
+                    setting_type, setting_type
+                ))
+                .map_err(|e| t!("main.failed_to_navigate_to_settings", error = e))?;
         }
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.show();
+        if !window
+            .is_visible()
+            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
+        {
+            window
+                .show()
+                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
         }
-        let _ = window.set_focus();
+        window
+            .set_focus()
+            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     } else {
         let webview_window = WebviewWindowBuilder::new(
             &app_handle,
@@ -49,41 +61,33 @@ pub fn open_setting_window(app_handle: tauri::AppHandle, setting_type: Option<&s
         .min_inner_size(600.0, 600.0)
         .transparent(true)
         .visible(false)
-        .build();
+        .build()
+        .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
 
-        match webview_window {
-            Ok(window) => {
-                match window.current_monitor() {
-                    Ok(monitor) => match monitor {
-                        Some(monitor) => {
-                            let _ = window.set_max_size(Some(tauri::Size::Logical(LogicalSize {
-                                width: 600.0,
-                                height: monitor.size().height as f64,
-                            })));
-                        }
-                        None => {
-                            log::error!("Failed to get monitor size");
-                        }
-                    },
-                    Err(e) => {
-                        log::error!("Failed to get monitor size: {}", e);
-                    }
-                }
-                let _ = window.show();
-                let _ = window.set_focus();
-
-                let window_clone = window.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
-                        log::error!("Failed to fix window visual: {}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                log::error!("Failed to create settings window: {}", e);
-            }
+        if let Ok(Some(monitor)) = webview_window.current_monitor() {
+            webview_window
+                .set_max_size(Some(tauri::Size::Logical(LogicalSize {
+                    width: 600.0,
+                    height: monitor.size().height as f64,
+                })))
+                .map_err(|e| t!("main.failed_to_set_max_window_size", error = e))?;
         }
+
+        webview_window
+            .show()
+            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
+        webview_window
+            .set_focus()
+            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
+
+        let window_clone = webview_window.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
+                log::error!("{}", t!("main.failed_to_fix_window_visual", error = e));
+            }
+        });
     }
+    Ok(())
 }
 
 /// Open or focus the note window
@@ -91,16 +95,29 @@ pub fn open_setting_window(app_handle: tauri::AppHandle, setting_type: Option<&s
 /// This function is used to open a new note window, or if the window already exists, it displays and focuses the window.
 ///
 /// # Parameters
-/// - `app_handle` - Tauri application handle, used to manage windows, automatically injected by Tauri
+/// - `app_handle` - Tauri application handle
 #[command]
-pub fn open_note_window(app_handle: tauri::AppHandle) {
+pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let label = "note";
+    #[cfg(debug_assertions)]
+    log::debug!("Opening note window");
+
     if let Some(window) = app_handle.get_webview_window(label) {
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.show();
+        if !window
+            .is_visible()
+            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
+        {
+            window
+                .show()
+                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
         }
-        let _ = window.set_focus();
+        window
+            .set_focus()
+            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     } else {
+        #[cfg(debug_assertions)]
+        log::debug!("Creating new note window");
+
         let webview_window =
             WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::App("/note".into()))
                 .title("Notes")
@@ -112,25 +129,53 @@ pub fn open_note_window(app_handle: tauri::AppHandle) {
                 .min_inner_size(600.0, 400.0)
                 .transparent(true)
                 .visible(true)
-                .build();
+                .build()
+                .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
 
-        match webview_window {
-            Ok(window) => {
-                let _ = window.show();
-                let _ = window.set_focus();
-
-                let window_clone = window.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
-                        log::error!("Failed to fix note window visual: {}", e);
+        webview_window.on_window_event(|event| {
+            match event {
+                tauri::WindowEvent::Focused(focused) => {
+                    #[cfg(debug_assertions)]
+                    if focused {
+                        log::debug!("Note window focused");
                     }
-                });
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_default();
+                }
+                _ => {}
             }
-            Err(e) => {
-                log::error!("Failed to create note window: {}", e);
+        });
+
+        webview_window
+            .show()
+            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
+        
+        webview_window
+            .set_focus()
+            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
+
+        let window_clone = webview_window.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
+                log::error!("{}", t!("main.failed_to_fix_note_window_visual", error = e));
+            } else {
+                #[cfg(debug_assertions)]
+                log::debug!("Note window visual fixed");
+
+                // 检查窗口状态
+                if let Ok(is_visible) = window_clone.is_visible() {
+                    #[cfg(debug_assertions)]
+                    log::debug!("Note window visibility: {}", is_visible);
+                }
+                if let Ok(inner_size) = window_clone.inner_size() {
+                    #[cfg(debug_assertions)]
+                    log::debug!("Note window size: {}x{}", inner_size.width, inner_size.height);
+                }
             }
-        }
+        });
     }
+    Ok(())
 }
 
 /// Show the window by label
@@ -145,13 +190,21 @@ pub fn open_note_window(app_handle: tauri::AppHandle) {
 /// await invoke('show_window');
 /// ```
 #[command]
-pub fn show_window(app_handle: tauri::AppHandle, label: &str) {
+pub fn show_window(app_handle: tauri::AppHandle, label: &str) -> Result<(), String> {
     if let Some(window) = app_handle.get_webview_window(label) {
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.show();
+        if !window
+            .is_visible()
+            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
+        {
+            window
+                .show()
+                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
         }
-        let _ = window.set_focus();
+        window
+            .set_focus()
+            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     }
+    Ok(())
 }
 
 /// Opens a URL in the webview window
@@ -304,11 +357,11 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
 /// # Parameters
 /// - `app` - The app handle
 #[command]
-pub fn quit_window(app: tauri::AppHandle) {
+pub fn quit_window(app: tauri::AppHandle) -> Result<(), String> {
     for (_, window) in app.webview_windows() {
-        if let Err(e) = window.close() {
-            log::error!("Failed to close window: {}", e);
-        }
+        window
+            .close()
+            .map_err(|e| format!("Failed to close window: {}", e))?;
     }
     std::process::exit(0);
 }
