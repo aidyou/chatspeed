@@ -149,6 +149,7 @@ pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
                 tauri::WindowEvent::ScaleFactorChanged {
                     scale_factor,
                     new_inner_size,
+                    ..
                 } => {
                     log::debug!(
                         "Note window scale factor changed: {}, new size: {}x{}",
