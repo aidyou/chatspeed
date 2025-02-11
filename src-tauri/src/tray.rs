@@ -121,7 +121,12 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
             .tooltip("Chatspeed")
             .menu(&menu)
             .show_menu_on_left_click(true)
-            .on_menu_event(move |_ic, e| handle_tray_event(&app_clone, e))
+            .on_menu_event(move |_ic, e| {
+                let app = app_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    handle_tray_event(&app, e).await;
+                });
+            })
             .build(app)
             .map_err(|e| e.to_string())?;
         if let Some(icon) = app.default_window_icon() {
@@ -136,7 +141,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
 }
 
 /// Handle system tray events
-fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
+async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     dbg!(&event);
     let menu_id = event.id().as_ref().to_string();
     match menu_id.as_str() {
@@ -155,7 +160,7 @@ fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         "note" => {
-            if let Err(e) = crate::open_note_window(app.clone()) {
+            if let Err(e) = crate::open_note_window(app.clone()).await {
                 log::error!("Failed to open note window: {}", e);
             }
         }

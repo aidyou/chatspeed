@@ -3,7 +3,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use log::error;
 use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -91,13 +90,14 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
         CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => toggle_main_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
         CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => {
-            if let Err(e) = open_note_window(app.app_handle().clone()) {
-                log::error!("Failed to open note window: {}", e);
-            }
+            let app_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = open_note_window(app_handle).await {
+                    log::error!("Failed to open note window: {}", e);
+                }
+            });
         }
-        // Add new shortcut handlers here
-        // "new_window_shortcut" => toggle_new_window(app),
-        _ => error!("Unknown shortcut type: {}", shortcut_type),
+        _ => {}
     }
 }
 

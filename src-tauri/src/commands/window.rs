@@ -104,7 +104,7 @@ pub fn open_setting_window(
 /// await invoke('open_note_window');
 /// ```
 #[command]
-pub fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let label = "note";
     #[cfg(debug_assertions)]
     log::debug!("Opening note window");

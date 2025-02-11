@@ -242,26 +242,30 @@ const closeWindow = async () => {
  * Executes actions based on the selected menu command.
  * @param {string} command - The command identifier.
  */
-const handleCommand = command => {
+const handleCommand = async command => {
   console.log(command)
-  switch (command) {
-    case 'note':
-      invoke('open_note_window')
-      break
-    case 'assistant':
-      invoke('show_window', { label: 'assistant' })
-      break
-    case 'setting':
-      invoke('open_setting_window', { settingType: 'general' })
-      break
-    case 'model':
-    case 'skill':
-    case 'about':
-      invoke('open_setting_window', { settingType: command })
-      break
-    case 'quit':
-      invoke('quit_window')
-      break
+  try {
+    switch (command) {
+      case 'note':
+        await invoke('open_note_window')
+        break
+      case 'assistant':
+        await invoke('show_window', { label: 'assistant' })
+        break
+      case 'setting':
+        await invoke('open_setting_window', { settingType: 'general' })
+        break
+      case 'model':
+      case 'skill':
+      case 'about':
+        await invoke('open_setting_window', { settingType: command })
+        break
+      case 'quit':
+        await invoke('quit_window')
+        break
+    }
+  } catch (error) {
+    console.error('Failed to handle command:', error)
   }
 }
 
