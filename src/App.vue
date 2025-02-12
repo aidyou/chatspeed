@@ -316,7 +316,8 @@ body {
     backdrop-filter: unset;
     border: unset;
 
-    &.titlebar {
+    &.titlebar,
+    .header {
       border-radius: unset;
     }
   }

@@ -27,7 +27,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Mutex as StdMutex;
+use tokio::time::{sleep, Duration};
 
+use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
 
 // use commands::toolbar::*;
@@ -79,7 +82,11 @@ i18n!("i18n", fallback = "en");
 /// ```
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 
+// Define a static variable to track if the window is ready
 static WINDOW_READY: AtomicBool = AtomicBool::new(false);
+
+// Define a static variable outside the run function to store the timer handle
+static HIDE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
 
 pub async fn run() -> Result<()> {
     // let system_locale = libs::lang::get_system_locale();
@@ -193,8 +200,26 @@ pub async fn run() -> Result<()> {
                         return;
                     }
                     if !focused {
-                        if let Err(e) = window.hide() {
-                            warn!("Failed to hide assistant window: {}", e);
+                        let window_clone = window.clone();
+                        // Cancel the previous timer (if any)
+                        if let Ok(mut timer) = HIDE_TIMER.lock() {
+                            if let Some(handle) = timer.take() {
+                                handle.abort();
+                            }
+                            // Create a new timer
+                            *timer = Some(spawn(async move {
+                                sleep(Duration::from_millis(100)).await;
+                                if let Err(e) = window_clone.hide() {
+                                    warn!("Failed to hide assistant window: {}", e);
+                                }
+                            }));
+                        }
+                    } else {
+                        // Cancel the timer when the window gains focus
+                        if let Ok(mut timer) = HIDE_TIMER.lock() {
+                            if let Some(handle) = timer.take() {
+                                handle.abort();
+                            }
                         }
                     }
                 }

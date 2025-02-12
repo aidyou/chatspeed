@@ -11,6 +11,7 @@ use tauri::PhysicalSize;
 use tauri::WebviewWindowBuilder;
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub struct WindowSize {
     pub width: u32,
     pub height: u32,
@@ -196,98 +197,35 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
             .set_focus()
             .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     } else {
-        let webview_window =
+        let mut webview_window_builder =
             WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::App("/note".into()))
                 .title("Notes")
                 .decorations(false)
                 .skip_taskbar(true)
-                .maximizable(true)
-                .resizable(true)
                 .inner_size(850.0, 600.0)
-                .min_inner_size(600.0, 400.0)
-                .transparent(true)
-                .visible(true)
-                .build()
-                .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
+                .min_inner_size(600.0, 400.0);
+        #[cfg(target_os = "windows")]
+        {
+            webview_window_builder = webview_window_builder.transparent(false);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            webview_window_builder = webview_window_builder.transparent(true);
+        }
+        let webview_window = webview_window_builder
+            .build()
+            .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
 
-        webview_window
-            .show()
-            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
+        let _ = webview_window.show();
+        let _ = webview_window.set_focus();
 
-        webview_window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
-
-        let window_clone = webview_window.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
+            if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
                 log::error!("{}", t!("main.failed_to_fix_note_window_visual", error = e));
             }
         });
     }
     Ok(())
-}
-
-/// Register window creation event listeners
-///
-/// Sets up event listeners for custom window creation events:
-/// - create-note-window: Creates or focuses the note window
-/// - create-setting-window: Creates or focuses the setting window with specified type
-///
-/// # Parameters
-/// - `app_handle` - The Tauri application handle
-pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
-    // Get main window once
-    let main_window = app_handle
-        .get_webview_window("main")
-        .expect("Main window not found");
-
-    // Helper function to spawn window creation task
-    let spawn_window_task = |task: Pin<Box<dyn Future<Output = Result<(), String>> + Send>>| {
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = task.await {
-                log::error!("Failed to create window: {}", e);
-            }
-        });
-    };
-
-    // Register note window creation event
-    let app_handle_clone = app_handle.clone();
-    main_window.listen("create-note-window", move |_| {
-        let app = app_handle_clone.clone();
-        spawn_window_task(Box::pin(
-            async move { create_or_focus_note_window(app).await },
-        ));
-    });
-
-    // Register setting window creation event
-    let app_handle_clone = app_handle.clone();
-    main_window.listen("create-setting-window", move |event| {
-        let app = app_handle_clone.clone();
-        let setting_type = serde_json::from_str::<SettingWindowPayload>(event.payload())
-            .unwrap_or_else(|_| SettingWindowPayload {
-                setting_type: "general".to_string(),
-            })
-            .setting_type;
-
-        spawn_window_task(Box::pin(async move {
-            create_or_focus_setting_window(app, Some(&setting_type)).await
-        }));
-    });
-
-    // Register URL window creation event
-    main_window.listen("create-url-window", move |event| {
-        let app = app_handle.clone();
-        let url = serde_json::from_str::<UrlWindowPayload>(event.payload())
-            .unwrap_or_else(|_| UrlWindowPayload {
-                url: "https://www.aidyou.ai".to_string(),
-            })
-            .url;
-
-        spawn_window_task(Box::pin(async move {
-            create_or_focus_url_window(app, &url).await
-        }));
-    });
 }
 
 #[derive(Deserialize)]
@@ -336,7 +274,7 @@ pub async fn create_or_focus_setting_window(
             .set_focus()
             .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     } else {
-        let webview_window = WebviewWindowBuilder::new(
+        let mut webview_window_builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
             tauri::WebviewUrl::App(format!("/settings/{}", setting_type.unwrap_or("")).into()),
@@ -346,11 +284,19 @@ pub async fn create_or_focus_setting_window(
         .skip_taskbar(true)
         .maximizable(false)
         .inner_size(650.0, 700.0)
-        .min_inner_size(650.0, 600.0)
-        .transparent(true)
-        .visible(false)
-        .build()
-        .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
+        .min_inner_size(650.0, 600.0);
+
+        #[cfg(target_os = "windows")]
+        {
+            webview_window_builder = webview_window_builder.transparent(false);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            webview_window_builder = webview_window_builder.transparent(true);
+        }
+        let webview_window = webview_window_builder
+            .build()
+            .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
 
         if let Ok(Some(monitor)) = webview_window.current_monitor() {
             webview_window
@@ -361,16 +307,11 @@ pub async fn create_or_focus_setting_window(
                 .map_err(|e| t!("main.failed_to_set_max_window_size", error = e))?;
         }
 
-        webview_window
-            .show()
-            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        webview_window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
+        let _ = webview_window.show();
+        let _ = webview_window.set_focus();
 
-        let window_clone = webview_window.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
+            if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
                 log::error!("{}", t!("main.failed_to_fix_window_visual", error = e));
             }
         });
@@ -436,4 +377,66 @@ pub async fn create_or_focus_url_window(
         // });
     }
     Ok(())
+}
+
+/// Register window creation event listeners
+///
+/// Sets up event listeners for custom window creation events:
+/// - create-note-window: Creates or focuses the note window
+/// - create-setting-window: Creates or focuses the setting window with specified type
+///
+/// # Parameters
+/// - `app_handle` - The Tauri application handle
+pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
+    // Get main window once
+    let main_window = app_handle
+        .get_webview_window("main")
+        .expect("Main window not found");
+
+    // Helper function to spawn window creation task
+    let spawn_window_task = |task: Pin<Box<dyn Future<Output = Result<(), String>> + Send>>| {
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = task.await {
+                log::error!("Failed to create window: {}", e);
+            }
+        });
+    };
+
+    // Register note window creation event
+    let app_handle_clone = app_handle.clone();
+    main_window.listen("create-note-window", move |_| {
+        let app = app_handle_clone.clone();
+        spawn_window_task(Box::pin(
+            async move { create_or_focus_note_window(app).await },
+        ));
+    });
+
+    // Register setting window creation event
+    let app_handle_clone = app_handle.clone();
+    main_window.listen("create-setting-window", move |event| {
+        let app = app_handle_clone.clone();
+        let setting_type = serde_json::from_str::<SettingWindowPayload>(event.payload())
+            .unwrap_or_else(|_| SettingWindowPayload {
+                setting_type: "general".to_string(),
+            })
+            .setting_type;
+
+        spawn_window_task(Box::pin(async move {
+            create_or_focus_setting_window(app, Some(&setting_type)).await
+        }));
+    });
+
+    // Register URL window creation event
+    main_window.listen("create-url-window", move |event| {
+        let app = app_handle.clone();
+        let url = serde_json::from_str::<UrlWindowPayload>(event.payload())
+            .unwrap_or_else(|_| UrlWindowPayload {
+                url: "https://www.aidyou.ai".to_string(),
+            })
+            .url;
+
+        spawn_window_task(Box::pin(async move {
+            create_or_focus_url_window(app, &url).await
+        }));
+    });
 }
