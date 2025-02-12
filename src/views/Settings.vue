@@ -147,7 +147,7 @@ const switchSetting = id => {
   .main {
     flex: 1;
     overflow-y: auto;
-    overflow-x: auto;
+    overflow-x: hidden;
     padding: var(--cs-space-xxs) var(--cs-space-md) var(--cs-space-md);
     display: flex;
     flex-direction: column;

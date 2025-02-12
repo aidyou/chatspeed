@@ -170,7 +170,9 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
             } else {
                 menu_id.as_str()
             };
-            if let Err(e) = crate::open_setting_window(app.clone(), Some(setting_type)) {
+            if let Err(e) =
+                crate::open_setting_window(app.clone(), Some(setting_type.to_owned())).await
+            {
                 log::error!("Failed to open setting window: {}", e);
             }
         }

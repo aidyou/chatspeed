@@ -1,3 +1,39 @@
+//! Window management commands for the application
+//!
+//! This module implements commands for managing application windows, including
+//! creating and focusing note, setting, and URL windows.
+//!
+//! # Window Creation Strategy
+//!
+//! Instead of creating windows directly in command handlers, we use an event-based
+//! approach where commands emit events that are handled by the main thread. This
+//! design choice addresses a critical issue in WebView2 (Windows) where creating
+//! windows from IPC handlers can lead to deadlocks.
+//!
+//! ## Background
+//!
+//! The issue stems from how WebView2 handles window creation and IPC calls on Windows:
+//! - WebView2 requires window creation to happen on the main UI thread
+//! - IPC handlers run on a different thread
+//! - Attempting to create windows directly from IPC handlers can cause thread
+//!   synchronization issues and deadlocks
+//!
+//! For more details, see the discussion at:
+//! <https://github.com/tauri-apps/wry/issues/583>
+//!
+//! ## Implementation
+//!
+//! Our solution uses Tauri's event system:
+//! 1. Commands emit events (e.g., "create-note-window", "create-setting-window")
+//! 2. Event listeners on the main thread handle window creation
+//! 3. This ensures windows are always created on the correct thread
+//!
+//! This approach provides several benefits:
+//! - Prevents deadlocks on Windows
+//! - Works consistently across all platforms
+//! - Maintains clean separation of concerns
+//! - Improves code maintainability
+
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
@@ -5,15 +41,25 @@ use rust_i18n::t;
 use serde_json::Value;
 // use tauri::utils::{config::WindowEffectsConfig, WindowEffect};
 use crate::constants::ASSISTANT_ALWAYS_ON_TOP;
-use tauri::{command, Emitter, LogicalSize, Manager, Runtime, WebviewWindowBuilder}; //window::Color, WindowEvent,
+use tauri::{command, Emitter, Manager}; //window::Color, WindowEvent,
 
-/// Open or focus the settings window
+#[derive(serde::Serialize, Clone)]
+struct SettingWindowPayload {
+    setting_type: String,
+}
+
+/// Opens the settings window via event system
 ///
-/// This function is used to open a new setting window, or if the window already exists, it displays and focuses the window.
+/// IMPORTANT: We use events instead of direct window creation to avoid deadlocks
+/// on Windows. This is because WebView2 requires window creation to happen on the
+/// main UI thread, while IPC handlers run on a different thread. Using events
+/// ensures window creation occurs on the correct thread.
+///
+/// See: https://github.com/tauri-apps/wry/issues/583
 ///
 /// # Parameters
-/// - `app_handle` - Tauri application handle, used to manage windows, automatically injected by Tauri
-/// - `setting_type` - The type of setting to open, optional, value can be `general`, `model`, `skill`, `privacy`, `about`
+/// - `app_handle` - Tauri application handle
+/// - `setting_type` - Optional setting type to display (defaults to "general")
 ///
 /// # Example
 /// ```js
@@ -22,176 +68,37 @@ use tauri::{command, Emitter, LogicalSize, Manager, Runtime, WebviewWindowBuilde
 /// await invoke('open_setting_window', { settingType: 'model' });
 /// ```
 #[command]
-pub fn open_setting_window(
+pub async fn open_setting_window(
     app_handle: tauri::AppHandle,
-    setting_type: Option<&str>,
+    setting_type: Option<String>,
 ) -> Result<(), String> {
-    let label = "settings";
-    if let Some(window) = app_handle.get_webview_window(label) {
-        if let Some(setting_type) = setting_type {
-            window
-                .eval(&format!(
-                    "window.location.href = '/settings/{}';console.log('/settings/{}')",
-                    setting_type, setting_type
-                ))
-                .map_err(|e| t!("main.failed_to_navigate_to_settings", error = e))?;
-        }
-        if !window
-            .is_visible()
-            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
-        {
-            window
-                .show()
-                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        }
-        window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
-    } else {
-        let webview_window = WebviewWindowBuilder::new(
-            &app_handle,
-            label,
-            tauri::WebviewUrl::App(format!("/settings/{}", setting_type.unwrap_or("")).into()),
+    // Get the main window to emit the event
+    let main_window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| t!("main.window_not_ready"))?;
+
+    // Emit an event to create the window on the main thread
+    // use events instead of direct window creation to avoid deadlocks on Windows
+    main_window
+        .emit(
+            "create-setting-window",
+            SettingWindowPayload {
+                setting_type: setting_type.unwrap_or_else(|| "general".to_string()),
+            },
         )
-        .title("")
-        .decorations(false)
-        .skip_taskbar(true)
-        .maximizable(false)
-        .inner_size(600.0, 700.0)
-        .min_inner_size(600.0, 600.0)
-        .transparent(true)
-        .visible(false)
-        .build()
-        .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
+        .map_err(|e| t!("main.failed_to_emit_event", error = e))?;
 
-        if let Ok(Some(monitor)) = webview_window.current_monitor() {
-            webview_window
-                .set_max_size(Some(tauri::Size::Logical(LogicalSize {
-                    width: 600.0,
-                    height: monitor.size().height as f64,
-                })))
-                .map_err(|e| t!("main.failed_to_set_max_window_size", error = e))?;
-        }
-
-        webview_window
-            .show()
-            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        webview_window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
-
-        let window_clone = webview_window.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
-                log::error!("{}", t!("main.failed_to_fix_window_visual", error = e));
-            }
-        });
-    }
-    Ok(())
-}
-
-/// Internal function to create or open note window
-///
-/// This function is used to open a new note window, or if the window already exists, it displays and focuses the window.
-///
-/// # Parameters
-/// - `app_handle` - Tauri application handle
-///
-/// # Returns
-/// - `Result<(), String>` - Ok if successful, Err with error message if failed
-pub(crate) async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let label = "note";
-    #[cfg(debug_assertions)]
-    log::debug!("Opening note window");
-
-    if let Some(window) = app_handle.get_webview_window(label) {
-        if !window
-            .is_visible()
-            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
-        {
-            window
-                .show()
-                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        }
-        window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
-    } else {
-        #[cfg(debug_assertions)]
-        log::debug!("Creating new note window");
-
-        let webview_window =
-            WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::App("/note".into()))
-                .title("Notes")
-                .decorations(false)
-                .skip_taskbar(true)
-                .maximizable(true)
-                .resizable(true)
-                .inner_size(850.0, 600.0)
-                .min_inner_size(600.0, 400.0)
-                .transparent(true)
-                .visible(true)
-                .build()
-                .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
-
-        #[cfg(debug_assertions)]
-        {
-            webview_window.on_window_event(|event| match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if *focused {
-                        log::debug!("Note window focused");
-                    }
-                }
-                tauri::WindowEvent::Resized(size) => {
-                    log::debug!("Note window resized: {}x{}", size.width, size.height);
-                }
-                tauri::WindowEvent::ThemeChanged(theme) => {
-                    log::debug!("Note window theme changed: {:?}", theme);
-                }
-                tauri::WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    new_inner_size,
-                    ..
-                } => {
-                    log::debug!(
-                        "Note window scale factor changed: {}, new size: {}x{}",
-                        scale_factor,
-                        new_inner_size.width,
-                        new_inner_size.height
-                    );
-                }
-                _ => {}
-            });
-        }
-
-        #[cfg(debug_assertions)]
-        log::debug!("Showing note window...");
-
-        webview_window
-            .show()
-            .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-
-        #[cfg(debug_assertions)]
-        log::debug!("Setting note window focus...");
-
-        webview_window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
-
-        let window_clone = webview_window.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&window_clone, None).await {
-                log::error!("{}", t!("main.failed_to_fix_note_window_visual", error = e));
-            }
-        });
-    }
     Ok(())
 }
 
 /// Opens the note window via event system
 ///
-/// This function emits an event to the main window to create or focus the note window.
-/// This approach helps avoid potential deadlocks on Windows when creating windows from IPC handlers.
+/// IMPORTANT: We use events instead of direct window creation to avoid deadlocks
+/// on Windows. This is because WebView2 requires window creation to happen on the
+/// main UI thread, while IPC handlers run on a different thread. Using events
+/// ensures window creation occurs on the correct thread.
+///
+/// See: https://github.com/tauri-apps/wry/issues/583
 ///
 /// # Parameters
 /// - `app_handle` - Tauri application handle
@@ -210,6 +117,7 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String
         .ok_or_else(|| t!("main.window_not_ready"))?;
 
     // Emit an event to create the window on the main thread
+    // use events instead of direct window creation to avoid deadlocks on Windows
     main_window
         .emit("create-note-window", ())
         .map_err(|e| t!("main.failed_to_emit_event", error = e))?;
@@ -246,65 +154,43 @@ pub fn show_window(app_handle: tauri::AppHandle, label: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Opens a URL in the webview window
+#[derive(serde::Serialize, Clone)]
+struct UrlWindowPayload {
+    url: String,
+}
+/// Opens a URL in a new window via event system
 ///
-/// Uses a single window for all URLs, creating it if it doesn't exist
-/// or navigating to the new URL if it does.
+/// IMPORTANT: We use events instead of direct window creation to avoid deadlocks
+/// on Windows. This is because WebView2 requires window creation to happen on the
+/// main UI thread, while IPC handlers run on a different thread. Using events
+/// ensures window creation occurs on the correct thread.
+///
+/// See: https://github.com/tauri-apps/wry/issues/583
 ///
 /// # Parameters
 /// - `app_handle` - Tauri application handle
-/// - `url` - URL to open in the webview window
+/// - `url` - URL to open in the window
 ///
-/// # Returns
-/// - `Result<(), String>` - Success or error message
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// await invoke('open_url', { url: 'https://example.com' });
+/// ```
 #[command]
-pub fn open_url<R: Runtime>(app_handle: tauri::AppHandle<R>, url: String) -> Result<(), String> {
-    let window_label = "webview";
+pub async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<(), String> {
+    // Get the main window to emit the event
+    let main_window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| t!("main.window_not_ready"))?;
 
-    if let Some(window) = app_handle.get_webview_window(window_label) {
-        // Update the URL if the window already exists
-        if let Err(e) = window.eval(&format!("window.location.href = '{}';", url)) {
-            return Err(t!("main.failed_to_navigate_to_url", url = url, error = e).to_string());
-        }
+    // Emit an event to create the window on the main thread
+    // use events instead of direct window creation to avoid deadlocks on Windows
+    main_window
+        .emit("create-url-window", UrlWindowPayload { url })
+        .map_err(|e| t!("main.failed_to_emit_event", error = e))?;
 
-        // 确保窗口可见并获得焦点
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.show();
-        }
-        let _ = window.set_focus();
-
-        Ok(())
-    } else {
-        // Create a new webview window if it doesn't exist
-        let webview_window = WebviewWindowBuilder::new(
-            &app_handle,
-            window_label,
-            tauri::WebviewUrl::App(url.into()),
-        )
-        .title("Web View")
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(800.0, 600.0)
-        .build()
-        .map_err(|e| t!("main.failed_to_create_webview_window", error = e).to_string())?;
-
-        // Show the window and set focus
-        let _ = webview_window.show();
-        let _ = webview_window.set_focus();
-
-        // cleanup if window is closed
-        // let window_clone = webview_window.clone();
-        // webview_window.on_window_event(move |event| match event {
-        //     tauri::WindowEvent::Destroyed => {
-        //         // Clear all browsing data when window is destroyed
-        //         if let Err(e) = window_clone.clear_all_browsing_data() {
-        //             log::error!("Failed to clear browsing data: {}", e);
-        //         }
-        //     }
-        //     _ => {}
-        // });
-
-        Ok(())
-    }
+    Ok(())
 }
 
 /// Sync the state of the application

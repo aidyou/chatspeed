@@ -4,7 +4,8 @@
 }
 
 .card {
-    width: 560px;
+    width: 100%;
+    max-width: 100%;
     position: relative;
     margin-bottom: var(--cs-space-md);
 

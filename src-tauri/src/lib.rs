@@ -28,7 +28,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tauri::Listener;
 use tauri::Manager;
 
 // use commands::toolbar::*;
@@ -369,19 +368,8 @@ pub async fn run() -> Result<()> {
                 error!("Failed to create tray: {}", e);
             }
 
-            // Listen for note window creation events
-            app.get_webview_window("main")
-                .unwrap()
-                .listen("create-note-window", move |_| {
-                    let app_handle = app_handle_clone.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) =
-                            crate::commands::window::create_or_focus_note_window(app_handle).await
-                        {
-                            log::error!("Failed to create note window: {}", e);
-                        }
-                    });
-                });
+            // Register window creation event handlers
+            window::setup_window_creation_handlers(app_handle_clone);
 
             WINDOW_READY.store(true, Ordering::SeqCst);
 
