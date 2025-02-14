@@ -151,7 +151,7 @@
       "topK": 40,
       "documentationUrl": "https://github.com/ollama/ollama/tree/main/docs",
       "modelListUrl": "https://ollama.com/library",
-      "keyApplyUrl": ""
+      "keyApplyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D"
     },
     {
       "protocol": "gemini",

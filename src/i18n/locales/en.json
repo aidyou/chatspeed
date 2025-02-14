@@ -212,6 +212,10 @@
       "updateSuccess": "Model updated successfully"
     },
     "skill": {
+      "presetSkills": "Preset Skills",
+      "manualAdd": "Manual Add",
+      "manualAddDesc": "Add custom skills",
+      "loadPresetError": "Failed to load preset skills",
       "add": "Add Skill",
       "addSuccess": "Skill added successfully",
       "basicInfo": "Basic Information",

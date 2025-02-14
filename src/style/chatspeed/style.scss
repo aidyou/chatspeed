@@ -122,13 +122,20 @@
         }
 
         .text {
-            display: inline-block;
+            display: inline-flex;
+            gap: var(--cs-space-xxs);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
             max-width: 180px;
             font-size: var(--cs-font-size-sm);
             color: var(--cs-text-color-secondary);
+        }
+
+        .provider-logo-sm {
+            width: 14px;
+            height: 14px;
+            border-radius: 14px;
         }
 
         .cs {
@@ -192,19 +199,20 @@
                 .provider-logo {
                     width: 16px;
                     height: 16px;
-                    border-radius: var(--cs-border-radius);
+                    border-radius: 16px;
                     margin-right: var(--cs-space-sm);
                 }
+
             }
 
             &> :last-child.cs {
-                font-size: 20px;
+                font-size: var(--cs-font-size-xl);
                 margin-left: var(--cs-space-lg);
                 margin-right: 0;
             }
 
             .check-icon {
-                font-size: 16px;
+                font-size: var(--cs-font-size-md);
                 color: var(--cs-text-color-primary);
             }
         }
@@ -297,6 +305,20 @@
             padding-left: var(--cs-space-md);
         }
 
+        table {
+            border-collapse: collapse;
+
+            thead {
+                border-bottom: 2px solid var(--cs-border-color);
+            }
+
+            th,
+            td {
+                padding: var(--cs-space-xs) var(--cs-space-sm);
+                border: 1px solid var(--cs-border-color);
+            }
+        }
+
         .svg-container {
             box-sizing: border-box;
             border: 1px solid var(--cs-border-color);
@@ -311,6 +333,10 @@
                     margin: 0;
                     padding: var(--cs-space-sm);
                 }
+            }
+
+            .diagram-svg-container {
+                overflow-x: auto;
             }
 
             svg {

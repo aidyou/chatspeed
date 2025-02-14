@@ -238,11 +238,11 @@ export const parseMarkdown = content => {
   if (content.startsWith('<think>')) {
     if (content.indexOf('</think>') === -1) {
       content = `<div class="chat-think">
-        <div class="chat-think-title">${i18n.global.t('chat.reasoning')}</div>
+        <div class="chat-think-title expanded">${i18n.global.t('chat.reasoning')}</div>
         <div class="think-content">${content.replace('<think>', '')}</div>
       </div>\n`
     } else {
-      content = content.replace(/<think>([\s\S]+?)<\/think>/, `<div class="chat-think" v-think><div class="chat-think-title">${i18n.global.t('chat.reasoningProcess')}</div><div class="think-content">$1</div></div>`);
+      content = content.replace(/<think>([\s\S]+?)<\/think>/, `<div class="chat-think" v-think><div class="chat-think-title expanded">${i18n.global.t('chat.reasoningProcess')}</div><div class="think-content">$1</div></div>`);
     }
   }
 

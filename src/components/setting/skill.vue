@@ -3,7 +3,7 @@
     <div class="title">
       <span>{{ t('settings.type.skill') }}</span>
       <el-tooltip :content="$t('settings.skill.add')" placement="top">
-        <span class="icon" @click="editSkill()"><cs name="add" /></span>
+        <span class="icon" @click="showPresetSkills()"><cs name="add" /></span>
       </el-tooltip>
     </div>
     <Sortable
@@ -17,7 +17,7 @@
         dragClass: 'drag',
         draggable: '.draggable',
         forceFallback: true,
-        bubbleScroll: true,
+        bubbleScroll: true
       }"
       @update="onSortUpdate"
       @end="onDragEnd">
@@ -137,7 +137,7 @@
                 $t('settings.skill.promptPlaceholder', {
                   from: '{fromLang}',
                   to: '{toLang}',
-                  content: '{content}',
+                  content: '{content}'
                 })
               " />
           </el-form-item>
@@ -154,10 +154,45 @@
       </span>
     </template>
   </el-dialog>
+
+  <!-- 预设技能列表弹窗 -->
+  <el-dialog
+    v-model="presetSkillsVisible"
+    width="560px"
+    class="preset-skills-dialog"
+    :title="$t('settings.skill.presetSkills')"
+    :show-close="true"
+    :close-on-click-modal="true"
+    :close-on-press-escape="true">
+    <div class="preset-skills-list">
+      <div class="preset-skill-item manual-add" @click="manualAdd">
+        <div class="preset-skill-icon">
+          <cs name="add" size="32px" />
+        </div>
+        <div class="preset-skill-info">
+          <div class="preset-skill-name">{{ $t('settings.skill.manualAdd') }}</div>
+          <div class="preset-skill-desc">{{ $t('settings.skill.manualAddDesc') }}</div>
+        </div>
+      </div>
+      <div
+        v-for="item in presetSkills"
+        :key="item.name"
+        class="preset-skill-item"
+        @click="importSkill(item)">
+        <div class="preset-skill-icon">
+          <cs :name="item.icon" size="32px" />
+        </div>
+        <div class="preset-skill-info">
+          <div class="preset-skill-name">{{ item.name }}</div>
+          <div class="preset-skill-desc">{{ item.description }}</div>
+        </div>
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 
@@ -166,9 +201,12 @@ import { Sortable } from 'sortablejs-vue3'
 import fileSelector from '@/components/common/fileSelector.vue'
 import iconfonts from '@/components/icon/type.js'
 import { isEmpty, showMessage } from '@/libs/util'
+
+import { useSettingStore } from '@/stores/setting'
 import { useSkillStore } from '@/stores/skill'
 
-// models
+const settingStore = useSettingStore()
+// skills
 const skillStore = useSkillStore()
 // Computed property to get and set models from the store
 const skills = computed(() => skillStore.skills)
@@ -193,12 +231,12 @@ const skillTypes = [
   'textCompletion',
   'translation',
   'voiceRecognition',
-  'writing',
+  'writing'
 ]
 const skillDropdown = computed(() =>
   skillTypes.map(type => ({
     label: t(`settings.skill.type.${type}`),
-    value: type,
+    value: type
   }))
 )
 
@@ -211,14 +249,14 @@ const skillForm = ref({
   description: '',
   type: '',
   useSystemRole: false,
-  disabled: false,
+  disabled: false
 })
 
 // Validation rules for the skill form
 const skillRules = {
   // icon: [{ required: true, message: t('settings.skill.iconRequired') }],
   name: [{ required: true, message: t('settings.skill.nameRequired') }],
-  prompt: [{ required: true, message: t('settings.skill.promptRequired') }],
+  prompt: [{ required: true, message: t('settings.skill.promptRequired') }]
 }
 
 // Create an array of skill icons from the iconfonts object, sorted and filtered by prefix 'skill-'
@@ -227,7 +265,7 @@ const skillIcons = Object.keys(iconfonts)
   .filter(key => key.startsWith('skill-'))
   .map(key => ({
     value: key,
-    label: key,
+    label: key
   }))
 
 const loading = ref(false)
@@ -277,20 +315,24 @@ const editSkill = async id => {
       description: skillData.metadata?.description || '',
       type: skillData.metadata?.type || '',
       useSystemRole: skillData.metadata?.useSystemRole || false,
-      disabled: skillData.disabled,
+      disabled: skillData.disabled
     }
   } else {
+    // reset form
+    formRef.value?.resetFields()
     editId.value = null
     skillForm.value = {
       icon: '',
+      logo: '',
       name: '',
       prompt: '',
       description: '',
       type: '',
       useSystemRole: false,
-      disabled: false,
+      disabled: false
     }
   }
+
   skillDialogVisible.value = true
 }
 
@@ -314,7 +356,7 @@ const copySkill = id => {
     description: skillData.metadata?.description || '',
     type: skillData.metadata?.type || '',
     useSystemRole: skillData.metadata?.useSystemRole || false,
-    disabled: skillData.disabled,
+    disabled: skillData.disabled
   }
   skillDialogVisible.value = true
 }
@@ -335,8 +377,8 @@ const updateSkill = () => {
         metadata: {
           description: skillForm.value.description || '',
           type: skillForm.value.type || '',
-          useSystemRole: skillForm.value.useSystemRole || false,
-        },
+          useSystemRole: skillForm.value.useSystemRole || false
+        }
       }
       if (isEmpty(formData.logo) && isEmpty(formData.icon)) {
         showMessage(t('settings.skill.iconOrLogoRequired'), 'error')
@@ -370,7 +412,7 @@ const deleteSkill = id => {
   ElMessageBox.confirm(t('settings.skill.deleteConfirm'), t('settings.skill.deleteTitle'), {
     confirmButtonText: t('common.confirm'),
     cancelButtonText: t('common.cancel'),
-    type: 'warning',
+    type: 'warning'
   }).then(() => {
     // User confirmed deletion
     skillStore
@@ -416,6 +458,62 @@ const onFileSelectorChange = file => {
   }
 }
 
+// 预设技能相关
+const presetSkillsVisible = ref(false)
+const presetSkills = ref([])
+
+/**
+ * Shows the preset skills dialog and loads the preset skills data
+ */
+const showPresetSkills = async () => {
+  presetSkillsVisible.value = true
+  try {
+    const response = await fetch('/presetPrompts.json')
+    const data = await response.json()
+    presetSkills.value =
+      data.prompts[settingStore.settings.interfaceLanguage] || data.prompts['English']
+  } catch (error) {
+    console.error('Failed to load preset skills:', error)
+    ElMessage.error(t('settings.skill.loadPresetError'))
+  }
+}
+
+/**
+ * Closes the preset skills dialog and opens the edit skill dialog
+ */
+const manualAdd = () => {
+  presetSkillsVisible.value = false
+  editSkill()
+}
+
+/**
+ * Imports a preset skill and opens the edit skill dialog
+ * @param {Object} skill - The preset skill data to import
+ */
+const importSkill = skill => {
+  const formData = {
+    name: skill.name,
+    icon: skill.icon,
+    logo: '',
+    prompt: skill.prompt,
+    disabled: false,
+    metadata: {
+      description: skill.description || '',
+      type: skill.type || '',
+      useSystemRole: false
+    }
+  }
+
+  skillStore
+    .setSkill(formData)
+    .then(() => {
+      showMessage(t('settings.skill.importSuccess'), 'success')
+    })
+    .catch(err => {
+      showMessage(t('settings.skill.importFailed', { error: err }), 'error')
+    })
+}
+
 // 添加 tab 激活状态控制
 const activeTab = ref('basic')
 </script>
@@ -441,6 +539,64 @@ const activeTab = ref('basic')
     }
     .el-tabs__nav-wrap:after {
       background-color: var(--cs-border-color);
+    }
+  }
+}
+
+.preset-skills-dialog {
+  .preset-skills-list {
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 0 var(--cs-space-md);
+
+    .preset-skill-item {
+      display: flex;
+      align-items: center;
+      padding: var(--cs-space);
+      margin-bottom: var(--cs-space-sm);
+      border-radius: var(--cs-border-radius-md);
+      cursor: pointer;
+      transition: all 0.3s;
+      border: 1px solid var(--el-border-color);
+
+      &:hover {
+        border-color: var(--el-color-primary);
+        background-color: var(--el-color-primary-light-9);
+      }
+
+      &.manual-add {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background-color: var(--el-bg-color);
+        border-style: dashed;
+        margin-bottom: var(--cs-space-md);
+
+        &:hover {
+          background-color: var(--el-color-primary-light-9);
+        }
+      }
+    }
+
+    .preset-skill-icon {
+      margin-right: var(--cs-space);
+      color: var(--el-color-primary);
+    }
+
+    .preset-skill-info {
+      flex: 1;
+    }
+
+    .preset-skill-name {
+      font-size: var(--cs-font-size);
+      font-weight: 500;
+      margin-bottom: var(--cs-space-xxs);
+      color: var(--el-text-color-primary);
+    }
+
+    .preset-skill-desc {
+      font-size: var(--cs-font-size-xs);
+      color: var(--el-text-color-secondary);
     }
   }
 }

@@ -12,7 +12,14 @@
           <div class="model-selector" v-if="models.length > 0">
             <el-dropdown @command="onModelChange" trigger="click">
               <div class="dropdown-text upperLayer">
-                <span class="text">{{ currentModel?.name }}</span>
+                <span class="text">
+                  <img
+                    :src="currentModel?.providerLogo"
+                    v-if="currentModel?.providerLogo !== ''"
+                    class="provider-logo-sm" />
+                  <logo :name="currentModel?.logo" size="14" v-else />
+                  {{ currentModel?.name }}
+                </span>
                 <cs name="caret-down" />
               </div>
               <template #dropdown>
@@ -505,7 +512,7 @@ const cicleIndex = ref(0)
 const cicle = ['◒', '◐', '◓', '◑', '☯']
 const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
-    ? ((cicleIndex.value = (cicleIndex.value + 1) % 4),
+    ? ((cicleIndex.value = (cicleIndex.value + 1) % 5),
       parseMarkdown(currentAssistantMessage.value + ' ' + cicle[cicleIndex.value]))
     : '<div class="cs cs-loading cs-spin"></div>'
 )
@@ -1874,9 +1881,9 @@ const onTakeNote = message => {
         }
 
         // 当只有一个项目时占满
-        &:only-child {
-          max-width: 100%;
-        }
+        //&:only-child {
+        //  max-width: 100%;
+        //}
       }
     }
 
