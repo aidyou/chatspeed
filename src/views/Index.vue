@@ -24,7 +24,11 @@
                     :class="{ 'is-active': currentModel.id === model.id }">
                     <div class="item">
                       <div class="name">
-                        <logo :name="model.logo" size="16" />
+                        <img
+                          :src="model.providerLogo"
+                          v-if="model.providerLogo !== ''"
+                          class="provider-logo" />
+                        <logo :name="model.logo" size="16" v-else />
                         {{ model.name }}
                       </div>
                     </div>
@@ -141,6 +145,7 @@
               <logo :name="currentModel?.logo || 'ai-common'" class="logo" size="40" />
             </div>
 
+            <!-- message list -->
             <div
               v-for="(message, index) in messagesForShow"
               :key="index"
@@ -225,8 +230,26 @@
                     </div>
                   </div>
                 </div>
+
+                <div v-if="message?.metadata?.contextCleared" class="context-cleared">
+                  <label>{{ $t('chat.contextCleared') }}</label>
+                </div>
               </div>
             </div>
+
+            <!-- clear context -->
+            <div
+              v-if="
+                !isChatting &&
+                messagesForShow.length > 1 &&
+                !messagesForShow[messagesForShow.length - 1]?.metadata?.contextCleared
+              "
+              class="clear-context"
+              @click="onClearContext">
+              <cs name="clear" /> {{ $t('chat.clearContext') }}
+            </div>
+
+            <!-- chatting message -->
             <div v-if="isChatting" class="message assistant" :class="{ loading: isChatting }">
               <div class="avatar">
                 <logo :name="currentModel?.logo" />
@@ -444,6 +467,10 @@ const composing = ref(false)
 const compositionJustEnded = ref(false)
 const isChatting = ref(false)
 const currentAssistantMessage = ref('')
+const chatState = ref({
+  reasoning: '',
+  message: ''
+})
 
 const skillListRef = ref(null)
 const selectedSkill = ref(null)
@@ -459,11 +486,11 @@ const takeNoteForm = reactive({
   content: '',
   conversationId: 0,
   messageId: 0,
-  tags: [],
+  tags: []
 })
 const takeNoteRules = {
   tags: [{ required: true, message: t('chat.noteTagsRequired'), trigger: 'blur' }],
-  title: [{ required: true, message: t('chat.noteTitleRequired'), trigger: 'blur' }],
+  title: [{ required: true, message: t('chat.noteTitleRequired'), trigger: 'blur' }]
 }
 
 /**
@@ -589,7 +616,7 @@ const dateGroupKeys = [
   'lastMonth',
   'thisYear',
   'lastYear',
-  'earlier',
+  'earlier'
 ]
 
 const favoriteFlag = ref(false)
@@ -808,6 +835,10 @@ const sendMessage = async (messageId = null) => {
   chatStore
     .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
     .then(async () => {
+      chatState.value = {
+        reasoning: '',
+        message: ''
+      }
       chatErrorMessage.value = ''
       replyMessage.value = ''
       inputMessage.value = ''
@@ -818,7 +849,7 @@ const sendMessage = async (messageId = null) => {
 
       try {
         await invoke('chat_with_ai', {
-          apiProvider: currentModel.value.apiProvider,
+          apiProtocol: currentModel.value.apiProtocol,
           apiUrl: currentModel.value.baseUrl,
           apiKey: currentModel.value.apiKey,
           model: currentModel.value.defaultModel,
@@ -829,8 +860,8 @@ const sendMessage = async (messageId = null) => {
             topP: currentModel.value.topP,
             topK: currentModel.value.topK,
             label: windowLabel.value,
-            proxyType: proxyType.value,
-          },
+            proxyType: proxyType.value
+          }
         })
       } catch (error) {
         chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
@@ -856,6 +887,7 @@ const newChat = () => {
   if (!canCreateNewConversation.value) {
     return
   }
+  chatErrorMessage.value = ''
   resetScrollBehavior() // reset scroll behavior
   chatStore.createConversation().then(() => {
     nextTick(() => {
@@ -887,14 +919,22 @@ const genTitleByAi = () => {
       .map(message => ({ role: message.role, content: message.content.trim() })),
     {
       role: 'user',
-      content: `Please generate a clear topic for this conversation, limited to 10 characters, without including quotation marks, apostrophes, backticks, or any non-alphanumeric characters. Respond in ${myLanguage.value} if supported; otherwise, use English.`,
-    },
+      content: `Please generate a clear topic for this conversation, limited to 10 characters, without including quotation marks, apostrophes, backticks, or any non-alphanumeric characters. Respond in ${myLanguage.value} if supported; otherwise, use English.`
+    }
   ]
+  let genModel = currentModel.value
+  let model = currentModel.value.defaultModel
+  if (settingStore.settings.conversationTitleGenModel?.id) {
+    genModel =
+      modelStore.getModelById(settingStore.settings.conversationTitleGenModel.id) ||
+      currentModel.value
+    model = settingStore.settings.conversationTitleGenModel?.model || model
+  }
   invoke('chat_with_ai', {
-    apiProvider: currentModel.value.apiProvider,
-    apiUrl: currentModel.value.baseUrl,
-    apiKey: currentModel.value.apiKey,
-    model: currentModel.value.defaultModel,
+    apiProtocol: genModel.apiProtocol,
+    apiUrl: genModel.baseUrl,
+    apiKey: genModel.apiKey,
+    model: model,
     messages: messages,
     metadata: {
       stream: true,
@@ -902,8 +942,8 @@ const genTitleByAi = () => {
       action: 'gen_title',
       conversationId: chatStore.currentConversationId,
       label: windowLabel.value,
-      proxyType: proxyType.value,
-    },
+      proxyType: proxyType.value
+    }
   }).catch(error => {
     titleGenerating.value = false
     console.error('error on genTitleByAi:', error)
@@ -966,14 +1006,28 @@ const handleChatMessage = async payload => {
   if (payload?.is_error) {
     chatErrorMessage.value = payload.chunk
     isChatting.value = false
-    return
-  }
-  currentAssistantMessage.value += payload?.chunk || ''
-  nextTick(() => {
-    if (!userHasScrolled.value || isScrolledToBottom.value) {
-      scrollToBottomIfNeeded()
+    if (currentAssistantMessage.value == '') {
+      return
+    } else {
+      payload.is_done = true
     }
-  })
+  } else {
+    if (payload?.is_reasoning) {
+      chatState.value.reasoning += payload?.chunk || ''
+    } else {
+      chatState.value.message += payload?.chunk || ''
+    }
+
+    currentAssistantMessage.value =
+      (chatState.value.reasoning ? '<think>' + chatState.value.reasoning + '</think>\n' : '') +
+      (chatState.value.message || '')
+    nextTick(() => {
+      if (!userHasScrolled.value || isScrolledToBottom.value) {
+        scrollToBottomIfNeeded()
+      }
+    })
+  }
+
   if (payload?.is_done) {
     if (currentAssistantMessage.value.trim().length > 0) {
       try {
@@ -985,7 +1039,7 @@ const handleChatMessage = async payload => {
             tokens: payload?.metadata?.tokens?.total || 0,
             prompt: payload?.metadata?.tokens?.prompt || 0,
             completion: payload?.metadata?.tokens?.completion || 0,
-            provider: currentModel.value.defaultModel || '',
+            provider: currentModel.value.defaultModel || ''
           }
         )
         currentAssistantMessage.value = ''
@@ -1015,7 +1069,7 @@ const setupObserver = () => {
   const options = {
     root: chatMessagesRef.value,
     threshold: 0.1,
-    rootMargin: '100px 0px 0px 0px',
+    rootMargin: '100px 0px 0px 0px'
   }
 
   const observer = new IntersectionObserver(entries => {
@@ -1066,19 +1120,14 @@ onMounted(async () => {
       chatErrorMessage.value = t('chat.errorOnGetCurrentConversationId', { error })
     })
 
-  // listen ai_response_chunk event
-  unlistenChunkResponse.value = await listen('ai_response_chunk', async event => {
+  // listen ai_chunk event
+  unlistenChunkResponse.value = await listen('ai_chunk', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.label !== windowLabel.value) {
       return
     }
-    console.log(
-      'ai_response_chunk',
-      event?.payload?.chunk,
-      'action',
-      event?.payload?.metadata?.action
-    )
-    // console.log('ai_response_chunk', event)
+    console.log('chunk', event?.payload?.chunk, 'is_reasoning', event?.payload?.is_reasoning)
+    // console.log('ai_chunk', event)
     const payload = event.payload
     if (payload?.metadata?.action === 'gen_title') {
       handleTitleGenerated(payload)
@@ -1126,12 +1175,12 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (isChatting.value) {
     // stop chat
-    invoke('stop_chat', { apiProvider: currentModel.value.apiProvider })
+    invoke('stop_chat', { apiProtocol: currentModel.value.apiProtocol })
     isChatting.value = false
   }
   // unlisten send_message event
   unlistenSendMessage.value?.()
-  // unlisten ai_response_chunk event
+  // unlisten ai_chunk event
   unlistenChunkResponse.value?.()
 
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)
@@ -1203,7 +1252,7 @@ const onSaveEditConversation = () => {
 const onDeleteConversation = id => {
   ElMessageBox.confirm(t('chat.confirmDeleteConversation'), {
     confirmButtonText: t('common.confirm'),
-    cancelButtonText: t('common.cancel'),
+    cancelButtonText: t('common.cancel')
   }).then(() => {
     resetPagination()
     const oldCurrentConversationId = chatStore.currentConversationId
@@ -1251,14 +1300,14 @@ const onSubModelChange = model => {
     name: currentModel.value.name,
     models: currentModel.value.models,
     defaultModel: model,
-    apiProvider: currentModel.value.apiProvider,
+    apiProtocol: currentModel.value.apiProtocol,
     baseUrl: currentModel.value.baseUrl,
     apiKey: currentModel.value.apiKey,
     maxTokens: currentModel.value.maxTokens,
     temperature: currentModel.value.temperature,
     topP: currentModel.value.topP,
     topK: currentModel.value.topK,
-    disabled: currentModel.value.disabled,
+    disabled: currentModel.value.disabled
   }).catch(error => {
     console.error('error on update_ai_model:', error)
   })
@@ -1268,7 +1317,7 @@ const onSubModelChange = model => {
  * Stop chat
  */
 const onStopChat = () => {
-  invoke('stop_chat', { apiProvider: currentModel.value.apiProvider })
+  invoke('stop_chat', { apiProtocol: currentModel.value.apiProtocol })
     .then(() => {
       if (currentAssistantMessage.value.trim().length > 0) {
         chatStore
@@ -1336,7 +1385,7 @@ const onCopyMessage = id => {
 const onDeleteMessage = id => {
   ElMessageBox.confirm(t('chat.confirmDeleteMessage'), {
     confirmButtonText: t('common.confirm'),
-    cancelButtonText: t('common.cancel'),
+    cancelButtonText: t('common.cancel')
   }).then(() => {
     chatStore
       .deleteMessage(id)
@@ -1377,6 +1426,12 @@ const onOpenSkillSelector = () => {
   if (skillListRef.value) {
     skillListRef.value.show()
   }
+}
+
+const onClearContext = () => {
+  chatStore.clearContext().catch(error => {
+    showMessage(t('chat.errorOnClearContext', { error }), 'error', 3000)
+  })
 }
 
 // =================================================

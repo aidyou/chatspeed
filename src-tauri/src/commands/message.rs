@@ -292,6 +292,37 @@ pub fn delete_message(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<()
     let main_store = state.lock().map_err(|e| e.to_string())?;
     main_store.delete_message(id).map_err(|e| e.to_string())
 }
+/// Update the metadata of a message
+///
+/// Updates the metadata of a message in the chat store.
+///
+/// # Parameters
+/// - `state` - The state of the chat store, automatically injected by Tauri
+/// - `id` - The ID of the message to update
+/// - `metadata` - The new metadata to set for the message
+///
+/// # Returns
+/// * `Result<(), String>` - Ok if successful or an error message
+///
+/// # Example
+///
+/// ```js
+/// // Call from frontend:
+/// import { invoke } from '@tauri-apps/api/core';
+///
+/// await invoke('update_message_metadata', { id: 1, metadata: { contextClear: true } });
+/// console.log('Message metadata updated successfully');
+#[command]
+pub fn update_message_metadata(
+    state: State<Arc<Mutex<MainStore>>>,
+    id: i64,
+    metadata: serde_json::Value,
+) -> Result<(), String> {
+    let main_store = state.lock().map_err(|e| e.to_string())?;
+    main_store
+        .update_message_metadata(id, Some(metadata))
+        .map_err(|e| e.to_string())
+}
 
 /// Sends a conversation message to the frontend with the specified label and message content.
 ///

@@ -92,6 +92,7 @@
     "mindmap": "Mind Map",
     "noData": "No Data",
     "save": "Save",
+    "search": "Search",
     "upload": "Upload",
     "uploadFailed": "File upload failed"
   },
@@ -108,13 +109,6 @@
     "searchNotePlaceholder": "Search notes"
   },
   "settings": {
-    "apiProvider": {
-      "claude": "Claude",
-      "gemini": "Gemini",
-      "huggingface": "HuggingFace",
-      "ollama": "Ollama",
-      "openai": "OpenAI Compatible API"
-    },
     "general": {
       "advancedSettings": "Advanced Settings",
       "assistantWindowVisibleShortcut": "Show Assistant Window Shortcut",
@@ -124,7 +118,6 @@
       "backingUp": "Backing up...",
       "backup": "Backup",
       "backupDir": "Backup Directory",
-      "backupDirPlaceholder": "Please select a backup directory. By default, backups are stored in the 'backups' folder under the data directory",
       "backupSettings": "Backup Settings",
       "backupSuccess": "Backup successful",
       "codeDarkTheme": "Code Dark Theme",
@@ -181,8 +174,8 @@
       "additionalInfo": "Additional Information",
       "apiKey": "API Key",
       "apiKeyRequired": "Please enter the API key",
-      "apiProvider": "API Provider",
-      "apiProviderRequired": "Please select an API provider",
+      "apiProtocol": "API Protocol",
+      "apiProtocolRequired": "Please select an API protocol",
       "apiUrl": "API URL",
       "basicInfo": "Basic Information",
       "copy": "Copy Model",
@@ -195,6 +188,8 @@
       "deleteTitle": "Delete Model",
       "disabled": "Disabled",
       "edit": "Edit Model",
+      "logo": "Logo",
+      "logoPlaceholder": "Provider Logo",
       "maxTokens": "Maximum Tokens",
       "maxTokensPlaceholder": "Default is 4096",
       "models": "Supported Models",
@@ -204,6 +199,7 @@
       "nameRequired": "Please enter the model name",
       "noModels": "No available models, please add one first",
       "notFound": "Model does not exist or has been deleted",
+      "presetModels": "Preset Models",
       "proxyType": "Proxy Type",
       "proxyTypes": {
         "bySetting": "Follow Network Settings",

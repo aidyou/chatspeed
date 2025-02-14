@@ -237,4 +237,31 @@ impl MainStore {
             .execute("DELETE FROM messages WHERE id = ?", [id])?;
         Ok(())
     }
+
+    /// Updates the metadata of a message.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the message to update.
+    /// * `metadata` - The new metadata for the message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StoreError` if the database operation fails.
+    pub fn update_message_metadata(
+        &self,
+        id: i64,
+        metadata: Option<Value>,
+    ) -> Result<(), StoreError> {
+        let metadata_str = metadata
+            .map(|m| serde_json::to_string(&m))
+            .transpose()
+            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+
+        self.conn.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            rusqlite::params![metadata_str, id],
+        )?;
+        Ok(())
+    }
 }

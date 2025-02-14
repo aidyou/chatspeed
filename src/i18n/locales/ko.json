@@ -108,13 +108,6 @@
     "searchNotePlaceholder": "지혜록 검색"
   },
   "settings": {
-    "apiProvider": {
-      "claude": "Claude",
-      "gemini": "Gemini",
-      "huggingface": "HuggingFace",
-      "ollama": "Ollama",
-      "openai": "OpenAI 호환 API"
-    },
     "general": {
       "advancedSettings": "고급 설정",
       "assistantWindowVisibleShortcut": "어시스턴트 창 표시 단축키",
@@ -124,7 +117,6 @@
       "backingUp": "백업 중...",
       "backup": "백업",
       "backupDir": "백업 디렉토리",
-      "backupDirPlaceholder": "백업 디렉토리를 선택하세요. 기본적으로 데이터 디렉토리의 'backups' 폴더에 저장됩니다",
       "backupSettings": "백업 설정",
       "backupSuccess": "백업 성공",
       "codeDarkTheme": "코드 다크 테마",
@@ -181,8 +173,8 @@
       "additionalInfo": "추가 정보",
       "apiKey": "API 키",
       "apiKeyRequired": "API 키를 입력해 주세요",
-      "apiProvider": "API 제공자",
-      "apiProviderRequired": "API 제공자를 선택해 주세요",
+      "apiProtocol": "API 프로토콜",
+      "apiProtocolRequired": "API 프로토콜을 선택해 주세요",
       "apiUrl": "API URL",
       "basicInfo": "기본 정보",
       "copy": "모델 복사",
@@ -195,6 +187,8 @@
       "deleteTitle": "모델 삭제",
       "disabled": "비활성화",
       "edit": "모델 편집",
+      "logo": "Logo",
+      "logoPlaceholder": "공급자 로고",
       "maxTokens": "최대 토큰 수",
       "maxTokensPlaceholder": "기본값은 4096입니다",
       "models": "지원되는 모델",

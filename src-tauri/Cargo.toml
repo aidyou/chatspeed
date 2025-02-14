@@ -66,6 +66,7 @@ warp                         = "0.3.7"
 whatlang                     = "0.16.4"
 xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
 zip                          = "2.2.2"
+tauri-plugin-opener = "2.2.5"
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
 # pyo3                         = { version = "0.23.3", features = ["auto-initialize"] }

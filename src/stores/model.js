@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, provide } from 'vue';
 import i18n from '@/i18n/index.js'
 
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -133,10 +133,13 @@ export const useModelStore = defineStore('model', () => {
    * @param {Object} model
    * @returns {Object} Processed model data
    */
-  const processModelData = (model) => ({
-    ...model,
-    logo: getModelLogo(model.defaultModel)
-  })
+  const processModelData = (model) => {
+    return {
+      ...model,
+      logo: getModelLogo(model.defaultModel),
+      providerLogo: model?.metadata?.logo || ''
+    }
+  }
 
   // =================================================
   // The following functions are related to interaction with the server

@@ -9,7 +9,6 @@
  * 5. `think`: Toggles the visibility of think content
  */
 
-import { invoke } from '@tauri-apps/api/core'
 import hljs from 'highlight.js'
 import katex from 'katex'
 import i18n from '@/i18n'
@@ -18,6 +17,7 @@ import { Markmap } from 'markmap-view'
 import { Transformer } from 'markmap-lib'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
+import { openUrl as invokeOpenUrl } from '@tauri-apps/plugin-opener'
 
 // =================================================
 // Mermaid Diagram Processing
@@ -743,7 +743,7 @@ const DIRECTIVE_CONFIG = {
             e.preventDefault()
             e.stopPropagation()
             try {
-              await invoke('open_url', { url: e.target.href })
+              await invokeOpenUrl(e.target.href)
             } catch (error) {
               console.error('Failed to open URL:', error)
             }

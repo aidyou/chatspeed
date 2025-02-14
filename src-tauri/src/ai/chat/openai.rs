@@ -37,7 +37,7 @@ impl OpenAIChat {
     async fn handle_stream_response(
         &self,
         mut response: Response,
-        callback: impl Fn(String, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let mut full_response = String::new();
@@ -49,6 +49,7 @@ impl OpenAIChat {
                 error.clone().to_string(),
                 true,
                 true,
+                false,
                 metadata_option.clone(),
             );
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
@@ -57,12 +58,16 @@ impl OpenAIChat {
                 break;
             }
 
-            let StreamChunk { content, usage } = self
+            let StreamChunk {
+                reasoning_content,
+                content,
+                usage,
+            } = self
                 .client
                 .process_stream_chunk(chunk, &StreamFormat::OpenAI)
                 .await
                 .map_err(|e| {
-                    callback(e.clone(), true, true, metadata_option.clone());
+                    callback(e.clone(), true, true, false, metadata_option.clone());
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
 
@@ -70,9 +75,17 @@ impl OpenAIChat {
                 token_usage = new_usage;
             }
 
+            if let Some(content) = reasoning_content {
+                if !content.is_empty() {
+                    full_response.push_str(&content);
+                    callback(content, false, false, true, metadata_option.clone());
+                }
+            }
             if let Some(content) = content {
-                full_response.push_str(&content);
-                callback(content, false, false, metadata_option.clone());
+                if !content.is_empty() {
+                    full_response.push_str(&content);
+                    callback(content, false, false, false, metadata_option.clone());
+                }
             }
         }
 
@@ -81,6 +94,7 @@ impl OpenAIChat {
             String::new(),
             false,
             true,
+            false,
             Some(ai_util::update_or_create_metadata(
                 metadata_option,
                 "tokens",
@@ -115,7 +129,7 @@ impl AiChatTrait for OpenAIChat {
         api_key: Option<&str>,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
 
@@ -141,12 +155,12 @@ impl AiChatTrait for OpenAIChat {
             )
             .await
             .map_err(|e| {
-                callback(e.clone(), true, true, metadata_option.clone());
+                callback(e.clone(), true, true, false, metadata_option.clone());
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
 
         if response.is_error {
-            callback(response.content.clone(), true, true, metadata_option);
+            callback(response.content.clone(), true, true, false, metadata_option);
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 response.content,
@@ -157,7 +171,13 @@ impl AiChatTrait for OpenAIChat {
             self.handle_stream_response(raw_response, callback, metadata_option)
                 .await
         } else {
-            callback(response.content.clone(), false, true, metadata_option);
+            callback(
+                response.content.clone(),
+                false,
+                true,
+                false,
+                metadata_option,
+            );
             Ok(response.content)
         }
     }

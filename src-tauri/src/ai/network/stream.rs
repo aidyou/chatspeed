@@ -53,6 +53,7 @@ pub struct TokenUsage {
 /// Stream chunk parsing result
 #[derive(Debug)]
 pub struct StreamChunk {
+    pub reasoning_content: Option<String>,
     /// The content of the chunk
     pub content: Option<String>,
     /// Token usage information
@@ -70,6 +71,7 @@ impl StreamParser {
             StreamFormat::Gemini => Self::parse_gemini(chunk),
             StreamFormat::StandardSSE => Self::parse_sse(chunk),
             StreamFormat::Custom(parser) => parser(chunk).map(|content| StreamChunk {
+                reasoning_content: None,
                 content,
                 usage: None,
             }),
@@ -88,12 +90,19 @@ impl StreamParser {
                 let data = &line["data: ".len()..];
                 if data == "[DONE]" {
                     return Ok(StreamChunk {
+                        reasoning_content: None,
                         content: None,
                         usage: None,
                     });
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(data) {
+                    // chat content
                     let content = json["choices"][0]["delta"]["content"]
+                        .as_str()
+                        .map(String::from);
+
+                    // reasoning content
+                    let reasoning_content = json["choices"][0]["delta"]["reasoning_content"]
                         .as_str()
                         .map(String::from);
 
@@ -109,11 +118,16 @@ impl StreamParser {
                         None
                     };
 
-                    return Ok(StreamChunk { content, usage });
+                    return Ok(StreamChunk {
+                        reasoning_content,
+                        content,
+                        usage,
+                    });
                 }
             }
         }
         Ok(StreamChunk {
+            reasoning_content: None,
             content: None,
             usage: None,
         })
@@ -137,9 +151,14 @@ impl StreamParser {
                 })
             });
 
-            return Ok(StreamChunk { content, usage });
+            return Ok(StreamChunk {
+                reasoning_content: None,
+                content,
+                usage,
+            });
         }
         Ok(StreamChunk {
+            reasoning_content: None,
             content: None,
             usage: None,
         })
@@ -153,6 +172,7 @@ impl StreamParser {
         for line in chunk_str.lines() {
             if line.starts_with("event: done") {
                 return Ok(StreamChunk {
+                    reasoning_content: None,
                     content: None,
                     usage: None,
                 });
@@ -164,6 +184,10 @@ impl StreamParser {
                         .get("content")
                         .and_then(Value::as_str)
                         .map(String::from);
+                    let reasoning_content = json
+                        .get("reasoning_content")
+                        .and_then(Value::as_str)
+                        .map(String::from);
                     let usage = json.get("usage").and_then(|usage| {
                         Some(TokenUsage {
                             total_tokens: usage["total_tokens"].as_u64().unwrap_or_default(),
@@ -173,15 +197,21 @@ impl StreamParser {
                                 .unwrap_or_default(),
                         })
                     });
-                    return Ok(StreamChunk { content, usage });
+                    return Ok(StreamChunk {
+                        reasoning_content,
+                        content,
+                        usage,
+                    });
                 }
                 return Ok(StreamChunk {
+                    reasoning_content: None,
                     content: Some(data.to_string()),
                     usage: None,
                 });
             }
         }
         Ok(StreamChunk {
+            reasoning_content: None,
             content: None,
             usage: None,
         })
@@ -215,6 +245,7 @@ impl StreamParser {
                 let data = &line["data: ".len()..];
                 if data == "[DONE]" {
                     return Ok(StreamChunk {
+                        reasoning_content: None,
                         content: None,
                         usage: None,
                     });
@@ -228,11 +259,16 @@ impl StreamParser {
                         completion_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
                     });
 
-                    return Ok(StreamChunk { content, usage });
+                    return Ok(StreamChunk {
+                        reasoning_content: None,
+                        content,
+                        usage,
+                    });
                 }
             }
         }
         Ok(StreamChunk {
+            reasoning_content: None,
             content: None,
             usage: None,
         })

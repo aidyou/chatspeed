@@ -29,9 +29,10 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
     ///     - `proxy_server`: A string indicating the proxy server. like `http://127.0.0.1:7890`.
     ///     - Additional parameters that may be included in the callback function, like label.
     /// - `callback`: A callback function to handle streaming responses.
-    ///     - `String`: The content of the message.
-    ///     - `bool`: A boolean indicating whether the message is a error message.
-    ///     - `bool`: A boolean indicating whether the message is finished.
+    ///     - `content`: `String`: The content of the message.
+    ///     - `is_error`: `bool`: A boolean indicating whether the message is a error message.
+    ///     - `is_finished`: `bool`: A boolean indicating whether the message is finished.
+    ///     - `is_reasoning`: `bool`: A boolean indicating whether the message is a reasoning message.
     ///     - `Value`: Additional parameters that may be included in the callback function, like label.
     ///
     /// # Returns
@@ -43,6 +44,6 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         api_key: Option<&str>,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>>;
 }

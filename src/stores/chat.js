@@ -238,6 +238,25 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
+  const clearContext = () => {
+    return new Promise((resolve, reject) => {
+      // if the last message is context cleared or messages is empty, then do nothing
+      if (messages.value.length === 0) return resolve()
+
+      const lastMessage = messages.value[messages.value.length - 1]
+      if (lastMessage.metadata?.contextCleared) return resolve()
+
+      lastMessage.metadata = { ...lastMessage?.metadata, contextCleared: true }
+      invoke('update_message_metadata', { id: lastMessage.id, metadata: lastMessage.metadata }).then(() => {
+        lastMessage.metadata.contextCleared = true
+        resolve()
+      }).catch((error) => {
+        console.error('Error clearing context:', error)
+        reject(error)
+      })
+    })
+  }
+
   return {
     conversations,
     loadConversations,
@@ -252,5 +271,6 @@ export const useChatStore = defineStore('chat', () => {
     loadMessages,
     addChatMessage,
     deleteMessage,
+    clearContext
   }
 });

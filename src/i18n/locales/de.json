@@ -108,13 +108,6 @@
     "searchNotePlaceholder": "WissenNote durchsuchen"
   },
   "settings": {
-    "apiProvider": {
-      "claude": "Claude",
-      "gemini": "Gemini",
-      "huggingface": "HuggingFace",
-      "ollama": "Ollama",
-      "openai": "OpenAI-kompatible API"
-    },
     "general": {
       "advancedSettings": "Erweiterte Einstellungen",
       "assistantWindowVisibleShortcut": "Assistentenfenster anzeigen Tastenkombination",
@@ -124,7 +117,6 @@
       "backingUp": "Sicherung läuft...",
       "backup": "Sichern",
       "backupDir": "Sicherungsverzeichnis",
-      "backupDirPlaceholder": "Bitte wählen Sie ein Sicherungsverzeichnis. Standardmäßig werden Sicherungen im 'backups'-Ordner des Datenverzeichnisses gespeichert",
       "backupSettings": "Sicherungseinstellungen",
       "backupSuccess": "Sicherung erfolgreich",
       "codeDarkTheme": "Code-Dunkles Thema",
@@ -181,8 +173,8 @@
       "additionalInfo": "Zusätzliche Informationen",
       "apiKey": "API-Schlüssel",
       "apiKeyRequired": "Bitte geben Sie den API-Schlüssel ein",
-      "apiProvider": "API-Anbieter",
-      "apiProviderRequired": "Bitte wählen Sie einen API-Anbieter",
+      "apiProtocol": "API-Protokoll",
+      "apiProtocolRequired": "Bitte wählen Sie ein API-Protokoll",
       "apiUrl": "API URL",
       "basicInfo": "Grundinformationen",
       "copy": "Modell kopieren",
@@ -195,6 +187,8 @@
       "deleteTitle": "Modell löschen",
       "disabled": "Deaktiviert",
       "edit": "Modell bearbeiten",
+      "logo": "Logo",
+      "logoPlaceholder": "Anbieter-Logo",
       "maxTokens": "Maximale Token",
       "maxTokensPlaceholder": "Standard ist 4096",
       "models": "Unterstützte Modelle",

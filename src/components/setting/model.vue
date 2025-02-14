@@ -3,7 +3,7 @@
     <div class="title">
       <span>{{ t('settings.type.model') }}</span>
       <el-tooltip :content="$t('settings.model.add')" placement="top">
-        <span class="icon" @click="editModel()"><cs name="add" /></span>
+        <span class="icon" @click="showPresetModels()"><cs name="add" /></span>
       </el-tooltip>
     </div>
     <Sortable
@@ -17,14 +17,19 @@
         dragClass: 'drag',
         draggable: '.draggable',
         forceFallback: true,
-        bubbleScroll: true,
+        bubbleScroll: true
       }"
       @update="onUpdate"
       @end="onDragEnd">
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
-            <logo :name="element.logo" color="primary" size="18px" />{{ element.name }}
+            <img
+              v-if="element.providerLogo !== ''"
+              :src="element.providerLogo"
+              class="provider-logo" />
+            <logo :name="element.logo" color="primary" size="18px" v-else />
+            {{ element.name }}
           </div>
           <div class="value">
             <el-tooltip
@@ -76,17 +81,18 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
         <el-form :model="modelForm" :rules="modelRules" ref="formRef">
-          <el-form-item :label="$t('settings.model.apiProvider')" prop="apiProvider">
-            <el-select v-model="modelForm.apiProvider">
-              <el-option
-                v-for="option in apiProviderOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value" />
+          <el-form-item :label="$t('settings.model.apiProtocol')" prop="apiProtocol">
+            <el-select v-model="modelForm.apiProtocol">
+              <el-option v-for="(k, v) in apiProtocolOptions" :key="k" :label="v" :value="k" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.model.name')" prop="name">
             <el-input v-model="modelForm.name" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.logo')" prop="logo">
+            <el-input
+              v-model="modelForm.logo"
+              :placeholder="$t('settings.model.logoPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.models')" prop="models">
             <el-select
@@ -125,7 +131,7 @@
           <el-form-item
             :label="$t('settings.model.apiKey')"
             prop="apiKey"
-            :required="modelForm.apiProvider !== 'ollama'">
+            :required="modelForm.apiProtocol !== 'ollama'">
             <el-input v-model="modelForm.apiKey" type="password" show-password />
           </el-form-item>
         </el-form>
@@ -201,16 +207,84 @@
       </span>
     </template>
   </el-dialog>
+
+  <!-- 预设模型列表弹窗 -->
+  <el-dialog
+    v-model="presetModelsVisible"
+    :title="$t('settings.model.presetModels')"
+    width="600px"
+    align-center
+    class="preset-models-dialog">
+    <div class="preset-models-container">
+      <div class="search-bar">
+        <el-row :gutter="10">
+          <el-col :span="16">
+            <el-input
+              v-model="searchQuery"
+              :placeholder="$t('common.search')"
+              clearable
+              class="search-input" />
+          </el-col>
+          <el-col :span="8">
+            <el-button type="primary" plain @click="manualAdd()" style="width: 100%"
+              ><cs name="add" /> {{ $t('settings.model.addDirectly') }}</el-button
+            >
+          </el-col>
+        </el-row>
+      </div>
+
+      <div class="preset-models-list">
+        <el-card
+          v-for="model in filteredModels"
+          :key="model.name"
+          class="preset-model-card"
+          shadow="hover">
+          <div class="model-item">
+            <div class="model-info">
+              <img :src="model.logo" class="model-logo" />
+              <div class="model-details">
+                <h3>{{ model.name }}</h3>
+                <p>{{ model.desc }}</p>
+              </div>
+              <el-button type="success" @click="importPresetModel(model)">{{
+                $t('settings.model.addFromPreset')
+              }}</el-button>
+            </div>
+            <div class="links">
+              <el-link
+                v-if="model.documentationUrl"
+                type="primary"
+                @click="invokeOpenUrl(model.documentationUrl)">
+                {{ $t('settings.model.documentation') }}
+              </el-link>
+              <el-link
+                v-if="model.modelListUrl"
+                type="primary"
+                @click="invokeOpenUrl(model.modelListUrl)">
+                {{ $t('settings.model.modelInfo') }}
+              </el-link>
+              <el-link
+                v-if="model.keyApplyUrl"
+                type="primary"
+                @click="invokeOpenUrl(model.keyApplyUrl)">
+                {{ $t('settings.model.applyKey') }}
+              </el-link>
+            </div>
+          </div>
+        </el-card>
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { openUrl } from '@tauri-apps/plugin-opener'
 const { t } = useI18n()
 
 import { Sortable } from 'sortablejs-vue3'
 
-import { apiProvider } from '@/config/config'
 import { isEmpty, showMessage, toInt, toFloat } from '@/libs/util'
 import { useModelStore } from '@/stores/model'
 
@@ -225,19 +299,28 @@ const formRef = ref(null)
 const modelDialogVisible = ref(false)
 const editId = ref(null)
 
+// Computed property to generate API type options for the select input
+const apiProtocolOptions = {
+  OpenAI: 'openai',
+  Ollama: 'ollama',
+  Gemini: 'gemini',
+  Claude: 'claude'
+}
+
 /**
  * Computed property to generate proxy type options for the select input
  */
 const proxyTypeOptions = computed(() => {
   return ['bySetting', 'none'].map(key => ({
     label: t(`settings.model.proxyTypes.${key}`),
-    value: key,
+    value: key
   }))
 })
 
 const defaultFormData = {
-  apiProvider: 'openai',
+  apiProtocol: 'openai',
   name: '',
+  logo: '',
   models: '',
   modelList: [],
   defaultModel: '',
@@ -248,22 +331,22 @@ const defaultFormData = {
   topP: 1.0,
   topK: 40,
   proxyType: 'bySetting',
-  disabled: false,
+  disabled: false
 }
 // Reactive object to hold the form data for the model
 const modelForm = ref({ ...defaultFormData })
 
 // Computed property to get the base URL placeholder based on the API type
 const baseUrlPlaceholder = computed(() => {
-  if (modelForm.value.apiProvider === 'openai') {
+  if (modelForm.value.apiProtocol === 'openai') {
     return 'https://api.openai.com/v1'
-  } else if (modelForm.value.apiProvider === 'ollama') {
+  } else if (modelForm.value.apiProtocol === 'ollama') {
     return 'http://localhost:11434/v1'
-  } else if (modelForm.value.apiProvider === 'huggingface') {
+  } else if (modelForm.value.apiProtocol === 'huggingface') {
     return 'https://api-inference.huggingface.co/models'
-  } else if (modelForm.value.apiProvider === 'anthropic') {
+  } else if (modelForm.value.apiProtocol === 'anthropic') {
     return 'https://api.anthropic.com'
-  } else if (modelForm.value.apiProvider === 'gemini') {
+  } else if (modelForm.value.apiProtocol === 'gemini') {
     return 'https://generativelanguage.googleapis.com/v1beta/models'
   }
   return ''
@@ -271,7 +354,7 @@ const baseUrlPlaceholder = computed(() => {
 
 // Validation rules for the model form
 const modelRules = {
-  apiProvider: [{ required: true, message: t('settings.model.apiProviderRequired') }],
+  apiProtocol: [{ required: true, message: t('settings.model.apiProtocolRequired') }],
   name: [{ required: true, message: t('settings.model.nameRequired') }],
   models: [{ required: true, message: t('settings.model.modelsRequired') }],
   defaultModel: [{ required: true, message: t('settings.model.defaultModelRequired') }],
@@ -279,7 +362,7 @@ const modelRules = {
   apiKey: [
     {
       validator: (_rule, value, callback) => {
-        if (modelForm.value.apiProvider === 'ollama') {
+        if (modelForm.value.apiProtocol === 'ollama') {
           callback()
         } else if (isEmpty(value)) {
           callback(new Error(t('settings.model.apiKeyRequired')))
@@ -287,22 +370,14 @@ const modelRules = {
           callback()
         }
       },
-      trigger: 'blur',
-    },
-  ],
+      trigger: 'blur'
+    }
+  ]
 }
 
 // Computed property to derive default models from the input
 const defaultModels = computed(() => {
   return modelInit(modelForm.value.models)
-})
-
-// Computed property to generate API type options for the select input
-const apiProviderOptions = computed(() => {
-  return Object.keys(apiProvider()).map(key => ({
-    label: apiProvider()[key],
-    value: key,
-  }))
 })
 
 // Watcher to update the default model when models change
@@ -337,7 +412,7 @@ const modelInit = models => {
  * Opens the model dialog for editing or creating a new model.
  * @param {string|null} id - The ID of the model to edit, or null to create a new model.
  */
-const editModel = async id => {
+const editModel = async (id, model) => {
   if (id) {
     const modelData = modelStore.getModelById(id)
     if (!modelData) {
@@ -346,8 +421,9 @@ const editModel = async id => {
     }
     editId.value = id
     modelForm.value = {
-      apiProvider: modelData.apiProvider,
+      apiProtocol: modelData.apiProtocol,
       name: modelData.name,
+      logo: modelData?.metadata?.logo || '',
       models: modelData.models.join(','),
       modelList: [...modelData.models],
       defaultModel: modelData.defaultModel,
@@ -358,8 +434,18 @@ const editModel = async id => {
       topP: modelData.topP,
       topK: modelData.topK,
       disabled: modelData.disabled,
-      proxyType: modelData?.metadata?.proxyType,
+      proxyType: modelData?.metadata?.proxyType
     }
+  } else if (model) {
+    modelForm.value = { ...defaultFormData }
+    modelForm.value.modelList = [...model.models]
+    modelForm.value.models = modelForm.value.modelList.join(',')
+    modelForm.value.apiProtocol = model.protocol
+
+    const keys = ['name', 'logo', 'baseUrl', 'maxTokens', 'temperature', 'topP', 'topK']
+    keys.forEach(key => {
+      modelForm.value[key] = model[key]
+    })
   } else {
     editId.value = null
     modelForm.value = { ...defaultFormData }
@@ -379,8 +465,9 @@ const copyModel = id => {
   }
   editId.value = null
   modelForm.value = {
-    apiProvider: modelData.apiProvider,
+    apiProtocol: modelData.apiProtocol,
     name: modelData.name + '-Copy',
+    logo: modelData?.metadata?.logo || '',
     models: modelData.models.join(','),
     modelList: modelData.models,
     defaultModel: modelData.defaultModel,
@@ -391,7 +478,7 @@ const copyModel = id => {
     topP: modelData.topP,
     topK: modelData.topK,
     disabled: modelData.disabled,
-    proxyType: modelData?.metadata?.proxyType,
+    proxyType: modelData?.metadata?.proxyType
   }
   modelDialogVisible.value = true
 }
@@ -407,7 +494,7 @@ const updateModel = () => {
 
       const formData = {
         id: editId.value,
-        apiProvider: modelForm.value.apiProvider.trim(),
+        apiProtocol: modelForm.value.apiProtocol.trim(),
         name: modelForm.value.name.trim(),
         models: allModels,
         defaultModel: modelForm.value.defaultModel.trim(),
@@ -418,7 +505,10 @@ const updateModel = () => {
         topP: toFloat(modelForm.value.topP),
         topK: toInt(modelForm.value.topK),
         disabled: modelForm.value.disabled,
-        metadata: { proxyType: modelForm.value.proxyType || '' },
+        metadata: {
+          proxyType: modelForm.value.proxyType || '',
+          logo: modelForm.value.logo || ''
+        }
       }
 
       modelStore
@@ -445,7 +535,7 @@ const deleteModel = id => {
   ElMessageBox.confirm(t('settings.model.deleteConfirm'), t('settings.model.deleteTitle'), {
     confirmButtonText: t('common.confirm'),
     cancelButtonText: t('common.cancel'),
-    type: 'warning',
+    type: 'warning'
   }).then(() => {
     // User confirmed deletion
     modelStore
@@ -505,6 +595,64 @@ const handlePaste = e => {
   modelForm.value.modelList = [...new Set([...modelForm.value.modelList, ...newItems])]
   modelForm.value.models = modelForm.value.modelList.join(',')
 }
+
+// preset models
+const presetModelsVisible = ref(false)
+const presetModels = ref([])
+const searchQuery = ref('')
+
+const filteredModels = computed(() => {
+  if (!searchQuery.value) return presetModels.value
+  const search = searchQuery.value.toLowerCase()
+  return presetModels.value.filter(model => model.searchName.includes(search))
+})
+
+/**
+ * Opens the given URL in the default web browser
+ */
+const invokeOpenUrl = async url => {
+  try {
+    await openUrl(url)
+  } catch (error) {
+    console.log(error)
+    showMessage(t('common.openUrlError'), 'error')
+  }
+}
+
+/**
+ * Shows the preset models dialog and loads the preset models data
+ */
+const showPresetModels = async () => {
+  if (!presetModels.value.length) {
+    try {
+      const response = await fetch('/presetTextAiProvider.json')
+      const data = await response.json()
+      presetModels.value = data.models.map(x => {
+        x.searchName = x.name.toLowerCase()
+        return x
+      })
+    } catch (error) {
+      return showMessage(t('settings.model.loadPresetError'), 'error')
+    }
+  }
+  presetModelsVisible.value = true
+}
+/**
+ * closes the preset models dialog and opens the edit model dialog
+ */
+const manualAdd = () => {
+  presetModelsVisible.value = false
+  editModel(null)
+}
+
+/**
+ * Imports a preset model and opens the edit model dialog
+ * @param {Object} model - The preset model data to import
+ */
+const importPresetModel = model => {
+  presetModelsVisible.value = false
+  editModel(null, model)
+}
 </script>
 
 <style lang="scss">
@@ -536,5 +684,94 @@ const handlePaste = e => {
       }
     }
   }
+}
+.provider-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 18px;
+  margin-right: var(--cs-space-xs);
+}
+
+.preset-models-dialog {
+  :deep(.el-dialog__body) {
+    padding: 0;
+  }
+
+  .preset-models-container {
+    display: flex;
+    flex-direction: column;
+    height: 70vh;
+
+    .search-bar {
+      padding: var(--cs-space-sm) var(--cs-space) 0;
+      background: var(--el-bg-color);
+    }
+
+    .preset-models-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 var(--cs-space) var(--cs-space-sm);
+    }
+  }
+
+  .preset-model-card {
+    margin-bottom: var(--cs-space-sm);
+    .model-item {
+      .model-info {
+        display: flex;
+        align-items: center;
+        gap: var(--cs-space);
+        margin-bottom: var(--cs-space-sm);
+
+        .model-logo {
+          width: 40px;
+          height: 40px;
+          flex-shrink: 0;
+          border-radius: 40px;
+
+          img {
+            width: 100%;
+            height: 100%;
+            border-radius: 40px;
+          }
+        }
+      }
+      .links {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--cs-space);
+      }
+    }
+
+    .model-details {
+      flex: 1;
+      min-width: 0;
+
+      h3 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 24px;
+      }
+
+      p {
+        margin: 5px 0 0;
+        font-size: 14px;
+        color: var(--el-text-color-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+    }
+  }
+}
+
+.search-input {
+  margin-bottom: 16px;
+}
+.el-popper {
+  max-width: 550px;
 }
 </style>

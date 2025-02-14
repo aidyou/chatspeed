@@ -34,10 +34,16 @@
     "fs:allow-download-write-recursive",
     "fs:allow-download-write",
     "fs:allow-write-file",
-    "shell:allow-open"
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ],
   "plugins": {
     "fs": {
+      "scope": [
+        "**/*"
+      ]
+    },
+    "opener": {
       "scope": [
         "**/*"
       ]

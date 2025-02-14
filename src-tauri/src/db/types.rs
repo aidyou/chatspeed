@@ -48,8 +48,8 @@ pub struct AiModel {
     #[serde(rename = "defaultModel")]
     pub default_model: String,
     /// API provider, including openai, azure, and others.
-    #[serde(rename = "apiProvider")]
-    pub api_provider: String,
+    #[serde(rename = "apiProtocol")]
+    pub api_protocol: String,
     /// Base URL for the model's API endpoint.
     #[serde(rename = "baseUrl")]
     pub base_url: String,

@@ -92,6 +92,7 @@
     "mindmap": "思維導圖",
     "noData": "無資料",
     "save": "儲存",
+    "search": "搜索",
     "upload": "上傳",
     "uploadFailed": "檔案上傳失敗"
   },
@@ -108,13 +109,6 @@
     "searchNotePlaceholder": "搜尋智記"
   },
   "settings": {
-    "apiProvider": {
-      "claude": "Claude（克勞德）",
-      "gemini": "Gemini",
-      "huggingface": "HuggingFace",
-      "ollama": "Ollama",
-      "openai": "OpenAI相容介面"
-    },
     "general": {
       "advancedSettings": "進階設定",
       "assistantWindowVisibleShortcut": "顯示對話視窗快速鍵",
@@ -124,7 +118,6 @@
       "backingUp": "正在備份...",
       "backup": "備份",
       "backupDir": "備份目錄",
-      "backupDirPlaceholder": "請選擇備份目錄，預設備份到資料目錄下的 backups 資料夾",
       "backupSettings": "備份設定",
       "backupSuccess": "備份成功",
       "codeDarkTheme": "程式碼暗色主題",
@@ -181,8 +174,8 @@
       "additionalInfo": "附加資訊",
       "apiKey": "API金鑰",
       "apiKeyRequired": "請輸入API金鑰",
-      "apiProvider": "API提供商",
-      "apiProviderRequired": "請選擇API提供商",
+      "apiProtocol": "API協議",
+      "apiProtocolRequired": "請選擇API協議",
       "apiUrl": "API請求位址",
       "basicInfo": "基本資訊",
       "copy": "複製模型",
@@ -195,6 +188,8 @@
       "deleteTitle": "刪除模型",
       "disabled": "是否停用",
       "edit": "編輯模型",
+      "logo": "Logo",
+      "logoPlaceholder": "供應商Logo",
       "maxTokens": "最大Token數",
       "maxTokensPlaceholder": "預設為4096",
       "models": "支援的模型",
@@ -204,6 +199,7 @@
       "nameRequired": "請輸入模型名稱",
       "noModels": "沒有可用模型，請先新增",
       "notFound": "模型不存在或者已刪除",
+      "presetModels": "預設模型",
       "proxyType": "代理類型",
       "proxyTypes": {
         "bySetting": "跟隨網路設定",

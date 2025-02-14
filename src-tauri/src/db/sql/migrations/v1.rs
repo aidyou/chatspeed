@@ -19,6 +19,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             value TEXT NOT NULL
         )",
     ),
+    // ALTER TABLE ai_model RENAME COLUMN api_provider TO api_protocol;
     (
         AI_MODEL_TABLE,
         "CREATE TABLE IF NOT EXISTS ai_model (
@@ -26,7 +27,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             name TEXT NOT NULL,
             models TEXT NOT NULL,
             default_model TEXT NOT NULL,
-            api_provider TEXT NOT NULL,
+            api_protocol TEXT NOT NULL,
             base_url TEXT NOT NULL,
             api_key TEXT NOT NULL,
             max_tokens INTEGER NOT NULL DEFAULT 4096,

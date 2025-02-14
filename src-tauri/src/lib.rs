@@ -147,6 +147,7 @@ pub async fn run() -> Result<()> {
             add_message,
             delete_message,
             send_message,
+            update_message_metadata,
             // node
             get_tags,
             add_note,
@@ -180,6 +181,7 @@ pub async fn run() -> Result<()> {
             install_update,
             restart_app,
         ])
+        .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
                 // Hide window whenever it loses focus

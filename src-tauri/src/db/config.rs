@@ -39,7 +39,7 @@ impl MainStore {
     /// * `name` - Name of the AI model
     /// * `models` - List of supported model names
     /// * `default_model` - Default model to use
-    /// * `api_provider` - API provider name
+    /// * `api_protocol` - API provider name
     /// * `base_url` - Base URL for API endpoint
     /// * `api_key` - API key for authentication
     /// * `max_tokens` - Maximum tokens allowed
@@ -59,7 +59,7 @@ impl MainStore {
         name: String,
         models: Vec<String>,
         default_model: String,
-        api_provider: String,
+        api_protocol: String,
         base_url: String,
         api_key: String,
         max_tokens: i32,
@@ -90,7 +90,7 @@ impl MainStore {
         self.conn
             .execute(
                 "INSERT INTO ai_model (
-                    name, models, default_model, api_provider, base_url, api_key,
+                    name, models, default_model, api_protocol, base_url, api_key,
                     max_tokens, temperature, top_p, top_k, sort_index, disabled,
                     is_default, is_official, official_id, metadata
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -98,7 +98,7 @@ impl MainStore {
                     name,
                     models.join(","),
                     default_model,
-                    api_provider,
+                    api_protocol,
                     base_url,
                     api_key,
                     max_tokens,
@@ -141,7 +141,7 @@ impl MainStore {
         name: String,
         models: Vec<String>,
         default_model: String,
-        api_provider: String,
+        api_protocol: String,
         base_url: String,
         api_key: String,
         max_tokens: i32,
@@ -157,14 +157,14 @@ impl MainStore {
             .map_err(|e| StoreError::TauriError(e.to_string()))?;
 
         self.conn.execute(
-            "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_provider = ?,
+            "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_protocol = ?,
              base_url = ?, api_key = ?, max_tokens = ?, temperature = ?, top_p = ?,
              top_k = ?, disabled = ?, metadata = ? WHERE id = ?",
             (
                 name,
                 models.join(","),
                 default_model,
-                api_provider,
+                api_protocol,
                 base_url,
                 api_key,
                 max_tokens,

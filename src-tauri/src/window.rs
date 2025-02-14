@@ -301,7 +301,7 @@ pub async fn create_or_focus_setting_window(
         if let Ok(Some(monitor)) = webview_window.current_monitor() {
             webview_window
                 .set_max_size(Some(tauri::Size::Logical(LogicalSize {
-                    width: 600.0,
+                    width: 650.0,
                     height: monitor.size().height as f64,
                 })))
                 .map_err(|e| t!("main.failed_to_set_max_window_size", error = e))?;

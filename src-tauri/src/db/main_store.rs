@@ -287,7 +287,7 @@ impl MainStore {
                         .filter(|s| !s.is_empty())
                         .collect(),
                     default_model: row.get("default_model").unwrap_or_default(),
-                    api_provider: row.get("api_provider").unwrap_or_default(),
+                    api_protocol: row.get("api_protocol").unwrap_or_default(),
                     base_url: row.get("base_url").unwrap_or_default(),
                     api_key: row.get("api_key").unwrap_or_default(),
                     max_tokens: row.get("max_tokens").unwrap_or(0),
@@ -569,7 +569,7 @@ impl MainStore {
 
             // Migrate AI models
             let mut stmt = config_conn.prepare(
-                "SELECT id, name, models, default_model, api_provider, base_url, api_key, max_tokens, \
+                "SELECT id, name, models, default_model, api_protocol, base_url, api_key, max_tokens, \
                 temperature, top_p, top_k, sort_index, is_default, disabled, is_official, official_id, metadata \
                 FROM ai_model"
             ).map_err(|e| {
@@ -612,7 +612,7 @@ impl MainStore {
                     name,
                     models_str,
                     default_model,
-                    api_provider,
+                    api_protocol,
                     base_url,
                     api_key,
                     max_tokens,
@@ -632,10 +632,10 @@ impl MainStore {
                 })?;
 
                 tx.execute(
-                    "INSERT INTO ai_model (id, name, models, default_model, api_provider, base_url, api_key, \
+                    "INSERT INTO ai_model (id, name, models, default_model, api_protocol, base_url, api_key, \
                     max_tokens, temperature, top_p, top_k, sort_index, is_default, disabled, is_official, official_id, metadata) \
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![id, name, models_str, default_model, api_provider, base_url, api_key,
+                    params![id, name, models_str, default_model, api_protocol, base_url, api_key,
                         max_tokens, temperature, top_p, top_k, sort_index, is_default, disabled,
                         is_official, official_id, metadata.unwrap_or_default()],
                 ).map_err(|e| {

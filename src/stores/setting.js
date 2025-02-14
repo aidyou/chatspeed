@@ -23,6 +23,7 @@ const defaultSettings = {
   showMenuButton: true,
   // chat settings
   historyMessages: 1,
+  conversationTitleGenModel: { id: '', model: '' },
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
   assistantWindowVisibleShortcut: 'ALT+Z',

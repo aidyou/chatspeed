@@ -89,10 +89,26 @@ export const chatPreProcess = async (inputMessage, historyMessages, quoteMessage
  * @returns {Array<{role: string, content: string}>} Formatted history messages
  */
 function buildHistoryMessages(historyMessages) {
-  return historyMessages.map(message => ({
-    role: message.role,
-    content: message.content
-  }))
+  return historyMessages.reduceRight((acc, message) => {
+    // If the contextCleared marker is encountered, stop collecting
+    if (message.metadata?.contextCleared) {
+      acc.stop = true
+      return acc
+    }
+
+    // If collection has already stopped, return directly
+    if (acc.stop) {
+      return acc
+    }
+
+    // Collect message
+    acc.messages.unshift({
+      role: message.role,
+      content: message.content
+    })
+
+    return acc
+  }, { messages: [], stop: false }).messages
 }
 
 /**
@@ -226,7 +242,7 @@ export const parseMarkdown = content => {
         <div class="think-content">${content.replace('<think>', '')}</div>
       </div>\n`
     } else {
-      content = content.replace(/<think>([\s\S]+?)<\/think>/, `<div class="chat-think" v-think><div class="chat-think-title">${i18n.global.t('chat.reasoningProcess')}</div><div class="think-content" style="display: none;">$1</div></div>`);
+      content = content.replace(/<think>([\s\S]+?)<\/think>/, `<div class="chat-think" v-think><div class="chat-think-title">${i18n.global.t('chat.reasoningProcess')}</div><div class="think-content">$1</div></div>`);
     }
   }
 
@@ -234,17 +250,28 @@ export const parseMarkdown = content => {
   // 1. Preserve line breaks within code blocks
   // 2. Add two spaces at the end of single line breaks in normal text (non-code blocks)
   // 3. Retain consecutive line breaks (empty lines) for creating new paragraphs
-  const codeBlocks = []
-  content = content.replace(/```[\s\S]+?```/g, match => {
-    codeBlocks.push(match)
-    return `___CODE_BLOCK_${codeBlocks.length - 1}___`
-  })
+
+  // Use Map to store placeholders for better performance and cleaner restoration
+  const blocks = new Map();
+  let counter = 0;
+
+  // Create placeholder for special content (code blocks, math formulas)
+  const createPlaceholder = (content, prefix) => {
+    const id = `___${prefix}_${counter++}___`;
+    blocks.set(id, content);
+    return id;
+  };
+
+  // Protect special content by replacing them with placeholders
+  content = content
+    .replace(/```[\s\S]+?```/g, match => createPlaceholder(match, 'CODE'))
+    .replace(/\\\[([\s\S]*?)\\\]/g, match => createPlaceholder(match, 'MATH'));
+
   // Add two spaces at the end of non-empty lines for soft line breaks, but retain consecutive line breaks for paragraph separation
-  content = content.replace(/([^\n])\n(?!\n)/g, '$1  \n')
-  // Restore code blocks
-  codeBlocks.forEach((block, index) => {
-    content = content.replace(`___CODE_BLOCK_${index}___`, block)
-  })
+  content = content.replace(/([^\n])\n(?!\n)/g, '$1  \n');
+
+  // Restore all protected content in a single pass
+  content = content.replace(/___(?:CODE|MATH)_\d+___/g, match => blocks.get(match));
 
   // Replace strings wrapped with ``` to ```\n$1\n``` and trim leading and trailing spaces from $1
   content = content.replace(/\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g, (_match, p1, p2) => {

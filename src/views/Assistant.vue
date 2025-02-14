@@ -188,7 +188,11 @@
             :key="model.id"
             :class="{ active: currentModel.id === model.id }">
             <div class="name">
-              <logo :name="model.logo" size="16" />
+              <img
+                :src="model.providerLogo"
+                v-if="model.providerLogo !== ''"
+                class="provider-logo" />
+              <logo :name="model.logo" size="16" v-else />
               <span>{{ model.name }}</span>
             </div>
             <div class="icon" v-if="currentModel.id === model.id">
@@ -285,7 +289,7 @@ const skills = computed(() => {
     name: t('assistant.ask'),
     icon: 'skill-chat-square',
     metadata: { description: t('assistant.askDescription') },
-    prompt: '',
+    prompt: ''
   }
   return [ask, ...skillStore.availableSkills]
 })
@@ -386,13 +390,13 @@ onMounted(async () => {
     }
   }
 
-  // listen ai_response_chunk event
-  unlistenChunkResponse.value = await listen('ai_response_chunk', async event => {
+  // listen ai_chunk event
+  unlistenChunkResponse.value = await listen('ai_chunk', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.label !== settingStore.label) {
       return
     }
-    // console.log('ai_response_chunk', event)
+    // console.log('ai_chunk', event)
     handleChatMessage(event.payload)
   })
 
@@ -485,7 +489,7 @@ const sendMessage = async () => {
 
   try {
     await invoke('chat_with_ai', {
-      apiProvider: currentModel.value.apiProvider,
+      apiProtocol: currentModel.value.apiProtocol,
       apiUrl: currentModel.value.baseUrl,
       apiKey: currentModel.value.apiKey,
       model: currentModel.value.defaultModel,
@@ -496,8 +500,8 @@ const sendMessage = async () => {
         topP: currentModel.value.topP,
         topK: currentModel.value.topK,
         label: settingStore.label,
-        proxyType: proxyType.value,
-      },
+        proxyType: proxyType.value
+      }
     })
   } catch (error) {
     chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
@@ -523,7 +527,7 @@ const handleChatMessage = async payload => {
       tokens: payload?.metadata?.tokens?.total || 0,
       prompt: payload?.metadata?.tokens?.prompt || 0,
       completion: payload?.metadata?.tokens?.completion || 0,
-      provider: currentModel.value.defaultModel || '',
+      provider: currentModel.value.defaultModel || ''
     }
     nextTick(scrollToBottomIfNeeded)
   }
@@ -658,7 +662,7 @@ const onGoToChat = async () => {
         payloadMetadata.value
       )
       sendSyncState('conversation_switch', 'main', {
-        conversationId: chatStore.currentConversationId,
+        conversationId: chatStore.currentConversationId
       })
       // show main window
       invoke('show_window', { label: 'main' })
@@ -1083,6 +1087,12 @@ const onAddModel = () => {
           text-overflow: ellipsis;
           overflow: hidden;
           font-size: var(--cs-font-size-sm);
+        }
+
+        .provider-logo {
+          width: 16px;
+          height: 16px;
+          border-radius: var(--cs-border-radius);
         }
       }
 

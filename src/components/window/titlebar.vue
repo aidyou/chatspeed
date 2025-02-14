@@ -1,5 +1,5 @@
 <template>
-  <el-header class="header" v-show="showTitlebar">
+  <el-header class="header" :class="{ 'reverse-layout': !isMacOS }" v-show="showTitlebar">
     <!-- window controls -->
     <div class="window-controls upperLayer">
       <div class="control-icon close" @click="closeWindow" type="text" v-if="showCloseButtons">
@@ -13,41 +13,44 @@
       </div>
     </div>
 
-    <!-- left button area -->
-    <div class="left" :style="{ marginLeft: showCloseButtons ? '60px' : '0' }">
-      <slot name="left"></slot>
-    </div>
+    <!-- main content wrapper -->
+    <div class="titlebar-content-wrapper">
+      <!-- left button area -->
+      <div class="left">
+        <slot name="left"></slot>
+      </div>
 
-    <!-- center area -->
-    <div class="center">
-      <slot name="center"></slot>
-    </div>
+      <!-- center area -->
+      <div class="center">
+        <slot name="center"></slot>
+      </div>
 
-    <!-- reight button area -->
-    <div class="right">
-      <slot name="right"></slot>
+      <!-- right button area -->
+      <div class="right">
+        <slot name="right"></slot>
 
-      <!-- menu show control -->
-      <el-dropdown @command="handleCommand" trigger="click" v-if="showMenuButton">
-        <div class="menu icon-btn upperLayer">
-          <cs name="menu" />
-        </div>
-        <template #dropdown>
-          <el-dropdown-menu class="dropdown">
-            <template v-for="(menu, idx) in menus" :key="idx">
-              <div class="divider" v-if="menu.name === 'divider'" />
-              <el-dropdown-item :command="menu.name" v-else>
-                <div class="item">
-                  <div class="name">
-                    <cs :name="menu.name" />
-                    {{ menu.label }}
+        <!-- menu show control -->
+        <el-dropdown @command="handleCommand" trigger="click" v-if="showMenuButton">
+          <div class="menu icon-btn upperLayer">
+            <cs name="menu" />
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu class="dropdown">
+              <template v-for="(menu, idx) in menus" :key="idx">
+                <div class="divider" v-if="menu.name === 'divider'" />
+                <el-dropdown-item :command="menu.name" v-else>
+                  <div class="item">
+                    <div class="name">
+                      <cs :name="menu.name" />
+                      {{ menu.label }}
+                    </div>
                   </div>
-                </div>
-              </el-dropdown-item>
-            </template>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+                </el-dropdown-item>
+              </template>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </div>
   </el-header>
 </template>
@@ -60,8 +63,11 @@ import { useWindowStore } from '@/stores/window'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const { t } = useI18n()
-
 const windowStore = useWindowStore()
+
+// Compute OS-specific layout
+const isMacOS = computed(() => windowStore.os === 'macos')
+const isWindows = computed(() => windowStore.os === 'windows')
 
 const props = defineProps({
   showCloseButtons: {
@@ -110,12 +116,11 @@ const menus = computed(() => {
 })
 
 const showTitlebar = computed(() => {
-  return !(windowStore.os === 'macos' && isFullscreen.value)
+  return !(isMacOS.value && isFullscreen.value)
 })
 
 const isFullscreen = ref(false)
 const appWindow = getCurrentWindow()
-const isWindows = computed(() => windowStore.os === 'windows')
 
 // Check initial fullscreen state
 const checkInitialFullscreen = async () => {
@@ -191,37 +196,27 @@ const minimizeWindow = async () => {
 // Toggle maximize/unmaximize
 const toggleMaximize = async () => {
   try {
-    if (isWindows.value) {
-      const isMaximized = await appWindow.isMaximized()
-      if (isMaximized) {
-        await appWindow.unmaximize()
-      } else {
-        await appWindow.maximize()
-      }
-      isFullscreen.value = isMaximized
-    } else {
-      const currentFullscreen = await appWindow.isFullscreen()
+    const currentFullscreen = await appWindow.isFullscreen()
 
-      if (!currentFullscreen) {
-        document.documentElement.style.transition = 'all 0.3s ease-in-out'
-        document.documentElement.style.transform = 'scale(0.98)'
-        await new Promise(resolve => setTimeout(resolve, 50))
+    if (!currentFullscreen) {
+      document.documentElement.style.transition = 'all 0.3s ease-in-out'
+      document.documentElement.style.transform = 'scale(0.98)'
+      await new Promise(resolve => setTimeout(resolve, 50))
 
-        await appWindow.setFullscreen(true)
+      await appWindow.setFullscreen(true)
 
+      setTimeout(() => {
+        document.documentElement.style.transform = 'scale(1)'
         setTimeout(() => {
-          document.documentElement.style.transform = 'scale(1)'
-          setTimeout(() => {
-            document.documentElement.style.transition = ''
-            document.documentElement.style.transform = ''
-          }, 300)
-        }, 50)
-      } else {
-        await appWindow.setFullscreen(false)
-      }
-
-      isFullscreen.value = !currentFullscreen
+          document.documentElement.style.transition = ''
+          document.documentElement.style.transform = ''
+        }, 300)
+      }, 50)
+    } else {
+      await appWindow.setFullscreen(false)
     }
+
+    isFullscreen.value = !currentFullscreen
   } catch (error) {
     console.error('Failed to toggle maximize:', error)
     document.documentElement.style.transition = ''
@@ -308,10 +303,10 @@ init()
   }
 
   .window-controls {
-    position: absolute;
-    left: 7px;
-    top: 50%;
-    transform: translateY(-50%);
+    // position: absolute;
+    // left: 7px;
+    // top: 50%;
+    // transform: translateY(-50%);
     display: flex;
     gap: 8px;
     z-index: 100;
@@ -362,6 +357,36 @@ init()
     .cs {
       font-size: 18px !important;
       color: var(--cs-text-color-secondary);
+    }
+  }
+
+  .titlebar-content-wrapper {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 0 var(--cs-space);
+
+    .left,
+    .right {
+      flex: 0;
+    }
+
+    .center {
+      flex: 1;
+    }
+  }
+
+  &.reverse-layout {
+    flex-direction: row-reverse !important;
+
+    .window-controls {
+      flex-direction: row-reverse !important;
+    }
+
+    .titlebar-content-wrapper {
+      padding-left: 0;
     }
   }
 }

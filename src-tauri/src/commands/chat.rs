@@ -14,7 +14,7 @@
 //! import { invoke } from '@tauri-apps/api/core'
 //!
 //! const result = await invoke('chat_with_ai', {
-//!     apiProvider: 'openai',
+//!     apiProtocol: 'openai',
 //!     apiUrl: 'https://api.openai.com/v1/chat/completions',
 //!     model: 'gpt-3.5-turbo',
 //!     apiKey: 'your-api-key',
@@ -24,8 +24,8 @@
 //!     ],
 //!     maxTokens: 100
 //! })
-//! window.addEventListener('ai_response_chunk', (event) => {
-//!   console.log('ai_response_chunk', event)
+//! window.addEventListener('ai_chunk', (event) => {
+//!   console.log('ai_chunk', event)
 //! })
 //! ```
 //!
@@ -33,7 +33,7 @@
 //! ```js
 //! import { invoke } from '@tauri-apps/api/core'
 //!
-//! const result = await invoke('stop_chat', { apiProvider: 'openai' })
+//! const result = await invoke('stop_chat', { apiProtocol: 'openai' })
 //! ```
 //!
 //! ## How to add new AI providers
@@ -141,7 +141,7 @@ impl AiChatEnum {
         api_key: Option<&str>,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         impl_chat_method!(
             self,
@@ -170,7 +170,7 @@ impl AiChatEnum {
 /// # Parameters
 /// - `window` - The Tauri window instance, automatically injected by Tauri
 /// - `state` - The state of the chat system, automatically injected by Tauri
-/// - `api_provider` - The API provider to use for the chat.
+/// - `api_protocol` - The API provider to use for the chat.
 /// - `api_url` - The API URL to use for the chat.
 /// - `model` - The model to use for the chat.
 /// - `api_key` - The API key to use for the chat.
@@ -185,7 +185,7 @@ impl AiChatEnum {
 /// import { invoke } from '@tauri-apps/api/core'
 ///
 /// const result = await invoke('chat_with_ai', {
-///     apiProvider: 'openai',
+///     apiProtocol: 'openai',
 ///     apiUrl: 'https://api.openai.com/v1/chat/completions',
 ///     model: 'gpt-3.5-turbo',
 ///     apiKey: 'your-api-key',
@@ -195,8 +195,8 @@ impl AiChatEnum {
 ///     ],
 ///     maxTokens: 100
 /// })
-/// window.addEventListener('ai_response_chunk', (event) => {
-///   console.log('ai_response_chunk', event)
+/// window.addEventListener('ai_chunk', (event) => {
+///   console.log('ai_chunk', event)
 /// })
 /// ```
 #[tauri::command]
@@ -204,19 +204,22 @@ pub async fn chat_with_ai(
     window: tauri::Window, // The Tauri window instance, automatically injected by Tauri
     state: State<'_, ChatState>, // The state of the chat system, automatically injected by Tauri
     main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
-    api_provider: String,
+    api_protocol: String,
     api_url: Option<&str>,
     model: String,
     api_key: Option<&str>,
     messages: Vec<Value>,
     mut metadata: Option<Value>,
 ) -> Result<String, String> {
-    let tx = state.channels.get_or_create_channel(window.clone()).await;
+    let tx = state.channels.get_or_create_channel(window.clone()).await?;
 
-    let callback =
-        move |chunk: String, is_error: bool, is_done: bool, cb_metadata: Option<Value>| {
-            let _ = tx.try_send((chunk, is_error, is_done, cb_metadata));
-        };
+    let callback = move |chunk: String,
+                         is_error: bool,
+                         is_done: bool,
+                         is_reasoning: bool,
+                         cb_metadata: Option<Value>| {
+        let _ = tx.try_send((chunk, is_error, is_done, is_reasoning, cb_metadata));
+    };
 
     // If the proxy type is http, get the proxy server and username/password from the config
     if let Some(md) = metadata.as_mut() {
@@ -234,12 +237,12 @@ pub async fn chat_with_ai(
     }
 
     let chats = state.chats.lock().await;
-    match chats.get(&api_provider).cloned() {
+    match chats.get(&api_protocol).cloned() {
         Some(chat_interface) => {
             // Extract data needed for the async task
             let api_url_clone = if api_url == Some("") || api_url.is_none() {
                 // Set the Api url base for ollama
-                if api_provider == "ollama" {
+                if api_protocol == "ollama" {
                     Some("http://localhost:11434/v1/chat/completions".to_string())
                 } else {
                     None
@@ -266,7 +269,7 @@ pub async fn chat_with_ai(
             });
         }
         None => {
-            return Err(t!("chat.invalid_api_provider", provider = api_provider).to_string());
+            return Err(t!("chat.invalid_api_provider", provider = api_protocol).to_string());
         }
     }
 
@@ -278,7 +281,7 @@ pub async fn chat_with_ai(
 ///
 /// # Parameters
 /// - `state` - The state of the chat system, automatically injected by Tauri
-/// - `api_provider` - The API provider for which to stop the chat.
+/// - `api_protocol` - The API provider for which to stop the chat.
 ///
 /// # Returns
 /// A `Result` indicating success or an error message.
@@ -287,20 +290,20 @@ pub async fn chat_with_ai(
 /// ```js
 /// import { invoke } from '@tauri-apps/api/core'
 ///
-/// const result = await invoke('stop_chat', { apiProvider: 'openai' })
+/// const result = await invoke('stop_chat', { apiProtocol: 'openai' })
 /// ```
 #[tauri::command]
-pub async fn stop_chat(state: State<'_, ChatState>, api_provider: String) -> Result<(), String> {
+pub async fn stop_chat(state: State<'_, ChatState>, api_protocol: String) -> Result<(), String> {
     // Lock the chat state to access the chat interfaces.
     let chats = state.chats.lock().await;
-    let chat_interface = chats.get(&api_provider);
+    let chat_interface = chats.get(&api_protocol);
 
     match chat_interface {
         Some(chat_enum) => {
             chat_enum.set_stop_flag(true).await; // Set the stop flag to true.
             Ok(()) // Return success.
         }
-        None => Err(t!("chat.invalid_api_provider", provider = api_provider).to_string()), // Handle invalid API provider case.
+        None => Err(t!("chat.invalid_api_provider", provider = api_protocol).to_string()), // Handle invalid API provider case.
     }
 }
 

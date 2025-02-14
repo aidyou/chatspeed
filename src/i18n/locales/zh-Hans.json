@@ -6,6 +6,8 @@
     "haveNoModel": "您尚未添加任何模型，请从设置中心添加"
   },
   "chat": {
+    "contextCleared": "上下文已清除",
+    "clearContext": "清除上下文",
     "confirmDeleteConversation": "确定要删除这个对话吗？",
     "confirmDeleteMessage": "确定要删除这个消息吗？",
     "conversationNotFound": "对话不存在或者已删除",
@@ -27,6 +29,7 @@
     "deleteMessage": "删除消息",
     "diagramError": "流程图渲染失败",
     "editConversationTitle": "编辑对话主题",
+    "errorOnClearContext": "清除上下文失败",
     "errorOnCopyMessage": "复制消息失败: {error}",
     "errorOnDeleteConversation": "删除对话失败: {error}",
     "errorOnDeleteMessage": "删除消息失败: {error}",
@@ -64,7 +67,7 @@
     "quoteMessage": "引用消息",
     "quoteMessagePrompt": "= = = = = = = = = = =\n\n上面是您之前的回复，以下是我的回复或者新问题\n\n= = = = = = = = = = =",
     "reasoning": "推理中...",
-    "reasoningProcess": "推理过程",
+    "reasoningProcess": "已深度思考",
     "resendMessage": "重新发送消息",
     "searchChat": "搜索聊天",
     "showFavoriteConversations": "显示收藏的对话主题",
@@ -91,7 +94,9 @@
     "downloadSvg": "下载 SVG",
     "mindmap": "思维导图",
     "noData": "无数据",
+    "openUrlError": "打开链接失败",
     "save": "保存",
+    "search": "搜索",
     "upload": "上传",
     "uploadFailed": "文件上传失败"
   },
@@ -108,14 +113,9 @@
     "searchNotePlaceholder": "搜索智记"
   },
   "settings": {
-    "apiProvider": {
-      "claude": "Claude（克劳德）",
-      "gemini": "Gemini",
-      "huggingface": "HuggingFace",
-      "ollama": "Ollama",
-      "openai": "OpenAI兼容接口"
-    },
     "general": {
+      "conversationTitleGenModel": "会话主题生成模型",
+      "conversationTitleGenModelTooltip": "用户自动生成会话主题",
       "advancedSettings": "高级设置",
       "assistantWindowVisibleShortcut": "显示对话窗口快捷键",
       "autoStart": "开机启动",
@@ -124,7 +124,6 @@
       "backingUp": "正在备份...",
       "backup": "备份",
       "backupDir": "备份目录",
-      "backupDirPlaceholder": "请选择备份目录，默认备份到数据目录下的 backups 文件夹",
       "backupSettings": "备份设置",
       "backupSuccess": "备份成功",
       "codeDarkTheme": "代码暗色主题",
@@ -176,13 +175,18 @@
       "wordSelectionToolbar": "AI划词工具栏"
     },
     "model": {
+      "documentation": "文档",
+      "modelInfo": "模型信息",
+      "applyKey": "申请密钥",
       "add": "添加模型",
+      "addDirectly": "手动添加",
+      "addFromPreset": "从预设导入",
       "addSuccess": "模型已添加",
       "additionalInfo": "附加信息",
       "apiKey": "API密钥",
       "apiKeyRequired": "请输入API密钥",
-      "apiProvider": "API提供商",
-      "apiProviderRequired": "请选择API提供商",
+      "apiProtocol": "API协议",
+      "apiProtocolRequired": "请选择API协议",
       "apiUrl": "API请求地址",
       "basicInfo": "基本信息",
       "copy": "复制模型",
@@ -195,6 +199,8 @@
       "deleteTitle": "删除模型",
       "disabled": "是否禁用",
       "edit": "编辑模型",
+      "logo": "Logo",
+      "logoPlaceholder": "供应商Logo",
       "maxTokens": "最大Token数",
       "maxTokensPlaceholder": "默认为4096",
       "models": "支持的模型",
@@ -204,6 +210,7 @@
       "nameRequired": "请输入模型名称",
       "noModels": "没有可用模型，请先添加",
       "notFound": "模型不存在或者已删除",
+      "presetModels": "预设模型",
       "proxyType": "代理类型",
       "proxyTypes": {
         "bySetting": "跟随网络设置",

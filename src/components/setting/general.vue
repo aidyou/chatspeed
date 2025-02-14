@@ -154,6 +154,42 @@
             @change="onHistoryMessagesChange" />
         </div>
       </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.conversationTitleGenModel') }}
+            <small class="tooltip">{{
+              $t('settings.general.conversationTitleGenModelTooltip')
+            }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select
+            v-model="settings.conversationTitleGenModel.id"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onConversationTitleGenModelIdChange">
+            <el-option
+              v-for="model in modelStore.models"
+              :key="model.id"
+              :label="model.name"
+              :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select
+            v-model="settings.conversationTitleGenModel.model"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onConversationTitleGenModelModelChange">
+            <el-option
+              v-for="model in conversationTitleGenModelList"
+              :key="model"
+              :label="model"
+              :value="model">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -307,8 +343,9 @@
         <div class="value" style="width: 70%">
           <el-input
             v-model="settings.backupDir"
+            :readonly="true"
             :clearable="true"
-            :placeholder="$t('settings.general.backupDirPlaceholder')"
+            :placeholder="defaultBackupDir"
             @change="onBackupDirChange"
             @click="selectBackupDir" />
         </div>
@@ -347,7 +384,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
-import { documentDir } from '@tauri-apps/api/path'
+import { dataDir, documentDir } from '@tauri-apps/api/path'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -355,7 +392,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import {
   getAvailableLanguages,
   getSoftwareLanguages,
-  mapBrowserLangToStandard,
+  mapBrowserLangToStandard
 } from '@/i18n/langUtils'
 import { showMessage } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
@@ -363,34 +400,43 @@ import { sendSyncState } from '@/libs/sync'
 const { t } = useI18n()
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
-import { useSkillStore } from '@/stores/skill'
-const settingStore = useSettingStore()
 const modelStore = useModelStore()
-const skillStore = useSkillStore()
+const settingStore = useSettingStore()
+// import { useSkillStore } from '@/stores/skill'
+// const skillStore = useSkillStore()
 
 const { settings } = storeToRefs(settingStore)
 
 const backups = ref([])
 const restoreDir = ref('')
 
+const defaultBackupDir = ref('')
+
 import codeThemes from '@/config/highlight.js/themes.json'
 const themes = computed(() => ({
   system: t('settings.general.systemTheme'),
   light: t('settings.general.lightTheme'),
-  dark: t('settings.general.darkTheme'),
+  dark: t('settings.general.darkTheme')
 }))
+
+const conversationTitleGenModelList = computed(() => {
+  if (settingStore.settings.conversationTitleGenModel.id) {
+    return modelStore.getModelById(settingStore.settings.conversationTitleGenModel.id)?.models || []
+  }
+})
 
 const proxyTypes = computed(() => ({
   none: t('settings.general.proxyTypes.none'),
   system: t('settings.general.proxyTypes.system'),
-  http: t('settings.general.proxyTypes.http'),
+  http: t('settings.general.proxyTypes.http')
 }))
 
 // get all available languages
 const availableLanguages = getAvailableLanguages()
 const softwareLanguages = getSoftwareLanguages()
 
-onMounted(() => {
+onMounted(async () => {
+  defaultBackupDir.value = `${await dataDir()}/backups`
   getAllBackups()
 })
 
@@ -466,7 +512,7 @@ const KEY_DISPLAY_MAP = {
   '>': 'Period',
   '/': 'Slash',
   '?': 'Slash',
-  '≈': 'x', // Fixes the display issue of Alt+x on macOS
+  '≈': 'x' // Fixes the display issue of Alt+x on macOS
 }
 
 /**
@@ -536,6 +582,24 @@ const clearShortcut = shortcutKey => {
 const onHistoryMessagesChange = value => {
   setSetting('historyMessages', value || 0)
 }
+/**
+ * Handles the change of conversation title generation model id
+ * @param {number} value - The value of conversation title generation model id
+ */
+const onConversationTitleGenModelIdChange = value => {
+  settingStore.settings.conversationTitleGenModel = { id: value || 0, model: '' }
+  setSetting('conversationTitleGenModel', settingStore.settings.conversationTitleGenModel)
+}
+
+/**
+ * Handles the change of conversation title generation model
+ * @param {string} value - The value of conversation title generation model
+ */
+const onConversationTitleGenModelModelChange = value => {
+  settingStore.settings.conversationTitleGenModel.model = value || ''
+  setSetting('conversationTitleGenModel', settingStore.settings.conversationTitleGenModel)
+}
+
 /**
  * Handles the change of show menu button
  * @param {boolean} value - The value of show menu button
@@ -616,7 +680,7 @@ const selectBackupDir = async () => {
       directory: true,
       multiple: false,
       filters: [{ name: 'Directory', extensions: ['*'] }],
-      defaultPath: await documentDir(),
+      defaultPath: await documentDir()
     })
 
     if (selected) {
@@ -641,7 +705,7 @@ const startBackup = async () => {
   // Show loading state
   const loadingInstance = ElLoading.service({
     text: t('settings.general.backingUp'),
-    background: 'var(--cs-bg-color-opacity)',
+    background: 'var(--cs-bg-color-opacity)'
   })
   try {
     isBackingUp.value = true
@@ -664,7 +728,7 @@ const onRestore = value => {
     t('settings.general.restoreConfirmTitle'),
     {
       confirmButtonText: t('common.confirm'),
-      cancelButtonText: t('common.cancel'),
+      cancelButtonText: t('common.cancel')
     }
   )
     .then(() => {
@@ -695,7 +759,7 @@ const getAllBackups = () => {
       dirs.forEach(b => {
         backups.value.push({
           label: b.split('/').pop(),
-          value: b,
+          value: b
         })
       })
     }

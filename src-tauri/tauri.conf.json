@@ -78,7 +78,7 @@
         "minWidth": 650,
         "height": 700,
         "minHeight": 600,
-        "minimizable": false,
+        "maximizable": false,
         "titleBarStyle": "Transparent",
         "decorations": false,
         "transparent": true,
@@ -132,6 +132,9 @@
       "windows": {
         "installMode": "passive"
       }
+    },
+    "shell": {
+      "open": true
     }
   }
 }
