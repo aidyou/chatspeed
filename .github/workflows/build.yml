@@ -45,11 +45,36 @@ jobs:
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+          key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ matrix.target }}-
+            ${{ runner.os }}-vcpkg-
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: "${{ runner.os }}-rust-${{ matrix.target }}"
           workspaces: src-tauri
-          cache-all-crates: true
+          cache-targets: false
+          cache-on-failure: true
 
       - name: Setup vcpkg env
         shell: pwsh
@@ -177,11 +202,36 @@ jobs:
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+          key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ matrix.target }}-
+            ${{ runner.os }}-vcpkg-
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: "${{ runner.os }}-rust-${{ matrix.target }}"
           workspaces: src-tauri
-          cache-all-crates: true
+          cache-targets: false
+          cache-on-failure: true
 
       - name: Install dependencies (macOS)
         run: |
@@ -241,11 +291,36 @@ jobs:
       - name: Add Rust Target
         run: rustup target add x86_64-unknown-linux-gnu
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+          key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ matrix.target }}-
+            ${{ runner.os }}-vcpkg-
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: "${{ runner.os }}-rust-${{ matrix.target }}"
           workspaces: src-tauri
-          cache-all-crates: true
+          cache-targets: false
+          cache-on-failure: true
 
       - name: Install dependencies (ubuntu only)
         run: |
