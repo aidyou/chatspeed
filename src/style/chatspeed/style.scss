@@ -260,6 +260,13 @@
             line-height: 1.5;
             font-size: var(--cs-font-size-sm);
 
+            &.simple-text {
+                border: none;
+                word-break: break-word;
+                white-space: pre-wrap;
+                overflow-wrap: break-word;
+            }
+
             code {
                 &.hljs {
                     // background-color: var(--cs-code-block-bg-color);

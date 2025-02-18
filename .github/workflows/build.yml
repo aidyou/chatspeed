@@ -1,277 +1,138 @@
-name: Build and Release
+name: Release Build
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
 
-  workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        type: choice
-        required: true
-        default: 'test'
-        options:
-          - test
-          - release
-      platform:
-        description: 'Target platform (leave empty for all platforms)'
-        type: choice
-        required: false
-        default: 'all'
-        options:
-          - all
-          - linux
-          - macos
-          - windows
-
+permissions: write-all
 env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
 
 jobs:
-  build:
-    permissions:
-      contents: write
+  release:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            type: 'macos'
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            type: 'macos'
-          - platform: 'ubuntu-22.04'
-            args: ''
-            type: 'linux'
-          - platform: 'windows-latest'
-            args: ''
-            type: 'windows'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
 
-    runs-on: ${{ matrix.platform }}
-
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Check if should run
-        id: should_run
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]] || \
-             [[ "${{ github.event_name }}" == "workflow_dispatch" && \
-                ("${{ github.event.inputs.platform }}" == "all" || \
-                 "${{ github.event.inputs.platform }}" == "${{ matrix.type }}") ]]; then
-            echo "run=true" >> $GITHUB_OUTPUT
-          else
-            echo "run=false" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-        if: steps.should_run.outputs.run == 'true'
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Node
-        if: steps.should_run.outputs.run == 'true'
-        uses: actions/setup-node@v4
+      - name: Add Rust Target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
         with:
-          node-version: 'lts/*'
-          cache: 'yarn'
-
-      - name: Clean GitHub Actions cache (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
-        run: |
-          rm -rf ~/.cargo/registry/cache/
-          rm -rf ~/.cargo/git/db/
-          rm -rf target/
+          workspaces: src-tauri
+          cache-all-crates: true
 
       - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
-          # Clean apt cache
-          sudo rm -rf /var/lib/apt/lists/*
-          
-          # Update package index
-          sudo apt-get clean
           sudo apt-get update
-          
-          # Ensure all required packages are installed
           sudo apt-get install -y \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libssl-dev \
-            libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev \
-            patchelf
-
-          # Install other required development packages
-          sudo apt-get install -y \
-            libgdk-3-dev \
-            libpango1.0-dev \
-            libpangocairo-1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            libgdk-pixbuf-2.0-0 \
-            libatk1.0-dev \
-            libasound2-dev
-
-          # Ensure all libraries are correctly linked
-          sudo ldconfig
-
-          # Verify libraries are correctly installed
-          echo "Verifying installed libraries..."
-          ldconfig -p | grep -E "webkit2gtk|gtk-3|gdk-3|pangocairo|pango|atk|gdk_pixbuf|soup-3.0|javascriptcoregtk"
-
-          echo "System information:"
-          uname -a
-          lsb_release -a
-
-          echo "Installed packages:"
-          dpkg -l | grep -E 'webkit|gtk|ssl|indicator|sqlite|bzip2|clang|lld'
-
-          echo "Library paths:"
-          ldconfig -p | grep -E 'sqlite|bzip2|webkit|gtk'
-
-          # Set environment variables
-          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
-          echo "BZIP2_STATIC=1" >> $GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
-
-          # Show system SSL information
-          echo "System SSL information:"
-          openssl version
-
-          echo "pkg-config paths:"
-          pkg-config --list-all | grep -E 'gtk|webkit'
+            patchelf \
+            sqlite3 \
+            libsqlite3-dev
 
       - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos-latest' && steps.should_run.outputs.run == 'true'
+        if: matrix.os == 'macos-latest'
         run: |
           brew list sqlite3 || brew install sqlite3
-          brew list bzip2 || brew install bzip2
           echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
-          echo "SQLITE3_STATIC=1" >> $GITHUB_ENV
           echo "LDFLAGS=-L$(brew --prefix sqlite3)/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
-          echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-          echo "RUSTFLAGS=-C target-feature=+cxx-exceptions" >> $GITHUB_ENV
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - name: Install Windows dependencies
-        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        run: |
-          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
-          choco install windows-sdk-10-version-2004-all
-
-      - name: Setup Visual Studio Developer Command Prompt
-        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Install dependencies (windows only)
-        if: matrix.platform == 'windows-latest' && steps.should_run.outputs.run == 'true'
+      - name: Install dependencies (windows)
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          Write-Host "Setting up Visual Studio environment..."
+          vcpkg install sqlite3:x64-windows-static
 
-          # Setup Visual Studio environment variables
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $vcvarsallPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
-
-          # Import Visual Studio environment variables
-          cmd.exe /c "`"$vcvarsallPath`" x64 && set" | ForEach-Object {
-              if ($_ -match "=") {
-                  $name, $value = $_ -split "=", 2
-                  [System.Environment]::SetEnvironmentVariable($name, $value)
-              }
-          }
-
-          Write-Host "Installing dependencies via vcpkg..."
-
-          # Setup vcpkg environment
-          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          Write-Host "VCPKG_ROOT: $vcpkgRoot"
-
-          # Clean and reinstall dependencies
-          vcpkg remove sqlite3:x64-windows-static-md --recurse
-          vcpkg remove bzip2:x64-windows-static-md --recurse
-          vcpkg install sqlite3:x64-windows-static-md bzip2:x64-windows-static-md --clean-after-build
-
-          # Set environment variables and ensure correct library paths
-          echo "SQLITE3_STATIC=1" >> $env:GITHUB_ENV
-          echo "BZIP2_STATIC=1" >> $env:GITHUB_ENV
-          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
-          echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
-          echo "VCPKG_INSTALLED_DIR=$vcpkgRoot\installed" >> $env:GITHUB_ENV
-
-          # Set Rust linking flags
-          $rustflags = @(
-              "-C target-feature=+crt-static",
-              "-Ctarget-feature=+crt-static",
-              "-Clink-arg=/DEFAULTLIB:libcmt.lib",
-              "-Clink-arg=/DEFAULTLIB:oldnames.lib",
-              "-Clink-arg=/DEFAULTLIB:libvcruntime.lib",
-              "-Clink-arg=/DEFAULTLIB:libucrt.lib",
-              "-Clink-arg=/DEFAULTLIB:libcpmt.lib",
-              "-Clink-arg=/DEFAULTLIB:msvcrt.lib",
-              "-Clink-arg=/NODEFAULTLIB:libvcruntimed.lib",
-              "-Clink-arg=/NODEFAULTLIB:vcruntime.lib",
-              "-Clink-arg=/NODEFAULTLIB:vcruntimed.lib",
-              "-Clink-arg=/NODEFAULTLIB:msvcrtd.lib",
-              "-Clink-arg=/NODEFAULTLIB:msvcprtd.lib"
-          )
-
-          $rustflagsStr = $rustflags -join " "
-          echo "RUSTFLAGS=$rustflagsStr" >> $env:GITHUB_ENV
-
-          # Set Visual C++ toolchain environment variables
-          echo "CL=/MD" >> $env:GITHUB_ENV
-          echo "CFLAGS=/MD" >> $env:GITHUB_ENV
-          echo "CXXFLAGS=/MD" >> $env:GITHUB_ENV
-
-          # Verify library file locations
-          Write-Host "Verifying library locations:"
-          Get-ChildItem -Recurse -Path "$vcpkgRoot\installed\x64-windows-static-md\lib" -Filter "*.lib"
-
-      - name: Rust setup
-        if: steps.should_run.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Node
+        uses: actions/setup-node@v4
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-          components: rust-src,rustc-dev,llvm-tools-preview
+          node-version: 'lts/*'
 
-      # Add a new step for Ubuntu platform
-      - name: Setup Ubuntu Rust target
-        if: matrix.platform == 'ubuntu-22.04' && steps.should_run.outputs.run == 'true'
+      - name: Setup Yarn
         run: |
-          rustup target add x86_64-unknown-linux-gnu
-          echo "CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu" >> $GITHUB_ENV
+          corepack enable
+          yarn set version stable
 
-      - name: Setup Rust cache
-        if: steps.should_run.outputs.run == 'true'
-        uses: Swatinem/rust-cache@v2.7.3
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+
+      - name: Yarn Cache
+        uses: actions/cache@v3
         with:
-          workspaces: './src-tauri -> target'
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
 
-      - name: Install frontend dependencies
-        if: steps.should_run.outputs.run == 'true'
-        run: yarn install
+      - name: Yarn install
+        run: |
+          yarn install
+          yarn check ${{ matrix.target }}
 
-      - name: Build the app
-        if: steps.should_run.outputs.run == 'true'
+      - name: Tauri build
         uses: tauri-apps/tauri-action@v0
         env:
+          NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Release ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          tagName: v__VERSION__
+          releaseName: "ChatSpeed v__VERSION__"
+          releaseBody: "See the assets to download this version and install."
+          tauriScript: yarn
+          args: --target ${{ matrix.target }}
+
+      - name: Get Version
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install jq
+          echo "VERSION=$(cat package.json | jq '.version' | tr -d '"')" >> $GITHUB_ENV
+          echo "BUILDTIME=$(TZ=Asia/Shanghai date)" >> $GITHUB_ENV
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 'ChatSpeed ${{ github.ref_name }}'
+          body: 'See the assets to download this version and install.'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe

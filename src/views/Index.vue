@@ -180,7 +180,13 @@
                   v-katex
                   v-mermaid
                   v-think /> -->
-                <markdown :content="message.content" :reference="message.metadata?.reference" />
+                <div class="content" v-if="message.role === 'user'">
+                  <pre class="simple-text">{{ message.content }}</pre>
+                </div>
+                <markdown
+                  :content="message.content"
+                  :reference="message.metadata?.reference"
+                  v-else />
                 <div class="metadata">
                   <div class="buttons">
                     <el-tooltip
