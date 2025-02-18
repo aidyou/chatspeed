@@ -201,7 +201,6 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
             WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::App("/note".into()))
                 .title("Notes")
                 .decorations(false)
-                .skip_taskbar(true)
                 .inner_size(850.0, 600.0)
                 .min_inner_size(600.0, 400.0);
         #[cfg(target_os = "windows")]
@@ -281,7 +280,6 @@ pub async fn create_or_focus_setting_window(
         )
         .title("")
         .decorations(false)
-        .skip_taskbar(true)
         .maximizable(false)
         .inner_size(650.0, 700.0)
         .min_inner_size(650.0, 600.0);
