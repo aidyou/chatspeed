@@ -65,7 +65,7 @@
     "noteTitlePlaceholder": "请输入智记标题",
     "noteTitleRequired": "请输入标题",
     "quoteMessage": "引用消息",
-    "quoteMessagePrompt": "= = = = = = = = = = =\n\n上面是您之前的回复，以下是我的回复或者新问题\n\n= = = = = = = = = = =",
+    "quoteMessagePrompt": "= = = = = = = = = = =\n\n上面是您之前的回复，让我们继续这个话题\n\n= = = = = = = = = = =",
     "reasoning": "推理中...",
     "reasoningProcess": "已深度思考",
     "reference": "引用 {count} 篇资料作为参考",
