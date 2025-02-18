@@ -821,7 +821,11 @@ const sendMessage = async (messageId = null) => {
   let userMessage = ''
   // 如果回复消息，则将回复消息设置为空
   if (replyMessage.value) {
-    userMessage = replyMessage.value + '\n\n' + t('chat.quoteMessagePrompt') + '\n\n'
+    userMessage =
+      replyMessage.value.replace(/<think[^>]*>[\s\S]+?<\/think>/g, '').trim() +
+      '\n\n' +
+      t('chat.quoteMessagePrompt') +
+      '\n\n'
     replyMessage.value = ''
   }
 
