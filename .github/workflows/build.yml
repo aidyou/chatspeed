@@ -51,22 +51,65 @@ jobs:
           workspaces: src-tauri
           cache-all-crates: true
 
+      - name: Setup vcpkg env
+        shell: pwsh
+        run: |
+          # 设置 vcpkg 根目录
+          $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          
+          # 设置目标架构相关变量
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
+            echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+            echo "CARGO_CFG_TARGET_ARCH=x86_64" >> $env:GITHUB_ENV
+          } else {
+            echo "VCPKG_DEFAULT_TRIPLET=arm64-windows-static" >> $env:GITHUB_ENV
+            echo "CARGO_CFG_TARGET_ARCH=aarch64" >> $env:GITHUB_ENV
+          }
+          
+          # 设置通用 vcpkg 变量
+          echo "VCPKG_INSTALLED_DIR=$VCPKG_ROOT/installed" >> $env:GITHUB_ENV
+          echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
+          echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
+
       - name: Install dependencies (windows)
         shell: pwsh
         run: |
-          $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
-          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          # 确保 vcpkg 已集成
           vcpkg integrate install
-          vcpkg install sqlite3:x64-windows-static
-          vcpkg install sqlite3:arm64-windows-static
-          vcpkg integrate install
+          
+          # 安装依赖
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
+            vcpkg install sqlite3:x64-windows-static
+            vcpkg install bzip2:x64-windows-static
+            echo "SQLITE3_LIB_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/lib" >> $env:GITHUB_ENV
+            echo "SQLITE3_INCLUDE_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/include" >> $env:GITHUB_ENV
+          } else {
+            vcpkg install sqlite3:arm64-windows-static
+            vcpkg install bzip2:arm64-windows-static
+            echo "SQLITE3_LIB_DIR=$env:VCPKG_ROOT/installed/arm64-windows-static/lib" >> $env:GITHUB_ENV
+            echo "SQLITE3_INCLUDE_DIR=$env:VCPKG_ROOT/installed/arm64-windows-static/include" >> $env:GITHUB_ENV
+          }
+          
+          # 验证安装
+          if (Test-Path $env:SQLITE3_LIB_DIR) {
+            echo "SQLite3 lib directory exists at: $env:SQLITE3_LIB_DIR"
+            Get-ChildItem $env:SQLITE3_LIB_DIR
+          } else {
+            echo "Error: SQLite3 lib directory not found at: $env:SQLITE3_LIB_DIR"
+            exit 1
+          }
 
-      - name: Setup VCPKG_ROOT for build
+      - name: Setup Rust env
         shell: pwsh
         run: |
-          echo "VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
-          echo "SQLITE3_LIB_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/lib" >> $env:GITHUB_ENV
-          echo "SQLITE3_INCLUDE_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/include" >> $env:GITHUB_ENV
+          # 设置 Rust 环境变量
+          echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+          echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
+          
+          # 设置 vcpkg 集成相关的环境变量
+          echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
+          echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
 
       - name: Install Node
         uses: actions/setup-node@v4
