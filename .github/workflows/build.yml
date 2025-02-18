@@ -79,6 +79,9 @@ jobs:
       - name: Yarn install
         run: yarn install --immutable
 
+      - name: Build Frontend
+        run: yarn build
+
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0
         env:
@@ -87,10 +90,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "ChatSpeed v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          tauriScript: yarn
           args: --target ${{ matrix.target }}
 
   release-macos:
@@ -150,6 +149,9 @@ jobs:
       - name: Yarn install
         run: yarn install --immutable
 
+      - name: Build Frontend
+        run: yarn build
+
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0
         env:
@@ -158,10 +160,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "ChatSpeed v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          tauriScript: yarn
           args: --target ${{ matrix.target }}
 
   release-linux:
@@ -217,6 +215,9 @@ jobs:
       - name: Yarn install
         run: yarn install --immutable
 
+      - name: Build Frontend
+        run: yarn build
+
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0
         env:
@@ -225,8 +226,4 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "ChatSpeed v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          tauriScript: yarn
           args: --target x86_64-unknown-linux-gnu
