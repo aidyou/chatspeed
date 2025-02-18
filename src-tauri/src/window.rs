@@ -48,7 +48,7 @@ pub async fn fix_window_visual(
     _window: &tauri::WebviewWindow,
     _size: Option<WindowSize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     {
         use tauri::LogicalSize;
         let mut size = _size
@@ -119,6 +119,7 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
         .transparent(true)
         .skip_taskbar(true)
         .min_inner_size(400.0, 500.0)
+        .center()
         .build()
         {
             Ok(window) => {
@@ -202,7 +203,8 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
                 .title("Notes")
                 .decorations(false)
                 .inner_size(850.0, 600.0)
-                .min_inner_size(600.0, 400.0);
+                .min_inner_size(600.0, 400.0)
+                .center();
         #[cfg(target_os = "windows")]
         {
             webview_window_builder = webview_window_builder.transparent(false);
@@ -282,7 +284,8 @@ pub async fn create_or_focus_setting_window(
         .decorations(false)
         .maximizable(false)
         .inner_size(650.0, 700.0)
-        .min_inner_size(650.0, 600.0);
+        .min_inner_size(650.0, 600.0)
+        .center();
 
         #[cfg(target_os = "windows")]
         {
@@ -355,6 +358,7 @@ pub async fn create_or_focus_url_window(
         .title("Web View")
         .inner_size(1200.0, 800.0)
         .min_inner_size(800.0, 600.0)
+        .center()
         .build()
         .map_err(|e| t!("main.failed_to_create_webview_window", error = e).to_string())?;
 

@@ -24,6 +24,7 @@
         "dragDropEnabled": true,
         "transparent": true,
         "hiddenTitle": true,
+        "center": true,
         "create": true
       },
       {
@@ -38,6 +39,7 @@
         "dragDropEnabled": true,
         "transparent": true,
         "hiddenTitle": true,
+        "center": true,
         "create": false
       },
       {
@@ -53,6 +55,7 @@
         "transparent": true,
         "visible": false,
         "skipTaskbar": true,
+        "center": true,
         "create": true
       },
       {
@@ -67,6 +70,7 @@
         "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
+        "center": true,
         "create": false
       },
       {
@@ -82,7 +86,7 @@
         "titleBarStyle": "Transparent",
         "decorations": false,
         "transparent": true,
-        "skipTaskbar": true,
+        "center": true,
         "create": false
       }
     ],

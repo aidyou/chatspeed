@@ -384,7 +384,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
-import { appDataDir, documentDir } from '@tauri-apps/api/path'
+import { appDataDir } from '@tauri-apps/api/path'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -680,7 +680,7 @@ const selectBackupDir = async () => {
       directory: true,
       multiple: false,
       filters: [{ name: 'Directory', extensions: ['*'] }],
-      defaultPath: await documentDir()
+      defaultPath: await appDataDir()
     })
 
     if (selected) {
