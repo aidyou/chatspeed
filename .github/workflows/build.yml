@@ -54,8 +54,19 @@ jobs:
       - name: Install dependencies (windows)
         shell: pwsh
         run: |
+          $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          vcpkg integrate install
           vcpkg install sqlite3:x64-windows-static
           vcpkg install sqlite3:arm64-windows-static
+          vcpkg integrate install
+
+      - name: Setup VCPKG_ROOT for build
+        shell: pwsh
+        run: |
+          echo "VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
+          echo "SQLITE3_LIB_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/lib" >> $env:GITHUB_ENV
+          echo "SQLITE3_INCLUDE_DIR=$env:VCPKG_ROOT/installed/x64-windows-static/include" >> $env:GITHUB_ENV
 
       - name: Install Node
         uses: actions/setup-node@v4
