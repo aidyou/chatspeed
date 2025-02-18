@@ -77,10 +77,9 @@
     :show-close="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false">
-    <!-- 添加一个空标题 -->
-    <el-tabs v-model="activeTab">
-      <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
-        <el-form :model="modelForm" :rules="modelRules" ref="formRef">
+    <el-form :model="modelForm" :rules="modelRules" ref="formRef">
+      <el-tabs v-model="activeTab">
+        <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.model.apiProtocol')" prop="apiProtocol">
             <el-select v-model="modelForm.apiProtocol">
               <el-option v-for="(k, v) in apiProtocolOptions" :key="k" :label="v" :value="k" />
@@ -132,12 +131,14 @@
             :label="$t('settings.model.apiKey')"
             prop="apiKey"
             :required="modelForm.apiProtocol !== 'ollama'">
-            <el-input v-model="modelForm.apiKey" type="password" show-password />
+            <el-input
+              v-model="modelForm.apiKey"
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 5 }"
+              show-password />
           </el-form-item>
-        </el-form>
-      </el-tab-pane>
-      <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
-        <el-form :model="modelForm" :rules="modelRules" ref="formRef">
+        </el-tab-pane>
+        <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
           <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
             <el-input-number
               v-model="modelForm.maxTokens"
@@ -197,9 +198,9 @@
           <el-form-item :label="$t('settings.model.disabled')" prop="disabled">
             <el-switch v-model="modelForm.disabled" />
           </el-form-item>
-        </el-form>
-      </el-tab-pane>
-    </el-tabs>
+        </el-tab-pane>
+      </el-tabs>
+    </el-form>
     <template #footer>
       <span class="dialog-footer">
         <el-button @click="modelDialogVisible = false">{{ $t('common.cancel') }}</el-button>
@@ -413,6 +414,9 @@ const modelInit = models => {
  * @param {string|null} id - The ID of the model to edit, or null to create a new model.
  */
 const editModel = async (id, model) => {
+  formRef.value?.resetFields()
+  activeTab.value = 'basic' // 重置为基础信息标签页
+
   if (id) {
     const modelData = modelStore.getModelById(id)
     if (!modelData) {
@@ -506,7 +510,7 @@ const updateModel = () => {
         topK: toInt(modelForm.value.topK),
         disabled: modelForm.value.disabled,
         metadata: {
-          proxyType: modelForm.value.proxyType || '',
+          proxyType: modelForm.value.proxyType || 'bySetting',
           logo: modelForm.value.logo || ''
         }
       }

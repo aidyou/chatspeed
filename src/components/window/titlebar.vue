@@ -72,20 +72,20 @@ const isWindows = computed(() => windowStore.os === 'windows')
 const props = defineProps({
   showCloseButtons: {
     type: Boolean,
-    default: true,
+    default: true
   },
   showMaximizeButton: {
     type: Boolean,
-    default: true,
+    default: true
   },
   showMinimizeButton: {
     type: Boolean,
-    default: true,
+    default: true
   },
   showMenuButton: {
     type: Boolean,
-    default: false,
-  },
+    default: false
+  }
 })
 
 const availableMenus = [
@@ -97,7 +97,7 @@ const availableMenus = [
   'skill',
   'divider',
   'about',
-  'quit',
+  'quit'
 ]
 
 const menus = computed(() => {
@@ -105,12 +105,12 @@ const menus = computed(() => {
     if (menu === 'divider') {
       return {
         label: '',
-        name: 'divider',
+        name: 'divider'
       }
     }
     return {
       label: t(`menu.${menu}`),
-      name: menu,
+      name: menu
     }
   })
 })

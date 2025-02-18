@@ -104,7 +104,7 @@ function buildHistoryMessages(historyMessages) {
     // Collect message
     acc.messages.unshift({
       role: message.role,
-      content: message.content
+      content: (message.role === 'assistant' ? message.content.replace(/<think>[\s\S]*?<\/think>/g, '') : message.content)
     })
 
     return acc
@@ -230,21 +230,65 @@ export const htmlspecialchars = (text) => {
 /**
  * modify parseMarkdown function
  */
-export const parseMarkdown = content => {
+export const parseMarkdown = (content, reference) => {
   if (!content) return ''
+
+  let refs = ''
+  // format refs [1,2,3](@ref) -> [^1][^2][^3]
+  content = content.replace(/\[([0-9,\s]+)\]\(@ref\)/g, (_match, numbers) => {
+    return numbers.split(',').map(num => `[^${num.trim()}]`).join('')
+  })
+  // format refs [^1^] -> [^1]
+  content = content.replace(/\[\^([0-9]+)\^]/g, (_match, number) => {
+    return `[^${number.trim()}]`
+  })
+  // format refs [[1]] -> [^1]
+  content = content.replace(/\[\[([0-9]+)\]\]/g, (_match, number) => {
+    return `[^${number.trim()}]`
+  })
+
+  // Text like `[1]` needs to be replaced first; otherwise, the subsequent reference parsing will be converted to a code block by mk.
+  const refBlocks = new Map()
+  let refCounter = 0
+
+  // Replace regular reference text with placeholders
+  content = content.replace(/\`\[\^[0-9]+\]\`/g, match => {
+    const id = `___REF_${refCounter++}___`
+    refBlocks.set(id, match)
+    return id
+  })
+
+
+  if (Array.isArray(reference) && reference.length > 0) {
+    refs = `<div class="chat-reference"><div class="chat-reference-title"><span>${i18n.global.t('chat.reference', { count: reference.length })}</span></div><ul class="chat-reference-list" style="display: none;">`
+    reference.forEach(item => {
+      refs += `<li><a href="${item.url}">${item.title}</a></li>`
+
+      content = content.replace(new RegExp(`\\[\\^${item.id}\\]`, 'g'), `<a href="${item.url}" class="reference-link">${item.id}</a>`)
+      // content = content.replace(new RegExp(`\\[${item.id}\\]\\(@ref\\)`, 'g'), `<a href="${item.url}" class="reference-link">${item.id}</a>`)
+    })
+    refs += '</ul></div>'
+  }
+
+  // Replace placeholders back to original reference text
+  refBlocks.forEach((value, key) => {
+    content = content.replace(key, value)
+  })
 
   // Handle reasoning process similar to deepseek r1
   content = content.trim();
-  if (content.startsWith('<think>')) {
+  if (content.startsWith('<think')) {
     if (content.indexOf('</think>') === -1) {
       content = `<div class="chat-think">
-        <div class="chat-think-title expanded">${i18n.global.t('chat.reasoning')}</div>
+        <div class="chat-think-title expanded"><span>${i18n.global.t('chat.reasoning')}</span></div>
         <div class="think-content">${content.replace('<think>', '')}</div>
       </div>\n`
-    } else {
-      content = content.replace(/<think>([\s\S]+?)<\/think>/, `<div class="chat-think" v-think><div class="chat-think-title expanded">${i18n.global.t('chat.reasoningProcess')}</div><div class="think-content">$1</div></div>`);
     }
   }
+  content = content.replace(/<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/, (match, classAttr, className, content) => {
+    const translationKey = className?.includes('thinking') ? 'chat.reasoning' : 'chat.reasoningProcess'
+    return `<div class="chat-think ${className || ''}"><div class="chat-think-title expanded"><span>${i18n.global.t(translationKey)}</span></div><div class="think-content">${content}</div></div>`
+  });
 
   // Handle line breaks to ensure correct Markdown line break behavior:
   // 1. Preserve line breaks within code blocks
@@ -294,5 +338,5 @@ export const parseMarkdown = content => {
     }
     return `<pre><code class="language-${lang}">${htmlspecialchars(ev.text)}</code></pre>`
   }
-  return marked(content, { renderer })
+  return marked(refs + content, { renderer })
 }

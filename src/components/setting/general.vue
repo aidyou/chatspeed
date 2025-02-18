@@ -384,7 +384,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
-import { dataDir, documentDir } from '@tauri-apps/api/path'
+import { appDataDir, documentDir } from '@tauri-apps/api/path'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -436,7 +436,7 @@ const availableLanguages = getAvailableLanguages()
 const softwareLanguages = getSoftwareLanguages()
 
 onMounted(async () => {
-  defaultBackupDir.value = `${await dataDir()}/backups`
+  defaultBackupDir.value = `${await appDataDir()}/backups`
   getAllBackups()
 })
 

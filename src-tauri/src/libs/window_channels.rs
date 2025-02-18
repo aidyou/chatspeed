@@ -8,7 +8,14 @@ use tokio::sync::Mutex;
 // Define a structure to hold the channel sender for each window
 pub struct WindowChannels {
     // The parameter is a tuple of (chunk, is_error, is_done,is_reasoning, metadata)
-    channels: Arc<Mutex<HashMap<String, mpsc::Sender<(String, bool, bool, bool, Option<Value>)>>>>,
+    channels: Arc<
+        Mutex<
+            HashMap<
+                String,
+                mpsc::Sender<(String, bool, bool, bool, Option<String>, Option<Value>)>,
+            >,
+        >,
+    >,
 }
 
 impl WindowChannels {
@@ -29,17 +36,20 @@ impl WindowChannels {
     pub async fn get_or_create_channel(
         &self,
         window: tauri::Window,
-    ) -> Result<mpsc::Sender<(String, bool, bool, bool, Option<Value>)>, String> {
+    ) -> Result<mpsc::Sender<(String, bool, bool, bool, Option<String>, Option<Value>)>, String>
+    {
         let mut channels = self.channels.lock().await;
 
         let window_label = window.label().to_string();
         // If the channel for the window is not found, create a new one
         if !channels.contains_key(&window_label) {
-            let (tx, mut rx) = mpsc::channel::<(String, bool, bool, bool, Option<Value>)>(1000); // Buffer size 1000
+            let (tx, mut rx) =
+                mpsc::channel::<(String, bool, bool, bool, Option<String>, Option<Value>)>(1000); // Buffer size 1000
             let window_label_clone = window_label.clone();
             // Spawn a task to handle messages for the window
             tokio::spawn(async move {
-                while let Some((chunk, is_error, is_done, is_reasoning, metadata)) = rx.recv().await
+                while let Some((chunk, is_error, is_done, is_reasoning, msg_type, metadata)) =
+                    rx.recv().await
                 {
                     // Emit the event with the received data
                     if let Err(e) = window.emit(
@@ -51,6 +61,7 @@ impl WindowChannels {
                             "is_reasoning": is_reasoning,
                             "window": window_label_clone,
                             "metadata": metadata,
+                            "type": msg_type,
                         }),
                     ) {
                         eprintln!("Failed to emit event: {}", e);

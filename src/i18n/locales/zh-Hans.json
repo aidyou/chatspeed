@@ -68,6 +68,7 @@
     "quoteMessagePrompt": "= = = = = = = = = = =\n\n上面是您之前的回复，以下是我的回复或者新问题\n\n= = = = = = = = = = =",
     "reasoning": "推理中...",
     "reasoningProcess": "已深度思考",
+    "reference": "引用 {count} 篇资料作为参考",
     "resendMessage": "重新发送消息",
     "searchChat": "搜索聊天",
     "showFavoriteConversations": "显示收藏的对话主题",

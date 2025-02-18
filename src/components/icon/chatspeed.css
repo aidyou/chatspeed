@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-check-circle:before {
+  content: "\e64f";
+}
+
 .cs-clear:before {
   content: "\e648";
 }

@@ -51,7 +51,7 @@
       <p>
         ChatSpeed is proudly open source, built with Vue 3 and Tauri. We believe in transparency and
         community-driven development. All our code is available for review, contribution, and
-        improvement at <a href="https://github.com/aidyou/chatspeed" @click="openGithub">GitHub</a>.
+        improvement at <a href="#" @click="openGithub">GitHub</a>.
       </p>
     </div>
     <el-divider />
@@ -105,7 +105,7 @@
       <p>
         ChatSpeed 是一个基于 Vue 3 和 Tauri
         构建的开源项目。我们坚信透明和社区驱动的开发理念。所有代码都开放在
-        <a href="https://github.com/aidyou/chatspeed" @click="openGithub">GitHub</a>
+        <a href="#" @click="openGithub">GitHub</a>
         上供审查、贡献和改进。
       </p>
     </div>

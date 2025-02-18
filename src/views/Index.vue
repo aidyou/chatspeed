@@ -180,7 +180,7 @@
                   v-katex
                   v-mermaid
                   v-think /> -->
-                <markdown :content="message.content" />
+                <markdown :content="message.content" :reference="message.metadata?.reference" />
                 <div class="metadata">
                   <div class="buttons">
                     <el-tooltip
@@ -267,7 +267,10 @@
                   v-html="currentAssistantMessageHtml"
                   v-highlight
                   v-link
-                  katex />
+                  v-table
+                  katex
+                  v-mermaid
+                  v-reference />
               </div>
             </div>
 
@@ -476,7 +479,8 @@ const isChatting = ref(false)
 const currentAssistantMessage = ref('')
 const chatState = ref({
   reasoning: '',
-  message: ''
+  message: '',
+  reference: []
 })
 
 const skillListRef = ref(null)
@@ -513,7 +517,10 @@ const cicle = ['◒', '◐', '◓', '◑', '☯']
 const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
     ? ((cicleIndex.value = (cicleIndex.value + 1) % 5),
-      parseMarkdown(currentAssistantMessage.value + ' ' + cicle[cicleIndex.value]))
+      parseMarkdown(
+        currentAssistantMessage.value + ' ' + cicle[cicleIndex.value],
+        chatState.value?.reference || []
+      ))
     : '<div class="cs cs-loading cs-spin"></div>'
 )
 
@@ -844,7 +851,8 @@ const sendMessage = async (messageId = null) => {
     .then(async () => {
       chatState.value = {
         reasoning: '',
-        message: ''
+        message: '',
+        reference: []
       }
       chatErrorMessage.value = ''
       replyMessage.value = ''
@@ -994,7 +1002,7 @@ const handleTitleGenerated = payload => {
   if (payload?.is_done) {
     if (title.value.trim().length > 0) {
       // remove leading and trailing double quotes
-      title.value = title.value.replace(/^"|"$/g, '').replace(/<think>[\s\S]+?<\/think>/, '')
+      title.value = title.value.replace(/^"|"$/g, '').replace(/<think[^>]*>[\s\S]+?<\/think>/g, '')
       if (title.value.length > 0) {
         console.log('conversation title:', title.value)
         chatStore.updateConversation(payload?.metadata?.conversationId, title.value)
@@ -1018,22 +1026,42 @@ const handleChatMessage = async payload => {
     } else {
       payload.is_done = true
     }
-  } else {
-    if (payload?.is_reasoning) {
-      chatState.value.reasoning += payload?.chunk || ''
-    } else {
-      chatState.value.message += payload?.chunk || ''
-    }
-
-    currentAssistantMessage.value =
-      (chatState.value.reasoning ? '<think>' + chatState.value.reasoning + '</think>\n' : '') +
-      (chatState.value.message || '')
-    nextTick(() => {
-      if (!userHasScrolled.value || isScrolledToBottom.value) {
-        scrollToBottomIfNeeded()
-      }
-    })
   }
+  if (payload?.type === 'step') {
+    currentAssistantMessage.value = payload?.chunk || ''
+    return
+  }
+
+  let thinkingClass = ''
+  if (payload?.type === 'reference') {
+    if (payload?.chunk) {
+      try {
+        if (typeof payload?.chunk === 'string') {
+          chatState.value.reference.push(...JSON.parse(payload?.chunk))
+        } else {
+          chatState.value.reference.push(...payload?.chunk)
+        }
+      } catch (e) {
+        console.error('error on parse reference:', e)
+      }
+    }
+  } else if (payload?.is_reasoning) {
+    chatState.value.reasoning += payload?.chunk || ''
+    thinkingClass = 'thinking'
+  } else {
+    chatState.value.message += payload?.chunk || ''
+  }
+
+  currentAssistantMessage.value =
+    (chatState.value.reasoning
+      ? '<think class="' + thinkingClass + '">' + chatState.value.reasoning + '</think>\n'
+      : '') + (chatState.value.message || '')
+
+  nextTick(() => {
+    if (!userHasScrolled.value || isScrolledToBottom.value) {
+      scrollToBottomIfNeeded()
+    }
+  })
 
   if (payload?.is_done) {
     if (currentAssistantMessage.value.trim().length > 0) {
@@ -1046,7 +1074,8 @@ const handleChatMessage = async payload => {
             tokens: payload?.metadata?.tokens?.total || 0,
             prompt: payload?.metadata?.tokens?.prompt || 0,
             completion: payload?.metadata?.tokens?.completion || 0,
-            provider: currentModel.value.defaultModel || ''
+            provider: currentModel.value.defaultModel || '',
+            reference: chatState.value.reference || []
           }
         )
         currentAssistantMessage.value = ''
@@ -1133,7 +1162,7 @@ onMounted(async () => {
     if (event.payload?.metadata?.label !== windowLabel.value) {
       return
     }
-    console.log('chunk', event?.payload?.chunk, 'is_reasoning', event?.payload?.is_reasoning)
+    // console.log('payload', event?.payload)
     // console.log('ai_chunk', event)
     const payload = event.payload
     if (payload?.metadata?.action === 'gen_title') {
@@ -1301,23 +1330,31 @@ const onModelChange = id => {
 const onSubModelChange = model => {
   currentModel.value.defaultModel = model
   modelStore.setDefaultModel(currentModel.value)
+
+  const logo = currentModel.value?.metadata?.logo || ''
   // update the database record
-  invoke('update_ai_model', {
-    id: currentModel.value.id,
-    name: currentModel.value.name,
-    models: currentModel.value.models,
-    defaultModel: model,
-    apiProtocol: currentModel.value.apiProtocol,
-    baseUrl: currentModel.value.baseUrl,
-    apiKey: currentModel.value.apiKey,
-    maxTokens: currentModel.value.maxTokens,
-    temperature: currentModel.value.temperature,
-    topP: currentModel.value.topP,
-    topK: currentModel.value.topK,
-    disabled: currentModel.value.disabled
-  }).catch(error => {
-    console.error('error on update_ai_model:', error)
-  })
+  modelStore
+    .setModel({
+      id: currentModel.value.id,
+      apiProtocol: currentModel.value.apiProtocol,
+      name: currentModel.value.name,
+      models: currentModel.value.models,
+      defaultModel: model,
+      baseUrl: currentModel.value.baseUrl,
+      apiKey: currentModel.value.apiKey,
+      maxTokens: currentModel.value.maxTokens,
+      temperature: currentModel.value.temperature,
+      topP: currentModel.value.topP,
+      topK: currentModel.value.topK,
+      disabled: currentModel.value.disabled,
+      metadata: {
+        proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
+        logo: logo
+      }
+    })
+    .catch(error => {
+      console.error(error)
+    })
 }
 
 /**

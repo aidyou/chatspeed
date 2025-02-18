@@ -17,6 +17,12 @@ export function getModelLogo(model) {
   if (model.indexOf('/') !== -1) {
     model = model.split('/').slice(-1)[0]
   }
+  if (model === 'k1' || model === 'kimi' || model.startsWith('k1@') || model.startsWith('kimi@')) {
+    return 'moonshot'
+  }
+  if (model === 'deep_seek' || model.startsWith('ds-') || model.startsWith('deep_seek@')) {
+    return 'deepseek'
+  }
   if (model.startsWith('glm-')) {
     return 'chatglm'
   }
@@ -24,7 +30,9 @@ export function getModelLogo(model) {
   if (model.startsWith('meta-')) {
     return 'llama'
   }
-
+  if (model.startsWith('hunyuan')) {
+    return 'hunyuan'
+  }
   // get all key start with `ai-${model}`
   const keys = Object.keys(iconFont).filter(key => model.startsWith(key.replace('ai-', '')))
   // get the first key

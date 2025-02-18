@@ -141,7 +141,7 @@ impl AiChatEnum {
         api_key: Option<&str>,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         impl_chat_method!(
             self,
@@ -217,8 +217,16 @@ pub async fn chat_with_ai(
                          is_error: bool,
                          is_done: bool,
                          is_reasoning: bool,
+                         msg_type: Option<String>,
                          cb_metadata: Option<Value>| {
-        let _ = tx.try_send((chunk, is_error, is_done, is_reasoning, cb_metadata));
+        let _ = tx.try_send((
+            chunk,
+            is_error,
+            is_done,
+            is_reasoning,
+            msg_type,
+            cb_metadata,
+        ));
     };
 
     // If the proxy type is http, get the proxy server and username/password from the config

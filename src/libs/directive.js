@@ -760,6 +760,31 @@ const DIRECTIVE_CONFIG = {
       }
     }
   },
+  table: {
+    name: 'table',
+    handlers: {
+      mounted: el => {
+        el.querySelectorAll('table').forEach((block) => {
+          if (!block.parentElement.classList.contains('table-container')) {
+            const container = document.createElement('div')
+            container.className = 'table-container'
+            block.parentNode.insertBefore(container, block)
+            container.appendChild(block)
+          }
+        })
+      },
+      updated: el => {
+        el.querySelectorAll('table').forEach((block) => {
+          if (!block.parentElement.classList.contains('table-container')) {
+            const container = document.createElement('div')
+            container.className = 'table-container'
+            block.parentNode.insertBefore(container, block)
+            container.appendChild(block)
+          }
+        })
+      }
+    }
+  },
   katex: {
     name: 'katex',
     handlers: {
@@ -790,30 +815,29 @@ const DIRECTIVE_CONFIG = {
     name: 'think',
     handlers: {
       mounted: el => {
-        const title = el.querySelector('.chat-think-title')
-        const content = el.querySelector('.think-content')
-
-        if (title && content) {
-          title.style.cursor = 'pointer'
-          const clickHandler = () => {
-            const isHidden = content.style.display === 'none'
-            content.style.display = isHidden ? 'block' : 'none'
-            if (isHidden) {
-              title.classList.add('expanded')
-            } else {
-              title.classList.remove('expanded')
-            }
-          }
-          el._thinkClickHandler = clickHandler
-          title.addEventListener('click', clickHandler)
-        }
+        bindThinkEvents(el)
+      },
+      updated: el => {
+        removeThinkEvents(el)
+        bindThinkEvents(el)
       },
       unmounted: el => {
-        const title = el.querySelector('.chat-think-title')
-        if (title && el._thinkClickHandler) {
-          title.removeEventListener('click', el._thinkClickHandler)
-          delete el._thinkClickHandler
-        }
+        removeThinkEvents(el)
+      }
+    }
+  },
+  reference: {
+    name: 'reference',
+    handlers: {
+      mounted: el => {
+        bindReferenceEvents(el)
+      },
+      updated: el => {
+        removeReferenceEvents(el)
+        bindReferenceEvents(el)
+      },
+      unmounted: el => {
+        removeReferenceEvents(el)
       }
     }
   }
@@ -829,5 +853,67 @@ export function registerDirective(app) {
   // Register all directives
   Object.values(DIRECTIVE_CONFIG).forEach(({ name, handlers }) => {
     app.directive(name, handlers)
+  })
+}
+
+function removeThinkEvents(el) {
+  const titles = el.querySelectorAll('.chat-think-title')
+  titles.forEach(title => {
+    if (title._thinkClickHandler) {
+      title.removeEventListener('click', title._thinkClickHandler)
+      delete title._thinkClickHandler
+    }
+  })
+}
+
+function removeReferenceEvents(el) {
+  const titles = el.querySelectorAll('.chat-reference-title')
+  titles.forEach(title => {
+    if (title._referenceClickHandler) {
+      title.removeEventListener('click', title._referenceClickHandler)
+      delete title._referenceClickHandler
+    }
+  })
+}
+
+function bindThinkEvents(el) {
+  const titles = el.querySelectorAll('.chat-think-title')
+  titles.forEach(title => {
+    const content = title.nextElementSibling
+    if (content && content.classList.contains('think-content')) {
+      title.style.cursor = 'pointer'
+      const clickHandler = () => {
+        const isHidden = content.style.display === 'none'
+        content.style.display = isHidden ? 'block' : 'none'
+        if (isHidden) {
+          title.classList.add('expanded')
+        } else {
+          title.classList.remove('expanded')
+        }
+      }
+      title._thinkClickHandler = clickHandler
+      title.addEventListener('click', clickHandler)
+    }
+  })
+}
+
+function bindReferenceEvents(el) {
+  const titles = el.querySelectorAll('.chat-reference-title')
+  titles.forEach(title => {
+    const content = title.nextElementSibling
+    if (content && content.classList.contains('chat-reference-list')) {
+      title.style.cursor = 'pointer'
+      const clickHandler = () => {
+        const isHidden = content.style.display === 'none'
+        content.style.display = isHidden ? 'block' : 'none'
+        if (isHidden) {
+          title.classList.add('expanded')
+        } else {
+          title.classList.remove('expanded')
+        }
+      }
+      title._referenceClickHandler = clickHandler
+      title.addEventListener('click', clickHandler)
+    }
   })
 }

@@ -297,6 +297,8 @@ const iconFilter = query => {
  * @param {string|null} id - The ID of the skill to edit, or null to create a new skill.
  */
 const editSkill = async id => {
+  // reset form
+  formRef.value?.resetFields()
   fileSelectorRef.value?.reset()
   activeTab.value = 'basic'
 
@@ -318,8 +320,6 @@ const editSkill = async id => {
       disabled: skillData.disabled
     }
   } else {
-    // reset form
-    formRef.value?.resetFields()
     editId.value = null
     skillForm.value = {
       icon: '',

@@ -58,7 +58,7 @@ impl AnthropicChat {
     async fn handle_stream_response(
         &self,
         mut response: Response,
-        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let mut full_response = String::new();
@@ -66,7 +66,14 @@ impl AnthropicChat {
 
         while let Some(chunk) = response.chunk().await.map_err(|e| {
             let error = t!("chat.stream_read_error", error = e.to_string()).to_string();
-            callback(error.clone(), true, true, false, metadata_option.clone());
+            callback(
+                error.clone(),
+                true,
+                true,
+                false,
+                None,
+                metadata_option.clone(),
+            );
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
         })? {
             if self.should_stop().await {
@@ -77,12 +84,13 @@ impl AnthropicChat {
                 reasoning_content,
                 content,
                 usage,
+                msg_type,
             } = self
                 .client
                 .process_stream_chunk(chunk, &StreamFormat::Anthropic)
                 .await
                 .map_err(|e| {
-                    callback(e.clone(), true, true, false, metadata_option.clone());
+                    callback(e.clone(), true, true, false, None, metadata_option.clone());
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
 
@@ -93,13 +101,27 @@ impl AnthropicChat {
             if let Some(content) = reasoning_content {
                 if !content.is_empty() {
                     full_response.push_str(&content);
-                    callback(content, false, false, false, metadata_option.clone());
+                    callback(
+                        content,
+                        false,
+                        false,
+                        false,
+                        msg_type.clone(),
+                        metadata_option.clone(),
+                    );
                 }
             }
             if let Some(content) = content {
                 if !content.is_empty() {
                     full_response.push_str(&content);
-                    callback(content, false, false, false, metadata_option.clone());
+                    callback(
+                        content,
+                        false,
+                        false,
+                        false,
+                        msg_type.clone(),
+                        metadata_option.clone(),
+                    );
                 }
             }
         }
@@ -110,6 +132,7 @@ impl AnthropicChat {
             false,
             true,
             false,
+            None,
             Some(ai_util::update_or_create_metadata(
                 metadata_option,
                 "tokens",
@@ -144,7 +167,7 @@ impl AiChatTrait for AnthropicChat {
         api_key: Option<&str>,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<Value>) + Send + 'static,
+        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
 
@@ -173,12 +196,19 @@ impl AiChatTrait for AnthropicChat {
             )
             .await
             .map_err(|e| {
-                callback(e.clone(), true, true, false, metadata_option.clone());
+                callback(e.clone(), true, true, false, None, metadata_option.clone());
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
 
         if response.is_error {
-            callback(response.content.clone(), true, true, false, metadata_option);
+            callback(
+                response.content.clone(),
+                true,
+                true,
+                false,
+                None,
+                metadata_option.clone(),
+            );
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 response.content,
@@ -194,6 +224,7 @@ impl AiChatTrait for AnthropicChat {
                 false,
                 true,
                 false,
+                None,
                 metadata_option,
             );
             Ok(response.content)

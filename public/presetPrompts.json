@@ -5,7 +5,7 @@
           "name": "翻译",
           "icon": "skill-translate",
           "description": "自动识别文字语言并翻译",
-          "prompt": "Please translate the following text from {fromLang} to {toLang}:\n\n{content}",
+          "prompt": "请将下面的内容从 {fromLang} 翻译为 {toLang} ：\n\n{content}",
           "type": "translation"
         },
         {
@@ -19,14 +19,14 @@
           "name": "思维导图",
           "icon": "skill-mindmap-line",
           "description": "让 AI 帮你制作思维导图",
-          "prompt": "Please generate a mind map using the following structure. Keep it clear and organized, focusing on main branches and relevant sub-topics:\n\n- Use a main title at the center\n- Create key branches to outline major sections\n- Add 2 or more sub-topics under each branch for depth and clarity\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```markmap\n# Project Overview\n\n- Goals\n  - Increase efficiency\n  - Improve user satisfaction\n- Features\n  - Easy to use\n  - Flexible and customizable\n- Technologies\n  - Frontend\n  - React\n  - Vue\n  - Backend\n  - Node.js\n  - Python\n```\n\nContent to Map:\n\n{content}",
+          "prompt": "请严格按照markmap语法，使用以下结构生成一幅思维导图。保持清晰且有条理，重点关注主分支和相关子主题：\n\n- 在中心使用一个主标题\n- 创建关键分支以概述主要部分\n- 在每个分支下添加2个或更多子主题，以增加深度和清晰度\n- 确保结构在视觉上清晰且易于理解\n\n示例：\n\n```markmap\n# 项目概述\n\n- 目标\n  - 提高效率\n  - 提升用户满意度\n- 功能\n  - 易于使用\n  - 灵活且可定制\n- 技术\n  - 前端\n  - React\n  - Vue\n  - 后端\n  - Node.js\n  - Python\n```\n\n要绘制的内容：\n\n{content}",
           "type": "mindMapping"
         },
         {
           "name": "流程图",
           "icon": "skill-mindmap-right",
           "description": "让 AI 帮你制作流程图",
-          "prompt": "Please generate a flowchart using the following structure. Keep it clear and organized, focusing on key steps and decision points:\n\n- Use a main starting point at the top\n- Create sequential steps to outline the process\n- Add decision points with yes/no or other branches as needed\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```mermaid\ngraph TD\n  Start[Start] --> Step1[Identify Goals]\n  Step1 --> Decision1{Is Goal Feasible?}\n  Decision1 -- Yes --> Step2[Develop Plan]\n  Decision1 -- No --> End[End]\n  Step2 --> Step3[Implement Plan]\n  Step3 --> End\n```\n\nContent to Map:\n\n{content}",
+          "prompt": "请按Mermaid语法使用以下结构生成一个流程图。保持清晰且有条理，重点关注关键步骤和决策点：\n\n- 在顶部使用一个主要的起始点\n- 创建顺序步骤以概述流程\n- 根据需要添加带有是/否或其他分支的决策点\n- 确保结构在视觉上清晰且易于理解\n\n示例：\n\n```mermaid\ngraph TD\n  Start[Start] --> Step1[Identify Goals]\n  Step1 --> Decision1{Is Goal Feasible?}\n  Decision1 -- Yes --> Step2[Develop Plan]\n  Decision1 -- No --> End[End]\n  Step2 --> Step3[Implement Plan]\n  Step3 --> End\n```\n\n要绘制的内容：\n\n{content}",
           "type": "mindMapping"
         }
       ],
@@ -49,14 +49,14 @@
           "name": "Mindmap",
           "icon": "skill-mindmap-line",
           "description": "Let AI create mind maps for you",
-          "prompt": "Please generate a mind map using the following structure. Keep it clear and organized, focusing on main branches and relevant sub-topics:\n\n- Use a main title at the center\n- Create key branches to outline major sections\n- Add 2 or more sub-topics under each branch for depth and clarity\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```markmap\n# Project Overview\n\n- Goals\n  - Increase efficiency\n  - Improve user satisfaction\n- Features\n  - Easy to use\n  - Flexible and customizable\n- Technologies\n  - Frontend\n  - React\n  - Vue\n  - Backend\n  - Node.js\n  - Python\n```\n\nContent to Map:\n\n{content}",
+          "prompt": "Please generate a mind map in Markmap syntax using the following structure. Keep it clear and organized, focusing on main branches and relevant sub-topics:\n\n- Use a main title at the center\n- Create key branches to outline major sections\n- Add 2 or more sub-topics under each branch for depth and clarity\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```markmap\n# Project Overview\n\n- Goals\n  - Increase efficiency\n  - Improve user satisfaction\n- Features\n  - Easy to use\n  - Flexible and customizable\n- Technologies\n  - Frontend\n  - React\n  - Vue\n  - Backend\n  - Node.js\n  - Python\n```\n\nContent to Map:\n\n{content}",
           "type": "mindMapping"
         },
         {
           "name": "Flowchart",
           "icon": "skill-mindmap-right",
           "description": "Let AI generate flowcharts for you",
-          "prompt": "Please generate a flowchart using the following structure. Keep it clear and organized, focusing on key steps and decision points:\n\n- Use a main starting point at the top\n- Create sequential steps to outline the process\n- Add decision points with yes/no or other branches as needed\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```mermaid\ngraph TD\n  Start[Start] --> Step1[Identify Goals]\n  Step1 --> Decision1{Is Goal Feasible?}\n  Decision1 -- Yes --> Step2[Develop Plan]\n  Decision1 -- No --> End[End]\n  Step2 --> Step3[Implement Plan]\n  Step3 --> End\n```\n\nContent to Map:\n\n{content}",
+          "prompt": "Please generate a flowchart in Mermaid syntax using the following structure. Keep it clear and organized, focusing on key steps and decision points:\n\n- Use a main starting point at the top\n- Create sequential steps to outline the process\n- Add decision points with yes/no or other branches as needed\n- Ensure the structure is visually clear and easy to follow\n\nExample:\n\n```mermaid\ngraph TD\n  Start[Start] --> Step1[Identify Goals]\n  Step1 --> Decision1{Is Goal Feasible?}\n  Decision1 -- Yes --> Step2[Develop Plan]\n  Decision1 -- No --> End[End]\n  Step2 --> Step3[Implement Plan]\n  Step3 --> End\n```\n\nContent to Map:\n\n{content}",
           "type": "mindMapping"
         }
       ]

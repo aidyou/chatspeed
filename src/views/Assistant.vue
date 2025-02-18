@@ -126,9 +126,11 @@
               v-html="currentAssistantMessageHtml"
               v-highlight
               v-link
+              v-table
               v-katex
               v-mermaid
-              v-think />
+              v-think
+              v-reference />
           </div>
         </div>
       </div>
@@ -269,6 +271,11 @@ const userMessage = ref('')
 const currentAssistantMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
+const chatState = ref({
+  reasoning: '',
+  message: '',
+  reference: []
+})
 
 // language config
 const languageDict = languageConfig.languages
@@ -307,7 +314,8 @@ const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
     ? ((cicleIndex.value = (cicleIndex.value + 1) % 4),
       parseMarkdown(
-        currentAssistantMessage.value + (isChatting.value ? ' ' + cicle[cicleIndex.value] : '')
+        currentAssistantMessage.value + (isChatting.value ? ' ' + cicle[cicleIndex.value] : ''),
+        chatState.value?.reference || []
       ))
     : isChatting.value
     ? '<div class="cs cs-loading cs-spin cs-md"></div>'
@@ -483,12 +491,19 @@ const sendMessage = async () => {
   currentAssistantMessage.value = ''
   payloadMetadata.value = {}
   isChatting.value = true
+  chatState.value = {
+    reasoning: '',
+    message: '',
+    reference: []
+  }
+
   // reset scroll behavior
   resetScrollBehavior()
   nextTick(scrollToBottomIfNeeded)
 
   try {
     await invoke('chat_with_ai', {
+      apiProtocol: currentModel.value.apiProtocol,
       apiProtocol: currentModel.value.apiProtocol,
       apiUrl: currentModel.value.baseUrl,
       apiKey: currentModel.value.apiKey,
@@ -520,14 +535,39 @@ const handleChatMessage = async payload => {
     isChatting.value = false
     return
   }
-  currentAssistantMessage.value += payload?.chunk || ''
+
+  let thinkingClass = ''
+  if (payload?.type === 'reference') {
+    if (payload?.chunk) {
+      try {
+        if (typeof payload?.chunk === 'string') {
+          chatState.value.reference.push(...JSON.parse(payload?.chunk))
+        } else {
+          chatState.value.reference.push(...payload?.chunk)
+        }
+      } catch (e) {
+        console.error('error on parse reference:', e)
+      }
+    }
+  } else if (payload?.is_reasoning) {
+    chatState.value.reasoning += payload?.chunk || ''
+    thinkingClass = 'thinking'
+  } else {
+    chatState.value.message += payload?.chunk || ''
+  }
+  currentAssistantMessage.value =
+    (chatState.value.reasoning
+      ? '<think class="' + thinkingClass + '">' + chatState.value.reasoning + '</think>\n'
+      : '') + (chatState.value.message || '')
+
   if (payload?.is_done) {
     isChatting.value = false
     payloadMetadata.value = {
       tokens: payload?.metadata?.tokens?.total || 0,
       prompt: payload?.metadata?.tokens?.prompt || 0,
       completion: payload?.metadata?.tokens?.completion || 0,
-      provider: currentModel.value.defaultModel || ''
+      provider: currentModel.value.defaultModel || '',
+      reference: chatState.value?.reference || []
     }
     nextTick(scrollToBottomIfNeeded)
   }

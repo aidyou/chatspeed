@@ -58,6 +58,8 @@ pub struct StreamChunk {
     pub content: Option<String>,
     /// Token usage information
     pub usage: Option<TokenUsage>,
+    // Message type, text,step,reference
+    pub msg_type: Option<String>,
 }
 
 /// Stream response parser
@@ -74,6 +76,7 @@ impl StreamParser {
                 reasoning_content: None,
                 content,
                 usage: None,
+                msg_type: None,
             }),
             // StreamFormat::HuggingFace => Self::parse_huggingface(chunk),
             StreamFormat::Anthropic => Self::parse_anthropic(chunk),
@@ -93,6 +96,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content: None,
                         usage: None,
+                        msg_type: None,
                     });
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(data) {
@@ -103,6 +107,11 @@ impl StreamParser {
 
                     // reasoning content
                     let reasoning_content = json["choices"][0]["delta"]["reasoning_content"]
+                        .as_str()
+                        .map(String::from);
+
+                    // message type
+                    let msg_type = json["choices"][0]["delta"]["type"]
                         .as_str()
                         .map(String::from);
 
@@ -122,6 +131,7 @@ impl StreamParser {
                         reasoning_content,
                         content,
                         usage,
+                        msg_type,
                     });
                 }
             }
@@ -130,6 +140,7 @@ impl StreamParser {
             reasoning_content: None,
             content: None,
             usage: None,
+            msg_type: None,
         })
     }
 
@@ -155,12 +166,14 @@ impl StreamParser {
                 reasoning_content: None,
                 content,
                 usage,
+                msg_type: None,
             });
         }
         Ok(StreamChunk {
             reasoning_content: None,
             content: None,
             usage: None,
+            msg_type: None,
         })
     }
 
@@ -175,6 +188,7 @@ impl StreamParser {
                     reasoning_content: None,
                     content: None,
                     usage: None,
+                    msg_type: None,
                 });
             }
             if line.starts_with("data: ") {
@@ -188,6 +202,8 @@ impl StreamParser {
                         .get("reasoning_content")
                         .and_then(Value::as_str)
                         .map(String::from);
+                    let r#type = json.get("type").and_then(Value::as_str).map(String::from);
+
                     let usage = json.get("usage").and_then(|usage| {
                         Some(TokenUsage {
                             total_tokens: usage["total_tokens"].as_u64().unwrap_or_default(),
@@ -201,12 +217,14 @@ impl StreamParser {
                         reasoning_content,
                         content,
                         usage,
+                        msg_type: r#type,
                     });
                 }
                 return Ok(StreamChunk {
                     reasoning_content: None,
                     content: Some(data.to_string()),
                     usage: None,
+                    msg_type: None,
                 });
             }
         }
@@ -214,6 +232,7 @@ impl StreamParser {
             reasoning_content: None,
             content: None,
             usage: None,
+            msg_type: None,
         })
     }
 
@@ -248,6 +267,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content: None,
                         usage: None,
+                        msg_type: None,
                     });
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(data) {
@@ -263,6 +283,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content,
                         usage,
+                        msg_type: None,
                     });
                 }
             }
@@ -271,6 +292,7 @@ impl StreamParser {
             reasoning_content: None,
             content: None,
             usage: None,
+            msg_type: None,
         })
     }
 }
