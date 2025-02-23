@@ -20,7 +20,7 @@ export function getModelLogo(model) {
   if (model === 'k1' || model === 'kimi' || model.startsWith('k1@') || model.startsWith('kimi@')) {
     return 'moonshot'
   }
-  if (model === 'deep_seek' || model.startsWith('ds-') || model.startsWith('deep_seek@')) {
+  if (model === 'deep_seek' || model.startsWith('ds-') || model.startsWith('deep_seek')) {
     return 'deepseek'
   }
   if (model.startsWith('glm-')) {

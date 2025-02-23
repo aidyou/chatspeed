@@ -226,6 +226,11 @@
 }
 
 .chat {
+    .user-icon {
+        font-size: var(--cs-font-size-xxl) !important;
+        color: var(--cs-color-primary);
+    }
+
     .content {
         width: 100%;
         box-sizing: border-box;
@@ -265,6 +270,7 @@
                 word-break: break-word;
                 white-space: pre-wrap;
                 overflow-wrap: break-word;
+                margin: 0;
             }
 
             code {
@@ -321,8 +327,6 @@
         .table-container {
             max-width: 100%;
             overflow: auto;
-            overscroll-behavior: none;
-            -webkit-overflow-scrolling: touch;
             background: var(--cs-bg-color);
             border-radius: var(--cs-border-radius-md);
             border: 1px solid var(--cs-border-color);
@@ -385,6 +389,10 @@
             cursor: pointer;
         }
 
+        img {
+            max-width: 100%;
+        }
+
         .reference-link {
             color: var(--cs-text-color-primary);
             background-color: var(--cs-color-primary);
@@ -403,6 +411,10 @@
             box-sizing: border-box;
             border: 1px solid var(--cs-border-color);
             border-radius: var(--cs-border-radius-md);
+
+            .generating-svg {
+                padding: var(--cs-space-sm) var(--cs-space);
+            }
 
             pre {
                 margin: 0;

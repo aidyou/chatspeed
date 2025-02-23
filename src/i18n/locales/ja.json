@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "翻訳スキルプロンプトは空にできません"
   },
   "common": {
-    "alwaysOnTop": "常に最前面に表示",
+    "pin": "ピン留め",
+    "unpin": "ピン留めを解除",
     "autoHide": "フォーカス外時に自動非表示",
     "cancel": "キャンセル",
     "clear": "クリア",

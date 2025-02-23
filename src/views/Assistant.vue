@@ -530,7 +530,7 @@ const payloadMetadata = ref({})
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  if (payload?.is_error) {
+  if (payload?.isError) {
     chatErrorMessage.value = payload.chunk
     isChatting.value = false
     return
@@ -549,7 +549,7 @@ const handleChatMessage = async payload => {
         console.error('error on parse reference:', e)
       }
     }
-  } else if (payload?.is_reasoning) {
+  } else if (payload?.isReasoning) {
     chatState.value.reasoning += payload?.chunk || ''
     thinkingClass = 'thinking'
   } else {
@@ -560,7 +560,7 @@ const handleChatMessage = async payload => {
       ? '<think class="' + thinkingClass + '">' + chatState.value.reasoning + '</think>\n'
       : '') + (chatState.value.message || '')
 
-  if (payload?.is_done) {
+  if (payload?.isDone) {
     isChatting.value = false
     payloadMetadata.value = {
       tokens: payload?.metadata?.tokens?.total || 0,

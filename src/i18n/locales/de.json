@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "Übersetzungsfähigkeits-Prompt darf nicht leer sein"
   },
   "common": {
-    "alwaysOnTop": "Immer im Vordergrund",
+    "pin": "Immer im Vordergrund",
+    "unpin": "Immer im Vordergrund deaktivieren",
     "autoHide": "Automatisch ausblenden bei Unfokus",
     "cancel": "Abbrechen",
     "clear": "Löschen",

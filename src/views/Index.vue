@@ -7,6 +7,17 @@
           <div class="icon-btn upperLayer" @click="onToggleSidebar">
             <cs name="sidebar" />
           </div>
+          <div
+            class="icon-btn upperLayer pin-btn"
+            @click="onPin"
+            :class="{ active: mainWindowIsAlwaysOnTop }">
+            <el-tooltip
+              :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)"
+              :hide-after="0"
+              placement="bottom">
+              <cs name="pin" />
+            </el-tooltip>
+          </div>
         </template>
         <template #center>
           <div class="model-selector" v-if="models.length > 0">
@@ -162,7 +173,7 @@
               @mouseenter="hoveredMessageIndex = index"
               @mouseleave="hoveredMessageIndex = null">
               <div class="avatar">
-                <logo v-if="message.role === 'user'" name="write" />
+                <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
                 <logo
                   v-else
                   :name="
@@ -274,8 +285,6 @@
                   v-highlight
                   v-link
                   v-table
-                  katex
-                  v-mermaid
                   v-reference />
               </div>
             </div>
@@ -447,6 +456,8 @@ const modelStore = useModelStore()
 const noteStore = useNoteStore()
 const windowStore = useWindowStore()
 const settingStore = useSettingStore()
+
+const mainWindowIsAlwaysOnTop = computed(() => windowStore.mainWindowAlwaysOnTop)
 
 // edit conversation dialog
 const editConversationDialogVisible = ref(false)
@@ -991,7 +1002,7 @@ const genTitleByAi = () => {
  * Handle title generated event
  */
 const handleTitleGenerated = payload => {
-  if (payload?.is_error) {
+  if (payload?.isError) {
     console.error('error on genTitleByAi:', payload.error)
     titleGenerating.value = false
     // add retry logic
@@ -1009,7 +1020,7 @@ const handleTitleGenerated = payload => {
     return
   }
   title.value += payload?.chunk || ''
-  if (payload?.is_done) {
+  if (payload?.isDone) {
     if (title.value.trim().length > 0) {
       // remove leading and trailing double quotes
       title.value = title.value.replace(/^"|"$/g, '').replace(/<think[^>]*>[\s\S]+?<\/think>/g, '')
@@ -1028,15 +1039,16 @@ const handleTitleGenerated = payload => {
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  if (payload?.is_error) {
+  if (payload?.isError) {
     chatErrorMessage.value = payload.chunk
     isChatting.value = false
     if (currentAssistantMessage.value == '') {
       return
     } else {
-      payload.is_done = true
+      payload.isDone = true
     }
   }
+  // console.log('type', payload?.type, 'isReasoning', payload?.isReasoning, 'isDone', payload?.isDone)
   if (payload?.type === 'step') {
     currentAssistantMessage.value = payload?.chunk || ''
     return
@@ -1055,7 +1067,7 @@ const handleChatMessage = async payload => {
         console.error('error on parse reference:', e)
       }
     }
-  } else if (payload?.is_reasoning) {
+  } else if (payload?.isReasoning) {
     chatState.value.reasoning += payload?.chunk || ''
     thinkingClass = 'thinking'
   } else {
@@ -1073,7 +1085,7 @@ const handleChatMessage = async payload => {
     }
   })
 
-  if (payload?.is_done) {
+  if (payload?.isDone) {
     if (currentAssistantMessage.value.trim().length > 0) {
       try {
         await chatStore.addChatMessage(
@@ -1216,6 +1228,8 @@ onMounted(async () => {
   }
 
   cleanupObserver.value = setupObserver()
+
+  windowStore.initMainWindowAlwaysOnTop()
 })
 
 onBeforeUnmount(() => {
@@ -1244,6 +1258,13 @@ onBeforeUnmount(() => {
 const onToggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
   windowStore.setChatSidebarShow(!sidebarCollapsed.value)
+}
+
+/**
+ * Handle pin event
+ */
+const onPin = async () => {
+  await windowStore.toggleMainWindowAlwaysOnTop()
 }
 
 /**
@@ -1978,6 +1999,28 @@ const onTakeNote = message => {
 .take-note-dialog {
   &.el-dialog {
     min-width: 350px;
+  }
+}
+
+.pin-btn {
+  border-radius: var(--cs-border-radius-xs);
+  color: var(--cs-text-color-secondary);
+
+  &:hover .cs {
+    color: var(--cs-color-primary) !important;
+  }
+
+  .cs {
+    font-size: var(--cs-font-size-md) !important;
+    transform: rotate(45deg);
+    transition: all 0.3s ease-in-out;
+  }
+
+  &.active {
+    .cs {
+      color: var(--cs-color-primary);
+      transform: rotate(0deg);
+    }
   }
 }
 </style>

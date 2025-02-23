@@ -3,6 +3,23 @@ import { marked } from 'marked'
 import i18n from '@/i18n/index.js'
 import he from 'he';
 
+// Regular expressions
+const CODE_BLOCK_REGEX = /^```([^\n]*)\n([\s\S]*?)```/;
+const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g;
+const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g;
+const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g;
+const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g;
+const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/;
+const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g;
+const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
+const THINK_CONTENT_REGEX = /<think>[\s\S]*?<\/think>/g;
+const PLACEHOLDER_RESTORE_REGEX = /___(?:CODE|MATH|BLOCK_MATH|THINK)_\d+___/g;
+
+const MATH_BLOCK_REGEX = /\$\$([\s\S]+?)\$\$/g;
+const MATH_INLINE_REGEX = /\$([^\n]+?)\$/g;
+const CHINESE_CHARS_REGEX = /[\u4e00-\u9fa5]/;
+const CHINESE_CHARS_GROUP_REGEX = /([\u4e00-\u9fa5]+)/g;
+
 import { getLanguageByCode } from '@/i18n/langUtils'
 import { useSettingStore } from '@/stores/setting'
 
@@ -235,15 +252,15 @@ export const parseMarkdown = (content, reference) => {
 
   let refs = ''
   // format refs [1,2,3](@ref) -> [^1][^2][^3]
-  content = content.replace(/\[([0-9,\s]+)\]\(@ref\)/g, (_match, numbers) => {
+  content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
     return numbers.split(',').map(num => `[^${num.trim()}]`).join('')
   })
   // format refs [^1^] -> [^1]
-  content = content.replace(/\[\^([0-9]+)\^]/g, (_match, number) => {
+  content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
     return `[^${number.trim()}]`
   })
   // format refs [[1]] -> [^1]
-  content = content.replace(/\[\[([0-9]+)\]\]/g, (_match, number) => {
+  content = content.replace(REFERENCE_LINK_ALTERNATIVE_2_REGEX, (_match, number) => {
     return `[^${number.trim()}]`
   })
 
@@ -252,7 +269,7 @@ export const parseMarkdown = (content, reference) => {
   let refCounter = 0
 
   // Replace regular reference text with placeholders
-  content = content.replace(/\`\[\^[0-9]+\]\`/g, match => {
+  content = content.replace(REFERENCE_BLOCK_REGEX, match => {
     const id = `___REF_${refCounter++}___`
     refBlocks.set(id, match)
     return id
@@ -285,7 +302,7 @@ export const parseMarkdown = (content, reference) => {
       </div>\n`
     }
   }
-  content = content.replace(/<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/, (match, classAttr, className, content) => {
+  content = content.replace(THINK_REGEX, (_match, _classAttr, className, content) => {
     const translationKey = className?.includes('thinking') ? 'chat.reasoning' : 'chat.reasoningProcess'
     return `<div class="chat-think ${className || ''}"><div class="chat-think-title expanded"><span>${i18n.global.t(translationKey)}</span></div><div class="think-content">${content}</div></div>`
   });
@@ -308,31 +325,57 @@ export const parseMarkdown = (content, reference) => {
 
   // Protect special content by replacing them with placeholders
   content = content
-    .replace(/```[\s\S]+?```/g, match => createPlaceholder(match, 'CODE'))
-    .replace(/\\\[([\s\S]*?)\\\]/g, match => createPlaceholder(match, 'MATH'));
+    .replace(CODE_BLOCK_REGEX, match => createPlaceholder(match, 'CODE'))
 
   // Add two spaces at the end of non-empty lines for soft line breaks, but retain consecutive line breaks for paragraph separation
-  content = content.replace(/([^\n])\n(?!\n)/g, '$1  \n');
+  content = content.replace(LINE_BREAK_REGEX, '$1  \n');
+
+  // Replace all <think>...</think> blocks with placeholders
+  const thinkBlocks = new Map();
+  let thinkCounter = 0;
+  content = content.replace(THINK_CONTENT_REGEX, match => {
+    const id = `___THINK_${thinkCounter++}___`
+    thinkBlocks.set(id, match)
+    return id
+  })
 
   // Restore all protected content in a single pass
-  content = content.replace(/___(?:CODE|MATH)_\d+___/g, match => blocks.get(match));
+  content = content.replace(PLACEHOLDER_RESTORE_REGEX, match => blocks.get(match) || thinkBlocks.get(match));
 
   // Replace strings wrapped with ``` to ```\n$1\n``` and trim leading and trailing spaces from $1
-  content = content.replace(/\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g, (_match, p1, p2) => {
+  content = content.replace(BLOCK_CODE_REGEX, (_match, p1, p2) => {
     return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
   })
 
-  const renderer = new marked.Renderer()
-  renderer.link = ev => {
-    return `<a href="${ev.href}">${ev.text}</a>`
+  // Process math formulas before markdown parsing
+  if (content.includes('$')) {
+    // Process block math formulas
+    content = content.replace(MATH_BLOCK_REGEX, (_match, formula) => {
+      // Handle Chinese characters
+      if (CHINESE_CHARS_REGEX.test(formula)) {
+        formula = formula.replace(CHINESE_CHARS_GROUP_REGEX, '\\text{$1}')
+      }
+      return `<div class="katex katex-block" data-formula="${encodeURIComponent(formula)}"></div>`
+    })
+
+    // Process inline math formulas
+    content = content.replace(MATH_INLINE_REGEX, (_match, formula) => {
+      // Handle Chinese characters
+      if (CHINESE_CHARS_REGEX.test(formula)) {
+        formula = formula.replace(CHINESE_CHARS_GROUP_REGEX, '\\text{$1}')
+      }
+      return `<span class="katex katex-inline" data-formula="${encodeURIComponent(formula)}"></span>`
+    })
   }
+
+  const renderer = new marked.Renderer()
+
   renderer.code = ev => {
     let lang = ev.lang?.toLowerCase() || ''
-
     if (lang === 'mermaid') {
-      return `<div class="svg-container mermaid" data-content="${encodeURIComponent(ev.text)}"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingDiagram')}</div>`
+      return `<div class="svg-container mermaid" data-content="${encodeURIComponent(ev.text)}"><div class="generating-svg"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingDiagram')}</div></div>`
     } else if (lang === 'mindmap' || lang === 'markmap') {
-      return `<div class="svg-container markmap" data-content="${encodeURIComponent(ev.text)}"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingMindmap')}</div>`
+      return `<div class="svg-container markmap" data-content="${encodeURIComponent(ev.text)}"><div class="generating-svg"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingMindmap')}</div></div>`
     } else if (lang === 'vue') {
       return `<pre><code class="language-html">${htmlspecialchars(ev.text)}</code></pre>`
     }

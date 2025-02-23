@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "Le prompt de la compétence de traduction ne peut pas être vide"
   },
   "common": {
-    "alwaysOnTop": "Toujours au-dessus",
+    "pin": "Épingler",
+    "unpin": "Désépingler",
     "autoHide": "Masquer automatiquement lorsqu'il n'est pas en focus",
     "cancel": "Annuler",
     "clear": "Effacer",

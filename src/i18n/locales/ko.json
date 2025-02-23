@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "번역 스킬 프롬프트는 비워둘 수 없습니다"
   },
   "common": {
-    "alwaysOnTop": "항상 위에 표시",
+    "pin": "고정하기",
+    "unpin": "고정 해제",
     "autoHide": "포커스를 잃으면 자동 숨김",
     "cancel": "취소",
     "clear": "지우기",

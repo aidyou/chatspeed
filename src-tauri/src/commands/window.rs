@@ -40,7 +40,7 @@ use std::sync::atomic::Ordering;
 use rust_i18n::t;
 use serde_json::Value;
 // use tauri::utils::{config::WindowEffectsConfig, WindowEffect};
-use crate::constants::ASSISTANT_ALWAYS_ON_TOP;
+use crate::constants::{ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP};
 use tauri::{command, Emitter, Manager}; //window::Color, WindowEvent,
 
 #[derive(serde::Serialize, Clone)]
@@ -238,7 +238,7 @@ pub async fn toggle_window_always_on_top(
     window_label: &str,
     new_state: bool,
 ) -> Result<bool, String> {
-    if window_label == "assistant" {
+    if window_label == "assistant" || window_label == "main" {
         let window = app.get_webview_window(window_label).ok_or_else(|| {
             t!(
                 "main.failed_to_find_window_with_label",
@@ -253,7 +253,11 @@ pub async fn toggle_window_always_on_top(
             .map_err(|e| t!("main.failed_to_set_window_always_on_top", error = e).to_string())?;
 
         // Update global state
-        ASSISTANT_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed);
+        if window_label == "assistant" {
+            ASSISTANT_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed);
+        } else if window_label == "main" {
+            MAIN_WINDOW_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed);
+        }
     }
 
     Ok(new_state)
@@ -270,10 +274,10 @@ pub async fn toggle_window_always_on_top(
 /// - `bool` - The always on top state
 #[tauri::command]
 pub fn get_window_always_on_top(window_label: &str) -> bool {
-    if window_label == "assistant" {
-        ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed)
-    } else {
-        false
+    match window_label {
+        "assistant" => ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed),
+        "main" => MAIN_WINDOW_ALWAYS_ON_TOP.load(Ordering::Relaxed),
+        _ => false,
     }
 }
 

@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "翻译技能的提示词不能为空"
   },
   "common": {
-    "alwaysOnTop": "将窗口设置为置顶",
+    "pin": "置顶",
+    "unpin": "取消置顶",
     "autoHide": "将窗口设置为失去焦点自动隐藏",
     "cancel": "取消",
     "clear": "清空",

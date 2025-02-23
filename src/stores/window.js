@@ -58,17 +58,22 @@ export const useWindowStore = defineStore('window', () => {
   };
 
   const assistantAlwaysOnTop = ref(false)
+  const mainWindowAlwaysOnTop = ref(false)
 
   /**
-   * Toggle assistant window always on top state
+   * Toggle window always on top state
+   * @param {string} windowLabel - The label of the window to toggle
+   * @param {boolean} state - The current always on top state
+   * @returns {Promise<boolean>} The new always on top state
    */
-  const toggleAssistantAlwaysOnTop = async () => {
+  const toggleWindowAlwaysOnTop = async (windowLabel, state) => {
     try {
-      assistantAlwaysOnTop.value = await invoke('toggle_window_always_on_top', {
-        windowLabel: 'assistant',
-        newState: !assistantAlwaysOnTop.value
+      const newState = await invoke('toggle_window_always_on_top', {
+        windowLabel,
+        newState: !state
       })
-      return assistantAlwaysOnTop.value
+      console.log('pin state change to:', newState, ' window label:', windowLabel)
+      return newState
     } catch (error) {
       console.error('Failed to toggle window always on top:', error)
       return false
@@ -76,15 +81,57 @@ export const useWindowStore = defineStore('window', () => {
   }
 
   /**
+   * Initialize the always on top state of the specified window
+   * @param {string} windowLabel - The label of the window to initialize
+   */
+  const initWindowAlwaysOnTop = (windowLabel) => {
+    invoke('get_window_always_on_top', { windowLabel })
+      .then(state => {
+        console.log('pin state:', state, ' window label:', windowLabel)
+        switch (windowLabel) {
+          case 'assistant':
+            assistantAlwaysOnTop.value = state;
+            break;
+          case 'main':
+            mainWindowAlwaysOnTop.value = state;
+            break;
+        }
+      })
+      .catch(error => {
+        console.error('Failed to get window always on top:', error);
+      });
+  }
+
+  /**
+   * Toggle assistant window always on top state
+   * @returns {Promise<boolean>} The always on top state
+   */
+  const toggleAssistantAlwaysOnTop = async () => {
+    assistantAlwaysOnTop.value = await toggleWindowAlwaysOnTop('assistant', assistantAlwaysOnTop.value)
+  }
+
+  /**
+   * Toggle main window always on top state
+   * @returns {Promise<boolean>} The always on top state
+   */
+  const toggleMainWindowAlwaysOnTop = async () => {
+    mainWindowAlwaysOnTop.value = await toggleWindowAlwaysOnTop('main', mainWindowAlwaysOnTop.value)
+  }
+
+  /**
    * Get the always on top state of the assistant window
    * @returns {Promise<boolean>} The always on top state
    */
   const initAssistantAlwaysOnTop = () => {
-    invoke('get_window_always_on_top', { windowLabel: 'assistant' }).then(alwaysOnTop => {
-      assistantAlwaysOnTop.value = alwaysOnTop || false
-    }).catch(error => {
-      console.error('Failed to get window always on top:', error)
-    })
+    initWindowAlwaysOnTop('assistant')
+  }
+
+  /**
+   * Get the always on top state of the main window
+   * @returns {Promise<boolean>} The always on top state
+   */
+  const initMainWindowAlwaysOnTop = () => {
+    initWindowAlwaysOnTop('main')
   }
 
   initOs()
@@ -98,5 +145,8 @@ export const useWindowStore = defineStore('window', () => {
     assistantAlwaysOnTop,
     toggleAssistantAlwaysOnTop,
     initAssistantAlwaysOnTop,
+    mainWindowAlwaysOnTop,
+    initMainWindowAlwaysOnTop,
+    toggleMainWindowAlwaysOnTop,
   }
 })

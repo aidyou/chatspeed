@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "Translation skill prompt cannot be empty"
   },
   "common": {
-    "alwaysOnTop": "Always on Top",
+    "pin": "Pin to Top",
+    "unpin": "Unpin from Top",
     "autoHide": "Auto Hide When Unfocused",
     "cancel": "Cancel",
     "clear": "Clear",

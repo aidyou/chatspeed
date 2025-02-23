@@ -9,8 +9,19 @@
  * 5. `think`: Toggles the visibility of think content
  */
 
+// Regular expressions for Mermaid diagram syntax normalization
+const MERMAID_ARROW_LABEL_REGEX = /---\s*(\w+)\s*-->/g;
+const MERMAID_ARROW_LABEL_ALT_REGEX = /--\s*(\w+)\s*-->/g;
+const MERMAID_ARROW_SPACE_REGEX = /(\w+)\s+-->\s*(\w+)/g;
+const MERMAID_ARROW_END_REGEX = /(\w+)\s*-->\s*$/gm;
+const MERMAID_EMPTY_LINE_REGEX = /^\s*[\r\n]/gm;
+const MERMAID_ARROW_LABEL_END_REGEX = /\w+\s*-->\s*\|[^|]+\|\s*$/g;
+
+// Regular expressions for Markmap and date formatting
+const MARKMAP_STYLE_REGEX = /.markmap\s*{[^}]*}/;
+const DATE_SEPARATOR_REGEX = /[-:T]/g;
+
 import hljs from 'highlight.js'
-import katex from 'katex'
 import i18n from '@/i18n'
 import mermaid from 'mermaid'
 import { Markmap } from 'markmap-view'
@@ -18,6 +29,7 @@ import { Transformer } from 'markmap-lib'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { openUrl as invokeOpenUrl } from '@tauri-apps/plugin-opener'
+import katex from 'katex'
 
 // =================================================
 // Mermaid Diagram Processing
@@ -63,12 +75,12 @@ const processMermaidContent = (content) => {
 
   // Normalize arrow syntax
   return content
-    .replace(/---\s*(\w+)\s*-->/g, '-->|$1|')
-    .replace(/--\s*(\w+)\s*-->/g, '-->|$1|')
-    .replace(/(\w+)\s+-->\s*(\w+)/g, '$1-->$2')
-    .replace(/(\w+)\s*-->\s*$/gm, '$1')
-    .replace(/^\s*[\r\n]/gm, '')
-    .replace(/\w+\s*-->\s*\|[^|]+\|\s*$/g, '')
+    .replace(MERMAID_ARROW_LABEL_REGEX, '-->|$1|')
+    .replace(MERMAID_ARROW_LABEL_ALT_REGEX, '-->|$1|')
+    .replace(MERMAID_ARROW_SPACE_REGEX, '$1-->$2')
+    .replace(MERMAID_ARROW_END_REGEX, '$1')
+    .replace(MERMAID_EMPTY_LINE_REGEX, '')
+    .replace(MERMAID_ARROW_LABEL_END_REGEX, '')
 }
 
 // =================================================
@@ -211,7 +223,7 @@ function resolveCssVariables(svg) {
     let styleContent = styleElement.textContent
 
     // Remove existing markmap class styles
-    styleContent = styleContent.replace(/.markmap\s*{[^}]*}/, '')
+    styleContent = styleContent.replace(MARKMAP_STYLE_REGEX, '')
 
     // Add new styles with resolved variables
     const newStyles = `
@@ -280,14 +292,16 @@ function createDownloadButton(container, type) {
   const svgButton = document.createElement('i')
   svgButton.classList.add('cs', 'cs-download', 'diagram-download-btn')
   svgButton.innerText = i18n.global.t('common.downloadSvg')
-  svgButton.onclick = async () => {
+
+  // Create the click handler function
+  const handleSvgDownload = async () => {
     try {
       const filePath = await save({
         filters: [{
           name: 'SVG Image',
           extensions: ['svg']
         }],
-        defaultPath: `${name}-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}.svg`
+        defaultPath: `${name}-${new Date().toISOString().replace(DATE_SEPARATOR_REGEX, '').slice(0, 14)}.svg`
       })
 
       if (filePath) {
@@ -324,129 +338,15 @@ function createDownloadButton(container, type) {
     }
   }
 
-  // PNG download button
-  // const pngButton = document.createElement('i')
-  // pngButton.classList.add('cs', 'cs-image', 'diagram-download-btn')
-  // pngButton.innerText = i18n.global.t('common.downloadPng')
-  // pngButton.onclick = async () => {
-  //   try {
-  //     const svg = container.querySelector('svg')
-  //     const isMarkmap = container.closest('.markmap') !== null
+  // Add the event listener
+  svgButton.addEventListener('click', handleSvgDownload)
 
-  //     // 获取 SVG 的尺寸和位置信息
-  //     let width, height, transformMatrix
-  //     if (isMarkmap) {
-  //       // 对于 markmap，需要考虑 SVG 的变换
-  //       const g = svg.querySelector('g')
-  //       if (g) {
-  //         // 保存当前变换
-  //         const originalTransform = g.getAttribute('transform')
-
-  //         // 临时移除变换以获取完整尺寸
-  //         g.removeAttribute('transform')
-  //         const bbox = g.getBBox()
-  //         width = Math.ceil(bbox.width + bbox.x * 2)  // 添加边距
-  //         height = Math.ceil(bbox.height + bbox.y * 2)
-
-  //         // 恢复原始变换
-  //         if (originalTransform) {
-  //           g.setAttribute('transform', originalTransform)
-  //         }
-  //       } else {
-  //         // 降级处理
-  //         const bbox = svg.getBBox()
-  //         width = Math.ceil(bbox.width)
-  //         height = Math.ceil(bbox.height)
-  //       }
-  //     } else {
-  //       // 对于 mermaid，使用之前的逻辑
-  //       const viewBox = svg.getAttribute('viewBox')?.split(' ').map(Number)
-  //       if (viewBox?.length === 4) {
-  //         width = viewBox[2]
-  //         height = viewBox[3]
-  //       } else {
-  //         const bbox = svg.getBBox()
-  //         width = Math.ceil(bbox.width)
-  //         height = Math.ceil(bbox.height)
-  //       }
-  //     }
-
-  //     // Create temporary img element
-  //     const img = new Image()
-  //     // 克隆 SVG 并设置尺寸
-  //     const clonedSvg = svg.cloneNode(true)
-  //     clonedSvg.setAttribute('width', width)
-  //     clonedSvg.setAttribute('height', height)
-
-  //     if (isMarkmap) {
-  //       // 重置 markmap 的变换，确保显示完整内容
-  //       const g = clonedSvg.querySelector('g')
-  //       if (g) {
-  //         g.removeAttribute('transform')
-  //         // 添加一个居中的变换
-  //         const bbox = g.getBBox()
-  //         const centerX = (width - bbox.width) / 2 - bbox.x
-  //         const centerY = (height - bbox.height) / 2 - bbox.y
-  //         g.setAttribute('transform', `translate(${centerX},${centerY})`)
-  //       }
-  //     }
-
-  //     // 处理 CSS 变量
-  //     resolveCssVariables(clonedSvg)
-
-  //     const svgData = new XMLSerializer().serializeToString(clonedSvg)
-  //     const svgDataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)))
-
-  //     try {
-  //       await new Promise((resolve, reject) => {
-  //         img.onload = resolve
-  //         img.onerror = reject
-  //         img.src = svgDataUrl
-  //       })
-
-  //       // Create canvas with SVG's dimensions
-  //       const canvas = document.createElement('canvas')
-  //       canvas.width = width
-  //       canvas.height = height
-  //       const ctx = canvas.getContext('2d')
-
-  //       // Set white background
-  //       ctx.fillStyle = '#ffffff'
-  //       ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-  //       // 绘制图像
-  //       ctx.drawImage(img, 0, 0, width, height)
-
-  //       // Convert canvas to blob and save
-  //       const blob = await new Promise(resolve => {
-  //         canvas.toBlob(resolve, 'image/png')
-  //       })
-
-  //       const response = await fetch('http://127.0.0.1:21914/save/png', {
-  //         method: 'POST',
-  //         headers: {
-  //           'Content-Type': 'image/png'
-  //         },
-  //         body: blob
-  //       })
-
-  //       if (!response.ok) {
-  //         const errorText = await response.text()
-  //         console.error('Server response:', errorText)
-  //         throw new Error(`Failed to save PNG: ${errorText}`)
-  //       }
-
-  //       const result = await response.text()
-  //       console.log('Save result:', result)
-
-  //     } finally {
-  //       img.src = ''
-  //     }
-  //   } catch (error) {
-  //     console.error('Failed to save PNG:', error)
-  //   }
-  // }
-  // btnContainer.appendChild(pngButton)
+  // Store cleanup function on the container
+  const cleanup = () => {
+    svgButton.removeEventListener('click', handleSvgDownload)
+  }
+  container._diagramCleanup = container._diagramCleanup || []
+  container._diagramCleanup.push(cleanup)
 
   btnContainer.appendChild(svgButton)
   titleBar.appendChild(btnContainer)
@@ -611,14 +511,25 @@ const COPY_BUTTON_CONFIG = {
  * @param {string} iconClass - Icon class for the button
  * @param {string} text - Button text
  * @param {Function} onClick - Click handler
- * @returns {HTMLElement} The created button element
+ * @returns {Object} The created button element and cleanup function
  */
 function createCopyButton(iconClass, text, onClick) {
   const button = document.createElement('i')
   button.classList.add('cs', iconClass, 'code-copy-btn')
   button.innerText = text
-  button.onclick = onClick
-  return button
+
+  // Use addEventListener instead of onclick
+  button.addEventListener('click', onClick)
+
+  // Create cleanup function
+  const cleanup = () => {
+    button.removeEventListener('click', onClick)
+  }
+
+  return {
+    button,
+    cleanup
+  }
 }
 
 /**
@@ -664,8 +575,11 @@ function createTitleBar(block) {
   const copyBtnContainer = document.createElement('div')
   copyBtnContainer.classList.add('btn-container')
 
+  // Store cleanup functions
+  const cleanupFunctions = []
+
   // Create markdown copy button
-  const codeCopyButton = createCopyButton(
+  const markdownCopyBtn = createCopyButton(
     COPY_BUTTON_CONFIG.markdown.icon,
     COPY_BUTTON_CONFIG.markdown.text(),
     () => {
@@ -673,35 +587,73 @@ function createTitleBar(block) {
         '```' + languageClass + '\n' + block.innerText.trim() + '\n```\n' :
         block.innerText.trim()
       handleCopy(
-        codeCopyButton,
+        markdownCopyBtn.button,
         COPY_BUTTON_CONFIG.markdown.text(),
         copyText,
         COPY_BUTTON_CONFIG.markdown.icon
       )
     }
   )
-  copyBtnContainer.appendChild(codeCopyButton)
+  copyBtnContainer.appendChild(markdownCopyBtn.button)
+  cleanupFunctions.push(markdownCopyBtn.cleanup)
 
   // Create text copy button
-  const textCopyButton = createCopyButton(
+  const textCopyBtn = createCopyButton(
     COPY_BUTTON_CONFIG.code.icon,
     COPY_BUTTON_CONFIG.code.text(),
     () => {
       handleCopy(
-        textCopyButton,
+        textCopyBtn.button,
         COPY_BUTTON_CONFIG.code.text(),
         block.innerText.trim(),
         COPY_BUTTON_CONFIG.code.icon
       )
     }
   )
-  copyBtnContainer.appendChild(textCopyButton)
+  copyBtnContainer.appendChild(textCopyBtn.button)
+  cleanupFunctions.push(textCopyBtn.cleanup)
 
   titleBar.appendChild(copyBtnContainer)
 
   // Set parent element style and insert title bar
-  block.parentElement.style.position = 'relative'
-  block.parentElement.insertBefore(titleBar, block)
+  const parent = block.parentElement
+  parent.style.position = 'relative'
+  parent.insertBefore(titleBar, block)
+
+  // Store cleanup functions on parent element
+  parent._codeTitleBarCleanup = parent._codeTitleBarCleanup || []
+  parent._codeTitleBarCleanup.push(...cleanupFunctions)
+}
+
+// Cache for rendered formulas
+const formulaCache = new Map()
+
+// Render math formula with error handling and caching
+function renderFormula(element, displayMode = false) {
+  try {
+    const formula = decodeURIComponent(element.getAttribute('data-formula'))
+    const cacheKey = `${formula}-${displayMode}`
+
+    // Check cache
+    if (formulaCache.has(cacheKey)) {
+      element.innerHTML = formulaCache.get(cacheKey)
+      return
+    }
+
+    // Render formula
+    const rendered = katex.renderToString(formula, {
+      displayMode,
+      throwOnError: false,
+      strict: false
+    })
+
+    // Cache result
+    formulaCache.set(cacheKey, rendered)
+    element.innerHTML = rendered
+  } catch (err) {
+    console.warn('Math render error:', err)
+    element.innerHTML = element.getAttribute('data-formula') || ''
+  }
 }
 
 // =================================================
@@ -729,6 +681,15 @@ const DIRECTIVE_CONFIG = {
           hljs.highlightElement(block)
           if (!block.parentElement.querySelector('div')) {
             createTitleBar(block)
+          }
+        })
+      },
+      unmounted: el => {
+        // Clean up code title bar event listeners
+        el.querySelectorAll('pre').forEach(pre => {
+          if (pre._codeTitleBarCleanup) {
+            pre._codeTitleBarCleanup.forEach(cleanup => cleanup())
+            delete pre._codeTitleBarCleanup
           }
         })
       }
@@ -789,17 +750,29 @@ const DIRECTIVE_CONFIG = {
     name: 'katex',
     handlers: {
       mounted: el => {
-        el.querySelectorAll('p').forEach((block) => {
-          block.innerHTML = block.innerHTML.replace(/\[([^\]]+)\]/g, (_match, formula) => {
-            return `<span class="katex">${katex.renderToString(formula, { throwOnError: false })}</span>`
-          })
+        // Process block formulas
+        el.querySelectorAll('.katex-block').forEach(block => {
+          renderFormula(block, true)
+        })
+
+        // Process inline formulas
+        el.querySelectorAll('.katex-inline').forEach(inline => {
+          renderFormula(inline, false)
         })
       },
       updated: el => {
-        el.querySelectorAll('p').forEach((block) => {
-          block.innerHTML = block.innerHTML.replace(/\[([^\]]+)\]/g, (_match, formula) => {
-            return `<span class="katex">${katex.renderToString(formula, { throwOnError: false })}</span>`
-          })
+        // Process block formulas
+        el.querySelectorAll('.katex-block').forEach(block => {
+          if (!block.innerHTML) {
+            renderFormula(block, true)
+          }
+        })
+
+        // Process inline formulas
+        el.querySelectorAll('.katex-inline').forEach(inline => {
+          if (!inline.innerHTML) {
+            renderFormula(inline, false)
+          }
         })
       }
     }
@@ -808,7 +781,13 @@ const DIRECTIVE_CONFIG = {
     name: 'mermaid',
     handlers: {
       mounted: renderMermaidDiagrams,
-      updated: renderMermaidDiagrams
+      unmounted: (el) => {
+        // Clean up event listeners
+        if (el._diagramCleanup) {
+          el._diagramCleanup.forEach(cleanup => cleanup())
+          delete el._diagramCleanup
+        }
+      }
     }
   },
   think: {

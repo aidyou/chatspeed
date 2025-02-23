@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-talk:before {
+  content: "\e649";
+}
+
 .cs-check-circle:before {
   content: "\e64f";
 }

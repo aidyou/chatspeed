@@ -80,7 +80,8 @@
     "translationSkillPromptEmpty": "El prompt de la habilidad de traducción no puede estar vacío"
   },
   "common": {
-    "alwaysOnTop": "Siempre visible",
+    "pin": "Fijar en primer plano",
+    "unpin": "Desfijar del primer plano",
     "autoHide": "Ocultar automáticamente al perder el foco",
     "cancel": "Cancelar",
     "clear": "Limpiar",
