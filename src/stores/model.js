@@ -95,7 +95,7 @@ export const useModelStore = defineStore('model', () => {
    * A reactive reference to store the default model configuration.
    * @type {import('vue').Ref<Object>}
    */
-  const defaultModel = ref(csGetStorage(csStorageKey.defaultModel) || {})
+  const defaultModel = ref(csGetStorage(csStorageKey.defaultModel, {}))
 
   /**
    * Sets the default model configuration.

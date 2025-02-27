@@ -6,6 +6,10 @@
     "haveNoModel": "您尚未添加任何模型，请从设置中心添加"
   },
   "chat": {
+    "networkEnabled": "开启联网",
+    "networkDisabled": "关闭联网",
+    "deepsearchEnabled": "开启深度搜索",
+    "deepsearchDisabled": "关闭深度搜索",
     "clearContext": "清除上下文",
     "confirmDeleteConversation": "确定要删除这个对话吗？",
     "confirmDeleteMessage": "确定要删除这个消息吗？",
@@ -116,8 +120,11 @@
   },
   "settings": {
     "general": {
+      "chatspeedCrawler": "chatspeed爬虫",
+      "chatspeedCrawlerTooltip": "ChatSpeed 爬虫自动获取对话链接内容，作为深度搜索的核心组件。",
       "advancedSettings": "高级设置",
-      "assistantWindowVisibleShortcut": "显示对话窗口快捷键",
+      "assistantWindowVisibleShortcut": "唤起助手",
+      "assistantWindowVisibleAndPasteShortcut": "唤起助手并粘贴",
       "autoStart": "开机启动",
       "autoStartChangeFailed": "更改自动启动设置失败: {error}",
       "autoUpdate": "自动更新",
@@ -139,9 +146,9 @@
       "interfaceSettings": "界面设置",
       "language": "软件界面语言",
       "lightTheme": "亮色主题",
-      "mainWindowVisibleShortcut": "显示主窗口快捷键",
+      "mainWindowVisibleShortcut": "显示主窗口",
       "networkSettings": "网络设置",
-      "noteWindowVisibleShortcut": "显示智记窗口快捷键",
+      "noteWindowVisibleShortcut": "打开智记窗口",
       "pressKeysToSet": "请按下快捷键组合...",
       "primaryLanguage": "第一语言",
       "primaryLanguageTooltip": "主要作为语言翻译自动识别失败时的首选项",

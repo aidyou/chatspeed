@@ -284,6 +284,7 @@ const fromLang = ref('')
 const toLang = ref('')
 
 let unlistenChunkResponse = ref(null)
+let unlistenPasteResponse = ref(null)
 
 const models = computed(() => modelStore.availableModels)
 const currentModel = ref({ ...modelStore.defaultModel })
@@ -380,7 +381,7 @@ watch(
 // lifecycle
 // =================================================
 // Window visibility state
-const focusListener = ref(null)
+// const focusListener = ref(null)
 
 onMounted(async () => {
   inputRef.value?.focus()
@@ -408,23 +409,40 @@ onMounted(async () => {
     handleChatMessage(event.payload)
   })
 
-  // Listen for window show event
-  focusListener.value = await getCurrentWindow().listen('tauri://focus', async () => {
-    await readClipboard().then(async text => {
-      text = text.trim()
-      if (text && !inputMessage.value) {
-        currentAssistantMessage.value = ''
-        inputMessage.value = text
+  unlistenPasteResponse.value = await listen('assistant-window-paste', async event => {
+    // we don't want to process messages from other windows
+    if (event.payload?.label !== settingStore.label) {
+      return
+    }
+    if (event.payload?.content) {
+      inputMessage.value = event.payload.content
 
-        await nextTick()
-        const textarea = inputRef.value?.$el?.querySelector('textarea')
-        if (textarea) {
-          textarea.scrollTop = textarea.scrollHeight
-          textarea.focus()
-        }
+      await nextTick()
+      const textarea = inputRef.value?.$el?.querySelector('textarea')
+      if (textarea) {
+        textarea.scrollTop = textarea.scrollHeight
+        textarea.focus()
       }
-    })
+    }
   })
+
+  // // Listen for window show event
+  // focusListener.value = await getCurrentWindow().listen('tauri://focus', async () => {
+  //   await readClipboard().then(async text => {
+  //     text = text.trim()
+  //     if (text && !inputMessage.value) {
+  //       currentAssistantMessage.value = ''
+  //       inputMessage.value = text
+
+  //       await nextTick()
+  //       const textarea = inputRef.value?.$el?.querySelector('textarea')
+  //       if (textarea) {
+  //         textarea.scrollTop = textarea.scrollHeight
+  //         textarea.focus()
+  //       }
+  //     }
+  //   })
+  // })
 
   windowStore.initAssistantAlwaysOnTop()
   document.addEventListener('keydown', onKeydown)
@@ -436,9 +454,13 @@ onUnmounted(() => {
     unlistenChunkResponse.value()
   }
 
-  if (focusListener.value) {
-    focusListener.value()
+  // unlisten paste response event
+  if (unlistenPasteResponse.value) {
+    unlistenPasteResponse.value()
   }
+  // if (focusListener.value) {
+  //   focusListener.value()
+  // }
 
   if (chatMessagesRef.value) {
     chatMessagesRef.value.removeEventListener('scroll', onScroll)

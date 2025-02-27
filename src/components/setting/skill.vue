@@ -103,13 +103,13 @@
               </el-option>
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.skill.logo')" prop="logo">
+          <!-- <el-form-item :label="$t('settings.skill.logo')" prop="logo">
             <fileSelector
               type="image"
               ref="fileSelectorRef"
               @fileChanged="onFileSelectorChange"
               :defaultPath="skillForm.logo" />
-          </el-form-item>
+          </el-form-item> -->
           <el-form-item :label="$t('settings.skill.description')" prop="description">
             <el-input v-model="skillForm.description" type="textarea" :rows="3" />
           </el-form-item>
@@ -192,13 +192,13 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 
 import { Sortable } from 'sortablejs-vue3'
 
-import fileSelector from '@/components/common/fileSelector.vue'
+// import fileSelector from '@/components/common/fileSelector.vue'
 import iconfonts from '@/components/icon/type.js'
 import { isEmpty, showMessage } from '@/libs/util'
 

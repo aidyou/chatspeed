@@ -11,6 +11,18 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-tool:before {
+  content: "\e64b";
+}
+
+.cs-connected:before {
+  content: "\e64a";
+}
+
+.cs-skill-deep-search:before {
+  content: "\e725";
+}
+
 .cs-talk:before {
   content: "\e649";
 }

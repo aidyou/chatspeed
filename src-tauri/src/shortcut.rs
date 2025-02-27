@@ -3,11 +3,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use arboard::Clipboard;
+use serde_json::json;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_global_shortcut::Shortcut;
 
+use crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
+use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::db::MainStore;
 use crate::open_note_window;
 use crate::window::{toggle_assistant_window, toggle_main_window};
@@ -48,6 +53,14 @@ fn get_shortcuts(config_store: &Arc<Mutex<MainStore>>) -> HashMap<String, String
             ),
         );
 
+        shortcuts.insert(
+            CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT,
+                DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
+            ),
+        );
+
         // Note window shortcut
         shortcuts.insert(
             CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
@@ -67,6 +80,10 @@ fn get_shortcuts(config_store: &Arc<Mutex<MainStore>>) -> HashMap<String, String
         shortcuts.insert(
             CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
             DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        shortcuts.insert(
+            CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
+            DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
         );
         shortcuts.insert(
             CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
@@ -89,6 +106,18 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
     match shortcut_type {
         CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => toggle_main_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
+        CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT => {
+            toggle_assistant_window(app);
+            // get content from paste buffer
+            if let Ok(mut clipboard) = Clipboard::new().map_err(|e| e.to_string()) {
+                let content = clipboard.get_text().unwrap_or_default();
+                app.emit(
+                    "assistant-window-paste",
+                    json!({ "label": "assistant", "content": content }),
+                )
+                .unwrap();
+            }
+        }
         CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => {
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {

@@ -22,12 +22,14 @@ const defaultSettings = {
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
   // chat settings
+  chatspeedCrawler: '',
   historyMessages: 1,
   conversationTitleGenModel: { id: '', model: '' },
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
-  assistantWindowVisibleShortcut: 'ALT+Z',
   noteWindowVisibleShortcut: 'ALT+N',
+  assistantWindowVisibleShortcut: 'ALT+Z',
+  assistantWindowVisibleAndPasteShortcut: 'ALT+S',
   // network settings
   proxyType: 'none', // none, http, system
   proxyServer: '',

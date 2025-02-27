@@ -47,6 +47,35 @@ db:
   string_error: "字符串错误：%{error}"
   tauri_error: "Tauri错误：%{error}"
 
+http:
+  client_build_failed: "创建HTTP客户端失败: %{error}"
+  connection_failed: "连接失败: %{error}"
+  download_failed: "下载失败: %{error}"
+  failed_to_clone_request: "请求重试时，无法克隆请求"
+  failed_to_create_file: "无法创建文件: %{error}"
+  failed_to_open_file: "无法打开文件: %{error}"
+  failed_to_parse_response: "无法解析响应: %{error}"
+  failed_to_read_file: "无法读取文件，地址：%{path}，错误：%{error}"
+  failed_to_read_response: "无法读取响应: %{error}"
+  failed_to_write_file: "无法写入文件: %{error}"
+  headers_convert_failed: "无法将请求头配置转换为 HttpHeader: %{error}"
+  invalid_http_method: "无效的HTTP方法: %{method}"
+  invalid_request_config: "无效的请求配置: %{error}"
+  invalid_response_format: "无效的响应格式: %{error}"
+  json_parse_failed: "无法解析JSON: %{error}"
+  mime_parse_failed: "无法解析MIME类型"
+  missing_response_body: "响应体为空"
+  missing_url: "http请求缺少URL参数"
+  proxy_config_failed: "配置代理失败: %{error}"
+  read_response_failed: "无法读取响应: %{error}"
+  request_failed: "请求失败: %{error}"
+  request_timeout: "请求超时"
+  response_too_large: "服务器端的数据大于请求限制，服务器端数据大小：%{content_length},请求限制：%{max_size}"
+  runtime_create_failed: "创建运行时失败: %{error}"
+  status_not_ok: "状态码不是OK: %{status}"
+  upload_failed: "上传失败: %{error}"
+  user_message_with_references: "用户消息：\n %{content}\n\n参考资料：\n<ref source=\"crawler\">\n```json\n%{crawl_content}\n```\n</ref>\n\n请根据`<ref></ref>`内的参考资料进行回答。"
+
 main:
   failed_to_create_chat_store: "无法创建聊天存储: %{error}"
   failed_to_create_config_store: "无法创建配置存储: %{error}"
@@ -84,7 +113,7 @@ network:
   stream_decode_error: "解码流数据失败: %{error}"
 
 setting:
-  file_not_exists: "文件不存在: %{file_path}"
+  file_not_exists: "文件不存在:：%{file_path}"
 
 tray:
   about: "关于"

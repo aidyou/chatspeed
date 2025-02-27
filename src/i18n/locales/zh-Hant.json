@@ -117,7 +117,7 @@
   "settings": {
     "general": {
       "advancedSettings": "進階設定",
-      "assistantWindowVisibleShortcut": "顯示對話視窗快速鍵",
+      "assistantWindowVisibleShortcut": "喚起助手",
       "autoStart": "開機啟動",
       "autoStartChangeFailed": "變更自動啟動設定失敗: {error}",
       "autoUpdate": "自動更新",
@@ -139,9 +139,9 @@
       "interfaceSettings": "介面設定",
       "language": "軟體介面語言",
       "lightTheme": "亮色主題",
-      "mainWindowVisibleShortcut": "顯示主視窗快速鍵",
+      "mainWindowVisibleShortcut": "顯示主視窗",
       "networkSettings": "網路設定",
-      "noteWindowVisibleShortcut": "顯示智記視窗快速鍵",
+      "noteWindowVisibleShortcut": "打開智記視窗",
       "pressKeysToSet": "請按下快速鍵組合...",
       "primaryLanguage": "第一語言",
       "primaryLanguageTooltip": "主要作為語言翻譯自動識別失敗時的首選項",

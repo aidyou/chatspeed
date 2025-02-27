@@ -108,13 +108,14 @@ export function csSetStorage(key, value, keyPrefix = '__cs_') {
  * Retrieves data from the browser's local storage and parses it based on type information.
  * @param {string} key - The key for local storage.
  * @returns {any} - The value stored in local storage.
+ * @param {string} defaultValue - The default value to return if the key does not exist.
  * @param {string} keyPrefix - The prefix for the storage key.
  */
-export function csGetStorage(key, keyPrefix = '__cs_') {
+export function csGetStorage(key, defaultValue = null, keyPrefix = '__cs_') {
   const storedData = localStorage.getItem((keyPrefix || '') + key);
 
   if (storedData === null) {
-    return null; // Data does not exist
+    return defaultValue; // Data does not exist
   }
 
   try {

@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use crate::plugins::core::http::{HttpClient, HttpConfig};
+//! use crate::http::{HttpClient, HttpConfig};
 //!
 //! // Basic GET request
 //! let client = HttpClient::new()?;
@@ -29,8 +29,8 @@
 use futures::TryStreamExt;
 use reqwest::redirect::Policy;
 use rust_i18n::t;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{fs::File, io::AsyncWriteExt, runtime::Runtime};
+use std::{collections::HashMap, time::Duration};
+use tokio::{fs::File, io::AsyncWriteExt};
 
 use super::{
     error::{HttpError, HttpResult},
@@ -38,43 +38,18 @@ use super::{
 };
 
 /// HTTP client implementation with support for async requests and file operations
-#[derive(Clone)]
 pub struct HttpClient {
     client: reqwest::Client,
-    runtime: Arc<Runtime>,
 }
 
 impl HttpClient {
     /// Creates a new HTTP client instance
     pub fn new() -> HttpResult<Self> {
-        let runtime = Runtime::new().map_err(|e| {
-            log::error!("Failed to create tokio runtime: {}", e);
-            HttpError::Runtime(t!("http.runtime_create_failed", error = e.to_string()).to_string())
-        })?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
 
-        log::debug!("Created new tokio runtime");
-
-        let default_config = HttpConfig::default();
-        let client = Self::build_client(&default_config)?;
-
-        Ok(Self {
-            client,
-            runtime: Arc::new(runtime),
-        })
-    }
-
-    /// Creates a new HTTP client instance with custom configuration
-    pub fn new_with_config(config: &HttpConfig) -> HttpResult<Self> {
-        let runtime = Runtime::new().map_err(|e| {
-            HttpError::Runtime(t!("http.runtime_create_failed", error = e.to_string()).to_string())
-        })?;
-
-        let client = Self::build_client(config)?;
-
-        Ok(Self {
-            client,
-            runtime: Arc::new(runtime),
-        })
+        Ok(Self { client })
     }
 
     /// Helper function to handle common request errors
@@ -94,7 +69,7 @@ impl HttpClient {
         use tokio::fs::File;
         use tokio::io::AsyncReadExt;
 
-        // 读取文件
+        // open file
         let mut file = File::open(path).await.map_err(|e| {
             HttpError::Request(
                 t!(
@@ -106,7 +81,7 @@ impl HttpClient {
             )
         })?;
 
-        // 读取文件内容
+        // read the file content
         let mut contents = Vec::new();
         file.read_to_end(&mut contents).await.map_err(|e| {
             HttpError::Request(
@@ -119,13 +94,13 @@ impl HttpClient {
             )
         })?;
 
-        // 获取文件名
+        // get file name
         let filename = std::path::Path::new(path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
 
-        // 创建 multipart form
+        // create multipart form
         let part = Part::bytes(contents)
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")
@@ -334,7 +309,12 @@ impl HttpClient {
                         if let Some(content_length) = response.content_length() {
                             if content_length > max_size as u64 {
                                 return Err(HttpError::Response(
-                                    t!("http.response_too_large").to_string(),
+                                    t!(
+                                        "http.response_too_large",
+                                        content_length = content_length,
+                                        max_size = max_size
+                                    )
+                                    .to_string(),
                                 ));
                             }
                         }
@@ -352,114 +332,12 @@ impl HttpClient {
         }
     }
 
-    /// Builds the reqwest client with the given configuration
-    fn build_client(config: &HttpConfig) -> HttpResult<reqwest::Client> {
-        let mut builder = reqwest::Client::builder().redirect(
-            config
-                .follow_redirects
-                .map_or(Policy::none(), |max| Policy::limited(max as usize)),
-        );
-
-        log::debug!("Building HTTP client with config: {:?}", config);
-
-        if let Some(cookie_store) = config.enable_cookie_store {
-            builder = builder.cookie_store(cookie_store);
-        }
-
-        if let Some(timeout) = config.timeout {
-            if timeout > 0 {
-                builder = builder.timeout(Duration::from_secs(timeout as u64));
-            }
-        }
-
-        if let Some(connect_timeout) = config.connect_timeout {
-            if connect_timeout > 0 {
-                builder = builder.connect_timeout(Duration::from_secs(connect_timeout as u64));
-            }
-        }
-
-        if let Some(proxy_url) = &config.proxy {
-            let proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {
-                HttpError::Config(t!("http.proxy_config_failed", error = e.to_string()).to_string())
-            })?;
-            builder = builder.proxy(proxy);
-        }
-
-        if !config.compression.unwrap_or(false) {
-            builder = builder.no_gzip().no_brotli().no_deflate();
-        }
-
-        #[cfg(test)]
-        {
-            builder = builder.danger_accept_invalid_certs(true);
-            builder = builder.no_proxy();
-        }
-
-        builder.build().map_err(|e| {
-            HttpError::Config(t!("http.client_build_failed", error = e.to_string()).to_string())
-        })
-    }
-
     /// Extracts headers from reqwest::HeaderMap into a HashMap
     fn extract_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, String> {
         headers
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect()
-    }
-
-    /// 内部异步请求实现
-    async fn send_request_async_impl(&self, request: &HttpRequest) -> HttpResult<HttpResponse> {
-        if let Some(path) = &request.config.upload_file {
-            self.handle_upload(request, path).await
-        } else if let Some(path) = &request.config.download_path {
-            self.handle_download(request, path).await
-        } else {
-            self.handle_request(request).await
-        }
-    }
-
-    /// 发送同步请求（会阻塞当前线程）
-    pub fn send_request_blocking(&self, config: HttpConfig) -> HttpResult<HttpResponse> {
-        let request = HttpRequest::new(config);
-        self.runtime
-            .block_on(async { self.send_request_async_impl(&request).await })
-    }
-
-    /// 发送异步请求
-    pub async fn send_request_async(&self, config: HttpConfig) -> HttpResult<HttpResponse> {
-        let request = HttpRequest::new(config);
-        log::debug!("Starting async request: {:?}", request);
-
-        let response = self.send_request_async_impl(&request).await;
-        log::debug!("Async request completed: {:?}", response);
-
-        response
-    }
-
-    /// 根据配置自动选择同步或异步方式发送请求
-    pub fn send_request(&self, config: HttpConfig) -> HttpResult<HttpResponse> {
-        let request = HttpRequest::new(config);
-
-        if request.config.async_request.unwrap_or(false) {
-            // 对于异步请求，立即返回 202 Accepted
-            let client = self.clone();
-            let request = request.clone();
-            self.runtime
-                .spawn(async move { client.send_request_async_impl(&request).await });
-
-            Ok(HttpResponse {
-                status: 202,
-                headers: Default::default(),
-                body: Some("Request accepted".to_string()),
-                error: None,
-                progress: Some(0),
-            })
-        } else {
-            // 对于同步请求，等待完成
-            self.runtime
-                .block_on(async { self.send_request_async_impl(&request).await })
-        }
     }
 
     /// Determines if a request should be retried based on the error
@@ -469,6 +347,35 @@ impl HttpClient {
             || error.is_request()
             || matches!(error.status(), Some(status) if status.is_server_error())
     }
+
+    /// send async request
+    ///
+    /// # Parameters
+    /// - `config`: The configuration for the request
+    ///
+    /// # Returns
+    /// - `HttpResult<HttpResponse>`: The response from the server
+    pub async fn send_request(&self, config: HttpConfig) -> HttpResult<HttpResponse> {
+        let request = HttpRequest::new(config);
+        self.send_request_async_impl(&request).await
+    }
+
+    /// Handles the actual request and retries if needed
+    ///
+    /// # Parameters
+    /// - `request`: The request configuration
+    ///
+    /// # Returns
+    /// - `HttpResult<HttpResponse>`: The response from the server
+    async fn send_request_async_impl(&self, request: &HttpRequest) -> HttpResult<HttpResponse> {
+        if let Some(path) = &request.config.upload_file {
+            self.handle_upload(request, path).await
+        } else if let Some(path) = &request.config.download_path {
+            self.handle_download(request, path).await
+        } else {
+            self.handle_request(request).await
+        }
+    }
 }
 
 #[cfg(test)]
@@ -476,12 +383,12 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    #[test]
-    fn test_basic_get() {
+    #[tokio::test]
+    async fn test_basic_get() {
         let client = HttpClient::new().unwrap();
-        let config = HttpConfig::get("https://httpbin.org/get");
+        let config = HttpConfig::get("http://127.0.0.1:12321/data?url=https://ezool.net");
 
-        let result = client.send_request(config);
+        let result = client.send_request(config).await;
         dbg!(&result);
         assert!(result.is_ok());
 
@@ -490,12 +397,12 @@ mod tests {
         assert!(response.body.is_some());
     }
 
-    #[test]
-    fn test_post_with_body() {
+    #[tokio::test]
+    async fn test_post_with_body() {
         let client = HttpClient::new().unwrap();
         let config = HttpConfig::post("https://httpbin.org/post", "test body");
 
-        let result = client.send_request(config);
+        let result = client.send_request(config).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -503,32 +410,31 @@ mod tests {
         assert!(response.body.is_some());
     }
 
-    #[test]
-    fn test_download() {
+    #[tokio::test]
+    async fn test_download() {
         let client = HttpClient::new().unwrap();
         let config =
             HttpConfig::get("https://httpbin.org/image/jpeg").download_to("test_download.jpg");
 
-        let result = client.send_request(config);
+        let result = client.send_request(config).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
         assert_eq!(response.status, 200);
         assert!(Path::new("test_download.jpg").exists());
-
-        // Clean up test file
         std::fs::remove_file("test_download.jpg").unwrap();
     }
 
-    #[test]
-    fn test_async_request() {
+    #[tokio::test]
+    async fn test_async_request() {
         let client = HttpClient::new().unwrap();
         let config = HttpConfig::get("https://httpbin.org/get").async_request();
 
-        let result = client.send_request(config);
+        let result = client.send_request(config).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
-        assert_eq!(response.status, 202); // Async requests return 202 Accepted
+        assert_eq!(response.status, 200);
+        assert!(response.body.is_some());
     }
 }

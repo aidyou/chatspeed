@@ -307,6 +307,7 @@
               <SkillList
                 ref="skillListRef"
                 @onSelected="onSkillSelected"
+                @visibleChanged="onSkillListVisibleChanged"
                 :searchKw="skillSearchKeyword" />
             </div>
             <div class="additional" v-if="selectedSkill || replyMessage">
@@ -329,7 +330,35 @@
             </div>
             <div class="input">
               <div class="icons">
-                <cs class="skill-button" name="add" @click="onOpenSkillSelector" />
+                <el-tooltip
+                  :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+                  :hide-after="0"
+                  placement="top">
+                  <cs
+                    name="connected"
+                    class="small"
+                    :class="{ active: networkEnabled }"
+                    @click="onToggleNetwork"
+                    v-if="crawlerAvailable" />
+                </el-tooltip>
+                <el-tooltip
+                  :content="
+                    $t(`chat.${!deepsearchEnabled ? 'deepsearchEnabled' : 'deepsearchDisabled'}`)
+                  "
+                  :hide-after="0"
+                  placement="top">
+                  <cs
+                    name="skill-deep-search"
+                    class="small"
+                    :class="{ active: deepsearchEnabled }"
+                    v-if="crawlerAvailable"
+                    @click="onToggleDeepSearch" />
+                </el-tooltip>
+                <cs
+                  class="small"
+                  :class="{ active: isSkillListVisible }"
+                  name="tool"
+                  @click="onOpenSkillSelector" />
               </div>
               <el-input
                 ref="inputRef"
@@ -433,10 +462,11 @@ import { listen } from '@tauri-apps/api/event'
 
 import markdown from '@/components/chat/markdown.vue'
 
+import { csStorageKey } from '@/config/config'
 import { chatPreProcess, parseMarkdown } from '@/libs/chat'
 import { getModelLogo } from '@/libs/logo'
-import { isEmpty, showMessage } from '@/libs/util'
 import { getLanguageByCode } from '@/i18n/langUtils'
+import { isEmpty, showMessage, csGetStorage, csSetStorage } from '@/libs/util'
 import SkillList from '@/components/chat/skillList.vue'
 import titlebar from '@/components/window/titlebar.vue'
 
@@ -500,8 +530,22 @@ const chatState = ref({
   reference: []
 })
 
+// network connection and deep search
+// When enabled, it will automatically crawl the URLs in user queries
+const networkEnabled = ref(csGetStorage(csStorageKey.networkEnabled, true))
+// When deep search is enabled, the AI will automatically plan the user's questions
+// and break them down into executable steps for research.
+const deepsearchEnabled = ref(csGetStorage(csStorageKey.deepsearchEnabled, false))
+const crawlerAvailable = computed(() => {
+  return (
+    settingStore.settings.chatspeedCrawler != '' &&
+    settingStore.settings.chatspeedCrawler.startsWith('http')
+  )
+})
+
 const skillListRef = ref(null)
 const selectedSkill = ref(null)
+const isSkillListVisible = ref(false)
 
 const forceRefreshKey = ref(0)
 
@@ -890,6 +934,8 @@ const sendMessage = async (messageId = null) => {
           apiKey: currentModel.value.apiKey,
           model: currentModel.value.defaultModel,
           messages: messages,
+          networkEnabled: networkEnabled.value,
+          deepsearchEnabled: deepsearchEnabled.value,
           metadata: {
             maxTokens: currentModel.value.maxTokens,
             temperature: currentModel.value.temperature,
@@ -1494,6 +1540,24 @@ const onSkillSelected = skill => {
   // clear the search keyword
   skillSearchKeyword.value = ''
 }
+
+const onToggleNetwork = () => {
+  networkEnabled.value = !networkEnabled.value
+  csSetStorage(csStorageKey.networkEnabled, networkEnabled.value)
+}
+
+const onToggleDeepSearch = () => {
+  deepsearchEnabled.value = !deepsearchEnabled.value
+  csSetStorage(csStorageKey.deepsearchEnabled, deepsearchEnabled.value)
+}
+
+/**
+ * Toggle the skill selector visibility
+ * @param {Boolean} v
+ */
+const onSkillListVisibleChanged = v => {
+  isSkillListVisible.value = v
+}
 /**
  * Open the skill selector
  */
@@ -1885,7 +1949,7 @@ const onTakeNote = message => {
     right: 0;
     flex-shrink: 0;
     background-color: transparent;
-    padding: var(--cs-space-sm) var(--cs-space-md);
+    padding: var(--cs-space-sm);
     height: unset;
     z-index: 1;
 
@@ -1960,18 +2024,28 @@ const onTakeNote = message => {
       align-items: flex-end;
       background-color: var(--cs-input-bg-color);
       border-radius: var(--cs-border-radius-xxl);
-      padding: var(--cs-space-sm) var(--cs-space-md);
+      padding: var(--cs-space-sm);
 
       .icons {
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: var(--cs-space-xs) var(--cs-space-sm);
+        padding: var(--cs-space-xs);
         cursor: pointer;
 
         .cs {
           font-size: 20px !important;
           color: var(--cs-text-color-secondary);
+
+          &.small {
+            font-size: 16px !important;
+            padding-bottom: var(--cs-space-xxs);
+            padding-left: var(--cs-space-xs);
+
+            &:first-child {
+              padding-left: 0;
+            }
+          }
 
           &.cs-send {
             color: var(--cs-text-color-primary);

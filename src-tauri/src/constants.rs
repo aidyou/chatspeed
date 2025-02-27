@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 pub const CFG_WINDOW_WIDTH: &str = "window_width";
 pub const CFG_WINDOW_HEIGHT: &str = "window_height";
-pub const TRAY_ID: &str = "chatspeed";
+pub const TRAY_ID: &str = "Chatspeed";
 
 // Auto update config
 pub const CFG_AUTO_UPDATE: &str = "auto_update";
@@ -23,6 +23,8 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
+// chatspeed crawler api name
+pub const CHATSPEED_CRAWLER: &str = "chatspeed_crawler";
 // pub const CFG_WORD_SELECTION_TOOLBAR: &str = "word_selection_toolbar";
 
 // main window shortcuts
@@ -30,6 +32,9 @@ pub const CFG_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "main_window_visible_shortcut
 pub const DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "F2";
 pub const CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT: &str = "assistant_window_visible_shortcut";
 pub const DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+Z";
+pub const CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT: &str =
+    "assistant_window_visible_and_paste_shortcut";
+pub const DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT: &str = "Alt+S";
 pub const CFG_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "note_window_visible_shortcut";
 pub const DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+N";
 

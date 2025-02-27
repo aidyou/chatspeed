@@ -23,7 +23,7 @@
   </transition>
 </template>
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 
@@ -34,12 +34,12 @@ const { t } = useI18n()
 const skillStore = useSkillStore()
 const { skills } = storeToRefs(skillStore)
 
-const emit = defineEmits(['onSelected'])
+const emit = defineEmits(['onSelected', 'visibleChanged'])
 const props = defineProps({
   searchKw: {
     type: String,
-    default: '',
-  },
+    default: ''
+  }
 })
 
 const selectedId = ref(0)
@@ -51,6 +51,13 @@ const filteredSkills = computed(() => {
     skill.name.toLowerCase().includes(props.searchKw.toLowerCase())
   )
 })
+
+watch(
+  () => isVisible.value,
+  () => {
+    emit('visibleChanged', isVisible.value)
+  }
+)
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
@@ -135,7 +142,7 @@ const hide = () => {
 defineExpose({
   show,
   hide,
-  isVisible,
+  isVisible
 })
 </script>
 

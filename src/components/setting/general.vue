@@ -142,6 +142,20 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
+            {{ $t('settings.general.chatspeedCrawler') }}
+            <small class="tooltip">{{ $t('settings.general.chatspeedCrawlerTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 45%">
+          <el-input
+            v-model="settings.chatspeedCrawler"
+            @input="onChatspeedCrawlerChange"
+            placeholder="http://localhost:12321" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
             {{ $t('settings.general.historyMessages') }}
             <small class="tooltip">{{ $t('settings.general.historyMessagesTooltip') }}</small>
           </div>
@@ -265,6 +279,26 @@
         </div>
       </div>
       <div class="item">
+        <div class="label">{{ $t('settings.general.noteWindowVisibleShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top">
+            <el-input
+              v-model="settings.noteWindowVisibleShortcut"
+              readonly
+              :placeholder="$t('settings.general.pressKeysToSet')"
+              @keydown.prevent="e => captureShortcut(e, 'noteWindowVisibleShortcut')"
+              @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="clearShortcut('noteWindowVisibleShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleShortcut') }}</div>
         <div class="value">
           <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top">
@@ -285,18 +319,18 @@
         </div>
       </div>
       <div class="item">
-        <div class="label">{{ $t('settings.general.noteWindowVisibleShortcut') }}</div>
+        <div class="label">{{ $t('settings.general.assistantWindowVisibleAndPasteShortcut') }}</div>
         <div class="value">
           <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top">
             <el-input
-              v-model="settings.noteWindowVisibleShortcut"
+              v-model="settings.assistantWindowVisibleAndPasteShortcut"
               readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'noteWindowVisibleShortcut')"
+              @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleAndPasteShortcut')"
               @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
-                <el-button @click="clearShortcut('noteWindowVisibleShortcut')">
+                <el-button @click="clearShortcut('assistantWindowVisibleAndPasteShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
               </template>
@@ -581,6 +615,13 @@ const clearShortcut = shortcutKey => {
  */
 const onHistoryMessagesChange = value => {
   setSetting('historyMessages', value || 0)
+}
+/**
+ * Handles the change of chatspeed crawler
+ * @param {string} value - The value of chatspeed crawler
+ */
+const onChatspeedCrawlerChange = value => {
+  setSetting('chatspeedCrawler', value || '')
 }
 /**
  * Handles the change of conversation title generation model id

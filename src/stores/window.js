@@ -46,7 +46,7 @@ export const useWindowStore = defineStore('window', () => {
   })
 
   // Reactive reference to control the visibility of the chat sidebar, initialized from local storage
-  const chatSidebarShow = ref(csGetStorage(csStorageKey.chatSidebarShow) || false);
+  const chatSidebarShow = ref(csGetStorage(csStorageKey.chatSidebarShow, false));
 
   /**
    * Set the visibility of the chat sidebar and update local storage

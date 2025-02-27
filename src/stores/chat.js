@@ -39,7 +39,7 @@ export const useChatStore = defineStore('chat', () => {
       });
   }
 
-  const currentConversationId = ref(csGetStorage(csStorageKey.currentConversationId) || 0)
+  const currentConversationId = ref(csGetStorage(csStorageKey.currentConversationId, 0))
   /**
    * Retrieves the current conversation ID from storage or creates a new one if none exists.
    * @returns {Promise<number>} A promise that resolves to the current conversation ID.

@@ -22,6 +22,8 @@ const csStorageKey = {
   noteSidebarCollapsed: 'noteSidebarCollapsed',
   ignoreVersion: 'ignoreVersion',
   updateLater: 'updateLater',
+  networkEnabled: 'networkEnabled',
+  deepsearchEnabled: 'deepsearchEnabled',
 }
 Object.freeze(csStorageKey)
 

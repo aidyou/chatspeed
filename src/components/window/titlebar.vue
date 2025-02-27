@@ -283,30 +283,30 @@ init()
   border-radius: var(--cs-border-radius-md) var(--cs-border-radius-md) 0 0;
   user-select: none;
   -webkit-user-select: none;
-  overflow: hidden;
+  overflow: visible;
   box-sizing: border-box;
-  -webkit-app-region: drag; // 允许拖动窗口
+  -webkit-app-region: drag;
 
   .left,
   .right {
-    flex: 0;
-
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: center;
+    white-space: nowrap;
   }
 
   .center {
-    flex: 1;
+    flex: 0 1 auto;
     text-align: center;
     overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    min-width: 0;
+    margin: 0 10px;
   }
 
   .window-controls {
-    // position: absolute;
-    // left: 7px;
-    // top: 50%;
-    // transform: translateY(-50%);
     display: flex;
     gap: 8px;
     z-index: 100;
@@ -367,14 +367,24 @@ init()
     align-items: center;
     width: 100%;
     padding: 0 var(--cs-space);
+    overflow: visible;
+    position: relative;
+    min-width: 0;
 
     .left,
     .right {
-      flex: 0;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
 
     .center {
-      flex: 1;
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      margin: 0 10px;
+      max-width: calc(100% - 20px);
     }
   }
 

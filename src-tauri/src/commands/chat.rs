@@ -46,14 +46,16 @@
 
 use crate::ai::chat::{anthropic::AnthropicChat, gemini::GeminiChat, openai::OpenAIChat};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
+use crate::constants::CHATSPEED_CRAWLER;
 use crate::db::MainStore;
+use crate::http::crawler::Crawler;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::libs::window_channels::WindowChannels;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::sync::Mutex;
 use whatlang::detect;
 
@@ -208,7 +210,9 @@ pub async fn chat_with_ai(
     api_url: Option<&str>,
     model: String,
     api_key: Option<&str>,
-    messages: Vec<Value>,
+    mut messages: Vec<Value>,
+    network_enabled: Option<bool>,
+    deep_search_enabled: Option<bool>,
     mut metadata: Option<Value>,
 ) -> Result<String, String> {
     let tx = state.channels.get_or_create_channel(window.clone()).await?;
@@ -228,6 +232,52 @@ pub async fn chat_with_ai(
             cb_metadata,
         ));
     };
+
+    // 如果网络搜索已启用，匹配出最后一条用户提问的信息中的 url
+    // 将 url 的内容抓取出来拼接到最后一条用户消息中
+    if network_enabled == Some(true) {
+        // 获取爬虫接口地址
+        let crawler_url = {
+            let config_store = main_state.lock().map_err(|e| e.to_string())?;
+            config_store
+                .config
+                .get_setting(CHATSPEED_CRAWLER)
+                .map(|v| v.as_str().unwrap_or_default())
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        // 获取最后一条用户消息的内容
+        let content = messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str())
+            .map(|s| s.to_string());
+
+        // 如果找到内容，则进行抓取
+        if let Some(content) = content {
+            match crawler_from_content(&crawler_url, &content).await {
+                Ok(crawled_contents) => {
+                    if !crawled_contents.is_empty() {
+                        if let Some(last_message) = messages.last_mut() {
+                            let new_content = t!(
+                                "http.user_message_with_references",
+                                content = content,
+                                crawl_content = crawled_contents
+                            )
+                            .to_string();
+                            dbg!(&new_content);
+                            last_message["content"] = Value::String(new_content);
+                        }
+                    }
+                }
+                Err(err) => {
+                    log::error!("Failed to crawl content: {}", err);
+                }
+            }
+        }
+    }
 
     // If the proxy type is http, get the proxy server and username/password from the config
     if let Some(md) = metadata.as_mut() {
@@ -284,6 +334,54 @@ pub async fn chat_with_ai(
     Ok("".to_string())
 }
 
+/// Use the crawler_url server interface to fetch information about the URLs contained in the content.
+///
+/// # Arguments
+/// * `crawler_url` - The URL of the crawler server.
+/// * `content` - The content to be searched.
+///
+/// # Returns
+///
+/// A JSON string containing information about the URLs found in the content.
+pub async fn crawler_from_content(crawler_url: &str, content: &str) -> Result<String, String> {
+    // 使用正则表达式提取所有 URL
+    let url_regex =
+        regex::Regex::new(r"https?://(?:[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+){1,}|localhost)(?::\d+)?(?:/[a-zA-Z0-9\-._~%!$&()*+;=:@/\?,\[\]#'{}|]*)?")
+            .map_err(|e| e.to_string())?;
+    let urls: Vec<String> = url_regex
+        .find_iter(content)
+        .map(|m| m.as_str().to_string())
+        .collect();
+    if urls.is_empty() {
+        return Ok("".to_string());
+    }
+
+    // 抓取每个 URL 的内容
+    let mut crawled_contents = Vec::new();
+    let crawler = Crawler::new(crawler_url.to_string());
+    for url in urls {
+        match crawler.crawl_data(&url).await {
+            Ok(data) => {
+                if !data.content.is_empty() {
+                    crawled_contents.push(json!({
+                        "url": url,
+                        "title": data.title,
+                        "content": data.content
+                    }));
+                }
+            }
+            Err(err) => {
+                log::error!("Failed to crawl URL {}: {}", url, err);
+            }
+        }
+    }
+    if crawled_contents.is_empty() {
+        return Ok("".to_string());
+    }
+
+    serde_json::to_string(&crawled_contents).map_err(|e| e.to_string())
+}
+
 /// Tauri command to stop the ongoing chat for a specific API provider.
 /// This command sets the stop flag for the selected chat interface.
 ///
@@ -337,5 +435,56 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
         }
     } else {
         Err(t!("chat.failed_to_detect_language").to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_url_regex() {
+        let url_regex = regex::Regex::new(r"https?://(?:[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+){1,}|localhost)(?::\d+)?(?:/[a-zA-Z0-9\-._~%!$&()*+;=:@/\?,\[\]#'{}|]*)?")
+            .unwrap();
+
+        // 测试有效 URL
+        assert!(url_regex.is_match("https://www.example.com"));
+        assert!(url_regex.is_match("http://example.com/path/to/resource"));
+        assert!(url_regex.is_match("https://sub.domain.co.uk/page.html"));
+        assert!(url_regex.is_match("http://localhost:8080/")); // localhost
+        assert!(url_regex.is_match("http://127.0.0.1:8080/")); // IP 地址
+        assert!(url_regex.is_match("http://192.168.1.1/")); // IP 地址
+
+        // 测试带参数的 URL
+        assert!(url_regex.is_match("https://example.com?query=string"));
+        assert!(url_regex.is_match("http://example.com/path?param=value"));
+
+        // 测试 URL 后面有空格或标点
+        let text = "访问 https://example.com 查看详情";
+        let matches: Vec<_> = url_regex.find_iter(text).map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["https://example.com"]);
+
+        // 测试 URL 在句子结尾
+        let text = "我的网站是https://example.com/q=a,b,c+d's+f，请查收";
+        let matches: Vec<_> = url_regex.find_iter(text).map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["https://example.com/q=a,b,c+d's+f"]);
+
+        // 测试无效 URL
+        assert!(!url_regex.is_match("ftp://example.com")); // 不支持的协议
+        assert!(!url_regex.is_match("https://")); // 缺少域名
+        assert!(!url_regex.is_match("https://example")); // 无效顶级域名
+        assert!(!url_regex.is_match("https://中文.com")); // 包含非ASCII字符
+
+        // 测试包含非 ASCII 字符的路径
+        let text = "https://example.com/路径";
+        let matches: Vec<_> = url_regex.find_iter(text).map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["https://example.com/"]); // 应该匹配到 https://example.com/
+
+        // 测试 URL 后面紧跟非空白字符
+        let text = "访问https://example.com查看详情";
+        let matches: Vec<_> = url_regex.find_iter(text).map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["https://example.com"]);
+
+        let text = "帮我看下五粮液的最新消息： https://www.google.com/search?num=10&newwindow=1&sca_esv=d71ecd6c338007cf&q=%E4%BA%94%E7%B2%AE%E6%B6%B2&tbm=nws&source=lnms&fbs=ABzOT_AGBMogrnfXHu6GxeqSvos9XSASLdCNmBvs6Xj8xORx7DdQ5Qf-hUGrUlZE47p3nt_wRsvqT5kI5zzGpsTUFL1NtHWXBuWBXA_8FX0YOa2iQL8pUZj731v_jueJcMs4Skhde7wdO_KaQJ7zTQYQ-3mpAkgqEy6NfQtvSUgwlMp4znN99vkXSsWAcywgev8Dk-ZbucaF&sa=X&ved=2ahUKEwim2puh-N6LAxUPrlYBHUxgI04Q0pQJegQIHxAB&biw=1084&bih=1057&dpr=2.2";
+        let matches: Vec<_> = url_regex.find_iter(text).map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["https://www.google.com/search?num=10&newwindow=1&sca_esv=d71ecd6c338007cf&q=%E4%BA%94%E7%B2%AE%E6%B6%B2&tbm=nws&source=lnms&fbs=ABzOT_AGBMogrnfXHu6GxeqSvos9XSASLdCNmBvs6Xj8xORx7DdQ5Qf-hUGrUlZE47p3nt_wRsvqT5kI5zzGpsTUFL1NtHWXBuWBXA_8FX0YOa2iQL8pUZj731v_jueJcMs4Skhde7wdO_KaQJ7zTQYQ-3mpAkgqEy6NfQtvSUgwlMp4znN99vkXSsWAcywgev8Dk-ZbucaF&sa=X&ved=2ahUKEwim2puh-N6LAxUPrlYBHUxgI04Q0pQJegQIHxAB&biw=1084&bih=1057&dpr=2.2"]);
     }
 }
