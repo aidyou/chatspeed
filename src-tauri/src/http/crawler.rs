@@ -1,9 +1,11 @@
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::TryFrom;
+use std::fmt::Display;
 use url::form_urlencoded::byte_serialize;
 
-use super::{
+use crate::http::{
     client::HttpClient,
     error::{HttpError, HttpResult},
     types::HttpConfig,
@@ -27,6 +29,55 @@ pub struct SearchResult {
     pub summary: Option<String>,
     pub sitename: Option<String>,
     pub publish_date: Option<String>,
+}
+
+pub enum SearchProvider {
+    Baidu,
+    BaiduNews,
+    Google,
+    GoogleNews,
+    Bing,
+}
+
+impl Display for SearchProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Baidu => write!(f, "baidu"),
+            Self::BaiduNews => write!(f, "baidu_news"),
+            Self::Google => write!(f, "google"),
+            Self::GoogleNews => write!(f, "google_news"),
+            Self::Bing => write!(f, "bing"),
+        }
+    }
+}
+
+impl From<SearchProvider> for String {
+    fn from(provider: SearchProvider) -> Self {
+        provider.to_string()
+    }
+}
+
+impl TryFrom<&str> for SearchProvider {
+    type Error = String;
+
+    fn try_from(provider: &str) -> Result<Self, Self::Error> {
+        match provider {
+            "baidu" => Ok(Self::Baidu),
+            "baidu_news" => Ok(Self::BaiduNews),
+            "google" => Ok(Self::Google),
+            "google_news" => Ok(Self::GoogleNews),
+            "bing" => Ok(Self::Bing),
+            _ => Err(format!("Invalid search provider: {}", provider)),
+        }
+    }
+}
+
+impl TryFrom<String> for SearchProvider {
+    type Error = String;
+
+    fn try_from(provider: String) -> Result<Self, Self::Error> {
+        Self::try_from(provider.as_str())
+    }
 }
 
 /// Extension trait for `Value` that provides helper methods for getting string values
@@ -58,9 +109,9 @@ impl Crawler {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails or if the response is invalid.
-    pub async fn crawl_data(&self, url_to_crawl: &str) -> HttpResult<CrawlerData> {
+    pub async fn fetch(&self, url_to_crawl: &str) -> HttpResult<CrawlerData> {
         let full_url = format!(
-            "{}/data?url={}",
+            "{}/chp/fetch?url={}",
             self.crawler_url,
             byte_serialize(url_to_crawl.as_bytes()).collect::<String>()
         );
@@ -105,9 +156,10 @@ impl Crawler {
     /// Returns an error if the HTTP request fails or if the response is invalid.
     pub async fn search(
         &self,
+        provider: SearchProvider,
         keywords: &[&str],
-        page: Option<usize>,
-        number: Option<usize>,
+        page: Option<i64>,
+        number: Option<i64>,
     ) -> HttpResult<Vec<SearchResult>> {
         let encoded_keywords: String = keywords
             .iter()
@@ -118,8 +170,8 @@ impl Crawler {
         let page = page.unwrap_or(1);
         let number = number.unwrap_or(10);
         let full_url = format!(
-            "{}/search?kw={}&page={}&number={}",
-            self.crawler_url, encoded_keywords, page, number
+            "{}/chp/search?provider={}&kw={}&page={}&number={}",
+            self.crawler_url, provider, encoded_keywords, page, number
         );
 
         let client = HttpClient::new()?;

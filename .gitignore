@@ -50,5 +50,4 @@ test/
 /docs/
 /brand.md
 
-src-tauri/src/workflow
 src-tauri/src/plugins

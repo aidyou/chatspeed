@@ -94,6 +94,10 @@ const switchSetting = id => {
   color: var(--cs-text-color-primary);
   border-radius: var(--cs-border-radius-md);
 
+  .header .titlebar-content-wrapper .center {
+    flex: 1;
+  }
+
   .el-header {
     &.header-container {
       .menu {
@@ -129,6 +133,10 @@ const switchSetting = id => {
             color: var(--cs-text-color-secondary);
             transition: var(--el-transition-color);
           }
+        }
+
+        .el-sub-menu__hide-arrow {
+          z-index: var(--cs-upper-layer-zindex) !important;
         }
       }
 

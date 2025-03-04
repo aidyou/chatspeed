@@ -4,5 +4,3 @@
 //! The engine manages plugin registration, workflow state, and node execution.
 
 mod core;
-
-pub use core::WorkflowEngine;

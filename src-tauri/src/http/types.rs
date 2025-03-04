@@ -3,6 +3,8 @@
 //! Defines the core types used by the HTTP client, including request
 //! configurations, responses, and utility functions for building HTTP requests.
 
+#![allow(dead_code)]
+
 use rust_i18n::t;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;

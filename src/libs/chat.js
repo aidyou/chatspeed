@@ -4,12 +4,12 @@ import i18n from '@/i18n/index.js'
 import he from 'he';
 
 // Regular expressions
-const CODE_BLOCK_REGEX = /^```([^\n]*)\n([\s\S]*?)```/;
+const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g;
 const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g;
 const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g;
 const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g;
 const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g;
-const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/;
+const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/g;
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g;
 const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
 const THINK_CONTENT_REGEX = /<think>[\s\S]*?<\/think>/g;
@@ -281,7 +281,7 @@ export const parseMarkdown = (content, reference) => {
     reference.forEach(item => {
       refs += `<li><a href="${item.url}">${item.title}</a></li>`
 
-      content = content.replace(new RegExp(`\\[\\^${item.id}\\]`, 'g'), `<a href="${item.url}" class="reference-link">${item.id}</a>`)
+      content = content.replace(new RegExp(`\\[\\^${item.id}\\]`, 'g'), `<a href="${item.url}" class="reference-link" title="${item.id}. ${item.title}">${item.id}</a>`)
       // content = content.replace(new RegExp(`\\[${item.id}\\]\\(@ref\\)`, 'g'), `<a href="${item.url}" class="reference-link">${item.id}</a>`)
     })
     refs += '</ul></div>'
@@ -339,14 +339,6 @@ export const parseMarkdown = (content, reference) => {
     return id
   })
 
-  // Restore all protected content in a single pass
-  content = content.replace(PLACEHOLDER_RESTORE_REGEX, match => blocks.get(match) || thinkBlocks.get(match));
-
-  // Replace strings wrapped with ``` to ```\n$1\n``` and trim leading and trailing spaces from $1
-  content = content.replace(BLOCK_CODE_REGEX, (_match, p1, p2) => {
-    return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
-  })
-
   // Process math formulas before markdown parsing
   if (content.includes('$')) {
     // Process block math formulas
@@ -357,7 +349,7 @@ export const parseMarkdown = (content, reference) => {
       }
       return `<div class="katex katex-block" data-formula="${encodeURIComponent(formula)}"></div>`
     })
-
+    console.log(content)
     // Process inline math formulas
     content = content.replace(MATH_INLINE_REGEX, (_match, formula) => {
       // Handle Chinese characters
@@ -368,16 +360,37 @@ export const parseMarkdown = (content, reference) => {
     })
   }
 
+  // Restore all protected content in a single pass
+  content = content.replace(PLACEHOLDER_RESTORE_REGEX, match => blocks.get(match) || thinkBlocks.get(match));
+
+  // Replace strings wrapped with ``` to ```\n$1\n``` and trim leading and trailing spaces from $1
+  content = content.replace(BLOCK_CODE_REGEX, (_match, p1, p2) => {
+    return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
+  })
+
   const renderer = new marked.Renderer()
 
   renderer.code = ev => {
     let lang = ev.lang?.toLowerCase() || ''
+    if (lang == 'sqlite') {
+      lang = 'sql'
+    }
+    switch (lang) {
+      case 'sqlite':
+      case 'mysql':
+        lang = 'sql';
+        break;
+      case 'log':
+        lang = 'text';
+        break;
+      case 'vue':
+        lang = 'html';
+        break;
+    }
     if (lang === 'mermaid') {
       return `<div class="svg-container mermaid" data-content="${encodeURIComponent(ev.text)}"><div class="generating-svg"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingDiagram')}</div></div>`
     } else if (lang === 'mindmap' || lang === 'markmap') {
       return `<div class="svg-container markmap" data-content="${encodeURIComponent(ev.text)}"><div class="generating-svg"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingMindmap')}</div></div>`
-    } else if (lang === 'vue') {
-      return `<pre><code class="language-html">${htmlspecialchars(ev.text)}</code></pre>`
     }
     return `<pre><code class="language-${lang}">${htmlspecialchars(ev.text)}</code></pre>`
   }

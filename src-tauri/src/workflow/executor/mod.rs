@@ -3,6 +3,7 @@
 //! This module provides the core functionality for executing workflows,
 //! including parallel execution, state management, and error handling.
 
+mod channel;
 mod core;
 
-pub use core::{NodeExecutor, WorkflowExecutor};
+pub use core::WorkflowExecutor;

@@ -4,9 +4,6 @@ use thiserror::Error;
 /// HTTP module error types
 #[derive(Debug, Error)]
 pub enum HttpError {
-    /// Runtime error
-    #[error("{0}")]
-    Runtime(String),
     /// Request error
     #[error("{0}")]
     Request(String),

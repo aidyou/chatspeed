@@ -796,10 +796,13 @@ const DIRECTIVE_CONFIG = {
       mounted: el => {
         bindThinkEvents(el)
       },
-      updated: el => {
-        removeThinkEvents(el)
-        bindThinkEvents(el)
-      },
+      // !!! Important:
+      // Remove update event handling to avoid interface freezing due to lengthy thinking
+      //
+      // updated: el => {
+      //   removeThinkEvents(el)
+      //   bindThinkEvents(el)
+      // },
       unmounted: el => {
         removeThinkEvents(el)
       }

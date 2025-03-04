@@ -45,6 +45,7 @@
 //! - Finally, add the new AI provider to the `init_chats!` macro.
 
 use crate::ai::chat::{anthropic::AnthropicChat, gemini::GeminiChat, openai::OpenAIChat};
+use crate::ai::traits::chat::ChatResponse;
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::constants::CHATSPEED_CRAWLER;
 use crate::db::MainStore;
@@ -55,7 +56,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::State;
 use tokio::sync::Mutex;
 use whatlang::detect;
 
@@ -141,9 +142,10 @@ impl AiChatEnum {
         api_url: Option<&str>,
         model: &str,
         api_key: Option<&str>,
+        chat_id: String,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         impl_chat_method!(
             self,
@@ -151,6 +153,7 @@ impl AiChatEnum {
             api_url,
             model,
             api_key,
+            chat_id,
             messages,
             extra_params,
             callback
@@ -210,26 +213,23 @@ pub async fn chat_with_ai(
     api_url: Option<&str>,
     model: String,
     api_key: Option<&str>,
+    chat_id: String,
     mut messages: Vec<Value>,
     network_enabled: Option<bool>,
-    deep_search_enabled: Option<bool>,
+    _deep_search_enabled: Option<bool>,
     mut metadata: Option<Value>,
 ) -> Result<String, String> {
     let tx = state.channels.get_or_create_channel(window.clone()).await?;
 
-    let callback = move |chunk: String,
-                         is_error: bool,
-                         is_done: bool,
-                         is_reasoning: bool,
-                         msg_type: Option<String>,
-                         cb_metadata: Option<Value>| {
-        let _ = tx.try_send((
-            chunk,
-            is_error,
-            is_done,
-            is_reasoning,
-            msg_type,
-            cb_metadata,
+    let callback = move |chunk: Arc<ChatResponse>| {
+        let _ = tx.try_send(ChatResponse::new_with_arc(
+            chunk.chat_id.clone(),
+            chunk.chunk.clone(),
+            chunk.is_error,
+            chunk.is_done,
+            chunk.is_reasoning,
+            chunk.r#type.clone(),
+            chunk.metadata.clone(),
         ));
     };
 
@@ -318,6 +318,7 @@ pub async fn chat_with_ai(
                         api_url_clone.as_deref(),
                         &model,
                         api_key_clone.as_deref(),
+                        chat_id,
                         messages,
                         metadata,
                         callback,
@@ -360,7 +361,7 @@ pub async fn crawler_from_content(crawler_url: &str, content: &str) -> Result<St
     let mut crawled_contents = Vec::new();
     let crawler = Crawler::new(crawler_url.to_string());
     for url in urls {
-        match crawler.crawl_data(&url).await {
+        match crawler.fetch(&url).await {
             Ok(data) => {
                 if !data.content.is_empty() {
                     crawled_contents.push(json!({

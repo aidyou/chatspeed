@@ -1,72 +1,134 @@
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
-use crate::plugins::manager::PluginManager;
-use crate::workflow::config::EdgeConfig;
+use crate::workflow::error::WorkflowError;
+use crate::workflow::function_manager::FunctionManager;
+use crate::workflow::tools::fetch::Fetch;
+use crate::workflow::tools::request::Request;
+use crate::workflow::tools::search::Search;
 use crate::workflow::WorkflowExecutor;
-use crate::workflow::{
-    config::{NodeConfig, WorkflowConfig},
-    context::Context,
-    types::{WorkflowResult, WorkflowState},
-};
+use crate::workflow::WorkflowGraph;
+use crate::workflow::{context::Context, parser::WorkflowParser, types::WorkflowResult};
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
-    /// Workflow configuration
-    config: WorkflowConfig,
-    /// Plugin manager for handling plugin operations
-    plugin_manager: Arc<PluginManager>,
+    /// Function manager for handling function operations
+    function_manager: Arc<FunctionManager>,
     /// Execution context
-    pub(crate) context: Arc<RwLock<Context>>,
-    /// Current workflow state
-    state: WorkflowState,
+    pub(crate) context: Arc<Context>,
 }
 
 impl WorkflowEngine {
     /// Create a new workflow engine
-    pub fn new(config: WorkflowConfig, plugin_manager: Arc<PluginManager>) -> Self {
-        Self {
-            config,
-            plugin_manager,
-            context: Arc::new(RwLock::new(Context::new())),
-            state: WorkflowState::Init,
-        }
-    }
+    pub async fn new(chatspeedbot_server: Option<String>) -> Result<Self, WorkflowError> {
+        let function_manager = FunctionManager::new();
 
-    /// Load workflow configuration from database
-    async fn load_workflow(
-        &self,
-        workflow_id: &str,
-    ) -> WorkflowResult<(Vec<NodeConfig>, Vec<EdgeConfig>)> {
-        // Mock implementation: Load from database
-        // Convert JSON to NodeConfig and EdgeConfig
-        Ok((vec![], vec![]))
+        // register Request tool
+        function_manager
+            .register_function(Arc::new(Request::new()))
+            .await?;
+
+        if let Some(server) = chatspeedbot_server {
+            // register Search tool
+            function_manager
+                .register_function(Arc::new(Search::new(server.clone())))
+                .await?;
+
+            // register Fetch tool
+            function_manager
+                .register_function(Arc::new(Fetch::new(server.clone())))
+                .await?;
+        }
+
+        Ok(Self {
+            function_manager: Arc::new(function_manager),
+            context: Arc::new(Context::new()),
+        })
     }
 
     /// Execute the workflow
-    pub async fn execute_workflow(&self, workflow_id: &str) -> WorkflowResult<()> {
-        // Load workflow configuration
-        let (nodes, edges) = self.load_workflow(workflow_id).await?;
+    pub async fn execute(&self, workflow_config: &str) -> WorkflowResult<()> {
+        // Get workflow graph
+        let (nodes, edges) = WorkflowParser::parse(workflow_config)?;
+        let graph = WorkflowGraph::new(nodes, edges)?;
 
         // Create executor
-        let executor = WorkflowExecutor::new(
-            self.plugin_manager.clone(),
-            4,    // max_parallel
-            1000, // default_timeout
-        );
+        let mut executor = WorkflowExecutor::create(
+            self.context.clone(),
+            self.function_manager.clone(),
+            4, // max_parallel
+            Arc::new(graph),
+        )?;
 
         // Execute workflow
-        let context = self.context.read().await;
-        executor.execute_workflow(&nodes, &edges, &*context).await
-    }
+        // 使用公共方法设置上下文，而不是直接访问私有字段
+        executor.execute().await?;
 
-    /// Get the current workflow state
-    pub fn state(&self) -> WorkflowState {
-        self.state.clone()
+        Ok(())
     }
+}
 
-    /// Update the workflow state
-    pub fn update_state(&mut self, new_state: WorkflowState) {
-        self.state = new_state;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_execute() {
+        // Create the log file
+        let console_config = simplelog::ConfigBuilder::new()
+            .set_target_level(log::LevelFilter::Off) // 关闭目标/模块路径显示
+            .set_location_level(log::LevelFilter::Off) // 关闭文件位置显示
+            .set_time_level(log::LevelFilter::Info)
+            .build();
+        simplelog::CombinedLogger::init(vec![simplelog::TermLogger::new(
+            simplelog::LevelFilter::Debug,
+            console_config,
+            simplelog::TerminalMode::Mixed,
+            simplelog::ColorChoice::Auto,
+        )])
+        .expect(&rust_i18n::t!("main.failed_to_initialize_logger"));
+
+        let engine = WorkflowEngine::new(Some("http://localhost:12321".to_string()))
+            .await
+            .unwrap();
+
+        // Test workflow execution
+        let result = engine
+            .execute(
+                r#"[
+                {
+                    "group": "parallel_group_1",
+                    "parallel": true,
+                    "desc": "基础数据查询",
+                    "nodes": [
+                        {
+                            "node": "query_finance",
+                            "desc": "查询五粮液的信息",
+                            "tool": {
+                            "function": "Search",
+                            "param": {
+                                    "provider": "baidu_news",
+                                    "kw": ["五粮液财报", "五粮液负面"],
+                                    "number": 10
+                                }
+                            }
+                        },
+                        {
+                            "node": "search_news",
+                            "desc": "聚合近期新闻与舆情",
+                            "tool": {
+                            "function": "Search",
+                            "param": {
+                                    "provider": "google_news",
+                                    "kw": "五粮液板块"
+                                }
+                            }
+                        }
+                    ]
+                }
+            ]"#,
+            )
+            .await
+            .unwrap();
+        println!("{:#?}", result);
     }
 }

@@ -1,30 +1,32 @@
-//! HTTP Client Implementation
+// HTTP client module for making API requests
 //!
-//! This module provides a flexible HTTP client that supports both synchronous and asynchronous requests,
-//! file uploads/downloads, and custom headers.
+//! This module provides a simple HTTP client for making API requests.
+//! It supports both synchronous and asynchronous requests, as well as file uploads and downloads.
 //!
 //! # Examples
 //!
-//! ```rust
-//! use crate::http::{HttpClient, HttpConfig};
+//! ```
+//! use chatspeed::http::{HttpClient, HttpConfig};
 //!
 //! // Basic GET request
 //! let client = HttpClient::new()?;
-//! let config = HttpConfig::get("https://api.example.com/users")
+//! let config = HttpConfig::get("https://httpbin.org/get")
 //!     .header("Authorization", "Bearer token");
 //! let response = client.send_request(config)?;
 //!
-//! // Asynchronous POST request
-//! let config = HttpConfig::post("https://api.example.com/users", r#"{"name": "John"}"#)
+//! // POST request with JSON body
+//! let config = HttpConfig::post("https://httpbin.org/post", "test body")
 //!     .header("Content-Type", "application/json")
 //!     .async_request();
 //! let response = client.send_request(config)?;
 //!
 //! // File download
-//! let config = HttpConfig::get("https://example.com/file.zip")
-//!     .download_to("local/file.zip");
+//! let config = HttpConfig::get("https://httpbin.org/image/jpeg")
+//!                 .download_to("test_download.jpg");
 //! let response = client.send_request(config)?;
 //! ```
+
+#![allow(dead_code)]
 
 use futures::TryStreamExt;
 use reqwest::redirect::Policy;
@@ -47,6 +49,20 @@ impl HttpClient {
     pub fn new() -> HttpResult<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .build()?;
+
+        Ok(Self { client })
+    }
+
+    /// Creates a new HTTP client instance with custom configuration
+    pub fn new_with_config(config: &HttpConfig) -> HttpResult<Self> {
+        let client = reqwest::Client::builder()
+            .redirect(
+                config
+                    .follow_redirects
+                    .map_or(Policy::none(), |max| Policy::limited(max as usize)),
+            )
+            .timeout(Duration::from_secs(config.timeout.unwrap_or(30) as u64))
             .build()?;
 
         Ok(Self { client })

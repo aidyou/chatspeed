@@ -1,7 +1,42 @@
 use super::stoppable::Stoppable;
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Value;
-use std::error::Error;
+use std::{error::Error, sync::Arc};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatResponse {
+    pub chat_id: String,
+    pub chunk: String,
+    pub is_error: bool,
+    pub is_done: bool,
+    pub is_reasoning: bool,
+    pub r#type: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+impl ChatResponse {
+    pub fn new_with_arc(
+        chat_id: String,
+        chunk: String,
+        is_error: bool,
+        is_done: bool,
+        is_reasoning: bool,
+        r#type: Option<String>,
+        metadata: Option<Value>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            chat_id,
+            chunk,
+            is_error,
+            is_done,
+            is_reasoning,
+            r#type,
+            metadata,
+        })
+    }
+}
 
 #[async_trait]
 pub trait AiChatTrait: Send + Sync + Stoppable {
@@ -43,8 +78,9 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         api_url: Option<&str>,
         model: &str,
         api_key: Option<&str>,
+        chat_id: String,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>>;
 }

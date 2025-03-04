@@ -466,7 +466,7 @@ import { csStorageKey } from '@/config/config'
 import { chatPreProcess, parseMarkdown } from '@/libs/chat'
 import { getModelLogo } from '@/libs/logo'
 import { getLanguageByCode } from '@/i18n/langUtils'
-import { isEmpty, showMessage, csGetStorage, csSetStorage } from '@/libs/util'
+import { isEmpty, showMessage, csGetStorage, csSetStorage, Uuid } from '@/libs/util'
 import SkillList from '@/components/chat/skillList.vue'
 import titlebar from '@/components/window/titlebar.vue'
 
@@ -514,7 +514,7 @@ const userHasScrolled = ref(false)
 const isScrolledToBottom = ref(true)
 const hoveredMessageIndex = ref(null)
 const hoveredConversionIndex = ref(null)
-const pageSize = 30
+const pageSize = 10
 
 const inputRef = ref(null)
 const inputMessage = ref('')
@@ -524,6 +524,8 @@ const composing = ref(false)
 const compositionJustEnded = ref(false)
 const isChatting = ref(false)
 const currentAssistantMessage = ref('')
+const lastChatId = ref('')
+const titleChatId = ref('')
 const chatState = ref({
   reasoning: '',
   message: '',
@@ -579,8 +581,7 @@ const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
     ? ((cicleIndex.value = (cicleIndex.value + 1) % 5),
       parseMarkdown(
-        currentAssistantMessage.value + ' ' + cicle[cicleIndex.value],
-        chatState.value?.reference || []
+        currentAssistantMessage.value + cicle[cicleIndex.value] + chatState.value?.reference || []
       ))
     : '<div class="cs cs-loading cs-spin"></div>'
 )
@@ -924,6 +925,7 @@ const sendMessage = async (messageId = null) => {
       inputMessage.value = ''
       currentAssistantMessage.value = ''
       isChatting.value = true
+      lastChatId.value = Uuid()
 
       nextTick(scrollToBottomIfNeeded)
 
@@ -933,6 +935,7 @@ const sendMessage = async (messageId = null) => {
           apiUrl: currentModel.value.baseUrl,
           apiKey: currentModel.value.apiKey,
           model: currentModel.value.defaultModel,
+          chatId: lastChatId.value,
           messages: messages,
           networkEnabled: networkEnabled.value,
           deepsearchEnabled: deepsearchEnabled.value,
@@ -1012,11 +1015,13 @@ const genTitleByAi = () => {
       currentModel.value
     model = settingStore.settings.conversationTitleGenModel?.model || model
   }
+  titleChatId.value = Uuid()
   invoke('chat_with_ai', {
     apiProtocol: genModel.apiProtocol,
     apiUrl: genModel.baseUrl,
     apiKey: genModel.apiKey,
     model: model,
+    chatId: titleChatId.value,
     messages: messages,
     metadata: {
       stream: true,
@@ -1099,6 +1104,8 @@ const handleChatMessage = async payload => {
     currentAssistantMessage.value = payload?.chunk || ''
     return
   }
+
+  // console.log('payload', payload)
 
   let thinkingClass = ''
   if (payload?.type === 'reference') {
@@ -1234,14 +1241,18 @@ onMounted(async () => {
     // console.log('ai_chunk', event)
     const payload = event.payload
     if (payload?.metadata?.action === 'gen_title') {
-      handleTitleGenerated(payload)
+      if (payload?.chatId === titleChatId.value) {
+        handleTitleGenerated(payload)
+      }
     } else {
-      handleChatMessage(payload)
+      if (payload?.chatId === lastChatId.value) {
+        handleChatMessage(payload)
+      }
     }
   })
 
   await listen('sync_state', event => {
-    if (event.payload.label === windowLabel.label) {
+    if (event.payload.label === windowLabel.value) {
       return
     }
     if (
@@ -1882,6 +1893,7 @@ const onTakeNote = message => {
       align-items: flex-start;
       margin-bottom: var(--cs-space);
       position: relative;
+      transform: translateZ(0);
 
       .avatar {
         display: flex;

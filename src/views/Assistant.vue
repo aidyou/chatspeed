@@ -235,10 +235,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import SkillItem from '@/components/chat/skillItem.vue'
 
 import { chatPreProcess, parseMarkdown } from '@/libs/chat'
-import { csSetStorage, csGetStorage, isEmpty, showMessage } from '@/libs/util'
+import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import { csStorageKey } from '@/config/config'
-import { readClipboard } from '@/libs/clipboard.js'
 
 import { useChatStore } from '@/stores/chat'
 import { useModelStore } from '@/stores/model'
@@ -271,6 +270,7 @@ const userMessage = ref('')
 const currentAssistantMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
+const lastChatId = ref()
 const chatState = ref({
   reasoning: '',
   message: '',
@@ -518,6 +518,7 @@ const sendMessage = async () => {
     message: '',
     reference: []
   }
+  lastChatId.value = Uuid()
 
   // reset scroll behavior
   resetScrollBehavior()
@@ -530,6 +531,7 @@ const sendMessage = async () => {
       apiUrl: currentModel.value.baseUrl,
       apiKey: currentModel.value.apiKey,
       model: currentModel.value.defaultModel,
+      chatId: lastChatId.value,
       messages: messages,
       metadata: {
         maxTokens: currentModel.value.maxTokens,

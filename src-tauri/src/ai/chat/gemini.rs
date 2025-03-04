@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat,
 };
+use crate::ai::traits::chat::ChatResponse;
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::impl_stoppable;
 use crate::libs::ai_util;
@@ -85,8 +86,9 @@ impl GeminiChat {
     /// The generated text or an error
     async fn process_response(
         &self,
+        chat_id: String,
         response: String,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let StreamChunk {
@@ -99,7 +101,15 @@ impl GeminiChat {
             .process_stream_chunk(response.as_bytes().to_vec().into(), &StreamFormat::Gemini)
             .await
             .map_err(|e| {
-                callback(e.clone(), true, true, false, None, metadata_option.clone());
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    e.clone(),
+                    true,
+                    true,
+                    false,
+                    None,
+                    metadata_option.clone(),
+                ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
 
@@ -114,18 +124,20 @@ impl GeminiChat {
 
         let content = content.ok_or_else(|| {
             let error = t!("chat.failed_to_extract_text").to_string();
-            callback(
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
                 error.clone(),
                 true,
                 true,
                 false,
                 msg_type.clone(),
                 metadata_option.clone(),
-            );
+            ));
             error
         })?;
 
-        callback(
+        callback(ChatResponse::new_with_arc(
+            chat_id.clone(),
             format!("{}{}", reasoning, content.clone()),
             false,
             true,
@@ -140,7 +152,7 @@ impl GeminiChat {
                     "completion": usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0)
                 }),
             )),
-        );
+        ));
 
         Ok(content)
     }
@@ -164,9 +176,10 @@ impl AiChatTrait for GeminiChat {
         api_url: Option<&str>,
         model: &str,
         api_key: Option<&str>,
+        chat_id: String,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
 
@@ -191,26 +204,35 @@ impl AiChatTrait for GeminiChat {
             )
             .await
             .map_err(|e| {
-                callback(e.clone(), true, true, false, None, metadata_option.clone());
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    e.clone(),
+                    true,
+                    true,
+                    false,
+                    None,
+                    metadata_option.clone(),
+                ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
 
         if response.is_error {
-            callback(
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
                 response.content.clone(),
                 true,
                 true,
                 false,
                 None,
                 metadata_option,
-            );
+            ));
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 response.content,
             )));
         }
 
-        self.process_response(response.content, callback, metadata_option)
+        self.process_response(chat_id.clone(), response.content, callback, metadata_option)
             .await
     }
 }

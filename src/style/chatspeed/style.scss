@@ -271,6 +271,7 @@
                 white-space: pre-wrap;
                 overflow-wrap: break-word;
                 margin: 0;
+                font-size: var(--cs-font-size);
             }
 
             code {
@@ -278,6 +279,7 @@
                     // background-color: var(--cs-code-block-bg-color);
                     border-radius: 0 0 var(--cs-border-radius-md) var(--cs-border-radius-md);
                     padding: var(--cs-space-sm);
+                    will-change: contents;
                 }
             }
         }
@@ -405,6 +407,9 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
 
         .svg-container {
@@ -665,6 +670,11 @@
 }
 
 .cs-spin {
+    animation: spin 1s infinite;
+}
+
+.ic-loading {
+    display: inline-block;
     animation: spin 1s infinite;
 }
 

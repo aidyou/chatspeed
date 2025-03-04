@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat, TokenUsage,
 };
+use crate::ai::traits::chat::ChatResponse;
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::impl_stoppable;
 use crate::libs::ai_util;
@@ -36,8 +37,9 @@ impl OpenAIChat {
     /// * `metadata_option` - Optional metadata to include in callbacks
     async fn handle_stream_response(
         &self,
+        chat_id: String,
         mut response: Response,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let mut full_response = String::new();
@@ -45,14 +47,15 @@ impl OpenAIChat {
 
         while let Some(chunk) = response.chunk().await.map_err(|e| {
             let error = t!("chat.stream_read_error", error = e.to_string());
-            callback(
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
                 error.clone().to_string(),
                 true,
                 true,
                 false,
                 None,
                 metadata_option.clone(),
-            );
+            ));
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
         })? {
             if self.should_stop().await {
@@ -69,7 +72,15 @@ impl OpenAIChat {
                 .process_stream_chunk(chunk, &StreamFormat::OpenAI)
                 .await
                 .map_err(|e| {
-                    callback(e.clone(), true, true, false, None, metadata_option.clone());
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        e.clone(),
+                        true,
+                        true,
+                        false,
+                        None,
+                        metadata_option.clone(),
+                    ));
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
 
@@ -80,33 +91,36 @@ impl OpenAIChat {
             if let Some(content) = reasoning_content {
                 if !content.is_empty() {
                     full_response.push_str(&content);
-                    callback(
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
                         content,
                         false,
                         false,
                         true,
                         msg_type.clone(),
                         metadata_option.clone(),
-                    );
+                    ));
                 }
             }
             if let Some(content) = content {
                 if !content.is_empty() {
                     full_response.push_str(&content);
-                    callback(
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
                         content,
                         false,
                         false,
                         false,
                         msg_type.clone(),
                         metadata_option.clone(),
-                    );
+                    ));
                 }
             }
         }
 
         // Send final response with token usage
-        callback(
+        callback(ChatResponse::new_with_arc(
+            chat_id.clone(),
             String::new(),
             false,
             true,
@@ -121,7 +135,7 @@ impl OpenAIChat {
                     "completion": token_usage.completion_tokens
                 }),
             )),
-        );
+        ));
         Ok(full_response)
     }
 }
@@ -144,9 +158,10 @@ impl AiChatTrait for OpenAIChat {
         api_url: Option<&str>,
         model: &str,
         api_key: Option<&str>,
+        chat_id: String,
         messages: Vec<Value>,
         extra_params: Option<Value>,
-        callback: impl Fn(String, bool, bool, bool, Option<String>, Option<Value>) + Send + 'static,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
 
@@ -172,19 +187,28 @@ impl AiChatTrait for OpenAIChat {
             )
             .await
             .map_err(|e| {
-                callback(e.clone(), true, true, false, None, metadata_option.clone());
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    e.clone(),
+                    true,
+                    true,
+                    false,
+                    None,
+                    metadata_option.clone(),
+                ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
             })?;
 
         if response.is_error {
-            callback(
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
                 response.content.clone(),
                 true,
                 true,
                 false,
                 None,
                 metadata_option,
-            );
+            ));
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 response.content,
@@ -192,17 +216,18 @@ impl AiChatTrait for OpenAIChat {
         }
 
         if let Some(raw_response) = response.raw_response {
-            self.handle_stream_response(raw_response, callback, metadata_option)
+            self.handle_stream_response(chat_id.clone(), raw_response, callback, metadata_option)
                 .await
         } else {
-            callback(
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
                 response.content.clone(),
                 false,
                 true,
                 false,
                 None,
                 metadata_option,
-            );
+            ));
             Ok(response.content)
         }
     }

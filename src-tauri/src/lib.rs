@@ -9,9 +9,7 @@ mod shortcut;
 mod tray;
 mod updater;
 mod window;
-// mod plugins;
-// mod workflow;
-// mod snap;
+mod workflow;
 
 use crate::constants::*;
 use crate::db::MainStore;
@@ -20,7 +18,6 @@ use log::{error, warn};
 use rust_i18n::{i18n, set_locale, t};
 use simplelog::*;
 use tray::create_tray;
-// use snap::text_monitor::TextMonitorManager;
 
 use std::fs::File;
 use std::sync::atomic::AtomicBool;

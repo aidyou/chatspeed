@@ -80,7 +80,9 @@ impl WorkflowState {
     pub fn can_resume(&self) -> bool {
         matches!(
             self,
-            WorkflowState::Paused | WorkflowState::FailedWithRetry { .. } | WorkflowState::ReviewFailed { .. }
+            WorkflowState::Paused
+                | WorkflowState::FailedWithRetry { .. }
+                | WorkflowState::ReviewFailed { .. }
         )
     }
 
@@ -106,15 +108,32 @@ impl fmt::Display for WorkflowState {
             Self::Cancelled => write!(f, "cancelled"),
             Self::Stopped => write!(f, "stopped"),
             Self::Completed => write!(f, "completed"),
-            Self::ReviewFailed { node_id, reason, original_output, timestamp } => {
-                write!(f, "review failed at {}: node {} (reason: {})", timestamp, node_id, reason)?;
+            Self::ReviewFailed {
+                node_id,
+                reason,
+                original_output,
+                timestamp,
+            } => {
+                write!(
+                    f,
+                    "review failed at {}: node {} (reason: {})",
+                    timestamp, node_id, reason
+                )?;
                 if let Some(output) = original_output {
                     write!(f, ", original output: {}", output)?;
                 }
                 Ok(())
             }
-            Self::FailedWithRetry { retry_count, max_retries, error } => {
-                write!(f, "failed_with_retry(attempt {}/{}): {}", retry_count, max_retries, error)
+            Self::FailedWithRetry {
+                retry_count,
+                max_retries,
+                error,
+            } => {
+                write!(
+                    f,
+                    "failed_with_retry(attempt {}/{}): {}",
+                    retry_count, max_retries, error
+                )
             }
             Self::Failed { error, timestamp } => {
                 write!(f, "failed at {}: {}", timestamp, error)

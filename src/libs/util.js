@@ -241,7 +241,6 @@ export function snakeToCamel(str) {
 
 
 /**
- /**
  * Converts a timestamp to a formatted date string.
  * The date format is `YYYY-MM-DD HH:mm:ss`.
  *
@@ -257,4 +256,29 @@ export function formatTime(timestamp) {
   const minute = String(date.getMinutes()).padStart(2, '0')
   const second = String(date.getSeconds()).padStart(2, '0')
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
+
+
+const hexTable = Array.from({ length: 256 }, (_, i) =>
+  i.toString(16).padStart(2, '0')
+);
+/**
+ * Generates a UUID (Universally Unique Identifier).
+ * The UUID is generated using a random number generator.
+ *
+ * @returns {string} The generated UUID.
+ */
+export function Uuid() {
+  const buf = crypto.getRandomValues(new Uint8Array(16));
+  buf[6] = (buf[6] & 0x0f) | 0x40;
+  buf[8] = (buf[8] & 0x3f) | 0x80;
+
+  return hexTable[buf[0]] + hexTable[buf[1]] +
+    hexTable[buf[2]] + hexTable[buf[3]] + '-' +
+    hexTable[buf[4]] + hexTable[buf[5]] + '-' +
+    hexTable[buf[6]] + hexTable[buf[7]] + '-' +
+    hexTable[buf[8]] + hexTable[buf[9]] + '-' +
+    hexTable[buf[10]] + hexTable[buf[11]] +
+    hexTable[buf[12]] + hexTable[buf[13]] +
+    hexTable[buf[14]] + hexTable[buf[15]];
 }
