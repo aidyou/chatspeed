@@ -33,6 +33,8 @@ pub struct Note {
     pub updated_at: i64,
     // All note tags, separated by commas
     pub tags: Vec<String>,
+    // Metadata associated with the note
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Represents a tag with its metadata.
@@ -73,6 +75,7 @@ impl MainStore {
         conversation_id: Option<i64>,
         message_id: Option<i64>,
         tags: Vec<&str>,
+        metadata: Option<serde_json::Value>,
     ) -> Result<i64, StoreError> {
         let content_hash = format!("{:x}", xxh32(content.as_bytes(), 0));
 
@@ -95,14 +98,18 @@ impl MainStore {
             return Err(StoreError::AlreadyExists(t!("note.already_exists").into()));
         }
 
+        let metadata_str = metadata
+            .map(|m| serde_json::to_string(&m))
+            .transpose()
+            .map_err(|e| StoreError::TauriError(e.to_string()))?;
         let now = Utc::now().timestamp();
         let tx = self.conn.transaction()?;
 
         // 插入笔记
         tx.execute(
-            "INSERT INTO notes (tags,title, content, content_hash, conversation_id, message_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6,?7)",
-            params![tags.join(","), title, content, content_hash, conversation_id, message_id, now],
+            "INSERT INTO notes (tags,title, content, content_hash, conversation_id, message_id, created_at, updated_at, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6,?7, ?8)",
+            params![tags.join(","), title, content, content_hash, conversation_id, message_id, now, metadata_str],
         )?;
 
         let note_id = tx.last_insert_rowid();
@@ -197,6 +204,8 @@ impl MainStore {
     pub fn get_note(&self, note_id: i64) -> Result<Note, StoreError> {
         let mut stmt = self.conn.prepare("SELECT * FROM notes WHERE id = ?1")?;
         let note = stmt.query_row(params![note_id], |row| {
+            let metadata_str: Option<String> = row.get("metadata")?;
+            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
             Ok(Note {
                 id: row.get("id")?,
                 tags: row
@@ -213,6 +222,7 @@ impl MainStore {
                 message_id: row.get("message_id")?,
                 created_at: row.get("created_at")?,
                 updated_at: row.get("updated_at")?,
+                metadata,
             })
         })?;
 
@@ -251,6 +261,9 @@ impl MainStore {
 
         // 提取闭包到一个变量
         let map_fn = |row: &rusqlite::Row| -> SqliteResult<Note> {
+            let metadata_str: Option<String> = row.get("metadata")?;
+            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
             Ok(Note {
                 id: row.get("id")?,
                 title: row.get("title")?,
@@ -267,6 +280,7 @@ impl MainStore {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect(),
+                metadata,
             })
         };
 
@@ -306,6 +320,9 @@ impl MainStore {
         let search_pattern = format!("%{}%", kw);
         let notes = stmt
             .query_map(params![search_pattern], |row| {
+                let metadata_str: Option<String> = row.get("metadata")?;
+                let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
                 Ok(Note {
                     id: row.get("id")?,
                     title: row.get("title")?,
@@ -322,6 +339,7 @@ impl MainStore {
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string())
                         .collect(),
+                    metadata,
                 })
             })?
             .collect::<Result<Vec<Note>, _>>()?;

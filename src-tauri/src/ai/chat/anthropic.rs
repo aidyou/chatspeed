@@ -8,10 +8,10 @@ use tokio::sync::Mutex;
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat, TokenUsage,
 };
-use crate::ai::traits::chat::ChatResponse;
+use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
+use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
 use crate::impl_stoppable;
-use crate::libs::ai_util;
 
 /// Represents the Anthropic chat implementation
 #[derive(Clone)]
@@ -71,10 +71,7 @@ impl AnthropicChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 error.clone(),
-                true,
-                true,
-                false,
-                None,
+                MessageType::Error,
                 metadata_option.clone(),
             ));
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
@@ -87,7 +84,7 @@ impl AnthropicChat {
                 reasoning_content,
                 content,
                 usage,
-                msg_type,
+                ..
             } = self
                 .client
                 .process_stream_chunk(chunk, &StreamFormat::Anthropic)
@@ -96,10 +93,7 @@ impl AnthropicChat {
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         e.to_string(),
-                        true,
-                        true,
-                        false,
-                        None,
+                        MessageType::Error,
                         metadata_option.clone(),
                     ));
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -115,10 +109,7 @@ impl AnthropicChat {
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         content,
-                        false,
-                        false,
-                        false,
-                        msg_type.clone(),
+                        MessageType::Reasoning,
                         metadata_option.clone(),
                     ));
                 }
@@ -129,10 +120,7 @@ impl AnthropicChat {
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         content,
-                        false,
-                        false,
-                        false,
-                        msg_type.clone(),
+                        MessageType::Text,
                         metadata_option.clone(),
                     ));
                 }
@@ -143,11 +131,8 @@ impl AnthropicChat {
         callback(ChatResponse::new_with_arc(
             chat_id.clone(),
             String::new(),
-            false,
-            true,
-            false,
-            None,
-            Some(ai_util::update_or_create_metadata(
+            MessageType::Finished,
+            Some(update_or_create_metadata(
                 metadata_option,
                 "tokens",
                 json!({
@@ -184,7 +169,7 @@ impl AiChatTrait for AnthropicChat {
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
+        let (params, metadata_option) = init_extra_params(extra_params.clone());
 
         let headers = json!({
             "x-api-key": api_key.unwrap_or(""),
@@ -202,7 +187,7 @@ impl AiChatTrait for AnthropicChat {
                             .to_string(),
                     ),
                     None,
-                    ai_util::get_proxy_type(extra_params),
+                    get_proxy_type(extra_params),
                     Some(headers),
                 ),
                 "messages",
@@ -214,10 +199,7 @@ impl AiChatTrait for AnthropicChat {
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
                     e.clone(),
-                    true,
-                    true,
-                    false,
-                    None,
+                    MessageType::Error,
                     metadata_option.clone(),
                 ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -227,10 +209,7 @@ impl AiChatTrait for AnthropicChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 response.content.clone(),
-                true,
-                true,
-                false,
-                None,
+                MessageType::Error,
                 metadata_option.clone(),
             ));
             return Err(Box::new(std::io::Error::new(
@@ -246,10 +225,7 @@ impl AiChatTrait for AnthropicChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 response.content.clone(),
-                false,
-                true,
-                false,
-                None,
+                MessageType::Finished,
                 metadata_option,
             ));
             Ok(response.content)

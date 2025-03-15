@@ -1,4 +1,10 @@
 chat:
+  context:
+    content: 내용
+    language: 언어
+    location: 위치
+    role: 역할
+    time: 시간
   failed_to_create_file: "파일을 생성할 수 없습니다: %{error}"
   failed_to_detect_language: "언어 감지 실패"
   failed_to_extract_text: "생성된 텍스트 내용을 추출할 수 없습니다"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "잘못된 API 제공자: %{provider}"
   parse_response_failed: "응답 파싱 실패: %{error}"
   request_failed: "요청 실패, 상태 코드: %{status}, 응답: %{response}"
+  search_analysing: 분석 중
+  search_fetching: 가져오는 중
+  search_results: 검색 결과
+  searching: 검색 중
   stream_read_error: "스트림 데이터 읽기 실패: %{error}"
+  user_message_with_references: 참조가 포함된 사용자 메시지
 
 db:
   already_exists: "데이터가 이미 존재합니다"
@@ -47,6 +58,34 @@ db:
   string_error: "문자열 오류: %{error}"
   tauri_error: "Tauri 오류: %{error}"
 
+http:
+  client_build_failed: 클라이언트 빌드 실패
+  connection_failed: 연결 실패
+  download_failed: 다운로드 실패
+  failed_to_clone_request: 요청 복제 실패
+  failed_to_create_file: 파일 생성 실패
+  failed_to_open_file: 파일 열기 실패
+  failed_to_parse_response: 응답 파싱 실패
+  failed_to_read_file: 파일 읽기 실패
+  failed_to_read_response: 응답 읽기 실패
+  failed_to_write_file: 파일 쓰기 실패
+  headers_convert_failed: 헤더 변환 실패
+  invalid_http_method: 잘못된 HTTP 메소드
+  invalid_request_config: 잘못된 요청 설정
+  invalid_response_format: 잘못된 응답 형식
+  json_parse_failed: JSON 파싱 실패
+  mime_parse_failed: MIME 파싱 실패
+  missing_response_body: 응답 본문 누락
+  missing_url: URL 누락
+  proxy_config_failed: 프록시 설정 실패
+  read_response_failed: 응답 읽기 실패
+  request_failed: 요청 실패
+  request_timeout: 요청 시간 초과
+  response_too_large: 응답이 너무 큼
+  runtime_create_failed: 런타임 생성 실패
+  status_not_ok: 상태 코드 오류
+  upload_failed: 업로드 실패
+
 main:
   failed_to_create_chat_store: "채팅 저장소 생성 실패: %{error}"
   failed_to_create_config_store: "설정 저장소 생성 실패: %{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "요청 실패(상태 코드: %{status}) - %{error_type}: %{message}"
   request_failed: "요청 실패: %{error}"
   response_read_error: "응답 읽기 실패: %{error}"
-  stream_decode_error: "스트림 데이터 디코딩 실패: %{error}"
 
 note:
   already_exists: "이미 이 노트를 추가했습니다"

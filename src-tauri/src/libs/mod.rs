@@ -1,5 +1,5 @@
-pub mod ai_util;
+pub mod dedup;
 pub mod fs;
 pub mod lang;
-pub mod window;
+pub mod similarity;
 pub mod window_channels;

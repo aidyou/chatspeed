@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{error::Error, sync::Arc};
 use tokio::sync::Mutex;
@@ -7,10 +6,10 @@ use tokio::sync::Mutex;
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat,
 };
-use crate::ai::traits::chat::ChatResponse;
+use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
+use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
 use crate::impl_stoppable;
-use crate::libs::ai_util;
 
 /// Represents the Gemini chat implementation
 #[derive(Clone)]
@@ -95,7 +94,7 @@ impl GeminiChat {
             reasoning_content,
             content,
             usage,
-            msg_type,
+            ..
         } = self
             .client
             .process_stream_chunk(response.as_bytes().to_vec().into(), &StreamFormat::Gemini)
@@ -104,10 +103,7 @@ impl GeminiChat {
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
                     e.clone(),
-                    true,
-                    true,
-                    false,
-                    None,
+                    MessageType::Error,
                     metadata_option.clone(),
                 ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -116,34 +112,29 @@ impl GeminiChat {
         if self.should_stop().await {
             return Ok(String::new());
         }
-        let reasoning = if let Some(content) = reasoning_content {
-            content
-        } else {
-            String::new()
-        };
-
-        let content = content.ok_or_else(|| {
-            let error = t!("chat.failed_to_extract_text").to_string();
+        if let Some(content) = reasoning_content {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                error.clone(),
-                true,
-                true,
-                false,
-                msg_type.clone(),
+                content.clone(),
+                MessageType::Reasoning,
                 metadata_option.clone(),
             ));
-            error
-        })?;
+        };
+
+        if let Some(con) = content.clone() {
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                con.clone(),
+                MessageType::Text,
+                metadata_option.clone(),
+            ));
+        };
 
         callback(ChatResponse::new_with_arc(
             chat_id.clone(),
-            format!("{}{}", reasoning, content.clone()),
-            false,
-            true,
-            false,
-            msg_type.clone(),
-            Some(ai_util::update_or_create_metadata(
+            String::new(),
+            MessageType::Finished,
+            Some(update_or_create_metadata(
                 metadata_option,
                 "tokens",
                 json!({
@@ -154,7 +145,7 @@ impl GeminiChat {
             )),
         ));
 
-        Ok(content)
+        Ok(content.unwrap_or_default())
     }
 }
 
@@ -181,7 +172,7 @@ impl AiChatTrait for GeminiChat {
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
+        let (params, metadata_option) = init_extra_params(extra_params.clone());
 
         let response = self
             .client
@@ -195,7 +186,7 @@ impl AiChatTrait for GeminiChat {
                         api_key.unwrap_or("")
                     )),
                     None,
-                    ai_util::get_proxy_type(extra_params),
+                    get_proxy_type(extra_params),
                     None,
                 ),
                 "",
@@ -207,10 +198,7 @@ impl AiChatTrait for GeminiChat {
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
                     e.clone(),
-                    true,
-                    true,
-                    false,
-                    None,
+                    MessageType::Error,
                     metadata_option.clone(),
                 ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -220,10 +208,7 @@ impl AiChatTrait for GeminiChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 response.content.clone(),
-                true,
-                true,
-                false,
-                None,
+                MessageType::Error,
                 metadata_option,
             ));
             return Err(Box::new(std::io::Error::new(

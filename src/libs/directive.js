@@ -807,22 +807,21 @@ const DIRECTIVE_CONFIG = {
         removeThinkEvents(el)
       }
     }
-  },
-  reference: {
-    name: 'reference',
-    handlers: {
-      mounted: el => {
-        bindReferenceEvents(el)
-      },
-      updated: el => {
-        removeReferenceEvents(el)
-        bindReferenceEvents(el)
-      },
-      unmounted: el => {
-        removeReferenceEvents(el)
-      }
-    }
   }
+  // reference: {
+  //   name: 'reference',
+  //   handlers: {
+  //     mounted: el => {
+  //       bindReferenceEvents(el)
+  //     },
+  //     updated: el => {
+  //       removeReferenceEvents(el)
+  //       bindReferenceEvents(el)
+  //     },
+  //     unmounted: el => {
+  //       removeReferenceEvents(el)
+  //     }
+  //   }
 }
 
 /**
@@ -848,16 +847,6 @@ function removeThinkEvents(el) {
   })
 }
 
-function removeReferenceEvents(el) {
-  const titles = el.querySelectorAll('.chat-reference-title')
-  titles.forEach(title => {
-    if (title._referenceClickHandler) {
-      title.removeEventListener('click', title._referenceClickHandler)
-      delete title._referenceClickHandler
-    }
-  })
-}
-
 function bindThinkEvents(el) {
   const titles = el.querySelectorAll('.chat-think-title')
   titles.forEach(title => {
@@ -879,23 +868,33 @@ function bindThinkEvents(el) {
   })
 }
 
-function bindReferenceEvents(el) {
-  const titles = el.querySelectorAll('.chat-reference-title')
-  titles.forEach(title => {
-    const content = title.nextElementSibling
-    if (content && content.classList.contains('chat-reference-list')) {
-      title.style.cursor = 'pointer'
-      const clickHandler = () => {
-        const isHidden = content.style.display === 'none'
-        content.style.display = isHidden ? 'block' : 'none'
-        if (isHidden) {
-          title.classList.add('expanded')
-        } else {
-          title.classList.remove('expanded')
-        }
-      }
-      title._referenceClickHandler = clickHandler
-      title.addEventListener('click', clickHandler)
-    }
-  })
-}
+// function removeReferenceEvents(el) {
+//   const titles = el.querySelectorAll('.chat-reference-title')
+//   titles.forEach(title => {
+//     if (title._referenceClickHandler) {
+//       title.removeEventListener('click', title._referenceClickHandler)
+//       delete title._referenceClickHandler
+//     }
+//   })
+// }
+
+// function bindReferenceEvents(el) {
+//   const titles = el.querySelectorAll('.chat-reference-title')
+//   titles.forEach(title => {
+//     const content = title.nextElementSibling
+//     if (content && content.classList.contains('chat-reference-list')) {
+//       title.style.cursor = 'pointer'
+//       const clickHandler = () => {
+//         const isHidden = content.style.display === 'none'
+//         content.style.display = isHidden ? 'block' : 'none'
+//         if (isHidden) {
+//           title.classList.add('expanded')
+//         } else {
+//           title.classList.remove('expanded')
+//         }
+//       }
+//       title._referenceClickHandler = clickHandler
+//       title.addEventListener('click', clickHandler)
+//     }
+//   })
+// }

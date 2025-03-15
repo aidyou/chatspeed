@@ -20,16 +20,16 @@ doctest    = false
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-anyhow                       = "1.0.95"
-async-trait                  = "0.1.85"
+anyhow                       = "1.0.97"
+async-trait                  = "0.1.87"
 base64                       = "0.22.1"
-bytes                        = "1.9.0"
+bytes                        = "1.10.1"
 chrono                       = "0.4.39"
 dashmap                      = "6.1.0"
 dirs                         = "6.0"
 futures                      = { version = "0.3", features = ["std"] }
 futures-util                 = "0.3"
-global-hotkey                = "0.6.2"
+global-hotkey                = "0.6.4"
 image                        = "0.25.5"
 lazy_static                  = "1.4"
 locale_config                = "0.3.0"
@@ -42,33 +42,39 @@ reqwest                      = { version = "0.12.11", features = ["blocking", "s
 rusqlite                     = { version = "0.32", features = ["bundled", "backup"] }
 rust-i18n                    = "3.1.2"
 scraper                      = "0.22.0"
-semver                       = "1.0"
+semver                       = "1.0.26"
 serde                        = { version = "1.0.217", features = ["derive"] }
-serde_json                   = "1.0.135"
+serde_json                   = "1.0.140"
 json_value_merge             = "2.0.1"
 serde_yaml                   = "0.9.34-deprecated"
 sha2                         = "0.10"
-simplelog                    = "0.12"
-tauri                        = { version = "2.2.2", features = ["macos-private-api", "tray-icon"] }
+fern                         = "0.6"
+tauri                        = { version = "2.3.1", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog          = "2.2"
 tauri-plugin-fs              = "2.2"
 tauri-plugin-global-shortcut = "2.2"
 tauri-plugin-shell           = "2.2"
 tauri-plugin-updater         = "2.5"
-time                         = { version = "0.3", features = ["formatting"] }
-thiserror                    = "2.0.11"
+time                         = { version = "0.3.38", features = ["formatting"] }
+thiserror                    = "2.0.12"
 tokio                        = { version = "1.43", features = ["full"] }
 tracing                      = "0.1.41"
 arboard                      = "3.3"
 tracing-subscriber           = { version = "0.3.19", features = ["env-filter"] }
 url                          = "2.5.4"
-uuid                         = { version = "1.12", features = ["v4"] }
+uuid                         = { version = "1.15.1", features = ["v4"] }
 walkdir                      = "2.4.0"
 warp                         = "0.3.7"
 whatlang                     = "0.16.4"
 xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
-zip                          = "2.2.2"
-tauri-plugin-opener          = "2.2.5"
+zip                          = "2.2.3"
+tauri-plugin-opener          = "2.2.6"
+unicode-segmentation         = "1.9.0"
+unicode-script               = "0.5.7"
+seahash                      = "4.1.0"
+humantime                    = "2.0.0"
+jieba-rs                     = "0.7.2"
+tinysegmenter                = "0.1.0"
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
 # pyo3                         = { version = "0.23.3", features = ["auto-initialize"] }
@@ -101,4 +107,5 @@ vcpkg  = "0.2"
 vswhom = "0.1.0"
 
 [dev-dependencies]
-tempfile = "3.15.0"
+tempfile   = "3.15.0"
+small_ctor = "0.1.2"

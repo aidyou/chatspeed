@@ -65,18 +65,109 @@ impl Search {
 
 #[async_trait]
 impl FunctionDefinition for Search {
+    /// Returns the name of the function.
     fn name(&self) -> &str {
-        "Search"
+        "search"
     }
 
+    /// Returns the type of the function.
     fn function_type(&self) -> FunctionType {
         FunctionType::CHP
     }
 
+    /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "Get Search Results from a Provider"
+        "Perform a search query"
     }
 
+    /// Returns the function calling spec.
+    fn function_calling_spec(&self) -> Value {
+        json!({
+            "name": self.name(),
+            "description": self.description(),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "provider": {
+                        "type": "string",
+                        "enum": ["google", "google_news", "baidu", "baidu_news", "bing"],
+                        "description": "The search provider to use. Supported providers: google, google_news, baidu, baidu_news, bing."
+                    },
+                    "kw": {
+                        "type": "string",
+                        "description": "The keyword to search for."
+                    },
+                    "number": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "The number of results to return. Default is 10."
+                    },
+                    "page": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "The page number of the results. Default is 1."
+                    },
+                    "resolve_baidu_links": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Whether to resolve Baidu links. Recommended to enable for better result filtering."
+                    }
+                },
+                "required": ["provider", "kw"]
+            },
+            "responses": {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {
+                                    "type": "string",
+                                    "description": "The title of the search result."
+                                },
+                                "url": {
+                                    "type": "string",
+                                    "description": "The URL of the search result."
+                                },
+                                "summary": {
+                                    "type": "string",
+                                    "description": "A brief description of the search result.",
+                                    "nullable": true
+                                },
+                                "sitename": {
+                                    "type": "string",
+                                    "description": "The site name of the search result.",
+                                    "nullable": true
+                                },
+                                "publish_date": {
+                                    "type": "string",
+                                    "description": "The publish date of the search result.",
+                                    "nullable": true
+                                }
+                            }
+                        },
+                        "description": "The list of search results."
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "An error message if the search failed."
+                    }
+                },
+                "description": "The response containing search results or an error message."
+            }
+        })
+    }
+
+    /// Executes the function with the given parameters and context.
+    ///
+    /// # Arguments
+    /// * `params` - The parameters of the function.
+    /// * `_context` - The context of the function.
+    ///
+    /// # Returns
+    /// Returns a `FunctionResult` containing the result of the function execution.
     async fn execute(&self, params: Value, _context: &Context) -> FunctionResult {
         let provider: SearchProvider = params["provider"]
             .as_str()
@@ -95,10 +186,17 @@ impl FunctionDefinition for Search {
 
         let number = params["number"].as_i64().unwrap_or(10);
         let page = params["page"].as_i64().unwrap_or(1);
+        let resolve_baidu_links = params["resolve_baidu_links"].as_bool().unwrap_or(true);
 
         let crawler = Crawler::new(self.chatspeedbot_server.clone());
         let results = crawler
-            .search(provider, &[&kw], Some(page), Some(number))
+            .search(
+                provider,
+                &[&kw],
+                Some(page),
+                Some(number),
+                resolve_baidu_links,
+            )
             .await
             .map_err(|e| WorkflowError::Execution(e.to_string()))?;
         Ok(json!(results))

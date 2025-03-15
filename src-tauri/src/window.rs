@@ -1,20 +1,55 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use log::{error, warn};
 use rust_i18n::t;
 use serde::Deserialize;
+use serde::Serialize;
 use tauri::Listener;
 use tauri::LogicalSize;
 use tauri::Manager;
+use tauri::PhysicalPosition;
 use tauri::PhysicalSize;
+use tauri::WebviewWindow;
 use tauri::WebviewWindowBuilder;
+use tauri::Window;
 
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
+use crate::constants::CFG_WINDOW_POSITION;
+use crate::constants::CFG_WINDOW_SIZE;
+use crate::db::MainStore;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WindowSize {
-    pub width: u32,
-    pub height: u32,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Default for WindowSize {
+    fn default() -> Self {
+        Self {
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MainWindowPosition {
+    pub screen_name: Option<String>,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl Default for MainWindowPosition {
+    fn default() -> Self {
+        Self {
+            screen_name: None,
+            x: 0,
+            y: 0,
+        }
+    }
 }
 
 /// Fixes a visual artifact bug in Tauri v2 where transparent windows initially lack shadows and borders
@@ -52,7 +87,7 @@ pub async fn fix_window_visual(
     {
         use tauri::LogicalSize;
         let mut size = _size
-            .map(|s| LogicalSize::new(s.width as f64, s.height as f64))
+            .map(|s| LogicalSize::new(s.width, s.height))
             .unwrap_or_else(|| {
                 _window
                     .inner_size()
@@ -83,7 +118,7 @@ pub async fn fix_window_visual(
 /// If the assistant window exists, it will be shown or hidden based on its current state.
 /// If it does not exist, a new assistant window will be created with specified configurations.
 ///
-/// # Parameters
+/// # Arguments
 /// - `app`: A reference to the Tauri application handle.
 ///
 /// # Example
@@ -103,11 +138,22 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
             }
         }
 
-        if let Err(e) = window.show() {
-            warn!("Failed to show assistant window: {}", e);
-        }
-        if let Err(e) = window.set_focus() {
-            warn!("Failed to set focus to assistant window: {}", e);
+        // 先检查窗口是否有效
+        if window.is_visible().unwrap_or(true) {
+            // 如果已经可见，只需要设置焦点
+            if let Err(e) = window.set_focus() {
+                warn!("Failed to set focus to assistant window: {}", e);
+            }
+        } else {
+            // 如果不可见，先显示窗口
+            if let Err(e) = window.show() {
+                warn!("Failed to show assistant window: {}", e);
+            } else {
+                // 显示成功后再设置焦点
+                if let Err(e) = window.set_focus() {
+                    warn!("Failed to set focus to assistant window: {}", e);
+                }
+            }
         }
     } else {
         match WebviewWindowBuilder::new(
@@ -153,14 +199,23 @@ pub fn toggle_main_window(app: &tauri::AppHandle) {
                     warn!("Failed to set focus to main window: {}", e);
                 }
             } else {
-                if let Err(e) = window.set_focus() {
-                    warn!("Failed to set focus to main window: {}", e);
-                }
+                // 先检查窗口是否最小化
                 if let Ok(is_minimized) = window.is_minimized() {
                     if is_minimized {
+                        // 如果窗口最小化，先恢复窗口
                         if let Err(e) = window.unminimize() {
                             warn!("Failed to unminimize main window: {}", e);
+                        } else {
+                            // 等待瞬间确保窗口已恢复
+                            std::thread::sleep(std::time::Duration::from_millis(50));
                         }
+                    }
+                }
+
+                // 最后设置焦点
+                if window.is_visible().unwrap_or(false) {
+                    if let Err(e) = window.set_focus() {
+                        warn!("Failed to set focus to main window: {}", e);
                     }
                 }
                 // if let Err(e) = window.show() {
@@ -168,7 +223,13 @@ pub fn toggle_main_window(app: &tauri::AppHandle) {
                 // }
             }
         } else {
-            warn!("Failed to determine visibility of assistant window");
+            warn!("Failed to determine visibility of main window");
+            // 如果无法确定可见性，尝试显示窗口
+            if let Err(e) = window.show() {
+                warn!("Failed to show main window: {}", e);
+            } else if let Err(e) = window.set_focus() {
+                warn!("Failed to set focus to main window: {}", e);
+            }
         }
     }
 }
@@ -177,7 +238,7 @@ pub fn toggle_main_window(app: &tauri::AppHandle) {
 ///
 /// This function is used to open a new note window, or if the window already exists, it displays and focuses the window.
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - Tauri application handle
 ///
 /// # Returns
@@ -243,7 +304,7 @@ struct UrlWindowPayload {
 ///
 /// Creates a new setting window or focuses an existing one
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - The Tauri application handle
 /// - `setting_type` - The type of setting to show
 ///
@@ -325,7 +386,7 @@ pub async fn create_or_focus_setting_window(
 ///
 /// Creates a new window to display the specified URL
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - The Tauri application handle
 /// - `url` - The URL to display
 ///
@@ -387,7 +448,7 @@ pub async fn create_or_focus_url_window(
 /// - create-note-window: Creates or focuses the note window
 /// - create-setting-window: Creates or focuses the setting window with specified type
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - The Tauri application handle
 pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
     // Get main window once
@@ -441,4 +502,76 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
             create_or_focus_url_window(app, &url).await
         }));
     });
+}
+
+/// Restores window size and position configuration to a window
+///
+/// # Arguments
+/// * `window` - The window to apply configuration to
+/// * `main_store` - The main store
+pub fn restore_window_config(window: &WebviewWindow, main_store: &Arc<Mutex<MainStore>>) {
+    if let Ok(c) = main_store.lock() {
+        // restore window size
+        let window_size = c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()));
+        if let Some(size) = window_size {
+            if size.width > 0.0 && size.height > 0.0 {
+                if let Err(e) = window.set_size(tauri::Size::Logical(LogicalSize::new(
+                    size.width,
+                    size.height,
+                ))) {
+                    warn!("Failed to set window size: {}", e);
+                }
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "Window size set to: {}x{} (logical)",
+                    size.width,
+                    size.height
+                );
+            }
+            let window_clone = window.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::window::fix_window_visual(
+                    &window_clone,
+                    Some(WindowSize {
+                        width: size.width,
+                        height: size.height,
+                    }),
+                )
+                .await
+                {
+                    log::error!("Failed to fix window visual: {}", e);
+                }
+            });
+        }
+
+        // restore window position
+        let window_position =
+            c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()));
+        if let Some(position) = window_position {
+            if position.x != 0 && position.y != 0 {
+                if let Err(e) = window.set_position(tauri::Position::Physical(
+                    PhysicalPosition::new(position.x, position.y),
+                )) {
+                    warn!("Failed to set window position: {}", e);
+                }
+                #[cfg(debug_assertions)]
+                log::debug!("Window position set to: ({}, {})", position.x, position.y);
+            }
+        }
+    }
+}
+
+/// Get the current window position
+///
+/// # Arguments
+/// - `window` - The window to get the position of.
+///
+/// # Returns
+/// - `Option<String>` - The current screen name, or None if the window is not found.
+pub fn get_screen_name(window: &Window) -> Option<String> {
+    if let Some(monitor) = window.current_monitor().ok().flatten() {
+        monitor.name().map(|s| s.to_string())
+    } else {
+        None
+    }
 }

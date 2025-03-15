@@ -5,21 +5,16 @@ mod constants;
 mod db;
 mod http;
 mod libs;
+mod logger;
 mod shortcut;
 mod tray;
 mod updater;
 mod window;
 mod workflow;
 
-use crate::constants::*;
-use crate::db::MainStore;
 use anyhow::anyhow;
 use log::{error, warn};
 use rust_i18n::{i18n, set_locale, t};
-use simplelog::*;
-use tray::create_tray;
-
-use std::fs::File;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -31,20 +26,25 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
 
 // use commands::toolbar::*;
+use ai::interaction::chat_completion::ChatState;
 use commands::chat::*;
 use commands::clipboard::*;
-use commands::download::*;
 use commands::fs::*;
 use commands::message::*;
 use commands::note::*;
 use commands::os::*;
 use commands::setting::*;
+use commands::update::*;
 use commands::window::*;
+use constants::*;
+use db::MainStore;
 use http::server::start_http_server;
-use libs::window::apply_window_config;
 use libs::window_channels::WindowChannels;
+use logger::setup_logger;
 use shortcut::register_desktop_shortcut;
+use tray::create_tray;
 use updater::*;
+use window::*;
 
 // Initialize internationalization with the "i18n" directory
 // - Base directory is src-tauri/, so this will look for translations in src-tauri/i18n/
@@ -100,7 +100,7 @@ pub async fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(ChatState::new(Arc::new(WindowChannels::new())))
+        .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new()))))
         // Initialize the shell plugin
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
@@ -130,7 +130,7 @@ pub async fn run() -> Result<()> {
             read_clipboard,
             write_clipboard,
             // chat
-            chat_with_ai,
+            chat_completion,
             stop_chat,
             sync_state,
             detect_language,
@@ -208,8 +208,11 @@ pub async fn run() -> Result<()> {
                             // Create a new timer
                             *timer = Some(spawn(async move {
                                 sleep(Duration::from_millis(100)).await;
-                                if let Err(e) = window_clone.hide() {
-                                    warn!("Failed to hide assistant window: {}", e);
+                                // 在隐藏窗口前检查窗口是否可见
+                                if window_clone.is_visible().unwrap_or(false) {
+                                    if let Err(e) = window_clone.hide() {
+                                        warn!("Failed to hide assistant window: {}", e);
+                                    }
                                 }
                             }));
                         }
@@ -228,18 +231,33 @@ pub async fn run() -> Result<()> {
                 match window.label() {
                     "main" => {
                         api.prevent_close();
-                        if let Err(e) = window.minimize() {
-                            warn!("Failed to minimize window '{}': {}", window.label(), e);
+                        // 检查窗口是否有效，然后再尝试最小化
+                        if window.is_visible().unwrap_or(false) {
+                            if let Err(e) = window.minimize() {
+                                warn!("Failed to minimize window '{}': {}", window.label(), e);
+                            } else {
+                                log::debug!("Window '{}' minimized", window.label());
+                            }
+                        } else {
+                            log::debug!(
+                                "Window '{}' is not visible, skipping minimize",
+                                window.label()
+                            );
                         }
-                        log::debug!("Window '{}' minimized", window.label());
                     }
                     // we just hide the main window
                     "assistant" | "toolbar" => {
                         api.prevent_close();
-                        if let Err(e) = window.hide() {
-                            warn!("Failed to hide window '{}': {}", window.label(), e);
+                        // 检查窗口是否可见，只有可见的窗口才需要隐藏
+                        if window.is_visible().unwrap_or(false) {
+                            if let Err(e) = window.hide() {
+                                warn!("Failed to hide window '{}': {}", window.label(), e);
+                            } else {
+                                log::debug!("Window '{}' hidden", window.label());
+                            }
+                        } else {
+                            log::debug!("Window '{}' is already hidden", window.label());
                         }
-                        log::debug!("Window '{}' hidden", window.label());
                     }
                     _ => {
                         log::debug!("Window '{}' closed", window.label());
@@ -251,9 +269,10 @@ pub async fn run() -> Result<()> {
                     return;
                 }
                 if window.label() == "main" {
-                    let (old_width, old_height) =
-                        get_saved_window_size(&window.state::<Arc<Mutex<MainStore>>>());
-                    if (old_width != size.width || old_height != size.height)
+                    let config_state = window.state::<Arc<Mutex<MainStore>>>();
+                    let window_size = get_saved_window_size(&config_state).unwrap_or_default();
+                    if (window_size.width != size.width as f64
+                        || window_size.height != size.height as f64)
                         && (size.width > 0 && size.height > 0)
                     {
                         // 获取当前窗口的缩放因子
@@ -261,12 +280,37 @@ pub async fn run() -> Result<()> {
                         // 转换为逻辑尺寸
                         let logical_size = size.to_logical(scale_factor);
                         // Store the window size when the user resizes it to remember for the next startup
-                        let cs = window.state::<Arc<Mutex<MainStore>>>();
-                        if let Ok(mut store) = cs.clone().lock() {
-                            if let Err(e) =
-                                store.set_window_size(logical_size.width, logical_size.height)
-                            {
+                        if let Ok(mut store) = config_state.lock() {
+                            if let Err(e) = store.set_window_size(WindowSize {
+                                width: logical_size.width,
+                                height: logical_size.height,
+                            }) {
                                 error!("Failed to set window size: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            tauri::WindowEvent::Moved(position) => {
+                if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if window.label() == "main" {
+                    let config_store = &window.state::<Arc<Mutex<MainStore>>>();
+                    let old_pos = get_saved_window_position(config_store);
+                    let screen_name = get_screen_name(&window);
+
+                    if old_pos.map_or(true, |p| {
+                        screen_name != p.screen_name || position.x != p.x || position.y != p.y
+                    }) {
+                        let pos = MainWindowPosition {
+                            screen_name,
+                            x: position.x,
+                            y: position.y,
+                        };
+                        if let Ok(mut store) = config_store.lock() {
+                            if let Err(e) = store.save_window_position(pos) {
+                                error!("Failed to set window position: {}", e);
                             }
                         }
                     }
@@ -277,45 +321,26 @@ pub async fn run() -> Result<()> {
         // Setup the application with necessary configurations and state management
         .setup(|app| {
             // Initialize the logger
-            let log_dir = app
-                .path()
-                .app_log_dir()
-                .expect(&t!("main.failed_to_retrieve_log_directory"));
-            let log_file_path = log_dir.join("chatspeed.log");
-            // Ensure the log directory exists
-            std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
-            // Create the log file
-            let log_file =
-                File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
-            let console_config = ConfigBuilder::new()
-                .set_target_level(LevelFilter::Debug)
-                .set_location_level(LevelFilter::Debug)
-                .set_time_level(LevelFilter::Info)
-                .build();
-            let file_config = ConfigBuilder::new()
-                .set_target_level(LevelFilter::Info)
-                .set_location_level(LevelFilter::Info)
-                .set_time_level(LevelFilter::Info)
-                .build();
-
-            CombinedLogger::init(vec![
-                TermLogger::new(
-                    LevelFilter::Debug,
-                    console_config,
-                    TerminalMode::Mixed,
-                    ColorChoice::Auto,
-                ),
-                WriteLogger::new(LevelFilter::Info, file_config, log_file),
-            ])
-            .expect(&t!("main.failed_to_initialize_logger"));
-
-            log::info!(
-                "Logger initialized successfully, log file path: {:?}",
-                log_file_path
-            );
+            setup_logger(&app);
 
             // Initialize the main store
-            let main_store = Arc::new(Mutex::new(MainStore::new(app.handle()).map_err(|e| {
+            #[cfg(debug_assertions)]
+            let db_path = {
+                let dev_dir = &*crate::STORE_DIR.read();
+                dev_dir.join("chatspeed.db")
+            };
+
+            #[cfg(not(debug_assertions))]
+            let db_path = {
+                let app_local_data_dir = _app
+                    .path()
+                    .app_data_dir()
+                    .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
+                std::fs::create_dir_all(&app_local_data_dir)
+                    .map_err(|e| StoreError::StringError(e.to_string()))?;
+                app_local_data_dir.join("chatspeed.db")
+            };
+            let main_store = Arc::new(Mutex::new(MainStore::new(db_path).map_err(|e| {
                 error!("Create main store error: {}", e);
                 anyhow!(t!(
                     "main.failed_to_create_main_store",
@@ -348,7 +373,7 @@ pub async fn run() -> Result<()> {
 
             // Read and set the main window size from the configuration
             if let Some(main_window) = app.get_webview_window("main") {
-                apply_window_config(&main_window, &main_store);
+                restore_window_config(&main_window, &main_store);
             }
 
             let handle = app.handle().clone();
@@ -409,19 +434,31 @@ pub async fn run() -> Result<()> {
 
 /// Get the saved window size from the configuration
 ///
-/// # Parameters
+/// # Arguments
 /// - `config_store`: A reference to the configuration store.
 ///
 /// # Returns
 /// A tuple containing the saved window width and height.
-fn get_saved_window_size(config_store: &Arc<Mutex<MainStore>>) -> (u32, u32) {
+fn get_saved_window_size(config_store: &Arc<Mutex<MainStore>>) -> Option<WindowSize> {
     if let Ok(c) = config_store.lock() {
-        (
-            c.get_config(CFG_WINDOW_WIDTH, 0u32),
-            c.get_config(CFG_WINDOW_HEIGHT, 0u32),
-        )
+        c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
     } else {
-        (0, 0)
+        None
+    }
+}
+
+/// Get the saved window position from the configuration
+///
+/// # Arguments
+/// - `config_store`: A reference to the configuration store.
+///
+/// # Returns
+/// A tuple containing the saved window x and y positions.
+fn get_saved_window_position(config_store: &Arc<Mutex<MainStore>>) -> Option<MainWindowPosition> {
+    if let Ok(c) = config_store.lock() {
+        c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
+    } else {
+        None
     }
 }
 

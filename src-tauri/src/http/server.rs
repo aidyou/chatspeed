@@ -25,7 +25,7 @@ static INIT: Once = Once::new();
 
 /// Starts an HTTP server with multiple static directories.
 ///
-/// # Parameters
+/// # Arguments
 /// * `app` - Tauri application handle.
 ///
 /// # Returns
@@ -139,7 +139,7 @@ pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
 
 /// Attempts to find an available port starting from `start_port` up to `max_port`.
 ///
-/// # Parameters
+/// # Arguments
 /// * `start_port` - The starting port number to try.
 /// * `max_port` - The maximum port number to try.
 ///
@@ -160,7 +160,7 @@ fn find_available_port(start_port: u16, max_port: u16) -> Result<u16, String> {
 
 /// Retrieves the application data directory based on the development environment.
 ///
-/// # Parameters
+/// # Arguments
 /// * `app` - Application handle.
 ///
 /// # Returns
@@ -186,7 +186,7 @@ fn get_app_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
 
 /// Retrieves the server directory.
 ///
-/// # Parameters
+/// # Arguments
 /// * `app` - Application handle.
 ///
 /// # Returns
@@ -199,7 +199,7 @@ fn get_server_dir(_app: &AppHandle) -> Result<PathBuf, String> {
 
 /// Periodically cleans up the temporary directory.
 ///
-/// # Parameters
+/// # Arguments
 /// * `tmp_dir` - The path of the temporary directory.
 /// * `shutdown` - The receiver for shutdown signals.
 async fn cleanup_tmp_dir(tmp_dir: PathBuf, mut shutdown: broadcast::Receiver<()>) {
@@ -223,7 +223,7 @@ async fn cleanup_tmp_dir(tmp_dir: PathBuf, mut shutdown: broadcast::Receiver<()>
 
 /// Performs the actual cleanup operation for the temporary directory.
 ///
-/// # Parameters
+/// # Arguments
 /// * `tmp_dir` - The path of the temporary directory.
 ///
 /// # Returns

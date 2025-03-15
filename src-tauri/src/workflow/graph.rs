@@ -101,7 +101,7 @@ impl WorkflowGraph {
     /// - Detects cycles by checking the in-degree of nodes
     /// - Returns an error if a cycle is detected
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `adjacency` - The adjacency list representing the graph connections
     /// * `in_degree` - The in-degree map for the nodes
     ///
@@ -280,7 +280,7 @@ impl WorkflowGraph {
     /// This method builds a Markmap node string for the given node and its children.
     /// It uses the status map to add status icons to the node labels.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `output` - A mutable string that will be appended to
     /// * `node` - The configuration of the current node
     /// * `status_map` - A map of node IDs to their corresponding status icons
@@ -343,7 +343,7 @@ impl WorkflowGraph {
 
 #[cfg(test)]
 mod tests {
-    use crate::workflow::config::NodeType;
+    use crate::workflow::config::{NodeType, ToolConfig};
 
     use super::*;
     use serde_json::json;
@@ -351,13 +351,9 @@ mod tests {
     fn sample_node(id: &str) -> NodeConfig {
         NodeConfig {
             id: id.to_string(),
-            r#type: NodeType::Task,
-            function: Some("test".into()),
-            params: Some(json!({})),
+            r#type: NodeType::Task(ToolConfig::default()),
             timeout_secs: 0,
             description: None,
-            parallel: false,
-            output: None,
         }
     }
 

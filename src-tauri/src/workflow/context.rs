@@ -32,7 +32,7 @@ struct ContextData {
     outputs: HashMap<String, Value>,
     /// Workflow metadata
     metadata: HashMap<String, String>,
-    /// 节点状态追踪 (节点ID -> 状态)
+    /// Node state tracking (node ID -> state)
     node_states: HashMap<String, NodeState>,
 }
 
@@ -41,18 +41,18 @@ pub enum NodeState {
     Pending,
     Running,
     Completed,
-    Failed(u32),   // 记录失败次数
-    Retrying(u32), // 记录重试次数
+    Failed(u32),   // Record failure count
+    Retrying(u32), // Record retry count
     Paused,
 }
 
-/// 节点状态枚举
+/// Node state enumeration
 impl Context {
     /// Create a new context instance
     pub fn new() -> Self {
         Self {
             data: Arc::new(RwLock::new(ContextData::default())),
-            cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()))), // 缓存最近的100个值
+            cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()))), // Cache the latest 100 values
             cache_version: Arc::new(AtomicU64::new(0)),
             cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -60,7 +60,7 @@ impl Context {
 
     /// Get a value from the context with caching
     pub async fn get(&self, key: &str) -> Option<Value> {
-        // 先检查缓存
+        // Check cache first
         {
             let mut cache = self.cache.write().await;
             if let Some(value) = cache.get(key) {
@@ -68,11 +68,11 @@ impl Context {
             }
         }
 
-        // 缓存未命中，从存储中获取
+        // Cache miss, get from storage
         let data = self.data.read().await;
         let result = data.values.get(key).cloned();
 
-        // 如果找到了值，更新缓存
+        // If value is found, update cache
         if let Some(ref value) = result {
             let mut cache = self.cache.write().await;
             cache.put(key.to_string(), value.clone());
@@ -83,13 +83,13 @@ impl Context {
 
     /// Set a value in the context and update cache
     pub async fn set(&self, key: String, value: Value) -> WorkflowResult<()> {
-        // 更新存储
+        // Update storage
         {
             let mut data = self.data.write().await;
             data.values.insert(key.clone(), value.clone());
         }
 
-        // 更新缓存
+        // Update cache
         {
             let mut cache = self.cache.write().await;
             cache.put(key, value);
@@ -107,7 +107,7 @@ impl Context {
     /// Set a node's execution output into context.
     /// When the data already exists, merge the new output with the existing data.
     ///
-    /// # Paraments
+    /// # Arguments
     /// * `output_key` - The key of the output
     /// * `output` - The output value
     ///
@@ -154,124 +154,17 @@ impl Context {
         Ok(())
     }
 
-    /// 解析参数中的引用并替换为实际值
+    /// Resolve parameters with references and replace with actual values
     ///
-    /// 支持的引用格式：
-    /// - ${node_id} - 引用节点的整个输出
-    /// - ${node_id.path.to.data} - 引用节点输出中的特定字段
+    /// Supported reference formats:
+    /// - ${node_id} - Reference to a node's entire output
+    /// - ${node_id.path.to.data} - Reference to a specific field in a node's output
     pub async fn resolve_params(&self, params: Value) -> WorkflowResult<Value> {
         self.resolve_params_inner(params).await
     }
 
-    /// 内部实现，处理递归异步调用
-    async fn resolve_params_inner(&self, params: Value) -> WorkflowResult<Value> {
-        match params {
-            Value::Object(map) => {
-                let mut result = serde_json::Map::new();
-                for (key, value) in map {
-                    // 使用 Box::pin 避免无限大小的 future
-                    println!("解析对象字段: {}", key);
-                    let resolved = Box::pin(self.resolve_params_inner(value)).await?;
-                    println!("字段 {} 解析结果: {}", key, resolved);
-                    result.insert(key, resolved);
-                }
-                Ok(Value::Object(result))
-            }
-            Value::Array(arr) => {
-                let mut result = Vec::new();
-                for (index, item) in arr.iter().enumerate() {
-                    // 使用 Box::pin 避免无限大小的 future
-                    println!("解析数组元素 [{}]", index);
-                    let resolved = Box::pin(self.resolve_params_inner(item.clone())).await?;
-                    println!("数组元素 [{}] 解析结果: {}", index, resolved);
-                    result.push(resolved);
-                }
-                Ok(Value::Array(result))
-            }
-            Value::String(s) => {
-                // 检查字符串是否包含引用
-                if s.starts_with("${") && s.ends_with("}") {
-                    // 如果整个字符串就是一个引用，直接返回引用的值
-                    // 去掉 ${ 和 } 字符
-                    let reference = &s[2..s.len() - 1];
-                    println!("解析引用: {}", reference);
-
-                    // 分割节点ID和路径
-                    let parts: Vec<&str> = reference.splitn(2, '.').collect();
-                    let node_id = parts[0];
-                    let path = parts.get(1).copied();
-
-                    println!("引用节点ID: {}, 路径: {:?}", node_id, path);
-
-                    // 获取节点输出
-                    let result = self.get_node_output_with_path(node_id, path).await;
-                    match &result {
-                        Ok(value) => println!("引用解析结果: {}", value),
-                        Err(e) => println!("引用解析错误: {}", e),
-                    }
-
-                    return result;
-                } else if s.contains("${") && s.contains("}") {
-                    // 对于包含多个引用的字符串，使用字符串操作处理
-                    let mut result = s.clone();
-                    let mut start_pos = 0;
-
-                    while let Some(start_idx) = result[start_pos..].find("${") {
-                        let real_start = start_pos + start_idx;
-                        if let Some(end_idx) = result[real_start..].find("}") {
-                            let real_end = real_start + end_idx + 1;
-
-                            // 提取引用内容 (不包括 ${ 和 })
-                            let reference = &result[real_start + 2..real_end - 1];
-
-                            // 分割节点ID和路径
-                            let parts: Vec<&str> = reference.splitn(2, '.').collect();
-                            if !parts.is_empty() {
-                                let node_id = parts[0];
-                                let path = parts.get(1).copied();
-
-                                // 获取引用的值
-                                match self.get_node_output_with_path(node_id, path).await {
-                                    Ok(node_output) => {
-                                        // 将值转换为字符串并替换
-                                        let replacement = match node_output {
-                                            Value::String(s) => s,
-                                            Value::Null => "null".to_string(),
-                                            Value::Bool(b) => b.to_string(),
-                                            Value::Number(n) => n.to_string(),
-                                            _ => node_output.to_string(),
-                                        };
-
-                                        // 替换引用
-                                        result.replace_range(real_start..real_end, &replacement);
-
-                                        // 更新起始位置
-                                        start_pos = real_start + replacement.len();
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            } else {
-                                // 引用格式不正确，跳过
-                                start_pos = real_end;
-                            }
-                        } else {
-                            // 没有找到匹配的结束括号，跳过
-                            break;
-                        }
-                    }
-
-                    Ok(Value::String(result))
-                } else {
-                    Ok(Value::String(s))
-                }
-            }
-            // 其他类型直接返回
-            _ => Ok(params),
-        }
-    }
-
-    /// 获取节点输出，并可选择性地访问其中的特定路径
-    async fn get_node_output_with_path(
+    /// Get node output, and optionally access a specific path within it
+    pub(crate) async fn get_node_output_with_path(
         &self,
         node_id: &str,
         path: Option<&str>,
@@ -288,7 +181,7 @@ impl Context {
         }
     }
 
-    /// 访问 JSON 中的特定路径
+    /// Access a specific path within a JSON value
     fn access_json_path(&self, value: &Value, path: &str) -> WorkflowResult<Value> {
         let parts: Vec<&str> = path.split('.').collect();
         let mut current = value;
@@ -324,24 +217,24 @@ impl Context {
         Ok(current.clone())
     }
 
-    /// 根据节点ID列表获取对应的节点配置
+    /// Get node configurations by node ID list
     pub async fn get_node_configs(&self, node_ids: &[String]) -> WorkflowResult<Vec<NodeConfig>> {
-        // 如果节点ID列表为空，直接返回空结果
+        // If node ID list is empty, return empty result
         if node_ids.is_empty() {
             return Ok(Vec::new());
         }
 
-        // 双重校验
+        // Double-check
         let mut cache_key;
         loop {
             let _lock = self.cache_lock.lock().await;
-            // 获取当前缓存版本
+            // Get current cache version
             let current_version = self.cache_version.load(Ordering::Acquire);
 
-            // 构建缓存键，包含版本信息以确保版本变更时缓存失效
+            // Construct cache key, including version information to ensure cache invalidation on version change
             cache_key = format!("node_configs:{}:v{}", node_ids.join(","), current_version);
 
-            // 先检查缓存
+            // Check cache first
             let mut cache = self.cache.write().await;
             if let Some(cached_value) = cache.get(&cache_key) {
                 if let Ok(configs) = serde_json::from_value::<Vec<NodeConfig>>(cached_value.clone())
@@ -356,7 +249,7 @@ impl Context {
             }
         }
 
-        // 缓存未命中，从元数据中获取节点映射
+        // Cache miss, get from metadata
         let nodes_json = self.get_metadata("workflow_nodes").await.ok_or_else(|| {
             WorkflowError::Config("Workflow nodes not found in context".to_string())
         })?;
@@ -364,7 +257,7 @@ impl Context {
         let nodes: HashMap<String, NodeConfig> = serde_json::from_str(&nodes_json)
             .map_err(|e| WorkflowError::Config(format!("Failed to parse workflow nodes: {}", e)))?;
 
-        // 检查是否有不存在的节点ID，防止缓存穿透
+        // Check if there are non-existent node IDs to prevent cache penetration
         let missing_ids: Vec<String> = node_ids
             .iter()
             .filter(|id| !nodes.contains_key(*id))
@@ -378,13 +271,13 @@ impl Context {
             )));
         }
 
-        // 过滤出请求的节点
+        // Filter out requested nodes
         let result = node_ids
             .iter()
             .filter_map(|id| nodes.get(id).cloned())
             .collect::<Vec<NodeConfig>>();
 
-        // 更新缓存，只有当结果非空时才缓存
+        // Update cache, only cache non-empty results
         if !result.is_empty() {
             if let Ok(cache_value) = serde_json::to_value(&result) {
                 let mut cache = self.cache.write().await;
@@ -395,19 +288,19 @@ impl Context {
         Ok(result)
     }
 
-    /// 清除所有缓存
+    /// Clear all cache
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
         self.cache_version.fetch_add(1, Ordering::Release);
     }
 
-    /// 更新缓存版本，使所有缓存失效
+    /// Invalidate cache version, making all cache invalid
     pub async fn invalidate_cache(&self) {
         self.cache_version.fetch_add(1, Ordering::Release);
     }
 
-    /// 批量更新缓存
+    /// Batch update cache
     pub async fn batch_update_cache<T: Serialize>(
         &self,
         key_prefix: &str,
@@ -426,13 +319,13 @@ impl Context {
         Ok(())
     }
 
-    /// 更新节点状态
+    /// Update node state
     pub async fn update_node_state(&self, node_id: &str, state: NodeState) {
         let mut data = self.data.write().await;
         data.node_states.insert(node_id.to_string(), state);
     }
 
-    /// 更新节点状态，如果节点状态已经是失败或重试中，则计数加一
+    /// Update node state, incrementing failure or retry count if already failed or retrying
     pub async fn update_node_with_count(&self, node_id: &str, state: NodeState) {
         let mut data = self.data.write().await;
         data.node_states
@@ -445,7 +338,7 @@ impl Context {
             .or_insert(state);
     }
 
-    /// 获取节点状态
+    /// Get node state
     pub async fn get_node_state(&self, node_id: &str) -> NodeState {
         let data = self.data.read().await;
         data.node_states
@@ -454,7 +347,7 @@ impl Context {
             .unwrap_or(NodeState::Pending)
     }
 
-    /// 获取已完成节点集合
+    /// Get completed node set
     pub async fn get_completed_nodes(&self) -> HashSet<String> {
         let data = self.data.read().await;
         data.node_states
@@ -496,7 +389,7 @@ mod tests {
     async fn test_param_resolution() {
         let ctx = Context::new();
 
-        // 设置节点输出
+        // Set node output
         ctx.set_output(
             "node1".to_string(),
             json!({
@@ -515,7 +408,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 测试简单引用
+        // Test simple reference
         let params = json!({
             "param1": "${node1}",
             "param2": "${node2}",
@@ -527,7 +420,7 @@ mod tests {
         assert_eq!(resolved["param2"], ctx.get_output("node2").await.unwrap());
         assert_eq!(resolved["param3"], json!("prefix simple string suffix"));
 
-        // 测试路径引用
+        // Test path reference
         let params = json!({
             "param1": "${node1.data.value}",
             "param2": "${node1.data.nested.array.1}"
@@ -537,7 +430,7 @@ mod tests {
         assert_eq!(resolved["param1"], json!(42));
         assert_eq!(resolved["param2"], json!(2));
 
-        // 测试数组中的引用
+        // Test array reference
         let params = json!({
             "array": [1, "${node1.data.value}", 3]
         });

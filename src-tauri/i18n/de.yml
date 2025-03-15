@@ -1,4 +1,10 @@
 chat:
+  context:
+    location: "[Standort: %{location}]"
+    role: "[Rolle: %{role}]"
+    time: "[Zeit: %{time}]"
+    language: "[Sprache: %{language}]"
+    content: "%{context}\n\n%{content}"
   failed_to_create_file: "Datei konnte nicht erstellt werden: %{error}"
   failed_to_detect_language: "Sprache konnte nicht erkannt werden"
   failed_to_extract_text: "Generierter Textinhalt konnte nicht extrahiert werden"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "Ungültiger API-Anbieter: %{provider}"
   parse_response_failed: "Antwort konnte nicht analysiert werden: %{error}"
   request_failed: "Anfrage fehlgeschlagen, Statuscode: %{status}, Antwort: %{response}"
+  search_analysing: "Daten werden analysiert..."
+  search_fetching: "Daten werden abgerufen..."
+  search_results: "%{count} Ergebnisse gefunden"
+  searching: "Informationen werden gesucht..."
   stream_read_error: "Streaming-Daten konnten nicht gelesen werden: %{error}"
+  user_message_with_references: "Referenzen:\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nSie können sich bei der Beantwortung auf die Informationen in `<ref></ref>` beziehen. Bitte markieren Sie Referenzen mit [^id] und vermeiden Sie es, den Kontext zu wiederholen.\n\nBenutzer-Nachricht:\n %{content}"
 
 db:
   already_exists: "Daten existieren bereits"
@@ -47,6 +58,34 @@ db:
   string_error: "Zeichenkettenfehler: %{error}"
   tauri_error: "Tauri-Fehler: %{error}"
 
+http:
+  client_build_failed: "HTTP-Client konnte nicht erstellt werden: %{error}"
+  connection_failed: "Verbindung fehlgeschlagen: %{error}"
+  download_failed: "Download fehlgeschlagen: %{error}"
+  failed_to_clone_request: "Anfrage konnte beim Wiederholungsversuch nicht geklont werden"
+  failed_to_create_file: "Datei konnte nicht erstellt werden: %{error}"
+  failed_to_open_file: "Datei konnte nicht geöffnet werden: %{error}"
+  failed_to_parse_response: "Antwort konnte nicht analysiert werden: %{error}"
+  failed_to_read_file: "Datei konnte nicht gelesen werden, Pfad: %{path}, Fehler: %{error}"
+  failed_to_read_response: "Antwort konnte nicht gelesen werden: %{error}"
+  failed_to_write_file: "In Datei konnte nicht geschrieben werden: %{error}"
+  headers_convert_failed: "Anforderungsheader konnten nicht in HttpHeader konvertiert werden: %{error}"
+  invalid_http_method: "Ungültige HTTP-Methode: %{method}"
+  invalid_request_config: "Ungültige Anfragekonfiguration: %{error}"
+  invalid_response_format: "Ungültiges Antwortformat: %{error}"
+  json_parse_failed: "JSON konnte nicht analysiert werden: %{error}"
+  mime_parse_failed: "MIME-Typ konnte nicht analysiert werden"
+  missing_response_body: "Antwortteil ist leer"
+  missing_url: "Fehlender URL-Parameter in HTTP-Anfrage"
+  proxy_config_failed: "Proxy konnte nicht konfiguriert werden: %{error}"
+  read_response_failed: "Antwort konnte nicht gelesen werden: %{error}"
+  request_failed: "Anfrage fehlgeschlagen: %{error}"
+  request_timeout: "Zeitlimit für Anfrage überschritten"
+  response_too_large: "Serverseitige Daten überschreiten das Anfragelimit, serverseitige Datengröße: %{content_length}, Anfragelimit: %{max_size}"
+  runtime_create_failed: "Laufzeitumgebung konnte nicht erstellt werden: %{error}"
+  status_not_ok: "Statuscode ist nicht OK: %{status}"
+  upload_failed: "Upload fehlgeschlagen: %{error}"
+
 main:
   failed_to_create_chat_store: "Chat-Speicher konnte nicht erstellt werden: %{error}"
   failed_to_create_config_store: "Konfigurations-Speicher konnte nicht erstellt werden: %{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "Anfrage fehlgeschlagen (Code: %{status}) - %{error_type}: %{message}"
   request_failed: "Anfrage fehlgeschlagen: %{error}"
   response_read_error: "Antwort konnte nicht gelesen werden: %{error}"
-  stream_decode_error: "Streaming-Daten konnten nicht dekodiert werden: %{error}"
 
 note:
   already_exists: "Sie haben diese Notiz bereits hinzugefügt"

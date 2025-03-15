@@ -8,6 +8,17 @@ chat:
   parse_response_failed: "Ошибка разбора ответа: %{error}"
   request_failed: "Запрос не выполнен, код состояния: %{status}, ответ: %{response}"
   stream_read_error: "Ошибка чтения потока данных: %{error}"
+  context:
+    content: Содержание
+    language: Язык
+    location: Местоположение
+    role: Роль
+    time: Время
+  search_analysing: Анализ
+  search_fetching: Получение
+  search_results: Результаты поиска
+  searching: Поиск
+  user_message_with_references: Сообщение пользователя с ссылками
 
 db:
   already_exists: "Данные уже существуют"
@@ -47,6 +58,34 @@ db:
   string_error: "Ошибка строки: %{error}"
   tauri_error: "Ошибка Tauri: %{error}"
 
+http:
+  client_build_failed: "Не удалось создать HTTP-клиент: %{error}"
+  connection_failed: "Ошибка соединения: %{error}"
+  download_failed: "Ошибка загрузки: %{error}"
+  failed_to_clone_request: "Не удалось клонировать запрос при повторной попытке"
+  failed_to_create_file: "Не удалось создать файл: %{error}"
+  failed_to_open_file: "Не удалось открыть файл: %{error}"
+  failed_to_parse_response: "Не удалось разобрать ответ: %{error}"
+  failed_to_read_file: "Не удалось прочитать файл, путь: %{path}, ошибка: %{error}"
+  failed_to_read_response: "Не удалось прочитать ответ: %{error}"
+  failed_to_write_file: "Не удалось записать в файл: %{error}"
+  headers_convert_failed: "Не удалось преобразовать заголовки запроса в HttpHeader: %{error}"
+  invalid_http_method: "Недопустимый HTTP-метод: %{method}"
+  invalid_request_config: "Недопустимая конфигурация запроса: %{error}"
+  invalid_response_format: "Недопустимый формат ответа: %{error}"
+  json_parse_failed: "Не удалось разобрать JSON: %{error}"
+  mime_parse_failed: "Не удалось разобрать MIME-тип"
+  missing_response_body: "Тело ответа пусто"
+  missing_url: "Отсутствует параметр URL в HTTP-запросе"
+  proxy_config_failed: "Не удалось настроить прокси: %{error}"
+  read_response_failed: "Не удалось прочитать ответ: %{error}"
+  request_failed: "Запрос не выполнен: %{error}"
+  request_timeout: "Превышено время ожидания запроса"
+  response_too_large: "Данные на стороне сервера превышают лимит запроса, размер данных на сервере: %{content_length}, лимит запроса: %{max_size}"
+  runtime_create_failed: "Не удалось создать среду выполнения: %{error}"
+  status_not_ok: "Код состояния не OK: %{status}"
+  upload_failed: "Ошибка загрузки: %{error}"
+
 main:
   failed_to_create_chat_store: "Не удалось создать хранилище чата: %{error}"
   failed_to_create_config_store: "Не удалось создать хранилище конфигурации: %{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "Запрос не выполнен (код состояния: %{status}) - %{error_type}: %{message}"
   request_failed: "Запрос не выполнен: %{error}"
   response_read_error: "Ошибка чтения ответа: %{error}"
-  stream_decode_error: "Ошибка декодирования потока данных: %{error}"
 
 note:
   already_exists: "Вы уже добавили эту заметку"

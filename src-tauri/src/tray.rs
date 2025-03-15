@@ -4,7 +4,7 @@ use crate::commands::window::quit_window;
 
 /// Create system tray menu
 ///
-/// # Parameters
+/// # Arguments
 /// - `app`: The app handle
 /// - `tray_id`: Optional tray id, if not provided, will use default tray id
 ///

@@ -119,7 +119,7 @@ static LANG_MAP: phf::Map<&'static str, &'static str> = phf_map! {
 
 /// Converts whatlang language code string to the ISO 639-1 format
 ///
-/// # Parameters
+/// # Arguments
 /// - `lang`: The whatlang language code to convert.
 ///
 /// # Returns

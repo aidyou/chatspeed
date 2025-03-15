@@ -115,7 +115,7 @@ pub fn check_screenshot_permission() -> Result<(), String> {
 
 /// Starts the text monitor
 ///
-/// # Parameters
+/// # Arguments
 /// * `app`: The app handle
 ///
 /// # Returns
@@ -178,7 +178,7 @@ pub fn start_text_monitor(app: AppHandle, force: Option<bool>) -> Result<(), Str
 
 /// Stops the text monitor
 ///
-/// # Parameters
+/// # Arguments
 /// * `monitor`: The text monitor manager
 ///
 /// # Returns

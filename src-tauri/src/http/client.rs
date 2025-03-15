@@ -366,7 +366,7 @@ impl HttpClient {
 
     /// send async request
     ///
-    /// # Parameters
+    /// # Arguments
     /// - `config`: The configuration for the request
     ///
     /// # Returns
@@ -378,7 +378,7 @@ impl HttpClient {
 
     /// Handles the actual request and retries if needed
     ///
-    /// # Parameters
+    /// # Arguments
     /// - `request`: The request configuration
     ///
     /// # Returns

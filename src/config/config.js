@@ -23,7 +23,7 @@ const csStorageKey = {
   ignoreVersion: 'ignoreVersion',
   updateLater: 'updateLater',
   networkEnabled: 'networkEnabled',
-  deepsearchEnabled: 'deepsearchEnabled',
+  assistNetworkEnabled: 'assistNetworkEnabled',
 }
 Object.freeze(csStorageKey)
 

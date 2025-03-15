@@ -49,7 +49,10 @@
       <div class="resize-handle" @mousedown="handleResizeStart" v-show="!sidebarCollapsed"></div>
       <el-main ref="mainContent" class="main">
         <div v-if="currentNote" class="chat note-content">
-          <markdown :content="currentNote.content" />
+          <markdown
+            :content="currentNote.content"
+            :reference="currentNote?.metadata?.reference || []"
+            :reasoning="currentNote?.metadata?.reasoning || ''" />
           <div class="note-footer">
             <div class="note-meta">
               <span class="time">{{ formatTime(currentNote.updatedAt * 1000) }}</span>
@@ -118,7 +121,7 @@ const treeData = ref([])
 const currentNote = ref(null)
 const defaultProps = {
   label: 'label',
-  children: 'nodes',
+  children: 'nodes'
 }
 const mainContent = ref(null)
 
@@ -138,7 +141,7 @@ watch(
       type: 'tag',
       label: tag.name,
       count: tag.note_count,
-      nodes: [],
+      nodes: []
     }))
   },
   { immediate: true }
@@ -236,7 +239,7 @@ const onHandleNodeClick = data => {
       data.nodes = res.map(note => ({
         id: note.id,
         type: 'note',
-        label: note.title,
+        label: note.title
       }))
     })
   } else {
@@ -270,7 +273,7 @@ const onNoteTrash = () => {
   ElMessageBox.confirm(t('chat.noteDeleteConfirmContent'), t('chat.noteDeleteConfirmTitle'), {
     confirmButtonText: t('common.confirm'),
     cancelButtonText: t('common.cancel'),
-    type: 'warning',
+    type: 'warning'
   }).then(() => {
     noteStore
       .deleteNote(currentNote.value.id)

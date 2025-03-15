@@ -1,7 +1,9 @@
 use super::types::AiSkill;
+use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
-use crate::{CFG_WINDOW_HEIGHT, CFG_WINDOW_WIDTH, HTTP_SERVER_DIR};
+use crate::window::WindowSize;
+use crate::MainWindowPosition;
 
 use log::error;
 use rusqlite::Result;
@@ -431,14 +433,26 @@ impl MainStore {
     /// # Arguments
     ///
     /// * `width` - The width of the window in pixels.
-    /// * `height` - The height of the window in pixels.
+    /// * `size` - The size of the window.
     ///
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn set_window_size(&mut self, width: u32, height: u32) -> Result<(), StoreError> {
-        self.set_config(CFG_WINDOW_WIDTH, &serde_json::json!(width))?;
-        self.set_config(CFG_WINDOW_HEIGHT, &serde_json::json!(height))?;
+    pub fn set_window_size(&mut self, size: WindowSize) -> Result<(), StoreError> {
+        self.set_config(crate::constants::CFG_WINDOW_SIZE, &serde_json::json!(size))?;
+        Ok(())
+    }
+
+    /// Saves the window position to the configuration.
+    ///
+    /// # Arguments
+    /// * `window` - The window to save the position of.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StoreError` if the database operation fails.
+    pub fn save_window_position(&mut self, pos: MainWindowPosition) -> Result<(), StoreError> {
+        self.set_config(CFG_WINDOW_POSITION, &serde_json::json!(pos))?;
         Ok(())
     }
 
@@ -447,7 +461,7 @@ impl MainStore {
     /// # Type Parameters
     /// * `T`: The target type that implements Deserialize
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `key`: The configuration key to retrieve
     /// * `default`: The default value to return if the key doesn't exist or conversion fails
     ///

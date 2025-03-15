@@ -54,7 +54,7 @@ use tauri::{command, AppHandle};
 ///
 /// This function is used to get the configuration information from the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 ///
 /// # Returns
@@ -109,7 +109,7 @@ pub fn get_all_config(
 ///
 /// This function is used to set the configuration information in the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `key` - The key of the configuration item to set
 /// - `value` - The value of the configuration item (in JSON format)
@@ -168,7 +168,7 @@ pub fn reload_config(state: State<Arc<Mutex<MainStore>>>) -> Result<(), String> 
 ///
 /// Retrieves an AI model by its ID from the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `id` - The ID of the AI model to retrieve
 ///
@@ -187,7 +187,7 @@ pub fn get_ai_model_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 ///
 /// Retrieves a list of all AI models from the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 ///
 /// # Returns
@@ -212,7 +212,7 @@ pub fn get_all_ai_models(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiMo
 ///
 /// Adds a new AI model to the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `name` - The name of the AI model to add
 /// - `models` - A vector of model names associated with the new AI model
@@ -291,7 +291,7 @@ pub fn add_ai_model(
 ///
 /// Updates the details of an existing AI model in the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `id` - The ID of the AI model to update
 /// - `name` - The new name for the AI model
@@ -377,7 +377,7 @@ pub fn update_ai_model(
 ///
 /// Updates the order of AI models in the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `model_ids` - A vector of IDs representing the new order of AI models
 ///
@@ -407,7 +407,7 @@ pub fn update_ai_model_order(
 ///
 /// Removes an AI model from the configuration store by its ID.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `id` - The ID of the AI model to delete
 ///
@@ -437,7 +437,7 @@ pub fn delete_ai_model(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(
 ///
 /// Retrieves an AI skill by its ID from the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `id` - The ID of the AI skill to retrieve
 ///
@@ -456,7 +456,7 @@ pub fn get_ai_skill_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 ///
 /// Retrieves a list of all AI skills from the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 ///
 /// # Returns
@@ -481,7 +481,7 @@ pub fn get_all_ai_skills(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiSk
 ///
 /// Adds a new AI skill to the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `skill` - The AI skill to add
 ///
@@ -524,7 +524,7 @@ pub fn add_ai_skill(
 ///
 /// Updates the details of an existing AI skill in the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `skill` - The AI skill with updated information
 ///
@@ -568,7 +568,7 @@ pub fn update_ai_skill(
 ///
 /// Updates the order of AI skills in the configuration store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `skill_ids` - A vector of IDs representing the new order of AI skills
 ///
@@ -589,7 +589,7 @@ pub fn update_ai_skill_order(
 ///
 /// Removes an AI skill from the configuration store by its ID.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the configuration store, automatically injected by Tauri
 /// - `id` - The ID of the AI skill to delete
 ///
@@ -627,7 +627,7 @@ pub async fn update_shortcut(app: tauri::AppHandle, key: &str, value: &str) -> R
 /// and either moves it to the upload directory or saves a new thumbnail image. The function organizes the
 /// uploaded images by month.
 ///
-/// # Parameters
+/// # Arguments
 /// - `image_path`: The path of the image file to upload.
 ///
 /// # Returns

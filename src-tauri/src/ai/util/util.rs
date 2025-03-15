@@ -4,7 +4,7 @@ use crate::ai::network::ProxyType;
 
 /// Get the metadata from the extra_params.
 ///
-/// # Parameters
+/// # Arguments
 /// * `extra_params`: The extra parameters from the API request.
 ///
 /// # Returns
@@ -37,7 +37,7 @@ pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
 
 /// Initialize the extra parameters.
 ///
-/// # Parameters
+/// # Arguments
 /// * `extra_params`: The extra parameters from the API request.
 ///
 /// # Returns
@@ -83,7 +83,7 @@ pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) 
 ///
 /// This function updates the existing metadata if provided; if not, it creates a new metadata object.
 ///
-/// # Parameters
+/// # Arguments
 ///
 /// * `metadata_option` - The optional existing metadata
 /// * `key` - The key to update or add

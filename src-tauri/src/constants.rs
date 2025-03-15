@@ -1,11 +1,14 @@
 use lazy_static::*;
 use parking_lot::RwLock as PLRwLock;
+use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-pub const CFG_WINDOW_WIDTH: &str = "window_width";
-pub const CFG_WINDOW_HEIGHT: &str = "window_height";
+// The main window info
+pub const CFG_WINDOW_POSITION: &str = "window_position";
+pub const CFG_WINDOW_SIZE: &str = "window_size";
+
 pub const TRAY_ID: &str = "Chatspeed";
 
 // Auto update config
@@ -25,7 +28,7 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 // chatspeed crawler api name
 pub const CHATSPEED_CRAWLER: &str = "chatspeed_crawler";
-// pub const CFG_WORD_SELECTION_TOOLBAR: &str = "word_selection_toolbar";
+pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 
 // main window shortcuts
 pub const CFG_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "main_window_visible_shortcut";
@@ -65,11 +68,22 @@ lazy_static! {
     // shared data dir: ${app_data}/shared
     pub static ref SHARED_DATA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
 
-    // Development environment data directory
+    // Just for Development environment data directory
     pub static ref STORE_DIR: Arc<PLRwLock<PathBuf>> = {
         #[cfg(debug_assertions)]
         {
-            let path = PathBuf::from("dev_data");
+            let project_root = if cfg!(test) {
+                // 在测试环境中，通过环境变量获取项目根目录
+                env::var("PROJECT_ROOT")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory")).parent().unwrap().into()
+            } else {
+                // 在开发和生产环境中，使用 CARGO_MANIFEST_DIR 或当前工作目录
+                env::var("CARGO_MANIFEST_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"))
+            };
+            let path = PathBuf::from(project_root).join("dev_data");
             // Create directory if it doesn't exist
             if !path.exists() {
                 if let Err(e) = std::fs::create_dir_all(&path) {

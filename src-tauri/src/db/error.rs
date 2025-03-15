@@ -38,7 +38,7 @@ pub enum StoreError {
 
 /// Macro to implement the `From` trait for converting specific error types into `StoreError`.
 ///
-/// # Parameters
+/// # Arguments
 ///
 /// - `$variant`: The variant of `StoreError` to use.
 /// - `$error_type`: The type of the error to convert from.

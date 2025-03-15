@@ -8,6 +8,17 @@ chat:
   parse_response_failed: "レスポンスの解析に失敗しました：%{error}"
   request_failed: "リクエストが失敗しました、ステータスコード：%{status}、レスポンス：%{response}"
   stream_read_error: "ストリームデータの読み取りに失敗しました：%{error}"
+  context:
+    content: 内容
+    language: 言語
+    location: 場所
+    role: 役割
+    time: 時間
+  search_analysing: 分析中
+  search_fetching: 取得中
+  search_results: 検索結果
+  searching: 検索中
+  user_message_with_references: 参照付きユーザーメッセージ
 
 db:
   already_exists: "データがすでに存在します"
@@ -47,6 +58,34 @@ db:
   string_error: "文字列エラー：%{error}"
   tauri_error: "Tauriエラー：%{error}"
 
+http:
+  client_build_failed: "クライアントの構築に失敗しました"
+  connection_failed: "接続に失敗しました"
+  download_failed: "ダウンロードに失敗しました"
+  failed_to_clone_request: "リクエストの複製に失敗しました"
+  failed_to_create_file: "ファイルの作成に失敗しました"
+  failed_to_open_file: "ファイルのオープンに失敗しました"
+  failed_to_parse_response: "レスポンスの解析に失敗しました"
+  failed_to_read_file: "ファイルの読み取りに失敗しました"
+  failed_to_read_response: "レスポンスの読み取りに失敗しました"
+  failed_to_write_file: "ファイルの書き込みに失敗しました"
+  headers_convert_failed: "ヘッダーの変換に失敗しました"
+  invalid_http_method: "無効なHTTPメソッド"
+  invalid_request_config: "無効なリクエスト設定"
+  invalid_response_format: "無効なレスポンス形式"
+  json_parse_failed: "JSONの解析に失敗しました"
+  mime_parse_failed: "MIMEの解析に失敗しました"
+  missing_response_body: "レスポンスボディがありません"
+  missing_url: "URLがありません"
+  proxy_config_failed: "プロキシの設定に失敗しました"
+  read_response_failed: "レスポンスの読み取りに失敗しました"
+  request_failed: "リクエストに失敗しました"
+  request_timeout: "リクエストがタイムアウトしました"
+  response_too_large: "レスポンスが大きすぎます"
+  runtime_create_failed: "ランタイムの作成に失敗しました"
+  status_not_ok: "ステータスがOKではありません"
+  upload_failed: "アップロードに失敗しました"
+
 main:
   failed_to_create_chat_store: "チャットストアの作成に失敗しました：%{error}"
   failed_to_create_config_store: "設定ストアの作成に失敗しました：%{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "リクエストが失敗しました（ステータスコード：%{status}）- %{error_type}：%{message}"
   request_failed: "リクエストが失敗しました：%{error}"
   response_read_error: "レスポンスの読み取りに失敗しました：%{error}"
-  stream_decode_error: "ストリームデータのデコードに失敗しました：%{error}"
 
 note:
   already_exists: "このノートはすでに追加されています"

@@ -11,9 +11,11 @@ use crate::{
     },
 };
 
+/// A function that sends an HTTP request.
 pub struct Request {}
 
 impl Request {
+    /// Creates a new instance of the `Request` function.
     pub fn new() -> Self {
         Self {}
     }
@@ -21,19 +23,78 @@ impl Request {
 
 #[async_trait]
 impl FunctionDefinition for Request {
+    /// Returns the name of the function.
     fn name(&self) -> &str {
-        "Request"
+        "request"
     }
 
+    /// Returns the type of the function.
     fn function_type(&self) -> FunctionType {
         FunctionType::Http
     }
 
+    /// Returns a brief description of the function.
     fn description(&self) -> &str {
         "Execute a HTTP request"
     }
 
+    /// Returns the function calling spec.
+    fn function_calling_spec(&self) -> Value {
+        json!({
+            "name": self.name(),
+            "description": self.description(),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to send the request to."
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST"],
+                        "description": "The HTTP method to use. Supported methods: GET, POST."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "The headers to include in the request. Example: {\"User-Agent\": \"Mozilla/5.0\", \"Accept\": \"application/json\"}."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "The body of the request. Required for POST requests."
+                    }
+                },
+                "required": ["url", "method"]
+            },
+            "responses": {
+                "type": "object",
+                "properties": {
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "The headers of the HTTP response."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "The body of the HTTP response."
+                    }
+                },
+                "description": "The response containing the HTTP headers and body."
+            }
+        })
+    }
+
+    /// Executes the function with the given parameters and context.
+    ///
+    /// # Arguments
+    /// * `params` - The parameters of the function.
+    /// * `_context` - The context of the function.
+    ///
+    /// # Returns
+    /// Returns a `FunctionResult` containing the result of the function execution.
     async fn execute(&self, params: Value, _context: &Context) -> FunctionResult {
+        // The URL of the request.
         let url = params["url"]
             .as_str()
             .ok_or_else(|| WorkflowError::FunctionParamError("url must be a string".to_string()))?;

@@ -10,6 +10,10 @@ use crate::{
     },
 };
 
+/// A function implementation for fetching data from a remote URL.
+///
+/// This function supports HTTP and HTTPS protocols, and can handle
+/// various types of requests (GET, POST, etc.) with custom headers and body.
 pub struct Fetch {
     // chatspeed bot server url
     chatspeedbot_server: String,
@@ -25,38 +29,98 @@ impl Fetch {
 
 #[async_trait]
 impl FunctionDefinition for Fetch {
+    /// Returns the name of the function.
     fn name(&self) -> &str {
-        "Fetch"
+        "fetch"
     }
 
+    /// Returns the type of the function.
     fn function_type(&self) -> FunctionType {
         FunctionType::CHP
     }
 
+    /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Crawl content from a url"
+        "Fetches data from a remote URL using HTTP or HTTPS."
     }
 
+    /// Returns the function calling specification in JSON format.
+    ///
+    /// This method provides detailed information about the function
+    /// in a format compatible with function calling APIs.
+    ///
+    /// # Returns
+    /// * `Value` - The function specification in JSON format.
+    fn function_calling_spec(&self) -> Value {
+        json!({
+            "name": self.name(),
+            "description": self.description(),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch data from"},
+                },
+                "required": ["url"]
+            },
+            "responses": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                    "type": "string",
+                    "description": "The title of the fetched content."
+                    },
+                    "url": {
+                    "type": "string",
+                    "description": "The URL of the fetched content."
+                    },
+                    "content": {
+                    "type": "string",
+                    "description": "The main content of the fetched page."
+                    }
+                },
+                "description": "The response containing the fetched content."
+            }
+        })
+    }
+
+    /// Executes the fetch function.
+    ///
+    /// # Arguments
+    /// * `params` - The parameters to pass to the function, including the URL.
+    /// * `context` - The context in which the function is executed.
+    ///
+    /// # Returns
+    /// * `FunctionResult` - The result of the function execution.
     async fn execute(&self, params: Value, _context: &Context) -> FunctionResult {
+        // Get the URL from the parameters
         let url = params["url"]
             .as_str()
             .ok_or_else(|| WorkflowError::FunctionParamError("url must be a string".to_string()))?;
+
+        // Check if the URL is empty
         if url.is_empty() {
             return Err(WorkflowError::FunctionParamError(
                 "url must not be empty".to_string(),
             ));
         }
+
+        // Check if the URL starts with http:// or https://
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(WorkflowError::FunctionParamError(
                 "url must start with http:// or https://".to_string(),
             ));
         }
 
+        // Create a new crawler instance
         let crawler = Crawler::new(self.chatspeedbot_server.clone());
+
+        // Fetch the data from the URL
         let results = crawler
             .fetch(url)
             .await
             .map_err(|e| WorkflowError::Execution(e.to_string()))?;
+
+        // Return the results as JSON
         Ok(json!(results))
     }
 }

@@ -115,6 +115,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
             deleted_at INTEGER,
+            metadata TEXT,
             FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE SET NULL,
             FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE SET NULL
         )",

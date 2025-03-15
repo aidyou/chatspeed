@@ -1,4 +1,10 @@
 chat:
+  context:
+    location: "[Location: %{location}]"
+    role: "[Role: %{role}]"
+    time: "[Time: %{time}]"
+    language: "[Language: %{language}]"
+    content: "%{context}\n\n%{content}"
   failed_to_create_file: "Failed to create file: %{error}"
   failed_to_detect_language: "Failed to detect language"
   failed_to_extract_text: "Failed to extract generated text content"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "Invalid API provider: %{provider}"
   parse_response_failed: "Failed to parse response: %{error}"
   request_failed: "Request failed with status: %{status}. Response: %{response}"
+  search_analysing: "Analyzing..."
+  search_fetching: "Fetching..."
+  search_results: "Found %{count} results in total"
+  searching: "Searching..."
   stream_read_error: "Failed to read stream data: %{error}"
+  user_message_with_references: "References:\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nWhen answering user questions, prioritize using your own knowledge. If the question is beyond your knowledge or requires the latest information, you can refer to the information within `<ref></ref>`. When referencing this information, please mark it with [^id] after the relevant sentence. Do not simply repeat the reference content, but provide a comprehensive analysis in your response.\n\nUser question:\n%{content}"
 
 db:
   already_exists: "Data already exists"
@@ -74,7 +85,6 @@ http:
   runtime_create_failed: "Failed to create runtime: %{error}"
   status_not_ok: "Status code is not OK: %{status}"
   upload_failed: "Upload failed: %{error}"
-  user_message_with_references: "User message:\n %{content}\n\nReferences:\n<ref source=\"crawler\">\n```json\n%{crawl_content}\n```\n</ref>\n\nPlease respond to the user message based on the references within `<ref></ref>`."
 
 main:
   failed_to_create_chat_store: "Failed to create chat store: %{error}"
@@ -107,7 +117,6 @@ network:
   request_failed_with_type: "Request failed (status: %{status}) - %{error_type}: %{message}"
   request_failed: "Request failed: %{error}"
   response_read_error: "Failed to read response: %{error}"
-  stream_decode_error: "Failed to decode stream data: %{error}"
 
 note:
   already_exists: "You have already added this note"

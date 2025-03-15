@@ -1,7 +1,8 @@
 use bytes::Bytes;
-use rust_i18n::t;
 use serde_json::Value;
 use std::fmt;
+
+use crate::ai::traits::chat::MessageType;
 
 /// Represents different types of stream response formats
 pub enum StreamFormat {
@@ -59,7 +60,7 @@ pub struct StreamChunk {
     /// Token usage information
     pub usage: Option<TokenUsage>,
     // Message type, text,step,reference
-    pub msg_type: Option<String>,
+    pub msg_type: Option<MessageType>,
 }
 
 /// Stream response parser
@@ -85,8 +86,9 @@ impl StreamParser {
 
     /// Parse OpenAI compatible format
     fn parse_openai(chunk: Bytes) -> Result<StreamChunk, String> {
-        let chunk_str = String::from_utf8(chunk.to_vec())
-            .map_err(|e| t!("network.stream_decode_error", error = e.to_string()))?;
+        // 使用 from_utf8_lossy 替代 from_utf8，以便在遇到无效的 UTF-8 序列时能够继续处理
+        // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
+        let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
 
         for line in chunk_str.lines() {
             if line.starts_with("data: ") {
@@ -96,7 +98,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content: None,
                         usage: None,
-                        msg_type: None,
+                        msg_type: Some(MessageType::Finished),
                     });
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(data) {
@@ -113,7 +115,7 @@ impl StreamParser {
                     // message type
                     let msg_type = json["choices"][0]["delta"]["type"]
                         .as_str()
-                        .map(String::from);
+                        .and_then(|s| MessageType::from_str(s));
 
                     let usage = if let Some(usage) = json.get("usage") {
                         Some(TokenUsage {
@@ -146,8 +148,7 @@ impl StreamParser {
 
     /// Parse Google AI (Gemini) format
     fn parse_gemini(chunk: Bytes) -> Result<StreamChunk, String> {
-        let chunk_str = String::from_utf8(chunk.to_vec())
-            .map_err(|e| t!("network.stream_decode_error", error = e.to_string()))?;
+        let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
 
         if let Ok(json) = serde_json::from_str::<Value>(&chunk_str) {
             let content = json["candidates"][0]["content"]["parts"][0]["text"]
@@ -166,7 +167,7 @@ impl StreamParser {
                 reasoning_content: None,
                 content,
                 usage,
-                msg_type: None,
+                msg_type: Some(MessageType::Text),
             });
         }
         Ok(StreamChunk {
@@ -179,8 +180,7 @@ impl StreamParser {
 
     /// Parse standard SSE format
     fn parse_sse(chunk: Bytes) -> Result<StreamChunk, String> {
-        let chunk_str = String::from_utf8(chunk.to_vec())
-            .map_err(|e| t!("network.stream_decode_error", error = e.to_string()))?;
+        let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
 
         for line in chunk_str.lines() {
             if line.starts_with("event: done") {
@@ -188,7 +188,7 @@ impl StreamParser {
                     reasoning_content: None,
                     content: None,
                     usage: None,
-                    msg_type: None,
+                    msg_type: Some(MessageType::Finished),
                 });
             }
             if line.starts_with("data: ") {
@@ -202,7 +202,10 @@ impl StreamParser {
                         .get("reasoning_content")
                         .and_then(Value::as_str)
                         .map(String::from);
-                    let r#type = json.get("type").and_then(Value::as_str).map(String::from);
+                    let r#type = json
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .and_then(|s| MessageType::from_str(s));
 
                     let usage = json.get("usage").and_then(|usage| {
                         Some(TokenUsage {
@@ -238,8 +241,7 @@ impl StreamParser {
 
     // /// Parse HuggingFace format
     // fn parse_huggingface(chunk: Bytes) -> Result<StreamChunk, String> {
-    //     let chunk_str = String::from_utf8(chunk.to_vec())
-    //         .map_err(|e| t!("network.stream_decode_error", error = e.to_string()))?;
+    //     let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
 
     //     if let Ok(json) = serde_json::from_str::<Value>(&chunk_str) {
     //         let content = json["completion"].as_str().map(String::from);
@@ -256,8 +258,7 @@ impl StreamParser {
 
     /// Parse Anthropic format
     fn parse_anthropic(chunk: Bytes) -> Result<StreamChunk, String> {
-        let chunk_str = String::from_utf8(chunk.to_vec())
-            .map_err(|e| t!("network.stream_decode_error", error = e.to_string()))?;
+        let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
 
         for line in chunk_str.lines() {
             if line.starts_with("data: ") {
@@ -267,7 +268,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content: None,
                         usage: None,
-                        msg_type: None,
+                        msg_type: Some(MessageType::Finished),
                     });
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(data) {
@@ -283,7 +284,7 @@ impl StreamParser {
                         reasoning_content: None,
                         content,
                         usage,
-                        msg_type: None,
+                        msg_type: Some(MessageType::Text),
                     });
                 }
             }
@@ -292,7 +293,7 @@ impl StreamParser {
             reasoning_content: None,
             content: None,
             usage: None,
-            msg_type: None,
+            msg_type: Some(MessageType::Finished),
         })
     }
 }

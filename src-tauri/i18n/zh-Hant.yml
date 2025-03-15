@@ -1,5 +1,11 @@
 chat:
-  failed_to_create_file: "無法建立檔案：%{error}"
+  context:
+    location: "[我的位置：%{location}]"
+    role: "[我的角色：%{role}]"
+    time: "[当前时间：%{time}]"
+    language: "[首要语言：%{language}]"
+    content: "%{context}\n\n%{content}"
+  failed_to_create_file: "无法建立檔案：%{error}"
   failed_to_detect_language: "偵測語言失敗"
   failed_to_extract_text: "無法擷取生成的文字內容"
   failed_to_send_request: "無法傳送請求：%{error}"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "無效的API提供者：%{provider}"
   parse_response_failed: "解析回應失敗：%{error}"
   request_failed: "請求失敗，狀態碼：%{status}，回應：%{response}"
+  search_analysing: 分析中
+  search_fetching: 獲取中
+  search_results: 本次共搜尋到%{count}條結果
+  searching: 正在搜尋資訊...
   stream_read_error: "讀取串流資料失敗：%{error}"
+  user_message_with_references: "[參考資料]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\n回答用戶問題時，請優先使用你自身的知識。如果問題超出你的知識範圍或需要最新資訊，可以參考`<ref></ref>`標籤內的資料。引用這些資料時，請在相關句子後標註[^id]。請不要簡單重複參考資料的內容，而是進行綜合分析後給出回答。\n\n[用戶問題]\n%{content}"
 
 db:
   already_exists: "資料已存在"
@@ -47,6 +58,34 @@ db:
   string_error: "字串錯誤：%{error}"
   tauri_error: "Tauri錯誤：%{error}"
 
+http:
+  client_build_failed: "建立HTTP客戶端失敗: %{error}"
+  connection_failed: "連接失敗: %{error}"
+  download_failed: "下載失敗: %{error}"
+  failed_to_clone_request: "請求重試時，無法克隆請求"
+  failed_to_create_file: "無法建立檔案: %{error}"
+  failed_to_open_file: "無法開啟檔案: %{error}"
+  failed_to_parse_response: "無法解析回應: %{error}"
+  failed_to_read_file: "無法讀取檔案，地址：%{path}，錯誤：%{error}"
+  failed_to_read_response: "無法讀取回應: %{error}"
+  failed_to_write_file: "無法寫入檔案: %{error}"
+  headers_convert_failed: "無法將請求頭配置轉換為 HttpHeader: %{error}"
+  invalid_http_method: "無效的HTTP方法: %{method}"
+  invalid_request_config: "無效的請求配置: %{error}"
+  invalid_response_format: "無效的回應格式: %{error}"
+  json_parse_failed: "無法解析JSON: %{error}"
+  mime_parse_failed: "無法解析MIME類型"
+  missing_response_body: "回應體為空"
+  missing_url: "http請求缺少URL參數"
+  proxy_config_failed: "配置代理失敗: %{error}"
+  read_response_failed: "無法讀取回應: %{error}"
+  request_failed: "請求失敗: %{error}"
+  request_timeout: "請求超時"
+  response_too_large: "伺服器端的數據大於請求限制，伺服器端數據大小：%{content_length},請求限制：%{max_size}"
+  runtime_create_failed: "建立運行時失敗: %{error}"
+  status_not_ok: "狀態碼不是OK: %{status}"
+  upload_failed: "上傳失敗: %{error}"
+
 main:
   failed_to_create_chat_store: "無法建立聊天儲存：%{error}"
   failed_to_create_config_store: "無法建立設定儲存：%{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "請求失敗（狀態碼：%{status}）- %{error_type}：%{message}"
   request_failed: "請求失敗：%{error}"
   response_read_error: "讀取回應失敗：%{error}"
-  stream_decode_error: "解碼串流資料失敗：%{error}"
 
 note:
   already_exists: "您已經添加過此筆記"

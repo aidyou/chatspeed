@@ -8,10 +8,10 @@ use tokio::sync::Mutex;
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat, TokenUsage,
 };
-use crate::ai::traits::chat::ChatResponse;
+use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
+use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
 use crate::impl_stoppable;
-use crate::libs::ai_util;
 
 /// OpenAI chat implementation
 #[derive(Clone)]
@@ -46,14 +46,11 @@ impl OpenAIChat {
         let mut token_usage = TokenUsage::default();
 
         while let Some(chunk) = response.chunk().await.map_err(|e| {
-            let error = t!("chat.stream_read_error", error = e.to_string());
+            let error = t!("chat.stream_read_error", error = e.to_string()).to_string();
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                error.clone().to_string(),
-                true,
-                true,
-                false,
-                None,
+                error.clone(),
+                MessageType::Error,
                 metadata_option.clone(),
             ));
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
@@ -67,6 +64,7 @@ impl OpenAIChat {
                 content,
                 usage,
                 msg_type,
+                ..
             } = self
                 .client
                 .process_stream_chunk(chunk, &StreamFormat::OpenAI)
@@ -75,10 +73,7 @@ impl OpenAIChat {
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         e.clone(),
-                        true,
-                        true,
-                        false,
-                        None,
+                        MessageType::Error,
                         metadata_option.clone(),
                     ));
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -94,10 +89,7 @@ impl OpenAIChat {
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         content,
-                        false,
-                        false,
-                        true,
-                        msg_type.clone(),
+                        MessageType::Reasoning,
                         metadata_option.clone(),
                     ));
                 }
@@ -105,13 +97,11 @@ impl OpenAIChat {
             if let Some(content) = content {
                 if !content.is_empty() {
                     full_response.push_str(&content);
+                    let msg_type = msg_type.unwrap_or(MessageType::Text);
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         content,
-                        false,
-                        false,
-                        false,
-                        msg_type.clone(),
+                        msg_type,
                         metadata_option.clone(),
                     ));
                 }
@@ -122,11 +112,8 @@ impl OpenAIChat {
         callback(ChatResponse::new_with_arc(
             chat_id.clone(),
             String::new(),
-            false,
-            true,
-            false,
-            None,
-            Some(ai_util::update_or_create_metadata(
+            MessageType::Finished,
+            Some(update_or_create_metadata(
                 metadata_option,
                 "tokens",
                 json!({
@@ -163,7 +150,7 @@ impl AiChatTrait for OpenAIChat {
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let (params, metadata_option) = ai_util::init_extra_params(extra_params.clone());
+        let (params, metadata_option) = init_extra_params(extra_params.clone());
 
         let response = self
             .client
@@ -171,7 +158,7 @@ impl AiChatTrait for OpenAIChat {
                 &ApiConfig::new(
                     Some(api_url.unwrap_or("https://api.openai.com/v1").to_string()),
                     api_key.map(String::from),
-                    ai_util::get_proxy_type(extra_params),
+                    get_proxy_type(extra_params),
                     None,
                 ),
                 "chat/completions",
@@ -190,10 +177,7 @@ impl AiChatTrait for OpenAIChat {
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
                     e.clone(),
-                    true,
-                    true,
-                    false,
-                    None,
+                    MessageType::Error,
                     metadata_option.clone(),
                 ));
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -203,10 +187,7 @@ impl AiChatTrait for OpenAIChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 response.content.clone(),
-                true,
-                true,
-                false,
-                None,
+                MessageType::Error,
                 metadata_option,
             ));
             return Err(Box::new(std::io::Error::new(
@@ -222,10 +203,7 @@ impl AiChatTrait for OpenAIChat {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 response.content.clone(),
-                false,
-                true,
-                false,
-                None,
+                MessageType::Finished,
                 metadata_option,
             ));
             Ok(response.content)

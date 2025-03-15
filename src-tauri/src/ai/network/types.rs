@@ -10,6 +10,28 @@ pub enum ProxyType {
     Http(String, Option<String>, Option<String>), // Http(server, username, password)
 }
 
+impl From<ProxyType> for String {
+    fn from(proxy_type: ProxyType) -> Self {
+        match proxy_type {
+            ProxyType::None => "none".to_string(),
+            ProxyType::System => "system".to_string(),
+            ProxyType::Http(server, username, password) => {
+                if username.is_some() && password.is_some() {
+                    format!(
+                        "http://{}:{}@{}",
+                        username.unwrap_or_default(),
+                        password.unwrap_or_default(),
+                        server
+                    )
+                } else {
+                    format!("http://{}", server)
+                }
+            }
+        }
+    }
+}
+// 不能实现From<ProxyType> for &str，因为&str是引用类型，需要指定生命周期
+
 /// Configuration for API requests
 #[derive(Debug, Clone)]
 pub struct ApiConfig {

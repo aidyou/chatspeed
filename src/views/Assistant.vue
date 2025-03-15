@@ -2,11 +2,13 @@
   <div class="assistant-page" @click="selectGroupVisible = false">
     <header class="header">
       <div class="input-container">
-        <div
-          class="icons upperLayer"
-          @click.stop="selectGroupVisible = !selectGroupVisible"
-          v-if="canChat">
-          <cs name="menu" />
+        <div class="icons upperLayer" v-if="canChat">
+          <cs name="menu" @click.stop="selectGroupVisible = !selectGroupVisible" />
+          <cs
+            name="connected"
+            @click="onToggleNetwork"
+            :class="{ active: networkEnabled }"
+            v-if="crawlerAvailable" />
         </div>
         <el-input
           class="input upperLayer"
@@ -81,7 +83,7 @@
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
         <el-tooltip
-          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'alwaysOnTop'}`)"
+          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
           :hide-after="0"
           placement="bottom">
           <cs name="pin" />
@@ -120,17 +122,47 @@
           <div class="content-container">
             <!-- todo: use markdown component -->
             <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
-            <div
-              class="content"
-              ref="chatMessagesRef"
-              v-html="currentAssistantMessageHtml"
-              v-highlight
-              v-link
-              v-table
-              v-katex
-              v-mermaid
-              v-think
-              v-reference />
+            <div class="content" ref="chatMessagesRef">
+              <div class="chat-reference" v-if="chatState.reference.length > 0">
+                <div
+                  class="chat-reference-title"
+                  :class="{ expanded: showReference }"
+                  @click="showReference = !showReference">
+                  <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
+                </div>
+                <ul class="chat-reference-list" v-show="showReference" v-link>
+                  <li v-for="item in chatState.reference" :key="item.id">
+                    <a :href="item.url" :title="item.title.trim()">{{ item.title.trim() }}</a>
+                  </li>
+                </ul>
+              </div>
+              <div class="chat-think" v-if="chatState.reasoning != ''">
+                <div
+                  class="chat-think-title"
+                  :class="{ expanded: showThink }"
+                  @click="showThink = !showThink">
+                  <span>{{
+                    $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
+                  }}</span>
+                </div>
+                <div
+                  v-show="showThink"
+                  class="think-content"
+                  v-highlight
+                  v-link
+                  v-table
+                  v-katex
+                  v-html="parseMarkdown(chatState.reasoning)"></div>
+              </div>
+              <div
+                v-html="currentAssistantMessageHtml"
+                v-highlight
+                v-link
+                v-table
+                v-katex
+                v-think
+                v-mermaid />
+            </div>
           </div>
         </div>
       </div>
@@ -230,7 +262,6 @@ import { useI18n } from 'vue-i18n'
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 
 import SkillItem from '@/components/chat/skillItem.vue'
 
@@ -255,6 +286,18 @@ const skillStore = useSkillStore()
 const settingStore = useSettingStore()
 const windowStore = useWindowStore()
 
+// network connection and deep search
+// When enabled, it will automatically crawl the URLs in user queries
+const networkEnabled = ref(csGetStorage(csStorageKey.assistNetworkEnabled, true))
+// When deep search is enabled, the AI will automatically plan the user's questions
+// and break them down into executable steps for research.
+const crawlerAvailable = computed(() => {
+  return (
+    settingStore.settings.chatspeedCrawler != '' &&
+    settingStore.settings.chatspeedCrawler.startsWith('http')
+  )
+})
+
 const selectGroupRef = ref(null)
 const selectGroupVisible = ref(false)
 
@@ -271,11 +314,15 @@ const currentAssistantMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
 const lastChatId = ref()
-const chatState = ref({
-  reasoning: '',
+const getDefaultChatState = () => ({
   message: '',
-  reference: []
+  reference: [],
+  reasoning: '',
+  isReasoning: false
 })
+const chatState = ref(getDefaultChatState())
+const showThink = ref(true)
+const showReference = ref(false)
 
 // language config
 const languageDict = languageConfig.languages
@@ -354,14 +401,11 @@ watch(
 /**
  * Scroll to bottom when assistant message changes
  */
-watch(
-  () => currentAssistantMessage.value,
-  () => {
-    nextTick(() => {
-      scrollToBottomIfNeeded()
-    })
-  }
-)
+watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
+  nextTick(() => {
+    scrollToBottomIfNeeded()
+  })
+})
 
 watch(
   () => currentModel.value,
@@ -513,11 +557,7 @@ const sendMessage = async () => {
   currentAssistantMessage.value = ''
   payloadMetadata.value = {}
   isChatting.value = true
-  chatState.value = {
-    reasoning: '',
-    message: '',
-    reference: []
-  }
+  chatState.value = getDefaultChatState()
   lastChatId.value = Uuid()
 
   // reset scroll behavior
@@ -525,7 +565,7 @@ const sendMessage = async () => {
   nextTick(scrollToBottomIfNeeded)
 
   try {
-    await invoke('chat_with_ai', {
+    await invoke('chat_completion', {
       apiProtocol: currentModel.value.apiProtocol,
       apiProtocol: currentModel.value.apiProtocol,
       apiUrl: currentModel.value.baseUrl,
@@ -533,13 +573,15 @@ const sendMessage = async () => {
       model: currentModel.value.defaultModel,
       chatId: lastChatId.value,
       messages: messages,
+      networkEnabled: networkEnabled.value,
       metadata: {
         maxTokens: currentModel.value.maxTokens,
         temperature: currentModel.value.temperature,
         topP: currentModel.value.topP,
         topK: currentModel.value.topK,
         label: settingStore.label,
-        proxyType: proxyType.value
+        proxyType: proxyType.value,
+        useContext: skillIndex.value == 0
       }
     })
   } catch (error) {
@@ -560,29 +602,53 @@ const handleChatMessage = async payload => {
     return
   }
 
-  let thinkingClass = ''
-  if (payload?.type === 'reference') {
-    if (payload?.chunk) {
-      try {
-        if (typeof payload?.chunk === 'string') {
-          chatState.value.reference.push(...JSON.parse(payload?.chunk))
-        } else {
-          chatState.value.reference.push(...payload?.chunk)
+  chatState.value.isReasoning = payload?.isReasoning
+  switch (payload?.type) {
+    case 'step':
+      currentAssistantMessage.value = payload?.chunk || ''
+      return
+    case 'reference':
+      if (payload?.chunk) {
+        try {
+          if (typeof payload?.chunk === 'string') {
+            const parsedChunk = JSON.parse(payload?.chunk || '[]')
+            if (Array.isArray(parsedChunk)) {
+              chatState.value.reference.push(...parsedChunk)
+            } else {
+              console.error('Expected an array but got:', typeof parsedChunk)
+            }
+          } else {
+            chatState.value.reference.push(...payload?.chunk)
+          }
+        } catch (e) {
+          console.error('error on parse reference:', e)
+          console.log('chunk', payload?.chunk)
         }
-      } catch (e) {
-        console.error('error on parse reference:', e)
       }
-    }
-  } else if (payload?.isReasoning) {
-    chatState.value.reasoning += payload?.chunk || ''
-    thinkingClass = 'thinking'
-  } else {
-    chatState.value.message += payload?.chunk || ''
+      break
+    case 'reasoning':
+      chatState.value.reasoning += payload?.chunk || ''
+      break
+    case 'error':
+    case 'finished':
+      payload.isDone = true
+      if (payload.type === 'finished') {
+        chatState.value.message += payload?.chunk || ''
+      }
+      break
+    default:
+      chatState.value.message += payload?.chunk || ''
+
+      // handle deepseek-r1 reasoning flag `<think></think>`
+      if (chatState.value.message.startsWith('<think>') && chatState.value.includes('</think>')) {
+        const messages = chatState.value.message.split('</think>')
+        chatState.value.reasoning = messages[0].replace('<think>', '').trim()
+        chatState.value.message = messages[1].trim()
+      }
+      break
   }
-  currentAssistantMessage.value =
-    (chatState.value.reasoning
-      ? '<think class="' + thinkingClass + '">' + chatState.value.reasoning + '</think>\n'
-      : '') + (chatState.value.message || '')
+
+  currentAssistantMessage.value = chatState.value.message || ''
 
   if (payload?.isDone) {
     isChatting.value = false
@@ -591,7 +657,8 @@ const handleChatMessage = async payload => {
       prompt: payload?.metadata?.tokens?.prompt || 0,
       completion: payload?.metadata?.tokens?.completion || 0,
       provider: currentModel.value.defaultModel || '',
-      reference: chatState.value?.reference || []
+      reference: chatState.value?.reference || [],
+      reasoning: chatState.value?.reasoning || ''
     }
     nextTick(scrollToBottomIfNeeded)
   }
@@ -725,6 +792,8 @@ const onGoToChat = async () => {
         currentAssistantMessage.value,
         payloadMetadata.value
       )
+
+      // send sync state to main window
       sendSyncState('conversation_switch', 'main', {
         conversationId: chatStore.currentConversationId
       })
@@ -750,6 +819,14 @@ const onCopyMessage = () => {
   } catch (error) {
     showMessage(t('chat.errorOnCopyMessage', { error }), 'error', 3000)
   }
+}
+
+/**
+ * Toggle network connection
+ */
+const onToggleNetwork = () => {
+  networkEnabled.value = !networkEnabled.value
+  csSetStorage(csStorageKey.assistNetworkEnabled, networkEnabled.value)
 }
 
 /**
@@ -879,9 +956,11 @@ const onAddModel = () => {
     .input-container {
       display: flex;
       justify-content: space-between;
+      align-items: center;
 
       .icons {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
@@ -889,9 +968,12 @@ const onAddModel = () => {
         height: 32px;
         cursor: pointer;
         border-radius: var(--cs-border-radius);
+        gap: var(--cs-space-xs);
 
-        &:hover {
-          background-color: var(--cs-bg-color-deep);
+        .cs {
+          &:hover {
+            color: var(--cs-color-primary);
+          }
         }
       }
 

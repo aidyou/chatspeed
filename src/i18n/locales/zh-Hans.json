@@ -8,8 +8,6 @@
   "chat": {
     "networkEnabled": "开启联网",
     "networkDisabled": "关闭联网",
-    "deepsearchEnabled": "开启深度搜索",
-    "deepsearchDisabled": "关闭深度搜索",
     "clearContext": "清除上下文",
     "confirmDeleteConversation": "确定要删除这个对话吗？",
     "confirmDeleteMessage": "确定要删除这个消息吗？",
@@ -121,7 +119,13 @@
   "settings": {
     "general": {
       "chatspeedCrawler": "chatspeed爬虫",
-      "chatspeedCrawlerTooltip": "ChatSpeed 爬虫自动获取对话链接内容，作为深度搜索的核心组件。",
+      "chatspeedCrawlerTooltip": "ChatSpeed 爬虫自动获取对话链接内容，是搜索必备的组件。",
+      "location": "位置",
+      "locationTip": "位置信息有助于提高对话准确性，建议包含国家和城市。",
+      "locationPlaceholder": "如：中国上海市",
+      "role": "角色",
+      "roleTip": "角色信息作为对话上下文，可提升对话质量。",
+      "rolePlaceholder": "如：对冲基金量化分析师",
       "advancedSettings": "高级设置",
       "assistantWindowVisibleShortcut": "唤起助手",
       "assistantWindowVisibleAndPasteShortcut": "唤起助手并粘贴",
@@ -181,7 +185,20 @@
       "theme": "界面主题",
       "updateSettingFailed": "更新设置失败: {error}",
       "updateShortcutFailed": "更新快捷键失败: {error}",
-      "wordSelectionToolbar": "AI划词工具栏"
+      "wordSelectionToolbar": "AI划词工具栏",
+      "websearchModel": "网络搜索模型",
+      "websearchModelTooltip": "用于将你的对话生成搜索关键词，请不要用推理模型，否则会很慢！",
+      "searchResultCount": "搜索结果数",
+      "searchResultCountTooltip": "提供给 AI 进行分析的搜索结果数，建议 10 条",
+      "searchEngine": "搜索引擎",
+      "searchEngineTooltip": "提供搜索结果的搜索引擎，可多选，建议 1-2 个",
+      "workflowSettings": "工作流设置",
+      "workflow": {
+        "reasoning": "推理模型",
+        "reasoningTooltip": "主要用于工作流中复杂的任务，包括计划、汇总分析结果等",
+        "general": "通用模型",
+        "generalTooltip": "用于工作流中简单的任务，如文本摘要、信息提取等"
+      }
     },
     "model": {
       "add": "添加模型",

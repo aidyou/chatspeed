@@ -80,6 +80,7 @@ use std::{
 use chrono::Utc;
 use log::{debug, error, info, warn};
 use rust_i18n::t;
+use serde_json::{json, Value};
 use tokio::{
     sync::{Mutex, RwLock, Semaphore},
     task::JoinSet,
@@ -87,7 +88,7 @@ use tokio::{
 };
 
 use crate::workflow::{
-    config::{NodeConfig, NodeType},
+    config::{LoopConfig, NodeConfig, NodeType, ToolConfig, WorkflowLoop},
     context::{Context, NodeState},
     error::WorkflowError,
     executor::channel::{SharedChannel, WatchChannel},
@@ -129,7 +130,7 @@ impl WorkflowExecutor {
     /// maximum parallel tasks, and workflow graph. It also sets up the necessary channels for
     /// state management and control signals.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `context` - The context of the workflow
     /// * `function_manager` - The function manager
     /// * `max_parallel` - The maximum number of parallel tasks
@@ -330,7 +331,7 @@ impl WorkflowExecutor {
     /// This method dispatches new tasks from the ready queue, respecting the maximum parallel
     /// task limit. It also sets up the necessary context for each task.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `ready_queue` - The queue of ready tasks
     /// * `semaphore` - The semaphore for parallel control
     /// * `task_result_tx` - The sender channel for task results
@@ -390,7 +391,7 @@ impl WorkflowExecutor {
     /// This method processes the result of a completed task, updates the node state,
     /// and handles any errors that occurred during task execution.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `result` - The result of the task
     /// * `start_time` - The start time of the task
     /// * `node_id` - The ID of the node
@@ -467,7 +468,7 @@ impl WorkflowExecutor {
     /// This method handles the results of completed tasks, updates the task dependencies,
     /// and prepares the next set of tasks for execution.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `task_result_rx` - The receiver channel for task results
     /// * `in_degree_map` - The map of node in-degrees
     /// * `ready_queue` - The queue of ready tasks
@@ -510,7 +511,7 @@ impl WorkflowExecutor {
     ///
     /// This method updates the in-degree of a node in the workflow graph.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `node_id` - The ID of the node
     ///
     /// # Returns
@@ -561,7 +562,7 @@ impl WorkflowExecutor {
     ///
     /// This method executes a task node with retry logic in case of failure.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `node` - The configuration of the task node
     ///
     /// # Returns
@@ -607,7 +608,7 @@ impl WorkflowExecutor {
     ///
     /// This method executes a task node and set the result to context output.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `node` - The configuration of the task node
     /// * `function_manager` - The function manager
     ///
@@ -623,26 +624,176 @@ impl WorkflowExecutor {
         node: NodeConfig,
         function_manager: Arc<FunctionManager>,
     ) -> WorkflowResult<()> {
-        let function_name = node.function.as_ref().ok_or_else(|| {
-            WorkflowError::FunctionNotFound(t!("workflow.executor.function_not_found").to_string())
-        })?;
+        match node.r#type {
+            NodeType::Task(ToolConfig {
+                function,
+                param,
+                output,
+            }) => {
+                let function = function_manager
+                    .get_function(&function)
+                    .await
+                    .map_err(|e| {
+                        WorkflowError::FunctionNotFound(format!(
+                            "Function {} not found: {}",
+                            function, e
+                        ))
+                    })?;
 
-        let function = function_manager
-            .get_function(function_name)
-            .await
-            .map_err(|e| {
-                WorkflowError::FunctionNotFound(format!(
-                    "Function {} not found: {}",
-                    function_name, e
-                ))
-            })?;
+                let params = self.context.resolve_params(param).await?;
+                let result = function.execute(params, &self.context).await?;
 
-        let params = node.params.unwrap_or_default();
-        let result = function.execute(params, &self.context).await?;
+                self.context
+                    .set_output(output.unwrap_or(node.id), result)
+                    .await?;
+            }
+            NodeType::Loop(_) => {
+                return self.execute_loop_node(node, function_manager).await;
+            }
+            _ => {
+                return Err(WorkflowError::Validation(format!(
+                    "Invalid node type: {:?}",
+                    node.r#type
+                )));
+            }
+        }
 
-        self.context
-            .set_output(node.output.unwrap_or(node.id), result)
-            .await?;
+        Ok(())
+    }
+
+    /// 执行循环节点
+    ///
+    /// 此方法执行循环节点，对输入数据进行迭代处理，并将结果设置到上下文输出中。
+    ///
+    /// # 参数
+    /// * `node` - 循环节点的配置
+    /// * `function_manager` - 函数管理器
+    ///
+    /// # 返回值
+    /// * `WorkflowResult<()>` - 如果循环节点执行成功，返回 `Ok(())`，否则返回包含详细信息的错误
+    ///
+    /// # 错误
+    /// * 如果以下情况发生，返回 `WorkflowError`：
+    ///   - 输入数据无效
+    ///   - 函数执行失败
+    ///   - 过滤条件无效
+    async fn execute_loop_node(
+        &self,
+        node: NodeConfig,
+        function_manager: Arc<FunctionManager>,
+    ) -> WorkflowResult<()> {
+        // 直接从参数中解析出 WorkflowLoop 结构
+        match node.r#type {
+            NodeType::Loop(LoopConfig {
+                input,
+                functions,
+                limit,
+                filter,
+            }) => {
+                // let params = node.params.clone().unwrap_or_default();
+                // let loop_config: WorkflowLoop = serde_json::from_value(params)
+                //     .map_err(|e| WorkflowError::Config(format!("无效的循环节点配置: {}", e)))?;
+
+                // 解析输入字段引用
+                let input_reference = input.trim();
+                let input_data = self
+                    .context
+                    .resolve_params(Value::String(input_reference.to_string()))
+                    .await?;
+
+                // 将输入数据转换为可迭代的项目集合
+                let items: Vec<Value> = match input_data {
+                    Value::Array(arr) => arr,
+                    Value::Object(map) => {
+                        // 如果是对象，将每个键值对转换为包含键和值的对象
+                        map.into_iter()
+                            .map(|(k, v)| {
+                                json!({
+                                    "key": k,
+                                    "value": v
+                                })
+                            })
+                            .collect()
+                    }
+                    _ => {
+                        return Err(WorkflowError::Config(format!(
+                            "循环节点输入必须是数组或对象，但收到了: {}",
+                            input_data.to_string()
+                        )))
+                    }
+                };
+
+                // 应用限制
+                let limit = limit.unwrap_or(items.len());
+                let actual_limit = std::cmp::min(limit, items.len());
+
+                // 准备结果数组
+                let mut results = HashMap::with_capacity(actual_limit);
+
+                // 迭代处理每个项目
+                for item in items.into_iter().take(actual_limit) {
+                    // 设置当前项目到上下文中，以便过滤条件和函数可以引用它
+                    self.context
+                        .set_output("item".to_string(), item.clone())
+                        .await?;
+
+                    // 检查过滤条件
+                    if let Some(filter) = &filter {
+                        // 使用专门的条件解析方法处理过滤条件
+                        let pass = self.context.resolve_condition(filter).await?;
+                        if !pass {
+                            // 如果过滤条件不满足，跳过此项目
+                            continue;
+                        }
+                    }
+
+                    // 执行所有函数
+                    for tool_def in &functions {
+                        // 创建函数调用参数
+                        let function_name = &tool_def.function;
+                        let function =
+                            function_manager
+                                .get_function(function_name)
+                                .await
+                                .map_err(|e| {
+                                    WorkflowError::FunctionNotFound(format!(
+                                        "函数 {} 未找到: {}",
+                                        function_name, e
+                                    ))
+                                })?;
+
+                        // 解析函数参数
+                        let mut function_params = tool_def.param.clone();
+                        function_params = self.context.resolve_params(function_params).await?;
+
+                        // 执行函数
+                        let result = function.execute(function_params, &self.context).await?;
+                        // 将处理后的项目添加到结果数组
+                        results.insert(function_name, result);
+                    }
+                }
+
+                // 将结果设置到上下文输出中
+                for tool_def in &functions {
+                    if results.contains_key(&tool_def.function) {
+                        let result_value = results.get(&tool_def.function).unwrap();
+                        self.context
+                            .set_output(
+                                tool_def.output.clone().unwrap_or(node.id.clone()),
+                                result_value.clone(),
+                            )
+                            .await?;
+                    }
+                }
+            }
+            _ => {
+                return Err(WorkflowError::Validation(format!(
+                    "Invalid node type: {:?}",
+                    node.r#type
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -654,7 +805,7 @@ impl WorkflowExecutor {
     /// dependencies of a group node are completed, this method is called to
     /// mark the group node as completed.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * node - The configuration of the group node
     ///
     /// # Returns
@@ -675,7 +826,7 @@ impl WorkflowExecutor {
     ///
     /// This method waits for the next task in the task set to complete and handles the result.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `task_set` - The set of running tasks
     ///
     /// # Returns
@@ -709,7 +860,7 @@ impl WorkflowExecutor {
     /// This method performs the final checks after all tasks have been executed, ensuring
     /// that all nodes have been processed and updating the workflow state accordingly.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * [nodes](cci:1://file:///Volumes/dev/personal/dev/ai/chatspeed/src-tauri/src/workflow/executor/core.rs:715:4-729:5) - The list of nodes in the workflow
     ///
     /// # Returns
@@ -864,7 +1015,7 @@ impl WorkflowExecutor {
     ///
     /// This method updates the state of the workflow.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `new_state` - The new state of the workflow
     ///
     /// # Returns
@@ -902,7 +1053,7 @@ impl WorkflowExecutor {
     ///
     /// This method validates if a state transition is valid.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `current` - The current state of the workflow
     /// * `new` - The new state of the workflow
     ///
@@ -1054,75 +1205,56 @@ impl WorkflowExecutor {
         let status_map = self.generate_status_map().await;
         let mut output = String::from("# Workflow Status\n\n");
 
-        // 组节点展示
-        output.push_str("## Group Nodes\n");
-        self.append_group_nodes(&status_map, &mut output).await;
+        // 按照原始顺序遍历所有节点
+        for node in self.graph.nodes() {
+            match &node.r#type {
+                NodeType::Group(group_config) => {
+                    // 处理组节点
+                    let icon = status_map.get(&node.id).copied().unwrap_or("");
+                    output.push_str(&format!("## {}{}\n", icon, node.id));
 
-        // 任务节点展示
-        output.push_str("\n## Task Nodes\n");
-        self.append_task_nodes(&status_map, &mut output);
+                    if let Some(desc) = &node.description {
+                        output.push_str(&format!("- Description: {}\n", desc));
+                    }
+
+                    output.push_str(&format!("- Parallel: {}\n", group_config.parallel));
+
+                    // 添加子节点
+                    if !group_config.nodes.is_empty() {
+                        output.push_str("- Child Nodes:\n");
+                        for child_id in &group_config.nodes {
+                            let child_icon = status_map.get(child_id).copied().unwrap_or("");
+                            output.push_str(&format!("  - {}{}\n", child_icon, child_id));
+                        }
+                    }
+
+                    output.push_str("\n");
+                }
+                NodeType::Task(_) => {
+                    // 处理任务节点
+                    let icon = status_map.get(&node.id).copied().unwrap_or("");
+                    output.push_str(&format!("## {}{}\n", icon, node.id));
+
+                    if let Some(desc) = &node.description {
+                        output.push_str(&format!("- Description: {}\n", desc));
+                    }
+
+                    output.push_str("\n");
+                }
+                NodeType::Loop(_) => {
+                    // 处理循环节点
+                    let icon = status_map.get(&node.id).copied().unwrap_or("");
+                    output.push_str(&format!("## {}{} (Loop)\n", icon, node.id));
+
+                    if let Some(desc) = &node.description {
+                        output.push_str(&format!("- Description: {}\n", desc));
+                    }
+
+                    output.push_str("\n");
+                }
+            }
+        }
 
         output
-    }
-
-    /// Append group nodes and their children
-    ///
-    /// This method appends the group nodes and their children to the output string.
-    ///
-    /// # Arguments
-    /// * `status_map` - A map of node IDs to their corresponding status icons
-    /// * `output` - A mutable string that will be appended to
-    async fn append_group_nodes(&self, status_map: &HashMap<String, &str>, output: &mut String) {
-        for node in self
-            .graph
-            .nodes()
-            .filter(|node| matches!(node.r#type, NodeType::Group(_)))
-        {
-            let icon = status_map.get(&node.id).copied().unwrap_or("");
-            let group_type = match &node.r#type {
-                NodeType::Group(config) => {
-                    if config.parallel {
-                        "PARALLEL"
-                    } else {
-                        "SEQUENCE"
-                    }
-                }
-                _ => "",
-            };
-
-            output.push_str(&format!("- {} {} [{}]\n", icon, node.id, group_type));
-
-            // 添加子节点
-            if let NodeType::Group(config) = &node.r#type {
-                for child_id in &config.nodes {
-                    if let Some(_) = self.graph.get_node(child_id) {
-                        let child_icon = status_map.get(child_id).copied().unwrap_or("");
-                        output.push_str(&format!("  - {}{}\n", child_icon, child_id));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Append task nodes
-    ///
-    /// This method appends the task nodes to the output string.
-    ///
-    /// # Arguments
-    /// * `status_map` - A map of node IDs to their corresponding status icons
-    /// * `output` - A mutable string that will be appended to
-    fn append_task_nodes(&self, status_map: &HashMap<String, &str>, output: &mut String) {
-        for node in self
-            .graph
-            .nodes()
-            .filter(|node| matches!(node.r#type, NodeType::Task))
-        {
-            let icon = status_map.get(&node.id).copied().unwrap_or("");
-            output.push_str(&format!("- {}{}\n", icon, node.id));
-
-            if let Some(desc) = &node.description {
-                output.push_str(&format!("  *{}*\n", desc));
-            }
-        }
     }
 }

@@ -196,7 +196,8 @@
                 </div>
                 <markdown
                   :content="message.content"
-                  :reference="message.metadata?.reference"
+                  :reference="message.metadata?.reference || []"
+                  :reasoning="message.metadata?.reasoning || ''"
                   v-else />
                 <div class="metadata">
                   <div class="buttons">
@@ -279,13 +280,11 @@
                 <logo :name="currentModel?.logo" />
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
-                <div
-                  class="content"
-                  v-html="currentAssistantMessageHtml"
-                  v-highlight
-                  v-link
-                  v-table
-                  v-reference />
+                <chatting
+                  :content="currentAssistantMessage"
+                  :reference="chatState.reference"
+                  :reasoning="chatState.reasoning"
+                  :is-reasoning="chatState.isReasoning" />
               </div>
             </div>
 
@@ -340,19 +339,6 @@
                     :class="{ active: networkEnabled }"
                     @click="onToggleNetwork"
                     v-if="crawlerAvailable" />
-                </el-tooltip>
-                <el-tooltip
-                  :content="
-                    $t(`chat.${!deepsearchEnabled ? 'deepsearchEnabled' : 'deepsearchDisabled'}`)
-                  "
-                  :hide-after="0"
-                  placement="top">
-                  <cs
-                    name="skill-deep-search"
-                    class="small"
-                    :class="{ active: deepsearchEnabled }"
-                    v-if="crawlerAvailable"
-                    @click="onToggleDeepSearch" />
                 </el-tooltip>
                 <cs
                   class="small"
@@ -461,9 +447,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 import markdown from '@/components/chat/markdown.vue'
+import chatting from '@/components/chat/chatting.vue'
 
 import { csStorageKey } from '@/config/config'
-import { chatPreProcess, parseMarkdown } from '@/libs/chat'
+import { chatPreProcess } from '@/libs/chat'
 import { getModelLogo } from '@/libs/logo'
 import { getLanguageByCode } from '@/i18n/langUtils'
 import { isEmpty, showMessage, csGetStorage, csSetStorage, Uuid } from '@/libs/util'
@@ -526,18 +513,20 @@ const isChatting = ref(false)
 const currentAssistantMessage = ref('')
 const lastChatId = ref('')
 const titleChatId = ref('')
-const chatState = ref({
-  reasoning: '',
+const getDefaultChatState = () => ({
   message: '',
-  reference: []
+  reference: [],
+  reasoning: '',
+  isReasoning: false
 })
+
+const chatState = ref(getDefaultChatState())
 
 // network connection and deep search
 // When enabled, it will automatically crawl the URLs in user queries
 const networkEnabled = ref(csGetStorage(csStorageKey.networkEnabled, true))
 // When deep search is enabled, the AI will automatically plan the user's questions
 // and break them down into executable steps for research.
-const deepsearchEnabled = ref(csGetStorage(csStorageKey.deepsearchEnabled, false))
 const crawlerAvailable = computed(() => {
   return (
     settingStore.settings.chatspeedCrawler != '' &&
@@ -560,7 +549,9 @@ const takeNoteForm = reactive({
   content: '',
   conversationId: 0,
   messageId: 0,
-  tags: []
+  tags: [],
+  reference: [],
+  reasoning: ''
 })
 const takeNoteRules = {
   tags: [{ required: true, message: t('chat.noteTagsRequired'), trigger: 'blur' }],
@@ -574,17 +565,6 @@ const myLanguage = computed(() => {
   const language = settingStore.settings.primaryLanguage
   return getLanguageByCode(language) || 'English'
 })
-
-const cicleIndex = ref(0)
-const cicle = ['◒', '◐', '◓', '◑', '☯']
-const currentAssistantMessageHtml = computed(() =>
-  currentAssistantMessage.value
-    ? ((cicleIndex.value = (cicleIndex.value + 1) % 5),
-      parseMarkdown(
-        currentAssistantMessage.value + cicle[cicleIndex.value] + chatState.value?.reference || []
-      ))
-    : '<div class="cs cs-loading cs-spin"></div>'
-)
 
 /**
  * The user must have at least one model available and should not have initiated a new topic to create a new conversation.
@@ -605,16 +585,13 @@ const canSendMessage = computed(
 )
 
 // listen AI response, update scroll
-watch(
-  () => currentAssistantMessage.value,
-  () => {
-    nextTick(() => {
-      if (!userHasScrolled.value || isScrolledToBottom.value) {
-        scrollToBottomIfNeeded()
-      }
-    })
-  }
-)
+watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
+  nextTick(() => {
+    if (!userHasScrolled.value || isScrolledToBottom.value) {
+      scrollToBottomIfNeeded()
+    }
+  })
+})
 
 watch(
   () => chatStore.messages?.length,
@@ -632,6 +609,8 @@ watch(
     if (newLength !== messagesForShow.value.length) {
       const startIndex = Math.max(0, newLength - pageSize)
       messagesForShow.value = chatStore.messages.slice(startIndex, newLength)
+
+      scrollToBottomIfNeeded()
     }
   }
 )
@@ -915,11 +894,7 @@ const sendMessage = async (messageId = null) => {
   chatStore
     .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
     .then(async () => {
-      chatState.value = {
-        reasoning: '',
-        message: '',
-        reference: []
-      }
+      chatState.value = getDefaultChatState()
       chatErrorMessage.value = ''
       replyMessage.value = ''
       inputMessage.value = ''
@@ -927,10 +902,15 @@ const sendMessage = async (messageId = null) => {
       isChatting.value = true
       lastChatId.value = Uuid()
 
-      nextTick(scrollToBottomIfNeeded)
+      // Scroll to bottom immediately
+      scrollToBottomIfNeeded()
+      setTimeout(() => {
+        // Scroll again after 800ms to prevent issues caused by the first scroll when the window's vdom has not been updated yet
+        scrollToBottomIfNeeded()
+      }, 800)
 
       try {
-        await invoke('chat_with_ai', {
+        await invoke('chat_completion', {
           apiProtocol: currentModel.value.apiProtocol,
           apiUrl: currentModel.value.baseUrl,
           apiKey: currentModel.value.apiKey,
@@ -938,14 +918,14 @@ const sendMessage = async (messageId = null) => {
           chatId: lastChatId.value,
           messages: messages,
           networkEnabled: networkEnabled.value,
-          deepsearchEnabled: deepsearchEnabled.value,
           metadata: {
             maxTokens: currentModel.value.maxTokens,
             temperature: currentModel.value.temperature,
             topP: currentModel.value.topP,
             topK: currentModel.value.topK,
             label: windowLabel.value,
-            proxyType: proxyType.value
+            proxyType: proxyType.value,
+            useContext: !selectedSkill.value
           }
         })
       } catch (error) {
@@ -1016,7 +996,7 @@ const genTitleByAi = () => {
     model = settingStore.settings.conversationTitleGenModel?.model || model
   }
   titleChatId.value = Uuid()
-  invoke('chat_with_ai', {
+  invoke('chat_completion', {
     apiProtocol: genModel.apiProtocol,
     apiUrl: genModel.baseUrl,
     apiKey: genModel.apiKey,
@@ -1099,39 +1079,56 @@ const handleChatMessage = async payload => {
       payload.isDone = true
     }
   }
-  // console.log('type', payload?.type, 'isReasoning', payload?.isReasoning, 'isDone', payload?.isDone)
-  if (payload?.type === 'step') {
-    currentAssistantMessage.value = payload?.chunk || ''
-    return
-  }
 
-  // console.log('payload', payload)
+  chatState.value.isReasoning = payload?.isReasoning
 
-  let thinkingClass = ''
-  if (payload?.type === 'reference') {
-    if (payload?.chunk) {
-      try {
-        if (typeof payload?.chunk === 'string') {
-          chatState.value.reference.push(...JSON.parse(payload?.chunk))
-        } else {
-          chatState.value.reference.push(...payload?.chunk)
+  switch (payload?.type) {
+    case 'step':
+      currentAssistantMessage.value = payload?.chunk || ''
+      return
+    case 'reference':
+      if (payload?.chunk) {
+        console.log('reference', payload?.chunk)
+        try {
+          if (typeof payload?.chunk === 'string') {
+            const parsedChunk = JSON.parse(payload?.chunk || '[]')
+            if (Array.isArray(parsedChunk)) {
+              chatState.value.reference.push(...parsedChunk)
+            } else {
+              console.error('Expected an array but got:', typeof parsedChunk)
+            }
+          } else {
+            chatState.value.reference.push(...payload?.chunk)
+          }
+        } catch (e) {
+          console.error('error on parse reference:', e)
+          console.log('chunk', payload?.chunk)
         }
-      } catch (e) {
-        console.error('error on parse reference:', e)
       }
-    }
-  } else if (payload?.isReasoning) {
-    chatState.value.reasoning += payload?.chunk || ''
-    thinkingClass = 'thinking'
-  } else {
-    chatState.value.message += payload?.chunk || ''
+      break
+    case 'reasoning':
+      chatState.value.reasoning += payload?.chunk || ''
+      break
+    case 'error':
+    case 'finished':
+      payload.isDone = true
+      if (payload.type === 'finished') {
+        chatState.value.message += payload?.chunk || ''
+      }
+      break
+    default:
+      chatState.value.message += payload?.chunk || ''
+
+      // handle deepseek-r1 reasoning flag `<think></think>`
+      if (chatState.value.message.startsWith('<think>') && chatState.value.includes('</think>')) {
+        const messages = chatState.value.message.split('</think>')
+        chatState.value.reasoning = messages[0].replace('<think>', '').trim()
+        chatState.value.message = messages[1].trim()
+      }
+      break
   }
 
-  currentAssistantMessage.value =
-    (chatState.value.reasoning
-      ? '<think class="' + thinkingClass + '">' + chatState.value.reasoning + '</think>\n'
-      : '') + (chatState.value.message || '')
-
+  currentAssistantMessage.value = chatState.value.message
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
       scrollToBottomIfNeeded()
@@ -1139,25 +1136,43 @@ const handleChatMessage = async payload => {
   })
 
   if (payload?.isDone) {
-    if (currentAssistantMessage.value.trim().length > 0) {
+    if (chatState.value.message.trim().length > 0) {
+      // 保存当前滚动位置和高度，用于后续恢复
+      const scrollInfo = {
+        top: chatMessagesRef.value.scrollTop,
+        height: chatMessagesRef.value.scrollHeight,
+        isAtBottom:
+          chatMessagesRef.value.scrollTop + chatMessagesRef.value.clientHeight >=
+          chatMessagesRef.value.scrollHeight - 10
+      }
       try {
         await chatStore.addChatMessage(
           chatStore.currentConversationId,
           'assistant',
-          currentAssistantMessage.value.trim(),
+          chatState.value.message.trim(),
           {
             tokens: payload?.metadata?.tokens?.total || 0,
             prompt: payload?.metadata?.tokens?.prompt || 0,
             completion: payload?.metadata?.tokens?.completion || 0,
             provider: currentModel.value.defaultModel || '',
-            reference: chatState.value.reference || []
+            reference: chatState.value.reference || [],
+            reasoning: chatState.value.reasoning || ''
           }
         )
-        currentAssistantMessage.value = ''
+        // 一次性更新所有状态，减少DOM重绘次数
         isChatting.value = false
+        chatState.value = getDefaultChatState()
+        currentAssistantMessage.value = ''
+
+        // 在DOM更新后恢复滚动位置
         nextTick(() => {
-          if (!userHasScrolled.value || isScrolledToBottom.value) {
-            scrollToBottomIfNeeded()
+          if (scrollInfo.isAtBottom) {
+            // 如果原本在底部，则滚动到新的底部
+            scrollToBottom()
+          } else {
+            // 否则尝试保持相对滚动位置
+            const heightDiff = chatMessagesRef.value.scrollHeight - scrollInfo.height
+            chatMessagesRef.value.scrollTop = scrollInfo.top + heightDiff
           }
         })
 
@@ -1212,7 +1227,9 @@ onMounted(async () => {
       if (event?.payload?.done) {
         messageReady.value = true
         loadMessagesForObserver()
-        nextTick(scrollToBottom)
+        setTimeout(() => {
+          scrollToBottom()
+        }, 300)
       } else {
         chatStore.appendMessage(event?.payload?.message)
       }
@@ -1247,12 +1264,15 @@ onMounted(async () => {
     } else {
       if (payload?.chatId === lastChatId.value) {
         handleChatMessage(payload)
+      } else {
+        console.log('ignore chatId', payload)
       }
     }
   })
 
   await listen('sync_state', event => {
-    if (event.payload.label === windowLabel.value) {
+    console.log('sync_state', event)
+    if (event.payload.label !== windowLabel.value) {
       return
     }
     if (
@@ -1423,19 +1443,10 @@ const onSubModelChange = model => {
   // update the database record
   modelStore
     .setModel({
-      id: currentModel.value.id,
-      apiProtocol: currentModel.value.apiProtocol,
-      name: currentModel.value.name,
-      models: currentModel.value.models,
+      ...currentModel.value,
       defaultModel: model,
-      baseUrl: currentModel.value.baseUrl,
-      apiKey: currentModel.value.apiKey,
-      maxTokens: currentModel.value.maxTokens,
-      temperature: currentModel.value.temperature,
-      topP: currentModel.value.topP,
-      topK: currentModel.value.topK,
-      disabled: currentModel.value.disabled,
       metadata: {
+        ...currentModel.value.metadata,
         proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
         logo: logo
       }
@@ -1456,7 +1467,11 @@ const onStopChat = () => {
           .addChatMessage(
             chatStore.currentConversationId,
             'assistant',
-            currentAssistantMessage.value.trim()
+            currentAssistantMessage.value.trim(),
+            {
+              reference: chatState.value?.reference || [],
+              reasoning: chatState.value?.reasoning || ''
+            }
           )
           .then(() => {
             currentAssistantMessage.value = ''
@@ -1555,11 +1570,6 @@ const onSkillSelected = skill => {
 const onToggleNetwork = () => {
   networkEnabled.value = !networkEnabled.value
   csSetStorage(csStorageKey.networkEnabled, networkEnabled.value)
-}
-
-const onToggleDeepSearch = () => {
-  deepsearchEnabled.value = !deepsearchEnabled.value
-  csSetStorage(csStorageKey.deepsearchEnabled, deepsearchEnabled.value)
 }
 
 /**
@@ -1681,7 +1691,11 @@ const onSaveTakeNote = async () => {
           takeNoteForm.content,
           takeNoteForm.conversationId,
           takeNoteForm.messageId,
-          takeNoteForm.tags.join(',')
+          takeNoteForm.tags.join(','),
+          {
+            reference: takeNoteForm.reference,
+            reasoning: takeNoteForm.reasoning
+          }
         )
         .then(() => {
           showMessage(t('chat.noteSaved'), 'success', 3000)
@@ -1708,6 +1722,8 @@ const onTakeNote = message => {
     takeNoteForm.content = message.content
     takeNoteForm.conversationId = chatStore.currentConversationId
     takeNoteForm.messageId = message.id
+    takeNoteForm.reference = message?.metadata?.reference
+    takeNoteForm.reasoning = message?.metadata?.reasoning
     takeNoteDialogVisible.value = true
     // Focus on tags input after dialog is shown
     setTimeout(() => {

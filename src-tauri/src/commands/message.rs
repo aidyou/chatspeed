@@ -40,7 +40,7 @@ use tauri::{command, Emitter, Manager, State};
 ///
 /// Retrieves a list of all conversations from the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 ///
 /// # Returns
@@ -69,7 +69,7 @@ pub fn get_all_conversations(
 ///
 /// Retrieves a conversation by its ID from the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `id` - The ID of the conversation
 ///
@@ -100,7 +100,7 @@ pub fn get_conversation_by_id(
 ///
 /// Adds a new conversation to the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `title` - The title of the conversation to add
 ///
@@ -128,7 +128,7 @@ pub fn add_conversation(state: State<Arc<Mutex<MainStore>>>, title: String) -> R
 ///
 /// Updates the favorite status of a conversation in the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `id` - The ID of the conversation to update
 /// - `is_favorite` - The new favorite status
@@ -162,7 +162,7 @@ pub fn update_conversation(
 ///
 /// Removes a conversation from the chat store by its ID.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `id` - The ID of the conversation to delete
 ///
@@ -190,7 +190,7 @@ pub fn delete_conversation(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resu
 ///
 /// Retrieves all messages for a specific conversation from the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `conversation_id` - The ID of the conversation
 ///
@@ -231,7 +231,7 @@ pub fn get_messages_for_conversation(
 ///
 /// Adds a new message to a conversation in the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `conversation_id` - The ID of the conversation
 /// - `role` - The role of the message sender
@@ -271,7 +271,7 @@ pub fn add_message(
 ///
 /// Removes a message from the chat store by its ID.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `id` - The ID of the message to delete
 ///
@@ -296,7 +296,7 @@ pub fn delete_message(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<()
 ///
 /// Updates the metadata of a message in the chat store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the chat store, automatically injected by Tauri
 /// - `id` - The ID of the message to update
 /// - `metadata` - The new metadata to set for the message
@@ -326,7 +326,7 @@ pub fn update_message_metadata(
 
 /// Sends a conversation message to the frontend with the specified label and message content.
 ///
-/// # Parameters
+/// # Arguments
 /// - `app` - The Tauri app handle
 /// - `label` - The label of the conversation
 /// - `message` - The message content

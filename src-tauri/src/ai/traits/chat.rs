@@ -1,18 +1,84 @@
 use super::stoppable::Stoppable;
 use async_trait::async_trait;
-use serde::Serialize;
+use log::warn;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::{error::Error, sync::Arc};
+use std::{default::Default, error::Error, sync::Arc};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageType {
+    Error,
+    Finished,
+    Reasoning,
+    Reference,
+    Step,
+    Text,
+    Think,
+}
+
+impl Default for MessageType {
+    fn default() -> Self {
+        MessageType::Text
+    }
+}
+
+// 自定义反序列化实现
+impl<'de> Deserialize<'de> for MessageType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(MessageType::from_str(&s).unwrap_or_else(|| {
+            warn!("Invalid message type: {}, defaulting to Content", s);
+            MessageType::Text
+        }))
+    }
+}
+
+impl From<MessageType> for &str {
+    fn from(value: MessageType) -> Self {
+        match value {
+            MessageType::Text => "text",
+            MessageType::Finished => "finished",
+            MessageType::Error => "error",
+            MessageType::Reasoning | MessageType::Think => "reasoning",
+            MessageType::Reference => "reference",
+            MessageType::Step => "step",
+        }
+    }
+}
+
+impl From<MessageType> for String {
+    fn from(value: MessageType) -> Self {
+        value.into()
+    }
+}
+
+impl MessageType {
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "finished" => Some(MessageType::Finished),
+            "error" => Some(MessageType::Error),
+            "reasoning" | "think" | "thinking" => Some(MessageType::Reasoning),
+            "reference" => Some(MessageType::Reference),
+            "step" => Some(MessageType::Step),
+            "text" => Some(MessageType::Text),
+            _ => {
+                warn!("Invalid message type: {}, returning None", value);
+                Some(MessageType::Text)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatResponse {
     pub chat_id: String,
     pub chunk: String,
-    pub is_error: bool,
-    pub is_done: bool,
-    pub is_reasoning: bool,
-    pub r#type: Option<String>,
+    pub r#type: MessageType,
     pub metadata: Option<Value>,
 }
 
@@ -20,18 +86,12 @@ impl ChatResponse {
     pub fn new_with_arc(
         chat_id: String,
         chunk: String,
-        is_error: bool,
-        is_done: bool,
-        is_reasoning: bool,
-        r#type: Option<String>,
+        r#type: MessageType,
         metadata: Option<Value>,
     ) -> Arc<Self> {
         Arc::new(Self {
             chat_id,
             chunk,
-            is_error,
-            is_done,
-            is_reasoning,
             r#type,
             metadata,
         })
@@ -42,7 +102,7 @@ impl ChatResponse {
 pub trait AiChatTrait: Send + Sync + Stoppable {
     /// Sends a chat request to the AI API and processes the response.
     ///
-    /// # Parameters
+    /// # Arguments
     /// - `api_url`: The URL of the AI API endpoint.
     /// - `model`: The model to be used for the chat.
     /// - `api_key`: The API key for authentication.

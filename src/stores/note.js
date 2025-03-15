@@ -46,9 +46,10 @@ export const useNoteStore = defineStore('note', () => {
    * @param {string} tags - Comma-separated list of tags.
    * @returns {Promise<void>} A promise that resolves when the note is created and state is synced.
    */
-  const addNote = (title, content, conversationId, messageId, tags) => {
+  const addNote = (title, content, conversationId, messageId, tags, metadata) => {
     tags = tags.replace('，', ',').split(',').map(x => x.trim()).filter(x => x != '')
-    return new Promise((resolve, reject) => invoke('add_note', { title, content, conversationId, messageId, tags })
+    console.log(metadata)
+    return new Promise((resolve, reject) => invoke('add_note', { title, content, conversationId, messageId, tags, metadata })
       .then(() => {
         sendSyncState('note_update', label)
         resolve()

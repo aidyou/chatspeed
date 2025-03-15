@@ -7,7 +7,7 @@ use crate::{DEFAULT_THUMBNAIL_HEIGHT, DEFAULT_THUMBNAIL_WIDTH};
 
 /// Save a thumbnail image to the given directory
 ///
-/// # Parameters
+/// # Arguments
 /// * `image_path` - The path to the image to save
 /// * `save_dir` - The directory to save the image to
 /// * `opt_width` - The width of the thumbnail (optional)
@@ -70,7 +70,7 @@ pub fn save_thumbnail_image(
 
 /// Get the file name of an image
 ///
-/// # Parameters
+/// # Arguments
 /// * `image_path` - The path to the image
 ///
 /// # Returns
@@ -96,7 +96,7 @@ pub fn get_file_name(image_path: &std::path::Path) -> String {
 
 /// Generate a 32-bit hash string for the given string
 ///
-/// # Parameters
+/// # Arguments
 /// * `s` - The string to hash
 ///
 /// # Returns

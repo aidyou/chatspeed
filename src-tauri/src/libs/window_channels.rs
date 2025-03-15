@@ -7,9 +7,10 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
 use crate::ai::traits::chat::ChatResponse;
+use crate::ai::traits::chat::MessageType;
 
-const BATCH_SIZE: usize = 200; // Maximum number of messages to batch
-const THROTTLE_DURATION: Duration = Duration::from_millis(200); // ~200fps
+const BATCH_SIZE: usize = 100; // Maximum number of messages to batch
+const THROTTLE_DURATION: Duration = Duration::from_millis(100);
 
 /// Define a structure to hold the channel sender for each window
 pub struct WindowChannels {
@@ -27,7 +28,7 @@ impl WindowChannels {
 
     /// Emit an AI chunk message to the specified window
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `window`: The Tauri window to send the message to
     /// * `chunk`: message to send
     async fn emit_ai_chunk(
@@ -42,7 +43,7 @@ impl WindowChannels {
 
     /// Emit a batch of AI chunks as a single message
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `window`: The Tauri window to send the message to
     /// * `batch`: The batch of AI chunks to send
     async fn emit_batch(
@@ -64,9 +65,6 @@ impl WindowChannels {
             Arc::new(ChatResponse {
                 chat_id: first_msg.chat_id.clone(),
                 chunk: combined,
-                is_error: false,
-                is_done: false,
-                is_reasoning: first_msg.is_reasoning,
                 metadata: first_msg.metadata.clone(),
                 r#type: first_msg.r#type.clone(),
             }),
@@ -76,7 +74,7 @@ impl WindowChannels {
 
     /// Get or create a channel for the specified window.
     ///
-    /// # Parameters
+    /// # Arguments
     /// * `window`: The Tauri window for which the channel is being requested.
     ///
     /// # Returns
@@ -95,45 +93,35 @@ impl WindowChannels {
 
                 let window = window.clone();
                 tokio::spawn(async move {
-                    let mut is_first: bool = true;
                     let mut batch = Vec::<ChatResponse>::with_capacity(BATCH_SIZE as usize);
                     let mut last_emit = Instant::now();
+                    // let mut is_first: bool = true;
 
                     while let Some(chunk) = rx.recv().await {
-                        // First message: send immediately
-                        if is_first && !chunk.chunk.is_empty() {
-                            is_first = false;
-
-                            #[cfg(debug_assertions)]
-                            log::debug!("Sending first message: {:?}", chunk);
-
-                            if let Err(e) = Self::emit_ai_chunk(&window, chunk.clone()).await {
-                                log::error!("Failed to emit AI chunk: {}", e);
-                            }
-
-                            // If it's an error or done message, don't start batching
-                            if !chunk.is_error && !chunk.is_done {
-                                last_emit = Instant::now();
-                            }
-                            continue;
-                        }
-
-                        // For error or done messages:
+                        // For error or done messages: they should be sent immediately
                         // 1. Send current batch first
-                        // 2. Then send the error/done message separately
-                        if chunk.is_error || chunk.is_done {
+                        // 2. Then send the error/done/step/reference message separately
+                        //
+                        // Note: Reference message is an array, so can't combine simply!!!
+                        if chunk.r#type == MessageType::Finished
+                            || chunk.r#type == MessageType::Error
+                            || chunk.r#type == MessageType::Step
+                            || chunk.r#type == MessageType::Reference
+                        {
                             #[cfg(debug_assertions)]
                             log::debug!(
-                                "sending error or done, is_error: {:?}, is_done: {:?}",
-                                chunk.is_error,
-                                chunk.is_done
+                                "sending message: {}, type: {:?}",
+                                chunk.chunk,
+                                chunk.r#type
                             );
 
                             // Send current batch if not empty
-                            if let Err(e) = Self::emit_batch(&window, &batch).await {
-                                log::error!("Failed to emit batch: {}", e);
+                            if !batch.is_empty() {
+                                if let Err(e) = Self::emit_batch(&window, &batch).await {
+                                    log::error!("Failed to emit batch: {}", e);
+                                }
+                                batch.clear();
                             }
-                            batch.clear();
 
                             // Send the error/done message
                             if let Err(e) = Self::emit_ai_chunk(&window, chunk).await {
@@ -142,46 +130,34 @@ impl WindowChannels {
                             continue;
                         }
 
+                        // Check if we should emit based on batch size or time
+                        let should_emit =
+                            batch.len() >= BATCH_SIZE || last_emit.elapsed() >= THROTTLE_DURATION;
+
                         // Check if new message is of different type
-                        if !batch.is_empty()
-                            && (batch[0].is_reasoning != chunk.is_reasoning
-                                || batch[0].r#type != chunk.r#type)
-                        {
+                        if !batch.is_empty() && (batch[0].r#type != chunk.r#type || should_emit) {
                             #[cfg(debug_assertions)]
-                            log::debug!(
-                                "emit_batch: is_reasoning: {:?}, msg_type: {:?}",
-                                chunk.is_reasoning,
-                                chunk.r#type.clone().unwrap_or_default()
-                            );
+                            {
+                                if batch[0].r#type != chunk.r#type {
+                                    log::debug!(
+                                        "emit_batch: msg_type: {:?}, batch_size: {}, elapsed: {:?}",
+                                        chunk.r#type,
+                                        batch.len(),
+                                        last_emit.elapsed()
+                                    );
+                                }
+                            }
 
                             // Send current batch
                             if let Err(e) = Self::emit_batch(&window, &batch).await {
                                 log::error!("Failed to emit batch: {}", e);
                             }
                             batch.clear();
+                            last_emit = Instant::now();
                         }
 
                         // Add new message to batch
                         batch.push(chunk.as_ref().clone());
-
-                        // Check if we should emit based on batch size or time
-                        let should_emit =
-                            batch.len() >= BATCH_SIZE || last_emit.elapsed() >= THROTTLE_DURATION;
-
-                        if should_emit {
-                            #[cfg(debug_assertions)]
-                            log::debug!(
-                                "should_emit: batch.len(): {:?}, THROTTLE_DURATION: {:?}",
-                                batch.len(),
-                                THROTTLE_DURATION
-                            );
-
-                            if let Err(e) = Self::emit_batch(&window, &batch).await {
-                                log::error!("Failed to emit batch: {}", e);
-                            }
-                            batch.clear();
-                            last_emit = Instant::now();
-                        }
 
                         // Add a small delay to prevent CPU overload
                         sleep(Duration::from_millis(1)).await;

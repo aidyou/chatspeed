@@ -142,15 +142,29 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
-            {{ $t('settings.general.chatspeedCrawler') }}
-            <small class="tooltip">{{ $t('settings.general.chatspeedCrawlerTooltip') }}</small>
+            {{ $t('settings.general.location') }}
+            <small class="tooltip">{{ $t('settings.general.locationTip') }}</small>
           </div>
         </div>
         <div class="value" style="width: 45%">
           <el-input
-            v-model="settings.chatspeedCrawler"
-            @input="onChatspeedCrawlerChange"
-            placeholder="http://localhost:12321" />
+            v-model="settings.location"
+            @input="onLocationChange"
+            :placeholder="$t('settings.general.locationPlaceholder')" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.role') }}
+            <small class="tooltip">{{ $t('settings.general.roleTip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 45%">
+          <el-input
+            v-model="settings.role"
+            @input="onRoleChange"
+            :placeholder="$t('settings.general.rolePlaceholder')" />
         </div>
       </div>
       <div class="item">
@@ -197,6 +211,160 @@
             @change="onConversationTitleGenModelModelChange">
             <el-option
               v-for="model in conversationTitleGenModelList"
+              :key="model"
+              :label="model"
+              :value="model">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.websearchModel') }}
+            <small class="tooltip">{{ $t('settings.general.websearchModelTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select
+            v-model="settings.websearchModel.id"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWebsearchModelIdChange">
+            <el-option
+              v-for="model in modelStore.models"
+              :key="model.id"
+              :label="model.name"
+              :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select
+            v-model="settings.websearchModel.model"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWebsearchModelModelChange">
+            <el-option
+              v-for="model in websearchModelList"
+              :key="model"
+              :label="model"
+              :value="model">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.searchEngine') }}
+            <small class="tooltip">{{ $t('settings.general.searchEngineTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 45%">
+          <el-select v-model="settings.searchEngine" @change="onSearchEngineChange" multiple>
+            <el-option
+              v-for="engine in searchEngines"
+              :key="engine"
+              :label="engine"
+              :value="engine" />
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.searchResultCount') }}
+            <small class="tooltip">{{ $t('settings.general.searchResultCountTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 45%">
+          <el-input
+            v-model="settings.searchResultCount"
+            @input="onSearchResultCountChange"
+            type="number" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.chatspeedCrawler') }}
+            <small class="tooltip">{{ $t('settings.general.chatspeedCrawlerTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 45%">
+          <el-input
+            v-model="settings.chatspeedCrawler"
+            @input="onChatspeedCrawlerChange"
+            placeholder="http://localhost:12321" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- workflow settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.workflowSettings') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.workflow.reasoning') }}
+            <small class="tooltip">{{ $t('settings.general.workflow.reasoningTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select
+            v-model="settings.workflowReasoningModel.id"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWorkflowReasoningModelIdChange">
+            <el-option
+              v-for="model in modelStore.models"
+              :key="model.id"
+              :label="model.name"
+              :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select
+            v-model="settings.workflowReasoningModel.model"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWorkflowReasoningModelModelChange">
+            <el-option
+              v-for="model in workflowReasoningModelList"
+              :key="model"
+              :label="model"
+              :value="model">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.workflow.general') }}
+            <small class="tooltip">{{ $t('settings.general.workflow.generalTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select
+            v-model="settings.workflowGeneralModel.id"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWorkflowGeneralModelIdChange">
+            <el-option
+              v-for="model in modelStore.models"
+              :key="model.id"
+              :label="model.name"
+              :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select
+            v-model="settings.workflowGeneralModel.model"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onWorkflowGeneralModelModelChange">
+            <el-option
+              v-for="model in workflowGeneralModelList"
               :key="model"
               :label="model"
               :value="model">
@@ -443,6 +611,7 @@ const { settings } = storeToRefs(settingStore)
 
 const backups = ref([])
 const restoreDir = ref('')
+const searchEngines = ['google', 'baidu', 'bing']
 
 const defaultBackupDir = ref('')
 
@@ -457,6 +626,14 @@ const conversationTitleGenModelList = computed(() => {
   if (settingStore.settings.conversationTitleGenModel.id) {
     return modelStore.getModelById(settingStore.settings.conversationTitleGenModel.id)?.models || []
   }
+  return []
+})
+
+const websearchModelList = computed(() => {
+  if (settingStore.settings.websearchModel.id) {
+    return modelStore.getModelById(settingStore.settings.websearchModel.id)?.models || []
+  }
+  return []
 })
 
 const proxyTypes = computed(() => ({
@@ -506,6 +683,18 @@ const onCodeLightThemeChange = value => {
 const onCodeDarkThemeChange = value => {
   setSetting('codeDarkTheme', value || 'default')
 }
+
+/**
+ * Handles the change of show menu button
+ * @param {boolean} value - The value of show menu button
+ */
+const onShowMenuButtonChange = value => {
+  setSetting('showMenuButton', value || false)
+}
+
+// =================================================
+// shortcut settings
+// =================================================
 
 const isCapturing = ref(false)
 const currentShortcutKey = ref(null)
@@ -609,6 +798,19 @@ const captureShortcut = (event, shortcutKey) => {
 const clearShortcut = shortcutKey => {
   setSetting(shortcutKey, '')
 }
+
+// =================================================
+// chat settings
+// =================================================
+
+const onLocationChange = value => {
+  setSetting('location', value || '')
+}
+
+const onRoleChange = value => {
+  setSetting('role', value || '')
+}
+
 /**
  * Handles the change of history messages
  * @param {number} value - The value of history messages
@@ -616,13 +818,7 @@ const clearShortcut = shortcutKey => {
 const onHistoryMessagesChange = value => {
   setSetting('historyMessages', value || 0)
 }
-/**
- * Handles the change of chatspeed crawler
- * @param {string} value - The value of chatspeed crawler
- */
-const onChatspeedCrawlerChange = value => {
-  setSetting('chatspeedCrawler', value || '')
-}
+
 /**
  * Handles the change of conversation title generation model id
  * @param {number} value - The value of conversation title generation model id
@@ -642,12 +838,80 @@ const onConversationTitleGenModelModelChange = value => {
 }
 
 /**
- * Handles the change of show menu button
- * @param {boolean} value - The value of show menu button
+ * Handles the change of web search model id
+ * @param {number} value - The value of web search model id
  */
-const onShowMenuButtonChange = value => {
-  setSetting('showMenuButton', value || false)
+const onWebsearchModelIdChange = value => {
+  settingStore.settings.websearchModel = { id: value || 0, model: '' }
+  setSetting('websearchModel', settingStore.settings.websearchModel)
 }
+
+/**
+ * Handles the change of web search model
+ * @param {string} value - The value of web search model
+ */
+const onWebsearchModelModelChange = value => {
+  settingStore.settings.websearchModel.model = value || ''
+  setSetting('websearchModel', settingStore.settings.websearchModel)
+}
+
+const onSearchEngineChange = value => {
+  setSetting('searchEngine', value || '')
+}
+
+const onSearchResultCountChange = value => {
+  setSetting('searchResultCount', value || 0)
+}
+
+/**
+ * Handles the change of chatspeed crawler
+ * @param {string} value - The value of chatspeed crawler
+ */
+const onChatspeedCrawlerChange = value => {
+  setSetting('chatspeedCrawler', value || '')
+}
+
+// =================================================
+// workflow settings
+// =================================================
+
+const onWorkflowReasoningModelIdChange = value => {
+  settingStore.settings.workflowReasoningModel = { id: value || 0, model: '' }
+  setSetting('workflowReasoningModel', settingStore.settings.workflowReasoningModel)
+}
+
+const workflowReasoningModelList = computed(() => {
+  if (settingStore.settings.workflowReasoningModel.id) {
+    return modelStore.getModelById(settingStore.settings.workflowReasoningModel.id)?.models || []
+  }
+  return []
+})
+
+const onWorkflowReasoningModelModelChange = value => {
+  settingStore.settings.workflowReasoningModel.model = value || ''
+  setSetting('workflowReasoningModel', settingStore.settings.workflowReasoningModel)
+}
+
+const onWorkflowGeneralModelIdChange = value => {
+  settingStore.settings.workflowGeneralModel = { id: value || 0, model: '' }
+  setSetting('workflowGeneralModel', settingStore.settings.workflowGeneralModel)
+}
+
+const workflowGeneralModelList = computed(() => {
+  if (settingStore.settings.workflowGeneralModel.id) {
+    return modelStore.getModelById(settingStore.settings.workflowGeneralModel.id)?.models || []
+  }
+  return []
+})
+
+const onWorkflowGeneralModelModelChange = value => {
+  settingStore.settings.workflowGeneralModel.model = value || ''
+  setSetting('workflowGeneralModel', settingStore.settings.workflowGeneralModel)
+}
+
+// =================================================
+// network settings
+// =================================================
 
 /**
  * Handles the change of proxy type
@@ -672,10 +936,16 @@ const onProxyPasswordChange = () => {
   setSetting('proxyPassword', settings.value.proxyPassword || '')
 }
 
-const onWordSelectionToolbarChange = value => {
-  settingStore.setTextMonitor(value || false).catch(err => {
-    showMessage(err, 'error')
-  })
+// =================================================
+// Advanced settings
+// =================================================
+
+/**
+ * Handles the change of auto update
+ * @param {boolean} value - The value of auto update
+ */
+const onAutoUpdateChange = value => {
+  setSetting('autoUpdate', value || false)
 }
 
 /**
@@ -699,16 +969,8 @@ const onAutoStartChange = async value => {
   }
 }
 
-/**
- * Handles the change of auto update
- * @param {boolean} value - The value of auto update
- */
-const onAutoUpdateChange = value => {
-  setSetting('autoUpdate', value || false)
-}
-
 // =================================================
-// Backup
+// Backup settings
 // =================================================
 const onBackupDirChange = () => {
   setSetting('backupDir', settings.value.backupDir || '')

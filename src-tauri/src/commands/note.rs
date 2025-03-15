@@ -33,7 +33,7 @@ use crate::db::{MainStore, Note, NoteTag};
 ///
 /// Creates a new note with the specified title, content, and tags.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 /// - `title` - The title of the note
 /// - `content` - The content of the note
@@ -66,10 +66,19 @@ pub fn add_note(
     conversation_id: Option<i64>,
     message_id: Option<i64>,
     tags: Vec<&str>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
+    dbg!(&metadata);
     let mut main_store = state.lock().map_err(|e| e.to_string())?;
     main_store
-        .add_note(&title, &content, conversation_id, message_id, tags)
+        .add_note(
+            &title,
+            &content,
+            conversation_id,
+            message_id,
+            tags,
+            metadata,
+        )
         .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -79,7 +88,7 @@ pub fn add_note(
 ///
 /// Retrieves a list of all tags from the note store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 ///
 /// # Returns
@@ -104,7 +113,7 @@ pub fn get_tags(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<NoteTag>, Str
 ///
 /// Retrieves all notes associated with a specific tag.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 /// - `tag_id` - The ID of the tag to filter notes by
 ///
@@ -133,7 +142,7 @@ pub fn get_notes(
 ///
 /// Retrieves a specific note by its ID.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 /// - `id` - The ID of the note to retrieve
 ///
@@ -159,7 +168,7 @@ pub fn get_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<Note, St
 ///
 /// Removes a note and its tag associations from the store.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 /// - `id` - The ID of the note to delete
 ///
@@ -185,7 +194,7 @@ pub fn delete_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), S
 ///
 /// Searches for notes by keyword in their titles.
 ///
-/// # Parameters
+/// # Arguments
 /// - `state` - The state of the note store, automatically injected by Tauri
 /// - `kw` - The keyword to search for in note titles
 ///

@@ -5,7 +5,10 @@ use rusqlite::{params, Connection, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 use tauri::AppHandle;
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
 // DO NOT REMOVE: This trait import is necessary for the Manager trait to be in scope
@@ -134,24 +137,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database connection or initialization fails.
-    pub fn new(_app: &AppHandle) -> Result<Self, StoreError> {
-        #[cfg(debug_assertions)]
-        let db_path = {
-            let dev_dir = &*crate::STORE_DIR.read();
-            dev_dir.join("chatspeed.db")
-        };
-
-        #[cfg(not(debug_assertions))]
-        let db_path = {
-            let app_local_data_dir = _app
-                .path()
-                .app_data_dir()
-                .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
-            std::fs::create_dir_all(&app_local_data_dir)
-                .map_err(|e| StoreError::StringError(e.to_string()))?;
-            app_local_data_dir.join("chatspeed.db")
-        };
-
+    pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
         let mut conn = Connection::open(&db_path).map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
@@ -164,7 +150,8 @@ impl MainStore {
             StoreError::DatabaseError(err)
         })?;
 
-        Self::migrate_data(_app).map_err(|e| {
+        let db_dir = db_path.as_ref().parent().unwrap_or(db_path.as_ref());
+        Self::migrate_data(&db_dir).map_err(|e| {
             let err = t!("db.failed_to_migrate_database", error = e.to_string()).to_string();
             log::error!("{}", err);
             StoreError::DatabaseError(err)
@@ -375,28 +362,17 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if any database operation fails during migration.
-    pub fn migrate_data(_app: &AppHandle) -> Result<(), StoreError> {
-        #[cfg(debug_assertions)]
-        let app_dir = &*crate::STORE_DIR.read();
-
-        #[cfg(not(debug_assertions))]
-        let app_dir = {
-            let app_local_data_dir = _app
-                .path()
-                .app_data_dir()
-                .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
-            std::fs::create_dir_all(&app_local_data_dir)
-                .map_err(|e| StoreError::StringError(e.to_string()))?;
-            app_local_data_dir
-        };
-
-        let chat_db_path = app_dir.join("chat.db");
-        let config_db_path = app_dir.join("config.db");
-        let new_db_path = app_dir.join("chatspeed.db");
-        let backup_dir = app_dir.join("backup");
+    pub fn migrate_data<P: AsRef<Path>>(db_path: P) -> Result<(), StoreError> {
+        let chat_db_path = db_path.as_ref().join("chat.db");
+        let config_db_path = db_path.as_ref().join("config.db");
+        let new_db_path = db_path.as_ref().join("chatspeed.db");
+        let backup_dir = db_path.as_ref().join("backup");
 
         if !chat_db_path.exists() && !config_db_path.exists() {
-            log::info!("No old databases found, skipping migration");
+            log::info!(
+                "No old databases found, skipping migration: {:?}",
+                new_db_path
+            );
             return Ok(());
         }
 

@@ -25,6 +25,11 @@ const defaultSettings = {
   chatspeedCrawler: '',
   historyMessages: 1,
   conversationTitleGenModel: { id: '', model: '' },
+  websearchModel: { id: '', model: '' },
+  searchEngine: [],
+  searchResultCount: 20,
+  location: '',
+  role: '',
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
   noteWindowVisibleShortcut: 'ALT+N',
@@ -39,7 +44,16 @@ const defaultSettings = {
   wordSelectionToolbar: false,
   autoStart: false,
   autoUpdate: true,
-  backupDir: ''
+  backupDir: '',
+  // workflow settings
+  workflowReasoningModel: {
+    id: '',
+    model: ''
+  },
+  workflowGeneralModel: {
+    id: '',
+    model: ''
+  }
 }
 
 /**

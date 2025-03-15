@@ -4,6 +4,6 @@
 //! including parallel execution, state management, and error handling.
 
 mod channel;
-mod core;
+mod dag;
 
-pub use core::WorkflowExecutor;
+pub use dag::WorkflowExecutor;

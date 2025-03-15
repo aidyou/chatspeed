@@ -1,4 +1,10 @@
 chat:
+  context:
+    location: "[我的位置：%{location}]"
+    role: "[我的角色：%{role}]"
+    time: "[当前时间：%{time}]"
+    language: "[首要语言：%{language}]"
+    content: "%{context}\n\n%{content}"
   failed_to_create_file: "无法创建文件: %{error}"
   failed_to_detect_language: "检测语言失败"
   failed_to_extract_text: "无法提取生成的文本内容"
@@ -8,6 +14,11 @@ chat:
   parse_response_failed: "解析响应失败: %{error}"
   request_failed: "请求失败，状态码：%{status}，响应：%{response}"
   stream_read_error: "读取流数据失败: %{error}"
+  user_message_with_references: "[参考资料]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\n回答用户问题时，请优先使用你自身的知识。如果问题超出你的知识范围或需要最新信息，可以参考`<ref></ref>`标签内的资料。引用这些资料时，请在相关句子后标注[^id]。请不要简单重复参考资料的内容，而是进行综合分析后给出回答。\n\n[用户问题]\n %{content}"
+  searching: "正在搜索信息..."
+  search_results: "本次共搜索到%{count}条结果"
+  search_analysing: "正在分析数据..."
+  search_fetching: "正在提取数据..."
 
 db:
   already_exists: "数据已存在"
@@ -74,7 +85,6 @@ http:
   runtime_create_failed: "创建运行时失败: %{error}"
   status_not_ok: "状态码不是OK: %{status}"
   upload_failed: "上传失败: %{error}"
-  user_message_with_references: "用户消息：\n %{content}\n\n参考资料：\n<ref source=\"crawler\">\n```json\n%{crawl_content}\n```\n</ref>\n\n请根据`<ref></ref>`内的参考资料进行回答。"
 
 main:
   failed_to_create_chat_store: "无法创建聊天存储: %{error}"
@@ -110,7 +120,6 @@ network:
   request_failed_with_type: "请求失败 (状态码: %{status}) - %{error_type}: %{message}"
   request_failed: "请求失败: %{error}"
   response_read_error: "读取响应失败: %{error}"
-  stream_decode_error: "解码流数据失败: %{error}"
 
 setting:
   file_not_exists: "文件不存在:：%{file_path}"

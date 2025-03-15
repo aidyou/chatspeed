@@ -8,31 +8,50 @@ use tokio::sync::RwLock;
 use crate::workflow::context::Context;
 use crate::workflow::error::WorkflowError;
 
-/// 函数调用的结果类型
+/// The result type of a function call.
 pub type FunctionResult = Result<Value, WorkflowError>;
 
-/// 函数定义特性
+/// A trait defining the characteristics of a function.
 #[async_trait]
 pub trait FunctionDefinition: Send + Sync {
-    /// 获取函数名称
+    /// Gets the name of the function.
     fn name(&self) -> &str;
 
-    /// 获取函数类型
+    /// Gets the type of the function.
     fn function_type(&self) -> FunctionType;
 
-    /// 获取函数描述
+    /// Gets the description of the function.
     fn description(&self) -> &str;
 
-    /// 执行函数
+    /// Returns the function calling specification in JSON format.
+    ///
+    /// This method provides detailed information about the function
+    /// in a format compatible with function calling APIs.
+    ///
+    /// # Returns
+    /// * `Value` - The function specification in JSON format.
+    fn function_calling_spec(&self) -> Value;
+
+    /// Executes the function.
+    ///
+    /// # Arguments
+    /// * `params` - The parameters to pass to the function.
+    /// * `context` - The context in which the function is executed.
+    ///
+    /// # Returns
+    /// * `FunctionResult` - The result of the function execution.
     async fn execute(&self, params: Value, context: &Context) -> FunctionResult;
 }
 
-/// 函数类型枚举
+/// An enumeration of function types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FunctionType {
-    Native, // Native function
-    Http,   // HTTP protocol
-    CHP,    //Chatspeed http protocol
+    /// A native function.
+    Native,
+    /// An HTTP protocol function.
+    Http,
+    /// A Chatspeed HTTP protocol function.
+    CHP,
 }
 
 impl fmt::Display for FunctionType {
@@ -45,21 +64,30 @@ impl fmt::Display for FunctionType {
     }
 }
 
-/// 函数管理器
+/// Manages the registration and execution of workflow functions.
+///
+/// This struct is responsible for maintaining a collection of functions
+/// that can be executed within a workflow.
 pub struct FunctionManager {
-    /// 注册的函数映射
+    /// A map of registered functions.
     functions: RwLock<HashMap<String, Arc<dyn FunctionDefinition>>>,
 }
 
 impl FunctionManager {
-    /// 创建新的函数管理器
+    /// Creates a new instance of `FunctionManager`.
     pub fn new() -> Self {
         Self {
             functions: RwLock::new(HashMap::new()),
         }
     }
 
-    /// 注册函数
+    /// Registers a new function with the manager.
+    ///
+    /// # Arguments
+    /// * `function` - The function to register.
+    ///
+    /// # Returns
+    /// * `Result<(), WorkflowError>` - The result of the registration.
     pub async fn register_function(
         &self,
         function: Arc<dyn FunctionDefinition>,
@@ -75,7 +103,13 @@ impl FunctionManager {
         Ok(())
     }
 
-    /// 注销函数
+    /// Unregisters a function from the manager.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the function to unregister.
+    ///
+    /// # Returns
+    /// * `Result<(), WorkflowError>` - The result of the unregistration.
     pub async fn unregister_function(&self, name: &str) -> Result<(), WorkflowError> {
         let mut functions = self.functions.write().await;
 
@@ -87,7 +121,13 @@ impl FunctionManager {
         Ok(())
     }
 
-    /// 获取函数
+    /// Gets a function by its name.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the function to get.
+    ///
+    /// # Returns
+    /// * `Result<Arc<dyn FunctionDefinition>, WorkflowError>` - The result of the function retrieval.
     pub async fn get_function(
         &self,
         name: &str,
@@ -100,7 +140,15 @@ impl FunctionManager {
             .ok_or_else(|| WorkflowError::FunctionNotFound(name.to_string()))
     }
 
-    /// 执行函数
+    /// Executes a function by its name.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the function to execute.
+    /// * `params` - The parameters to pass to the function.
+    /// * `context` - The context in which the function is executed.
+    ///
+    /// # Returns
+    /// * `FunctionResult` - The result of the function execution.
     pub async fn execute_function(
         &self,
         name: &str,
@@ -111,20 +159,29 @@ impl FunctionManager {
         function.execute(params, context).await
     }
 
-    /// 获取所有注册的函数名称
+    /// Gets the names of all registered functions.
+    ///
+    /// # Returns
+    /// * `Vec<String>` - A vector of function names.
     pub async fn get_registered_functions(&self) -> Vec<String> {
         let functions = self.functions.read().await;
         functions.keys().cloned().collect()
     }
 
-    /// 检查函数是否已注册
+    /// Checks if a function is registered.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the function to check.
+    ///
+    /// # Returns
+    /// * `bool` - Whether the function is registered.
     pub async fn has_function(&self, name: &str) -> bool {
         let functions = self.functions.read().await;
         functions.contains_key(name)
     }
 }
 
-/// 默认实现的空函数管理器
+/// A default implementation of `FunctionManager`.
 impl Default for FunctionManager {
     fn default() -> Self {
         Self::new()

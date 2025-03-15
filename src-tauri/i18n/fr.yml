@@ -1,4 +1,10 @@
 chat:
+  context:
+    location: "[Emplacement: %{location}]"
+    role: "[Rôle: %{role}]"
+    time: "[Heure: %{time}]"
+    language: "[Langue: %{language}]"
+    content: "%{context}\n\n%{content}"
   failed_to_create_file: "Échec de la création du fichier : %{error}"
   failed_to_detect_language: "Échec de la détection de la langue"
   failed_to_extract_text: "Échec de l'extraction du contenu du texte généré"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "Fournisseur d'API invalide : %{provider}"
   parse_response_failed: "Échec de l'analyse de la réponse : %{error}"
   request_failed: "La requête a échoué, code d'état : %{status}, réponse : %{response}"
+  search_analysing: "Analyse des données en cours..."
+  search_fetching: "Récupération des données..."
+  search_results: "%{count} résultats trouvés"
+  searching: "Recherche d'informations en cours..."
   stream_read_error: "Échec de la lecture des données du flux : %{error}"
+  user_message_with_references: "Références:\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nVous pouvez utiliser les informations dans `<ref></ref>` pour répondre. Veuillez marquer les références avec [^id] et éviter de répéter le contexte.\n\nMessage de l'utilisateur:\n %{content}"
 
 db:
   already_exists: "Les données existent déjà"
@@ -47,6 +58,34 @@ db:
   string_error: "Erreur de chaîne : %{error}"
   tauri_error: "Erreur Tauri : %{error}"
 
+http:
+  client_build_failed: "Échec de la création du client HTTP : %{error}"
+  connection_failed: "Échec de la connexion : %{error}"
+  download_failed: "Échec du téléchargement : %{error}"
+  failed_to_clone_request: "Échec du clonage de la requête lors de la nouvelle tentative"
+  failed_to_create_file: "Échec de la création du fichier : %{error}"
+  failed_to_open_file: "Échec de l'ouverture du fichier : %{error}"
+  failed_to_parse_response: "Échec de l'analyse de la réponse : %{error}"
+  failed_to_read_file: "Échec de la lecture du fichier, chemin : %{path}, erreur : %{error}"
+  failed_to_read_response: "Échec de la lecture de la réponse : %{error}"
+  failed_to_write_file: "Échec de l'écriture du fichier : %{error}"
+  headers_convert_failed: "Échec de la conversion des en-têtes de requête en HttpHeader : %{error}"
+  invalid_http_method: "Méthode HTTP invalide : %{method}"
+  invalid_request_config: "Configuration de requête invalide : %{error}"
+  invalid_response_format: "Format de réponse invalide : %{error}"
+  json_parse_failed: "Échec de l'analyse JSON : %{error}"
+  mime_parse_failed: "Échec de l'analyse du type MIME"
+  missing_response_body: "Corps de réponse vide"
+  missing_url: "Paramètre URL manquant dans la requête HTTP"
+  proxy_config_failed: "Échec de la configuration du proxy : %{error}"
+  read_response_failed: "Échec de la lecture de la réponse : %{error}"
+  request_failed: "Échec de la requête : %{error}"
+  request_timeout: "Délai d'attente de la requête dépassé"
+  response_too_large: "Les données côté serveur dépassent la limite de requête, taille des données côté serveur : %{content_length}, limite de requête : %{max_size}"
+  runtime_create_failed: "Échec de la création de l'environnement d'exécution : %{error}"
+  status_not_ok: "Le code d'état n'est pas OK : %{status}"
+  upload_failed: "Échec du téléversement : %{error}"
+
 main:
   failed_to_create_chat_store: "Échec de la création du stockage de chat : %{error}"
   failed_to_create_config_store: "Échec de la création du stockage de configuration : %{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "Requête échouée (code : %{status}) - %{error_type} : %{message}"
   request_failed: "Requête échouée : %{error}"
   response_read_error: "Échec de la lecture de la réponse : %{error}"
-  stream_decode_error: "Échec du décodage des données du flux : %{error}"
 
 note:
   already_exists: "Vous avez déjà ajouté cette note"

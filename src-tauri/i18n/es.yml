@@ -1,4 +1,10 @@
 chat:
+  context:
+    location: "[Ubicación: %{location}]"
+    role: "[Rol: %{role}]"
+    time: "[Hora: %{time}]"
+    language: "[Idioma: %{language}]"
+    content: "%{context}\n\n%{content}"
   failed_to_create_file: "No se pudo crear el archivo: %{error}"
   failed_to_detect_language: "Error al detectar el idioma"
   failed_to_extract_text: "No se pudo extraer el contenido del texto generado"
@@ -7,7 +13,12 @@ chat:
   invalid_api_provider: "Proveedor de API inválido: %{provider}"
   parse_response_failed: "Error al analizar la respuesta: %{error}"
   request_failed: "Solicitud fallida, código de estado: %{status}, respuesta: %{response}"
+  search_analysing: "Analizando datos..."
+  search_fetching: "Obteniendo datos..."
+  search_results: "%{count} resultados encontrados"
+  searching: "Buscando información..."
   stream_read_error: "Error al leer datos del stream: %{error}"
+  user_message_with_references: "Referencias:\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nPuede utilizar la información en `<ref></ref>` para responder. Por favor, marque las referencias con [^id] y evite repetir el contexto.\n\nMensaje del usuario:\n %{content}"
 
 db:
   already_exists: "Los datos ya existen"
@@ -70,6 +81,34 @@ main:
   failed_to_start_up_application: "Error al iniciar la aplicación"
   failed_to_check_window_visibility: "Error al verificar visibilidad de ventana: %{error}"
 
+http:
+  client_build_failed: "Error al crear cliente HTTP: %{error}"
+  connection_failed: "Conexión fallida: %{error}"
+  download_failed: "Error al descargar: %{error}"
+  failed_to_clone_request: "Error al clonar la solicitud durante el reintento"
+  failed_to_create_file: "Error al crear archivo: %{error}"
+  failed_to_open_file: "Error al abrir archivo: %{error}"
+  failed_to_parse_response: "Error al analizar respuesta: %{error}"
+  failed_to_read_file: "Error al leer archivo, ruta: %{path}, error: %{error}"
+  failed_to_read_response: "Error al leer respuesta: %{error}"
+  failed_to_write_file: "Error al escribir archivo: %{error}"
+  headers_convert_failed: "Error al convertir encabezados de solicitud a HttpHeader: %{error}"
+  invalid_http_method: "Método HTTP inválido: %{method}"
+  invalid_request_config: "Configuración de solicitud inválida: %{error}"
+  invalid_response_format: "Formato de respuesta inválido: %{error}"
+  json_parse_failed: "Error al analizar JSON: %{error}"
+  mime_parse_failed: "Error al analizar tipo MIME"
+  missing_response_body: "El cuerpo de la respuesta está vacío"
+  missing_url: "Falta el parámetro URL en la solicitud HTTP"
+  proxy_config_failed: "Error al configurar proxy: %{error}"
+  read_response_failed: "Error al leer respuesta: %{error}"
+  request_failed: "Solicitud fallida: %{error}"
+  request_timeout: "Tiempo de espera de solicitud agotado"
+  response_too_large: "Los datos del servidor exceden el límite de solicitud, tamaño de datos del servidor: %{content_length}, límite de solicitud: %{max_size}"
+  runtime_create_failed: "Error al crear runtime: %{error}"
+  status_not_ok: "El código de estado no es OK: %{status}"
+  upload_failed: "Error al subir: %{error}"
+
 network:
   client_build_error: "Error al crear cliente HTTP: %{error}"
   header_error: "Error al crear encabezado de solicitud: %{error}"
@@ -78,7 +117,6 @@ network:
   request_failed_with_type: "Solicitud fallida (código de estado: %{status}) - %{error_type}: %{message}"
   request_failed: "Solicitud fallida: %{error}"
   response_read_error: "Error al leer respuesta: %{error}"
-  stream_decode_error: "Error al decodificar datos del stream: %{error}"
 
 note:
   already_exists: "Ya has añadido esta nota"

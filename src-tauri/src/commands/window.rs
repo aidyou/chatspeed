@@ -57,7 +57,7 @@ struct SettingWindowPayload {
 ///
 /// See: https://github.com/tauri-apps/wry/issues/583
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - Tauri application handle
 /// - `setting_type` - Optional setting type to display (defaults to "general")
 ///
@@ -100,7 +100,7 @@ pub async fn open_setting_window(
 ///
 /// See: https://github.com/tauri-apps/wry/issues/583
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - Tauri application handle
 ///
 /// # Example
@@ -127,7 +127,7 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String
 
 /// Show the window by label
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - Tauri application handle
 ///
 /// # Example
@@ -167,7 +167,7 @@ struct UrlWindowPayload {
 ///
 /// See: https://github.com/tauri-apps/wry/issues/583
 ///
-/// # Parameters
+/// # Arguments
 /// - `app_handle` - Tauri application handle
 /// - `url` - URL to open in the window
 ///
@@ -197,7 +197,7 @@ pub async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<(), S
 ///
 /// It is used to sync the state of the application.
 ///
-/// # Parameters
+/// # Arguments
 /// - `app` - The app handle, automatically injected by Tauri
 /// - `sync_type` - The type of sync to perform
 /// - `label` - The window label of the sync, the available labels can be found in `src-tauri/tauri.conf.json`: app.windows[window_config_index].label
@@ -225,7 +225,7 @@ pub fn sync_state(app: tauri::AppHandle, sync_type: &str, label: &str, metadata:
 ///
 /// Note: Only the assistant window is supported now.
 ///
-/// # Parameters
+/// # Arguments
 /// - `app` - The app handle
 /// - `window_label` - The label of the window
 /// - `new_state` - The new state to set
@@ -267,7 +267,7 @@ pub async fn toggle_window_always_on_top(
 ///
 /// Note: Only the assistant window is supported now.
 ///
-/// # Parameters
+/// # Arguments
 /// - `window_label` - The label of the window
 ///
 /// # Returns
@@ -283,7 +283,7 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
 
 /// Quit the application
 ///
-/// # Parameters
+/// # Arguments
 /// - `app` - The app handle
 #[command]
 pub fn quit_window(app: tauri::AppHandle) -> Result<(), String> {

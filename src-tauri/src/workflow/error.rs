@@ -64,6 +64,10 @@ pub enum WorkflowError {
     #[error("{}", t!("workflow.error.state_change_failed", reason = .0))]
     StateChangeFailed(String),
 
+    /// Store error
+    #[error("{}", t!("workflow.error.store", msg = .0))]
+    Store(String),
+
     /// Timeout error
     #[error("{}", t!("workflow.error.timeout", node = .0))]
     Timeout(String),
