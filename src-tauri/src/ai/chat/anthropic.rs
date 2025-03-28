@@ -2,11 +2,15 @@ use async_trait::async_trait;
 use reqwest::Response;
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::time::Instant;
 use std::{error::Error, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::ai::interaction::constants::{
+    TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
+};
 use crate::ai::network::{
-    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat, TokenUsage,
+    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamFormat, TokenUsage,
 };
 use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
@@ -42,11 +46,11 @@ impl AnthropicChat {
         json!({
             "model": model,
             "messages": messages,
-            "max_tokens": params.get("max_tokens").unwrap(),
-            "temperature": params.get("temperature").unwrap(),
-            "stream": params.get("stream").unwrap(),
-            "top_p": params.get("top_p").unwrap(),
-            "top_k": params.get("top_k").unwrap(),
+            "max_tokens": params.get("max_tokens").unwrap_or(&json!(4096)),
+            "temperature": params.get("temperature").unwrap_or(&json!(1.0)),
+            "stream": params.get("stream").unwrap_or(&json!(true)),
+            "top_p": params.get("top_p").unwrap_or(&json!(1.0)),
+            "top_k": params.get("top_k").unwrap_or(&json!(40)),
         })
     }
 
@@ -65,6 +69,7 @@ impl AnthropicChat {
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let mut full_response = String::new();
         let mut token_usage = TokenUsage::default();
+        let start_time = Instant::now();
 
         while let Some(chunk) = response.chunk().await.map_err(|e| {
             let error = t!("chat.stream_read_error", error = e.to_string()).to_string();
@@ -80,12 +85,7 @@ impl AnthropicChat {
                 break;
             }
 
-            let StreamChunk {
-                reasoning_content,
-                content,
-                usage,
-                ..
-            } = self
+            let chunks = self
                 .client
                 .process_stream_chunk(chunk, &StreamFormat::Anthropic)
                 .await
@@ -99,30 +99,43 @@ impl AnthropicChat {
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
 
-            if let Some(new_usage) = usage {
-                token_usage = new_usage;
-            }
+            for chunk in chunks {
+                if let Some(new_usage) = chunk.usage {
+                    token_usage = new_usage;
 
-            if let Some(content) = reasoning_content {
-                if !content.is_empty() {
-                    full_response.push_str(&content);
-                    callback(ChatResponse::new_with_arc(
-                        chat_id.clone(),
-                        content,
-                        MessageType::Reasoning,
-                        metadata_option.clone(),
-                    ));
+                    // Anthropic does not provide tokens per second, so calculate it here
+                    let completion_tokens = token_usage.completion_tokens as f64;
+                    let duration = start_time.elapsed();
+                    token_usage.tokens_per_second = if duration.as_secs() > 0 {
+                        completion_tokens / duration.as_secs_f64()
+                    } else {
+                        0.0
+                    };
                 }
-            }
-            if let Some(content) = content {
-                if !content.is_empty() {
-                    full_response.push_str(&content);
-                    callback(ChatResponse::new_with_arc(
-                        chat_id.clone(),
-                        content,
-                        MessageType::Text,
-                        metadata_option.clone(),
-                    ));
+                if let Some(content) = chunk.reasoning_content {
+                    if !content.is_empty() {
+                        full_response.push_str(&format!("<think>{}</think>", content));
+
+                        callback(ChatResponse::new_with_arc(
+                            chat_id.clone(),
+                            content,
+                            MessageType::Reasoning,
+                            metadata_option.clone(),
+                        ));
+                    }
+                }
+
+                if let Some(content) = chunk.content {
+                    if !content.is_empty() {
+                        full_response.push_str(&content);
+
+                        callback(ChatResponse::new_with_arc(
+                            chat_id.clone(),
+                            content,
+                            MessageType::Text,
+                            metadata_option.clone(),
+                        ));
+                    }
                 }
             }
         }
@@ -134,11 +147,12 @@ impl AnthropicChat {
             MessageType::Finished,
             Some(update_or_create_metadata(
                 metadata_option,
-                "tokens",
+                TOKENS,
                 json!({
-                    "total": token_usage.total_tokens,
-                    "prompt": token_usage.prompt_tokens,
-                    "completion": token_usage.completion_tokens
+                    TOKENS_TOTAL: token_usage.total_tokens,
+                    TOKENS_PROMPT: token_usage.prompt_tokens,
+                    TOKENS_COMPLETION: token_usage.completion_tokens,
+                    TOKENS_PER_SECOND: token_usage.tokens_per_second
                 }),
             )),
         ));

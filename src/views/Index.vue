@@ -20,7 +20,7 @@
           </div>
         </template>
         <template #center>
-          <div class="model-selector" v-if="models.length > 0">
+          <div class="model-selector" v-if="modelProviders.length > 0">
             <el-dropdown @command="onModelChange" trigger="click">
               <div class="dropdown-text upperLayer">
                 <span class="text">
@@ -36,7 +36,7 @@
               <template #dropdown>
                 <el-dropdown-menu class="dropdown">
                   <el-dropdown-item
-                    v-for="model in models"
+                    v-for="model in modelProviders"
                     :key="model.id"
                     :command="model.id"
                     :class="{ 'is-active': currentModel.id === model.id }">
@@ -56,22 +56,32 @@
             </el-dropdown>
             <el-dropdown @command="onSubModelChange" trigger="click">
               <div class="dropdown-text upperLayer">
-                <span class="text">{{ currentModel?.defaultModel?.split('/').pop() }}</span>
+                <span class="text">{{ currentModelAlias }}</span>
                 <cs name="caret-down" />
               </div>
               <template #dropdown>
                 <el-dropdown-menu class="dropdown">
-                  <el-dropdown-item
-                    v-for="(model, index) in currentModel?.models"
-                    :key="index"
-                    :command="model"
-                    :class="{ 'is-active': currentModel?.defaultModel === model }">
-                    <div class="item">
-                      <div class="name">
-                        {{ model.split('/').pop() }}
+                  <template v-for="(models, group) in currentSubModels" :key="group">
+                    <el-dropdown-item disabled>
+                      <div class="item">
+                        <div class="name">
+                          {{ group }}
+                        </div>
                       </div>
-                    </div>
-                  </el-dropdown-item>
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-for="(model, index) in models"
+                      :divided="index == 0"
+                      :key="index"
+                      :command="model.id"
+                      :class="{ 'is-active': currentModel?.defaultModel === model.id }">
+                      <div class="item">
+                        <div class="name">
+                          {{ model.name || model.id.split('/').pop() }}
+                        </div>
+                      </div>
+                    </el-dropdown-item>
+                  </template>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -253,6 +263,12 @@
                       <label>{{ $t('chat.metadata.tokens') }}:</label>
                       <span>{{ message?.metadata?.tokens }}</span>
                     </div>
+                    <div class="item" v-if="message?.metadata?.tokensPerSecond">
+                      <span
+                        >{{ Math.round((message?.metadata?.tokensPerSecond * 100) / 100) }}
+                        {{ $t('chat.metadata.tokensPerSecond') }}</span
+                      >
+                    </div>
                   </div>
                 </div>
 
@@ -303,6 +319,7 @@
           <!-- footer -->
           <el-footer class="input-container">
             <div class="skill-list-container">
+               
               <SkillList
                 ref="skillListRef"
                 @onSelected="onSkillSelected"
@@ -481,10 +498,25 @@ const editConversationDialogVisible = ref(false)
 const editConversationId = ref(null)
 const editConversationTitle = ref('')
 
-// load models
-const models = computed(() => modelStore.availableModels)
-const currentModel = computed(() => modelStore.defaultModel)
-const canChat = computed(() => models.value.length > 0)
+// load model providers
+const modelProviders = computed(() => modelStore.getAvailableProviders)
+const currentModel = computed(() => modelStore.defaultModelProvider)
+const currentSubModels = computed(() =>
+  modelStore.defaultModelProvider?.models?.reduce((groups, x) => {
+    if (!x.group) {
+      x.group = t('settings.model.ungrouped')
+    }
+    groups[x.group] = groups[x.group] || []
+    groups[x.group].push(x)
+    return groups
+  }, {})
+)
+const currentModelAlias = computed(() => {
+  const cfg = currentModel.value.models.find(m => m.id === currentModel.value.defaultModel)
+  return cfg?.name || cfg?.id.split('/').pop()
+})
+
+const canChat = computed(() => modelProviders.value.length > 0)
 
 const chatMessagesRef = ref(null)
 const sidebarCollapsed = ref(!windowStore.chatSidebarShow)
@@ -908,7 +940,6 @@ const sendMessage = async (messageId = null) => {
         // Scroll again after 800ms to prevent issues caused by the first scroll when the window's vdom has not been updated yet
         scrollToBottomIfNeeded()
       }, 800)
-
       try {
         await invoke('chat_completion', {
           apiProtocol: currentModel.value.apiProtocol,
@@ -991,7 +1022,7 @@ const genTitleByAi = () => {
   let model = currentModel.value.defaultModel
   if (settingStore.settings.conversationTitleGenModel?.id) {
     genModel =
-      modelStore.getModelById(settingStore.settings.conversationTitleGenModel.id) ||
+      modelStore.getModelProviderById(settingStore.settings.conversationTitleGenModel.id) ||
       currentModel.value
     model = settingStore.settings.conversationTitleGenModel?.model || model
   }
@@ -1033,24 +1064,32 @@ const genTitleByAi = () => {
  * Handle title generated event
  */
 const handleTitleGenerated = payload => {
-  if (payload?.isError) {
-    console.error('error on genTitleByAi:', payload.error)
-    titleGenerating.value = false
-    // add retry logic
-    if (titleRetryCount.value < MAX_TITLE_RETRY) {
-      titleRetryCount.value++
-      console.log(`Retrying generate title (${titleRetryCount.value}/${MAX_TITLE_RETRY})...`)
-      setTimeout(() => {
-        genTitleByAi()
-      }, 3000) // retry after 3 seconds
-    } else {
-      console.error('Max retry attempts reached for title generation')
-      titleRetryCount.value = 0 // reset retry count
-      showMessage(t('chat.errorOnGenerateTitle'), 'error', 3000)
-    }
-    return
+  switch (payload?.type) {
+    case 'error':
+      console.error('error on genTitleByAi:', payload.error)
+      titleGenerating.value = false
+      // add retry logic
+      if (titleRetryCount.value < MAX_TITLE_RETRY) {
+        titleRetryCount.value++
+        console.log(`Retrying generate title (${titleRetryCount.value}/${MAX_TITLE_RETRY})...`)
+        setTimeout(() => {
+          genTitleByAi()
+        }, 3000) // retry after 3 seconds
+      } else {
+        console.error('Max retry attempts reached for title generation')
+        titleRetryCount.value = 0 // reset retry count
+        showMessage(t('chat.errorOnGenerateTitle'), 'error', 3000)
+      }
+      return
+
+    case 'text':
+      title.value += payload?.chunk || ''
+      break
+
+    case 'finished':
+      payload.isDone = true
+      break
   }
-  title.value += payload?.chunk || ''
   if (payload?.isDone) {
     if (title.value.trim().length > 0) {
       // remove leading and trailing double quotes
@@ -1070,17 +1109,8 @@ const handleTitleGenerated = payload => {
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  if (payload?.isError) {
-    chatErrorMessage.value = payload.chunk
-    isChatting.value = false
-    if (currentAssistantMessage.value == '') {
-      return
-    } else {
-      payload.isDone = true
-    }
-  }
-
-  chatState.value.isReasoning = payload?.isReasoning
+  let isDone = false
+  chatState.value.isReasoning = payload?.type == 'reasoning'
 
   switch (payload?.type) {
     case 'step':
@@ -1110,17 +1140,21 @@ const handleChatMessage = async payload => {
       chatState.value.reasoning += payload?.chunk || ''
       break
     case 'error':
-    case 'finished':
-      payload.isDone = true
-      if (payload.type === 'finished') {
-        chatState.value.message += payload?.chunk || ''
-      }
+      chatErrorMessage.value = payload?.chunk || ''
+      isDone = true
       break
-    default:
+    case 'finished':
+      isDone = true
+      chatState.value.message += payload?.chunk || ''
+      break
+    case 'text':
       chatState.value.message += payload?.chunk || ''
 
       // handle deepseek-r1 reasoning flag `<think></think>`
-      if (chatState.value.message.startsWith('<think>') && chatState.value.includes('</think>')) {
+      if (
+        chatState.value.message.startsWith('<think>') &&
+        chatState.value.message.includes('</think>')
+      ) {
         const messages = chatState.value.message.split('</think>')
         chatState.value.reasoning = messages[0].replace('<think>', '').trim()
         chatState.value.message = messages[1].trim()
@@ -1135,7 +1169,9 @@ const handleChatMessage = async payload => {
     }
   })
 
-  if (payload?.isDone) {
+  if (isDone) {
+    isChatting.value = false
+    lastChatId.value = ''
     if (chatState.value.message.trim().length > 0) {
       // 保存当前滚动位置和高度，用于后续恢复
       const scrollInfo = {
@@ -1154,13 +1190,13 @@ const handleChatMessage = async payload => {
             tokens: payload?.metadata?.tokens?.total || 0,
             prompt: payload?.metadata?.tokens?.prompt || 0,
             completion: payload?.metadata?.tokens?.completion || 0,
+            tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
             provider: currentModel.value.defaultModel || '',
             reference: chatState.value.reference || [],
             reasoning: chatState.value.reasoning || ''
           }
         )
         // 一次性更新所有状态，减少DOM重绘次数
-        isChatting.value = false
         chatState.value = getDefaultChatState()
         currentAssistantMessage.value = ''
 
@@ -1271,7 +1307,6 @@ onMounted(async () => {
   })
 
   await listen('sync_state', event => {
-    console.log('sync_state', event)
     if (event.payload.label !== windowLabel.value) {
       return
     }
@@ -1428,23 +1463,22 @@ const onOpenSettingWindow = type => {
  * @param {Object} id model config
  */
 const onModelChange = id => {
-  modelStore.setDefaultModel(models.value.find(model => model.id === id))
+  modelStore.setDefaultModelProvider(modelProviders.value.find(model => model.id === id))
 }
 
 /**
  * Set the default sub model
- * @param {Object} value sub model config
+ * @param {String} modelId sub model id
  */
-const onSubModelChange = model => {
-  currentModel.value.defaultModel = model
-  modelStore.setDefaultModel(currentModel.value)
-
+const onSubModelChange = modelId => {
+  currentModel.value.defaultModel = modelId
+  modelStore.setDefaultModelProvider(currentModel.value)
   const logo = currentModel.value?.metadata?.logo || ''
   // update the database record
   modelStore
     .setModel({
       ...currentModel.value,
-      defaultModel: model,
+      defaultModel: modelId,
       metadata: {
         ...currentModel.value.metadata,
         proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
@@ -1490,6 +1524,7 @@ const onStopChat = () => {
       showMessage(t('chat.errorOnStopChat', { error }), 'error', 3000)
     })
     .finally(() => {
+      lastChatId.value = ''
       isChatting.value = false
     })
 }
@@ -1901,7 +1936,8 @@ const onTakeNote = message => {
     flex: 1;
     overflow-y: auto;
     padding: var(--cs-space);
-    padding-bottom: calc(65px + var(--cs-space));
+    padding-bottom: var(--cs-space);
+    //padding-bottom: calc(65px + var(--cs-space));
 
     .message {
       display: flex;
@@ -1971,10 +2007,6 @@ const onTakeNote = message => {
   }
 
   footer.input-container {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
     flex-shrink: 0;
     background-color: transparent;
     padding: var(--cs-space-sm);

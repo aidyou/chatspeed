@@ -2,8 +2,9 @@
 //!
 //! ## Configuration Structure
 //! ### Root Elements
-//! A workflow consists of **nodes** (individual tasks) and **groups** (task containers):
+//! A workflow consists of **nodes** (individual tasks), **loops** (iterative tasks), and **groups** (task containers):
 //! - Nodes/groups are defined in a flat JSON array (`[...]`)
+//! - Loops **do execute** the tools defined in the `functions` array
 //! - Groups **do not execute tools directly** – they orchestrate node execution
 //!
 //! ### Node Definition (Executable Task)
@@ -13,7 +14,7 @@
 //!   "desc": "<description>",        // Optional
 //!   "dependencies": ["id1", "id2"], // Optional (node/group IDs)
 //!   "tool": {                       // Required (execution logic)
-//!     "function": "<executable>",
+//!     "function": "<function_name>",
 //!     "param": {                    // Supports value templates
 //!       "key": "${source_node.output_field}"
 //!     },
@@ -33,7 +34,7 @@
 //!     "input": "${source_node}",      // Required (input data to iterate over)
 //!     "functions": [                  // Required (list of functions to execute for each item)
 //!       {
-//!         "function": "<executable>",
+//!         "function": "<function_name>",
 //!         "param": {                  // Supports value templates
 //!           "key": "${item.field}"    // Use "item" to reference the current iteration item
 //!         },
@@ -132,15 +133,15 @@
 
 use lazy_static::lazy_static;
 use regex::Regex;
+use rust_i18n::t;
 use std::collections::HashSet;
 
-use crate::workflow::{
+use super::config::{WorkflowGroup, WorkflowItem, WorkflowLoop, WorkflowNode};
+use crate::workflow::dag::{
     config::{EdgeConfig, GroupConfig, NodeConfig, NodeType},
-    error::WorkflowError,
     types::WorkflowResult,
 };
-
-use super::config::{WorkflowGroup, WorkflowItem, WorkflowLoop, WorkflowNode};
+use crate::workflow::error::WorkflowError;
 
 lazy_static! {
     static ref ID_REGEX: Regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9\-_]*$").unwrap();
@@ -168,32 +169,49 @@ impl WorkflowParser {
     ///   - Node validation fails
     ///   - Edge validation fails
     pub fn parse(workflow_json: &str) -> WorkflowResult<(Vec<NodeConfig>, Vec<EdgeConfig>)> {
-        let workflow_items: Vec<WorkflowItem> = serde_json::from_str(workflow_json)
-            .map_err(|e| WorkflowError::Config(format!("Invalid workflow JSON: {}", e)))?;
+        let workflow_items: Vec<WorkflowItem> =
+            serde_json::from_str(workflow_json).map_err(|e| {
+                WorkflowError::Config(t!("workflow.invalid_workflow_json", error = e).to_string())
+            })?;
 
         Self::convert_to_dag(workflow_items)
     }
 
-    /// Validate the format of a node or group ID
+    /// Validate the format of a node or group ID and output
     ///
     /// This method ensures that the ID follows the required format:
     /// - Starts with a letter
     /// - Contains only alphanumeric characters, underscores (`_`), or hyphens (`-`)
+    /// - Output must be a valid ID and not "item"
     ///
     /// # Arguments
     /// * `id` - The ID to validate
+    /// * `output` - The output to validate
     ///
     /// # Returns
     /// * `WorkflowResult<()>` - Returns `Ok(())` if the ID is valid
     ///
     /// # Errors
     /// * Returns `WorkflowError` if the ID format is invalid
-    fn validate_id_format(id: &str) -> WorkflowResult<()> {
-        if !ID_REGEX.is_match(id) {
-            return Err(WorkflowError::Config(format!(
-                "Invalid ID format: '{}'. Only alphanumeric, _, - are allowed and must start with a letter",
-                id
-            )));
+    fn validate_node(id: Option<&str>, output: Option<&String>) -> WorkflowResult<()> {
+        if let Some(id) = id {
+            if !ID_REGEX.is_match(id) {
+                return Err(WorkflowError::Config(
+                    t!("workflow.invalid_node_id", id = id).to_string(),
+                ));
+            }
+        }
+        if let Some(output) = output {
+            if !ID_REGEX.is_match(&output) || output == "item" {
+                return Err(WorkflowError::Config(
+                    t!(
+                        "workflow.invalid_node_output",
+                        id = id.unwrap_or(""),
+                        output = output
+                    )
+                    .to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -212,63 +230,66 @@ impl WorkflowParser {
     /// * Returns `WorkflowError` if:
     ///   - An ID format is invalid
     ///   - Duplicate IDs are found
-    fn collect_and_validate_node_ids(items: &[WorkflowItem]) -> WorkflowResult<HashSet<String>> {
+    fn collect_and_validate_node(items: &[WorkflowItem]) -> WorkflowResult<HashSet<String>> {
         let mut node_ids = HashSet::new();
 
         for item in items {
             match item {
                 WorkflowItem::Node(node) => {
-                    Self::validate_id_format(&node.id)?;
+                    Self::validate_node(Some(&node.id), node.tool.output.as_ref())?;
                     if !node_ids.insert(node.id.clone()) {
-                        return Err(WorkflowError::Config(format!(
-                            "Duplicate node ID: {}",
-                            node.id
-                        )));
+                        return Err(WorkflowError::Config(
+                            t!("workflow.duplicate_node_id", id = node.id).to_string(),
+                        ));
                     }
                 }
                 WorkflowItem::Loop(ref loop_item) => {
-                    Self::validate_id_format(&loop_item.id)?;
+                    Self::validate_node(Some(&loop_item.id), None)?;
                     if !node_ids.insert(loop_item.id.clone()) {
-                        return Err(WorkflowError::Config(format!(
-                            "Duplicate node ID: {}",
-                            loop_item.id
-                        )));
+                        return Err(WorkflowError::Config(
+                            t!("workflow.duplicate_node_id", id = loop_item.id).to_string(),
+                        ));
+                    }
+                    // check every loop function output
+                    for func in &loop_item.r#loop.functions {
+                        Self::validate_node(None, func.output.as_ref())?;
                     }
                 }
                 WorkflowItem::Group(group) => {
-                    Self::validate_id_format(&group.id)?;
+                    Self::validate_node(Some(&group.id), None)?;
                     if !node_ids.insert(group.id.clone()) {
-                        return Err(WorkflowError::Config(format!(
-                            "Duplicate group ID: {}",
-                            group.id
-                        )));
+                        return Err(WorkflowError::Config(
+                            t!("workflow.duplicate_node_id", id = group.id).to_string(),
+                        ));
                     }
 
                     for item in &group.nodes {
                         match item {
                             WorkflowItem::Node(node) => {
-                                Self::validate_id_format(&node.id)?;
+                                Self::validate_node(Some(&node.id), node.tool.output.as_ref())?;
                                 if !node_ids.insert(node.id.clone()) {
-                                    return Err(WorkflowError::Config(format!(
-                                        "Duplicate node ID: {}",
-                                        node.id
-                                    )));
+                                    return Err(WorkflowError::Config(
+                                        t!("workflow.duplicate_node_id", id = node.id).to_string(),
+                                    ));
                                 }
                             }
                             WorkflowItem::Group(_) => {
-                                // 不允许组嵌套
-                                return Err(WorkflowError::Config(format!(
-                                    "嵌套组不允许：组 '{}' 内不能包含其他组",
-                                    group.id
-                                )));
+                                // Group nodes cannot be nested.
+                                return Err(WorkflowError::Config(
+                                    t!("workflow.nested_group", id = group.id).to_string(),
+                                ));
                             }
                             WorkflowItem::Loop(loop_item) => {
-                                Self::validate_id_format(&loop_item.id)?;
+                                Self::validate_node(Some(&loop_item.id), None)?;
                                 if !node_ids.insert(loop_item.id.clone()) {
-                                    return Err(WorkflowError::Config(format!(
-                                        "Duplicate node ID: {}",
-                                        loop_item.id
-                                    )));
+                                    return Err(WorkflowError::Config(
+                                        t!("workflow.duplicate_node_id", id = loop_item.id)
+                                            .to_string(),
+                                    ));
+                                }
+                                // check every loop function output
+                                for func in &loop_item.r#loop.functions {
+                                    Self::validate_node(None, func.output.as_ref())?;
                                 }
                             }
                         }
@@ -305,23 +326,26 @@ impl WorkflowParser {
     ) -> WorkflowResult<()> {
         for dep in dependencies {
             if !node_ids.contains(dep) {
-                return Err(WorkflowError::Config(format!(
-                    "Dependency '{}' of '{}' does not exist",
-                    dep, node_id
-                )));
+                return Err(WorkflowError::Config(
+                    t!("workflow.dependency_not_found", id = dep, node_id = node_id).to_string(),
+                ));
             }
 
             if dep == node_id {
-                return Err(WorkflowError::Config(format!(
-                    "Self-dependency detected for '{}'",
-                    node_id
-                )));
+                return Err(WorkflowError::Config(
+                    t!("workflow.self_dependency", node_id = node_id).to_string(),
+                ));
             }
 
-            edges.push(EdgeConfig {
+            // 检查边是否已经存在，避免重复添加
+            let edge = EdgeConfig {
                 from: dep.clone(),
                 to: node_id.to_string(),
-            });
+            };
+
+            if !edges.iter().any(|e| e.from == edge.from && e.to == edge.to) {
+                edges.push(edge);
+            }
         }
         Ok(())
     }
@@ -344,7 +368,7 @@ impl WorkflowParser {
     fn convert_to_dag(
         items: Vec<WorkflowItem>,
     ) -> WorkflowResult<(Vec<NodeConfig>, Vec<EdgeConfig>)> {
-        let node_ids = Self::collect_and_validate_node_ids(&items)?;
+        let node_ids = Self::collect_and_validate_node(&items)?;
         let mut edges = Vec::new();
         let mut nodes = Vec::new();
 
@@ -400,10 +424,9 @@ impl WorkflowParser {
                 WorkflowItem::Node(node) => child_nodes.push(node.id.clone()),
                 WorkflowItem::Group(_) => {
                     // 不允许组嵌套
-                    return Err(WorkflowError::Config(format!(
-                        "嵌套组不允许：组 '{}' 内不能包含其他组",
-                        group_id
-                    )));
+                    return Err(WorkflowError::Config(
+                        t!("workflow.nested_group", id = group_id).to_string(),
+                    ));
                 }
                 WorkflowItem::Loop(loop_item) => child_nodes.push(loop_item.id.clone()),
             }
@@ -416,17 +439,22 @@ impl WorkflowParser {
                 WorkflowItem::Node(node) => node.id.clone(),
                 WorkflowItem::Group(_) => {
                     // 不允许组嵌套
-                    return Err(WorkflowError::Config(format!(
-                        "嵌套组不允许：组 '{}' 内不能包含其他组",
-                        group_id
-                    )));
+                    return Err(WorkflowError::Config(
+                        t!("workflow.nested_group", id = group_id).to_string(),
+                    ));
                 }
                 WorkflowItem::Loop(loop_item) => loop_item.id.clone(),
             };
-            edges.push(EdgeConfig {
+
+            // 检查边是否已经存在，避免重复添加
+            let edge = EdgeConfig {
                 from: node_id,
                 to: group_id.clone(),
-            });
+            };
+
+            if !edges.iter().any(|e| e.from == edge.from && e.to == edge.to) {
+                edges.push(edge);
+            }
         }
 
         // 处理顺序组链式依赖（消费group.nodes所有权）
@@ -438,10 +466,9 @@ impl WorkflowParser {
                 WorkflowItem::Node(node) => node.id.clone(),
                 WorkflowItem::Group(_) => {
                     // 不允许组嵌套
-                    return Err(WorkflowError::Config(format!(
-                        "嵌套组不允许：组 '{}' 内不能包含其他组",
-                        group_id
-                    )));
+                    return Err(WorkflowError::Config(
+                        t!("workflow.nested_group", id = group_id).to_string(),
+                    ));
                 }
                 WorkflowItem::Loop(loop_item) => loop_item.id.clone(),
             };
@@ -457,10 +484,9 @@ impl WorkflowParser {
                         }
                         WorkflowItem::Group(_) => {
                             // 不允许组嵌套
-                            return Err(WorkflowError::Config(format!(
-                                "嵌套组不允许：组 '{}' 内不能包含其他组",
-                                group_id
-                            )));
+                            return Err(WorkflowError::Config(
+                                t!("workflow.nested_group", id = group_id).to_string(),
+                            ));
                         }
                         WorkflowItem::Loop(mut loop_item) => {
                             loop_item
@@ -478,10 +504,9 @@ impl WorkflowParser {
                         }
                         WorkflowItem::Group(_) => {
                             // 不允许组嵌套
-                            return Err(WorkflowError::Config(format!(
-                                "嵌套组不允许：组 '{}' 内不能包含其他组",
-                                group_id
-                            )));
+                            return Err(WorkflowError::Config(
+                                t!("workflow.nested_group", id = group_id).to_string(),
+                            ));
                         }
                         WorkflowItem::Loop(loop_item) => {
                             Self::create_loop_config(loop_item, node_ids, edges, nodes)?
@@ -495,10 +520,9 @@ impl WorkflowParser {
                     WorkflowItem::Node(node) => Self::process_node(node, node_ids, edges, nodes)?,
                     WorkflowItem::Group(_) => {
                         // 不允许组嵌套
-                        return Err(WorkflowError::Config(format!(
-                            "嵌套组不允许：组 '{}' 内不能包含其他组",
-                            group_id
-                        )));
+                        return Err(WorkflowError::Config(
+                            t!("workflow.nested_group", id = group_id).to_string(),
+                        ));
                     }
                     WorkflowItem::Loop(loop_item) => {
                         Self::create_loop_config(loop_item, node_ids, edges, nodes)?
@@ -629,22 +653,62 @@ impl WorkflowParser {
 
 #[cfg(test)]
 mod tests {
-    use crate::{logger, workflow::config::ToolConfig};
+    use crate::{logger, workflow::dag::config::ToolConfig};
 
     use super::*;
     use serde_json::json;
 
     #[test]
     fn test_basic_parsing() {
-        let json = r#"[{
-            "id": "step1",
-            "tool": {"function": "func1", "param": {}}
-        }]"#;
+        let json = r#"[
+            {
+                "id": "step1",
+                "desc": "First node",
+                "tool": {
+                    "function": "function1",
+                    "param": { "key": "value" }
+                }
+            }
+        ]"#;
 
         let (nodes, edges) = WorkflowParser::parse(json).unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(edges.len(), 0);
         assert_eq!(nodes[0].id, "step1");
+
+        let json = r#"[
+            {
+                "id": "step2",
+                "desc": "Second node",
+                "dependencies": ["step1"],
+                "tool": {
+                    "function": "function2",
+                    "param": { "key": "value" },
+                    "output": "item"
+                }
+            }
+        ]"#;
+
+        // output field can't be "item"
+        let r = WorkflowParser::parse(json);
+        assert!(r.is_err());
+
+        let json = r#"[
+            {
+                "id": "step2",
+                "desc": "Second node",
+                "dependencies": ["step1"],
+                "tool": {
+                    "function": "function2",
+                    "param": { "key": "value" },
+                    "output": "_item"
+                }
+            }
+        ]"#;
+
+        // output field can't be start with "_"
+        let r = WorkflowParser::parse(json);
+        assert!(r.is_err());
     }
 
     #[test]
@@ -826,7 +890,8 @@ mod tests {
         // 解析工作流JSON
         let (nodes, edges) = WorkflowParser::parse(workflow_json).unwrap();
 
-        let _ = crate::workflow::WorkflowGraph::new(nodes.clone(), edges.clone()).unwrap();
+        let _ =
+            crate::workflow::dag::graph::WorkflowGraph::new(nodes.clone(), edges.clone()).unwrap();
 
         // 验证依赖关系
         println!("Edges:");

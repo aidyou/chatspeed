@@ -9,16 +9,16 @@ chat:
   request_failed: "リクエストが失敗しました、ステータスコード：%{status}、レスポンス：%{response}"
   stream_read_error: "ストリームデータの読み取りに失敗しました：%{error}"
   context:
-    content: 内容
-    language: 言語
-    location: 場所
-    role: 役割
-    time: 時間
-  search_analysing: 分析中
-  search_fetching: 取得中
-  search_results: 検索結果
-  searching: 検索中
-  user_message_with_references: 参照付きユーザーメッセージ
+    content: "内容"
+    language: "言語"
+    location: "場所"
+    role: "役割"
+    time: "時間"
+  search_analysing: "分析中"
+  search_fetching: "取得中"
+  search_results: "検索結果"
+  searching: "検索中"
+  user_message_with_references: "参照付きユーザーメッセージ"
 
 db:
   already_exists: "データがすでに存在します"
@@ -79,7 +79,7 @@ http:
   missing_url: "URLがありません"
   proxy_config_failed: "プロキシの設定に失敗しました"
   read_response_failed: "レスポンスの読み取りに失敗しました"
-  request_failed: "リクエストに失敗しました"
+  request_failed: "リクエストに失敗しました: %{error}, ステータスコード: %{status}"
   request_timeout: "リクエストがタイムアウトしました"
   response_too_large: "レスポンスが大きすぎます"
   runtime_create_failed: "ランタイムの作成に失敗しました"

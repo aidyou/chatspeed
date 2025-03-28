@@ -198,7 +198,7 @@
             placement="bottom"
             @change="onConversationTitleGenModelIdChange">
             <el-option
-              v-for="model in modelStore.models"
+              v-for="model in modelStore.providers"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -211,9 +211,9 @@
             @change="onConversationTitleGenModelModelChange">
             <el-option
               v-for="model in conversationTitleGenModelList"
-              :key="model"
-              :label="model"
-              :value="model">
+              :key="model.id"
+              :label="model.name || model.id"
+              :value="model.id">
             </el-option>
           </el-select>
         </div>
@@ -232,7 +232,7 @@
             placement="bottom"
             @change="onWebsearchModelIdChange">
             <el-option
-              v-for="model in modelStore.models"
+              v-for="model in modelStore.providers"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -245,9 +245,9 @@
             @change="onWebsearchModelModelChange">
             <el-option
               v-for="model in websearchModelList"
-              :key="model"
-              :label="model"
-              :value="model">
+              :key="model.id"
+              :label="model.name || model.id"
+              :value="model.id">
             </el-option>
           </el-select>
         </div>
@@ -318,7 +318,7 @@
             placement="bottom"
             @change="onWorkflowReasoningModelIdChange">
             <el-option
-              v-for="model in modelStore.models"
+              v-for="model in modelStore.providers"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -331,9 +331,9 @@
             @change="onWorkflowReasoningModelModelChange">
             <el-option
               v-for="model in workflowReasoningModelList"
-              :key="model"
-              :label="model"
-              :value="model">
+              :key="model.id"
+              :label="model.name || model.id"
+              :value="model.id">
             </el-option>
           </el-select>
         </div>
@@ -352,7 +352,7 @@
             placement="bottom"
             @change="onWorkflowGeneralModelIdChange">
             <el-option
-              v-for="model in modelStore.models"
+              v-for="model in modelStore.providers"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -365,9 +365,9 @@
             @change="onWorkflowGeneralModelModelChange">
             <el-option
               v-for="model in workflowGeneralModelList"
-              :key="model"
-              :label="model"
-              :value="model">
+              :key="model.id"
+              :label="model.name || model.id"
+              :value="model.id">
             </el-option>
           </el-select>
         </div>
@@ -624,14 +624,17 @@ const themes = computed(() => ({
 
 const conversationTitleGenModelList = computed(() => {
   if (settingStore.settings.conversationTitleGenModel.id) {
-    return modelStore.getModelById(settingStore.settings.conversationTitleGenModel.id)?.models || []
+    return (
+      modelStore.getModelProviderById(settingStore.settings.conversationTitleGenModel.id)?.models ||
+      []
+    )
   }
   return []
 })
 
 const websearchModelList = computed(() => {
   if (settingStore.settings.websearchModel.id) {
-    return modelStore.getModelById(settingStore.settings.websearchModel.id)?.models || []
+    return modelStore.getModelProviderById(settingStore.settings.websearchModel.id)?.models || []
   }
   return []
 })
@@ -882,7 +885,9 @@ const onWorkflowReasoningModelIdChange = value => {
 
 const workflowReasoningModelList = computed(() => {
   if (settingStore.settings.workflowReasoningModel.id) {
-    return modelStore.getModelById(settingStore.settings.workflowReasoningModel.id)?.models || []
+    return (
+      modelStore.getModelProviderById(settingStore.settings.workflowReasoningModel.id)?.models || []
+    )
   }
   return []
 })
@@ -899,7 +904,9 @@ const onWorkflowGeneralModelIdChange = value => {
 
 const workflowGeneralModelList = computed(() => {
   if (settingStore.settings.workflowGeneralModel.id) {
-    return modelStore.getModelById(settingStore.settings.workflowGeneralModel.id)?.models || []
+    return (
+      modelStore.getModelProviderById(settingStore.settings.workflowGeneralModel.id)?.models || []
+    )
   }
   return []
 })

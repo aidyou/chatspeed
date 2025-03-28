@@ -67,7 +67,7 @@ const isDark = useDark({
   attribute: 'class',
   valueDark: 'dark',
   valueLight: 'light',
-  storageKey: null,
+  storageKey: null
 })
 
 const updateTrayFlag = ref(false)
@@ -155,7 +155,6 @@ onMounted(async () => {
     if (event.payload.label === getCurrentWebviewWindow().label) {
       return
     }
-    console.log('sync_state', event)
     if (event.payload.type === 'model') {
       modelStore.updateModelStore()
     } else if (event.payload.type === 'skill') {
@@ -175,7 +174,7 @@ onMounted(async () => {
       {
         confirmButtonText: 'Open Settings',
         cancelButtonText: 'Cancel',
-        type: 'warning',
+        type: 'warning'
       }
     )
       .then(() => {
@@ -194,7 +193,7 @@ onMounted(async () => {
     ElMessage.error({
       message: `Accessibility error: ${event.payload}`,
       duration: 0,
-      showClose: true,
+      showClose: true
     })
   })
 
@@ -203,7 +202,7 @@ onMounted(async () => {
     ElMessage.error({
       message: `Setup error: ${event.payload}`,
       duration: 0,
-      showClose: true,
+      showClose: true
     })
   })
 
@@ -212,7 +211,7 @@ onMounted(async () => {
     ElMessage.error({
       message: `Monitor error: ${event.payload}`,
       duration: 0,
-      showClose: true,
+      showClose: true
     })
   })
 })

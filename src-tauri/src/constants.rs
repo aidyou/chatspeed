@@ -27,7 +27,7 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 // chatspeed crawler api name
-pub const CHATSPEED_CRAWLER: &str = "chatspeed_crawler";
+pub const CFG_CHP_SERVER: &str = "chatspeed_crawler";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 
 // main window shortcuts
@@ -73,12 +73,12 @@ lazy_static! {
         #[cfg(debug_assertions)]
         {
             let project_root = if cfg!(test) {
-                // 在测试环境中，通过环境变量获取项目根目录
+                // In test environment, get project root directory from environment variable
                 env::var("PROJECT_ROOT")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory")).parent().unwrap().into()
             } else {
-                // 在开发和生产环境中，使用 CARGO_MANIFEST_DIR 或当前工作目录
+                // In development and production environments, use CARGO_MANIFEST_DIR or current working directory
                 env::var("CARGO_MANIFEST_DIR")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"))

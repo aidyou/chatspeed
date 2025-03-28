@@ -1,4 +1,5 @@
 use reqwest::Response;
+use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
 
@@ -153,42 +154,21 @@ impl ErrorFormat {
     /// Returns (error_type, error_message) if parsing succeeds
     pub fn parse_error(&self, error_text: &str) -> Option<(String, String)> {
         match self {
-            Self::OpenAI => {
+            Self::OpenAI | Self::Anthropic => {
                 if let Ok(json) = serde_json::from_str::<Value>(error_text) {
-                    json.get("error").and_then(|error| {
-                        Some((
-                            error
-                                .get("type")
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or(error_text)
-                                .to_string(),
-                        ))
-                    })
-                } else {
+                    if let Some(error) = json.get("error") {
+                        return Some((
+                            error["type"].as_str().unwrap_or("").to_string(),
+                            error["message"].as_str().unwrap_or(error_text).to_string(),
+                        ));
+                    }
+                    if let Some(errors) = json.get("errors") {
+                        return Some((
+                            errors["type"].as_str().unwrap_or("").to_string(),
+                            errors["message"].as_str().unwrap_or(error_text).to_string(),
+                        ));
+                    }
                     None
-                }
-            }
-            Self::Anthropic => {
-                if let Ok(json) = serde_json::from_str::<Value>(error_text) {
-                    json.get("error").and_then(|error| {
-                        Some((
-                            error
-                                .get("type")
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or(error_text)
-                                .to_string(),
-                        ))
-                    })
                 } else {
                     None
                 }
@@ -197,16 +177,8 @@ impl ErrorFormat {
                 if let Ok(json) = serde_json::from_str::<Value>(error_text) {
                     json.get("error").and_then(|error| {
                         Some((
-                            error
-                                .get("status")
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or(error_text)
-                                .to_string(),
+                            error["status"].as_str().unwrap_or("").to_string(),
+                            error["message"].as_str().unwrap_or(error_text).to_string(),
                         ))
                     })
                 } else {
@@ -216,4 +188,45 @@ impl ErrorFormat {
             Self::Custom(parser) => parser(error_text),
         }
     }
+}
+
+// =================================================
+// Response struct
+// =================================================
+/// Gemini response struct
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiResponse {
+    pub candidates: Vec<Candidate>,
+    pub usage_metadata: UsageMetadata,
+    pub model_version: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageMetadata {
+    pub prompt_token_count: u64,
+    pub total_token_count: u64,
+    pub prompt_tokens_details: Vec<TokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokensDetails {
+    pub modality: String,
+    pub token_count: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Candidate {
+    pub content: Content,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Content {
+    pub parts: Vec<Part>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Part {
+    pub text: String,
 }

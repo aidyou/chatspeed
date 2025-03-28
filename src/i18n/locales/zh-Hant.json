@@ -50,7 +50,8 @@
     "metadata": {
       "completion": "completion",
       "prompt": "prompt",
-      "tokens": "tokens"
+      "tokens": "tokens",
+      "tokensPerSecond": "令牌/秒"
     },
     "mindmapError": "思維導圖渲染失敗",
     "networkDisabled": "網路已禁用",

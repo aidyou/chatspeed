@@ -9,3 +9,4 @@ pub mod os;
 pub mod setting;
 pub mod update;
 pub mod window;
+pub mod workflow;

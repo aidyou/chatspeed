@@ -46,26 +46,47 @@ pub struct HttpClient {
 
 impl HttpClient {
     /// Creates a new HTTP client instance
-    pub fn new() -> HttpResult<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
+    pub fn new(proxy: Option<String>) -> HttpResult<Self> {
+        let mut client = reqwest::Client::builder().timeout(Duration::from_secs(30));
 
-        Ok(Self { client })
+        if let Some(proxy) = proxy {
+            if !proxy.is_empty() {
+                client = client.proxy(reqwest::Proxy::all(proxy).map_err(|e| {
+                    HttpError::Config(
+                        t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                    )
+                })?);
+            }
+        }
+
+        Ok(Self {
+            client: client.build()?,
+        })
     }
 
     /// Creates a new HTTP client instance with custom configuration
     pub fn new_with_config(config: &HttpConfig) -> HttpResult<Self> {
-        let client = reqwest::Client::builder()
+        let mut client = reqwest::Client::builder()
             .redirect(
                 config
                     .follow_redirects
                     .map_or(Policy::none(), |max| Policy::limited(max as usize)),
             )
-            .timeout(Duration::from_secs(config.timeout.unwrap_or(30) as u64))
-            .build()?;
+            .timeout(Duration::from_secs(config.timeout.unwrap_or(30) as u64));
 
-        Ok(Self { client })
+        if let Some(proxy) = &config.proxy {
+            if !proxy.is_empty() {
+                client = client.proxy(reqwest::Proxy::all(proxy).map_err(|e| {
+                    HttpError::Config(
+                        t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                    )
+                })?);
+            }
+        }
+
+        Ok(Self {
+            client: client.build()?,
+        })
     }
 
     /// Helper function to handle common request errors
@@ -75,7 +96,14 @@ impl HttpClient {
         } else if e.is_connect() {
             HttpError::Request(t!("http.connection_failed", error = e.to_string()).to_string())
         } else {
-            HttpError::Request(t!("http.request_failed", error = e.to_string()).to_string())
+            HttpError::Request(
+                t!(
+                    "http.request_failed",
+                    error = e.to_string(),
+                    status = e.status().unwrap_or_default()
+                )
+                .to_string(),
+            )
         }
     }
 
@@ -401,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_get() {
-        let client = HttpClient::new().unwrap();
+        let client = HttpClient::new(None).unwrap();
         let config = HttpConfig::get("http://127.0.0.1:12321/data?url=https://ezool.net");
 
         let result = client.send_request(config).await;
@@ -415,7 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_with_body() {
-        let client = HttpClient::new().unwrap();
+        let client = HttpClient::new(None).unwrap();
         let config = HttpConfig::post("https://httpbin.org/post", "test body");
 
         let result = client.send_request(config).await;
@@ -428,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_download() {
-        let client = HttpClient::new().unwrap();
+        let client = HttpClient::new(None).unwrap();
         let config =
             HttpConfig::get("https://httpbin.org/image/jpeg").download_to("test_download.jpg");
 
@@ -443,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_request() {
-        let client = HttpClient::new().unwrap();
+        let client = HttpClient::new(None).unwrap();
         let config = HttpConfig::get("https://httpbin.org/get").async_request();
 
         let result = client.send_request(config).await;

@@ -48,9 +48,9 @@ use super::chat_web_search::chat_completion_with_search;
 use crate::ai::interaction::chat_completion::{complete_chat_async, ChatProtocol, ChatState};
 use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::commands::constants::{TIME_IND, URL_REGEX};
-use crate::constants::CHATSPEED_CRAWLER;
+use crate::constants::CFG_CHP_SERVER;
 use crate::db::MainStore;
-use crate::http::crawler::Crawler;
+use crate::http::chp::Chp;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 
 use chrono::Local;
@@ -239,7 +239,7 @@ pub async fn chat_completion(
         let crawler_url = main_state
             .lock()
             .map_err(|e| e.to_string())?
-            .get_config(CHATSPEED_CRAWLER, String::new());
+            .get_config(CFG_CHP_SERVER, String::new());
 
         // 获取最后一条用户消息的内容
         let content = messages
@@ -335,10 +335,10 @@ pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Resul
 
     // 抓取每个 URL 的内容
     let mut crawled_contents = Vec::new();
-    let crawler = Crawler::new(crawler_url.to_string());
+    let crawler = Chp::new(crawler_url.to_string(), None);
     let mut i = 1;
     for url in urls {
-        match crawler.fetch(&url).await {
+        match crawler.web_crawler(&url, None).await {
             Ok(data) => {
                 if !data.content.is_empty() {
                     crawled_contents.push(json!({
@@ -379,7 +379,10 @@ pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Resul
 /// const result = await invoke('stop_chat', { apiProtocol: 'openai' })
 /// ```
 #[tauri::command]
-pub async fn stop_chat(state: State<'_, ChatState>, api_protocol: String) -> Result<(), String> {
+pub async fn stop_chat(
+    state: State<'_, Arc<ChatState>>,
+    api_protocol: String,
+) -> Result<(), String> {
     let protocol: ChatProtocol = api_protocol
         .clone()
         .try_into()

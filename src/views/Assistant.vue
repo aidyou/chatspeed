@@ -217,7 +217,7 @@
         <div class="selector-content">
           <div
             class="item"
-            v-for="model in models"
+            v-for="model in providers"
             @click.stop="onModelSelect(model)"
             :key="model.id"
             :class="{ active: currentModel.id === model.id }">
@@ -237,19 +237,26 @@
       </div>
       <div class="selector">
         <div class="selector-content">
-          <div
-            class="item"
-            v-for="(model, index) in currentModel?.models"
-            @click.stop="onSubModelSelect(model)"
-            :key="index"
-            :class="{ active: currentModel?.defaultModel === model }">
-            <div class="name">
-              <span>{{ model.split('/').pop() }}</span>
+          <template v-for="(models, group) in currentSubModels" :key="group">
+            <div class="item group" @click.stop>
+              <div class="name">
+                {{ group }}
+              </div>
             </div>
-            <div class="icon" v-if="currentModel?.defaultModel === model">
-              <cs name="check" />
+            <div
+              class="item"
+              v-for="(model, index) in models"
+              @click.stop="onSubModelSelect(model.id)"
+              :key="index"
+              :class="{ active: currentModel?.defaultModel === model.id }">
+              <div class="name">
+                <span>{{ model.name || model.id.split('/').pop() }}</span>
+              </div>
+              <div class="icon" v-if="currentModel?.defaultModel === model.id">
+                <cs name="check" />
+              </div>
             </div>
-          </div>
+          </template>
         </div>
       </div>
     </div>
@@ -333,9 +340,20 @@ const toLang = ref('')
 let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 
-const models = computed(() => modelStore.availableModels)
-const currentModel = ref({ ...modelStore.defaultModel })
-const canChat = computed(() => modelStore.availableModels.length > 0)
+const providers = computed(() => modelStore.getAvailableProviders)
+const currentModel = ref({ ...modelStore.defaultModelProvider })
+const currentSubModels = computed(() =>
+  currentModel.value.models?.reduce((groups, x) => {
+    if (!x.group) {
+      x.group = t('settings.model.ungrouped')
+    }
+    groups[x.group] = groups[x.group] || []
+    groups[x.group].push(x)
+    return groups
+  }, {})
+)
+
+const canChat = computed(() => modelStore.getAvailableProviders.length > 0)
 
 const skillIndex = ref(0)
 const skills = computed(() => {
@@ -433,10 +451,10 @@ onMounted(async () => {
   // set default model from local storage
   const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
   if (mid) {
-    const model = modelStore.getModelById(mid)
+    const model = modelStore.getModelProviderById(mid)
     if (model) {
       // IMPORTANT: Do not simplify this logic!
-      // If model is not found, we should keep the system default model (modelStore.defaultModel)
+      // If model is not found, we should keep the system default model (modelStore.defaultModelProvider)
       // instead of setting an empty object or null.
       // This ensures fallback to system default when user-defined model has been deleted.
       currentModel.value = { ...model }
@@ -596,13 +614,8 @@ const payloadMetadata = ref({})
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  if (payload?.isError) {
-    chatErrorMessage.value = payload.chunk
-    isChatting.value = false
-    return
-  }
-
-  chatState.value.isReasoning = payload?.isReasoning
+  let isDone = false
+  chatState.value.isReasoning = payload?.type == 'reasoning'
   switch (payload?.type) {
     case 'step':
       currentAssistantMessage.value = payload?.chunk || ''
@@ -630,17 +643,21 @@ const handleChatMessage = async payload => {
       chatState.value.reasoning += payload?.chunk || ''
       break
     case 'error':
-    case 'finished':
-      payload.isDone = true
-      if (payload.type === 'finished') {
-        chatState.value.message += payload?.chunk || ''
-      }
+      chatErrorMessage.value = payload?.chunk || ''
+      isDone = true
       break
-    default:
+    case 'finished':
+      isDone = true
+      chatState.value.message += payload?.chunk || ''
+      break
+    case 'text':
       chatState.value.message += payload?.chunk || ''
 
       // handle deepseek-r1 reasoning flag `<think></think>`
-      if (chatState.value.message.startsWith('<think>') && chatState.value.includes('</think>')) {
+      if (
+        chatState.value.message.startsWith('<think>') &&
+        chatState.value.message.includes('</think>')
+      ) {
         const messages = chatState.value.message.split('</think>')
         chatState.value.reasoning = messages[0].replace('<think>', '').trim()
         chatState.value.message = messages[1].trim()
@@ -649,8 +666,11 @@ const handleChatMessage = async payload => {
   }
 
   currentAssistantMessage.value = chatState.value.message || ''
+  nextTick(() => {
+    scrollToBottomIfNeeded()
+  })
 
-  if (payload?.isDone) {
+  if (isDone) {
     isChatting.value = false
     payloadMetadata.value = {
       tokens: payload?.metadata?.tokens?.total || 0,
@@ -1245,6 +1265,19 @@ const onAddModel = () => {
       .icon {
         flex-shrink: 0;
         display: flex;
+      }
+
+      &.group {
+        border-bottom: 1px solid var(--cs-border-color);
+        border-radius: 0;
+        &:hover {
+          background: none;
+          cursor: default;
+        }
+        .name {
+          font-size: var(--cs-font-size-sm);
+          color: var(--cs-text-color-secondary);
+        }
       }
     }
   }

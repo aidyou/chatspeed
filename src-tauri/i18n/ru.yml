@@ -79,7 +79,7 @@ http:
   missing_url: "Отсутствует параметр URL в HTTP-запросе"
   proxy_config_failed: "Не удалось настроить прокси: %{error}"
   read_response_failed: "Не удалось прочитать ответ: %{error}"
-  request_failed: "Запрос не выполнен: %{error}"
+  request_failed: "Запрос не выполнен, ошибка: %{error}, статус: %{status}"
   request_timeout: "Превышено время ожидания запроса"
   response_too_large: "Данные на стороне сервера превышают лимит запроса, размер данных на сервере: %{content_length}, лимит запроса: %{max_size}"
   runtime_create_failed: "Не удалось создать среду выполнения: %{error}"

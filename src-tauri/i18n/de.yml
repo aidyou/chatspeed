@@ -79,7 +79,7 @@ http:
   missing_url: "Fehlender URL-Parameter in HTTP-Anfrage"
   proxy_config_failed: "Proxy konnte nicht konfiguriert werden: %{error}"
   read_response_failed: "Antwort konnte nicht gelesen werden: %{error}"
-  request_failed: "Anfrage fehlgeschlagen: %{error}"
+  request_failed: "Anfrage fehlgeschlagen: Fehler: %{error}, Status: %{status}"
   request_timeout: "Zeitlimit für Anfrage überschritten"
   response_too_large: "Serverseitige Daten überschreiten das Anfragelimit, serverseitige Datengröße: %{content_length}, Anfragelimit: %{max_size}"
   runtime_create_failed: "Laufzeitumgebung konnte nicht erstellt werden: %{error}"

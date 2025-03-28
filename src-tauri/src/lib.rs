@@ -7,6 +7,7 @@ mod http;
 mod libs;
 mod logger;
 mod shortcut;
+mod test;
 mod tray;
 mod updater;
 mod window;
@@ -36,6 +37,7 @@ use commands::os::*;
 use commands::setting::*;
 use commands::update::*;
 use commands::window::*;
+use commands::workflow::*;
 use constants::*;
 use db::MainStore;
 use http::server::start_http_server;
@@ -177,6 +179,9 @@ pub async fn run() -> Result<()> {
             confirm_update,
             install_update,
             restart_app,
+            // workflow
+            run_dag_workflow,
+            run_react_workflow,
         ])
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| match event {
@@ -209,7 +214,11 @@ pub async fn run() -> Result<()> {
                             *timer = Some(spawn(async move {
                                 sleep(Duration::from_millis(100)).await;
                                 // 在隐藏窗口前检查窗口是否可见
-                                if window_clone.is_visible().unwrap_or(false) {
+                                if window_clone
+                                    .is_visible()
+                                    .map_err(|e| warn!("Failed to check window visibility: {}", e))
+                                    .unwrap_or(false)
+                                {
                                     if let Err(e) = window_clone.hide() {
                                         warn!("Failed to hide assistant window: {}", e);
                                     }
@@ -332,12 +341,12 @@ pub async fn run() -> Result<()> {
 
             #[cfg(not(debug_assertions))]
             let db_path = {
-                let app_local_data_dir = _app
+                let app_local_data_dir = app
                     .path()
                     .app_data_dir()
                     .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
                 std::fs::create_dir_all(&app_local_data_dir)
-                    .map_err(|e| StoreError::StringError(e.to_string()))?;
+                    .map_err(|e| db::StoreError::StringError(e.to_string()))?;
                 app_local_data_dir.join("chatspeed.db")
             };
             let main_store = Arc::new(Mutex::new(MainStore::new(db_path).map_err(|e| {

@@ -90,7 +90,7 @@ pub trait ApiClient: Send + Sync {
         &self,
         chunk: Bytes,
         format: &StreamFormat,
-    ) -> Result<StreamChunk, String> {
+    ) -> Result<Vec<StreamChunk>, String> {
         StreamParser::parse_chunk(chunk, format).await
     }
 }
@@ -194,16 +194,22 @@ impl DefaultApiClient {
 
     async fn process_error_response(&self, response: Response) -> Result<ApiResponse, String> {
         let status_code = response.status().as_u16();
+        let inner_type = response
+            .status()
+            .canonical_reason()
+            .unwrap_or("Unknown")
+            .to_owned();
         let error_text = response
             .text()
             .await
             .map_err(|e| t!("network.response_read_error", error = e.to_string()).to_string())?;
 
         let error_message =
-            if let Some((error_type, message)) = self.error_format.parse_error(&error_text) {
-                // 添加调试日志
-                #[cfg(debug_assertions)]
-                log::debug!(
+            if let Some((mut error_type, message)) = self.error_format.parse_error(&error_text) {
+                if error_type.is_empty() {
+                    error_type = inner_type;
+                }
+                log::warn!(
                     "Error response - Status: {}, Type: {}, Message: {}",
                     status_code,
                     error_type,

@@ -80,21 +80,24 @@ use std::{
 use chrono::Utc;
 use log::{debug, error, info, warn};
 use rust_i18n::t;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::{
     sync::{Mutex, RwLock, Semaphore},
     task::JoinSet,
     time,
 };
 
+use crate::workflow::error::WorkflowError;
+use crate::workflow::function_manager::FunctionManager;
 use crate::workflow::{
-    config::{LoopConfig, NodeConfig, NodeType, ToolConfig, WorkflowLoop},
-    context::{Context, NodeState},
-    error::WorkflowError,
-    executor::channel::{SharedChannel, WatchChannel},
-    function_manager::FunctionManager,
-    graph::WorkflowGraph,
-    types::{WorkflowResult, WorkflowState},
+    dag::{
+        config::{LoopConfig, NodeConfig, NodeType, ToolConfig},
+        context::{Context, NodeState},
+        executor::channel::{SharedChannel, WatchChannel},
+        graph::WorkflowGraph,
+        types::{WorkflowResult, WorkflowState},
+    },
+    function_manager::FunctionDefinition,
 };
 
 /// 工作流执行器，负责基于 DAG 的任务调度和执行
@@ -194,7 +197,7 @@ impl WorkflowExecutor {
     ///   - Any task fails to execute
     ///   - Task dependencies cannot be resolved
     pub async fn execute(&mut self) -> WorkflowResult<()> {
-        // 状态检查
+        // state check
         self.validate_execution_state().await?;
 
         let graph = self.graph.clone();
@@ -210,25 +213,33 @@ impl WorkflowExecutor {
         );
 
         if graph.node_count() == 0 {
-            info!("Workflow has no nodes");
+            warn!("Workflow has no nodes");
             self.update_state(WorkflowState::Completed).await?;
             return Ok(());
         }
 
-        // 转换到运行状态
+        #[cfg(debug_assertions)]
+        {
+            let edges = self.graph.edges();
+            for edge in edges {
+                debug!("Edge: {} -> {}", edge.from, edge.to);
+            }
+        }
+
+        // transition to running state
         self.update_state(WorkflowState::Running).await?;
 
-        // 准备执行上下文
+        // prepare execution context
         let nodes = graph.nodes().cloned().collect::<Vec<_>>();
 
-        // 更新 context 中节点状态为 Pending（等待执行）
+        // update context node state to Pending (waiting for execution)
         for node in &nodes {
             self.context
                 .update_node_state(&node.id, NodeState::Pending)
                 .await;
         }
 
-        // 初始化执行队列
+        // initialize execution queue
         {
             let mut ready_queue = self.ready_queue.lock().await;
             *ready_queue = self.initialize_ready_queue(&nodes).await;
@@ -246,35 +257,35 @@ impl WorkflowExecutor {
             }
         }
 
-        // 并行控制
+        // parallel control
         let semaphore = Arc::new(Semaphore::new(self.max_parallel));
 
-        // 任务通信通道
+        // task communication channel
         let mut task_set = JoinSet::new();
 
-        // 主执行循环
+        // main execution loop
         while {
             let queue_empty = self.ready_queue.lock().await.is_empty();
             !queue_empty || task_set.len() > 0
         } {
-            // 处理控制信号
+            // process control signals
             self.process_control_signals().await?;
 
-            // 检查任务结果
+            // check task results
             let tasks_to_dispatch = {
                 let mut queue = self.ready_queue.lock().await;
                 queue.drain(..).collect::<Vec<_>>()
             };
 
-            // 派发新任务
+            // dispatch new tasks
             self.dispatch_tasks(tasks_to_dispatch, &semaphore, &mut task_set)
                 .await?;
 
-            // 等待任务完成
+            // wait for task completion
             self.wait_for_task_completion(&mut task_set).await?;
         }
 
-        // 最终检查
+        // final check
         self.finalize_execution(&nodes).await
     }
 
@@ -294,10 +305,9 @@ impl WorkflowExecutor {
     async fn validate_execution_state(&self) -> WorkflowResult<()> {
         let state = self.state.read().await;
         if !matches!(*state, WorkflowState::Init | WorkflowState::Ready) {
-            return Err(WorkflowError::InvalidState(format!(
-                "{}",
-                t!("workflow.executor.invalid_state")
-            )));
+            return Err(WorkflowError::InvalidState(
+                t!("workflow.invalid_state").to_string(),
+            ));
         }
         Ok(())
     }
@@ -426,27 +436,13 @@ impl WorkflowExecutor {
 
                 // 获取所有后继节点（显式 + 隐式）
                 let mut successors = self.graph.successors(node_id).to_vec();
-
-                #[cfg(debug_assertions)]
-                debug!("Direct successors of node {}: {:?}", node_id, successors);
-
                 // 确保没有重复项
                 successors.sort_unstable();
                 successors.dedup();
 
-                #[cfg(debug_assertions)]
-                debug!("Final successors of node {}: {:?}", node_id, successors);
-                // 发送任务结果
-
                 self.process_completed_tasks(node_id.to_string(), successors)
                     .await?;
                 Ok(())
-
-                // debug!("Sending task result for node {}", node_id);
-                // task_result_sender
-                //     .send(Ok((node_id.to_string(), successors)))
-                //     .await
-                //     .map_err(|e| WorkflowError::Execution(format!("Result channel closed: {}", e)))
             }
             Err(e) => {
                 error!("Node {} failed: {}", node_id, e);
@@ -455,10 +451,6 @@ impl WorkflowExecutor {
                     .update_node_with_count(&node_id, NodeState::Failed(1))
                     .await;
                 Err(e)
-                // task_result_sender
-                //     .send(Err(e))
-                //     .await
-                //     .map_err(|e| WorkflowError::Execution(format!("Error channel closed: {}", e)))
             }
         }
     }
@@ -494,15 +486,12 @@ impl WorkflowExecutor {
         #[cfg(debug_assertions)]
         debug!("Adding node {} to completed nodes", node_id);
 
-        // 添加节点到已完成节点集合
-        self.completed_nodes.lock().await.insert(node_id);
-
         for node_id in successors {
-            #[cfg(debug_assertions)]
-            debug!("Processing successor: {}", node_id);
-
             self.update_node_degree(&node_id).await?;
         }
+
+        // 添加节点到已完成节点集合
+        self.completed_nodes.lock().await.insert(node_id);
 
         Ok(())
     }
@@ -538,16 +527,21 @@ impl WorkflowExecutor {
             let mut ready_queue = self.ready_queue.lock().await;
             if *degree == 0 {
                 #[cfg(debug_assertions)]
-                debug!("Node {} has zero in-degree, adding to ready queue", node_id);
+                {
+                    debug!("Node {} has zero in-degree, adding to ready queue", node_id);
+                }
+
                 if let Some(node) = self.graph.get_node(node_id) {
                     ready_queue.push_back(node.clone());
 
                     #[cfg(debug_assertions)]
-                    debug!(
-                        "Added node {} to ready queue, queue size: {}",
-                        node_id,
-                        ready_queue.len()
-                    );
+                    {
+                        debug!(
+                            "Added node {} to ready queue, queue size: {}",
+                            node_id,
+                            ready_queue.len()
+                        );
+                    }
                 } else {
                     warn!("Node {} not found in graph nodes", node_id);
                 }
@@ -633,15 +627,22 @@ impl WorkflowExecutor {
                 let function = function_manager
                     .get_function(&function)
                     .await
-                    .map_err(|e| {
-                        WorkflowError::FunctionNotFound(format!(
-                            "Function {} not found: {}",
-                            function, e
-                        ))
+                    .map_err(|_| {
+                        WorkflowError::FunctionNotFound(
+                            t!("workflow.function_not_found", name = function).to_string(),
+                        )
                     })?;
 
                 let params = self.context.resolve_params(param).await?;
-                let result = function.execute(params, &self.context).await?;
+                let result = function.execute(params).await?;
+
+                #[cfg(debug_assertions)]
+                {
+                    debug!(
+                        "Task {} executed successfully, result: {:?}",
+                        node.id, result
+                    );
+                }
 
                 self.context
                     .set_output(output.unwrap_or(node.id), result)
@@ -651,38 +652,40 @@ impl WorkflowExecutor {
                 return self.execute_loop_node(node, function_manager).await;
             }
             _ => {
-                return Err(WorkflowError::Validation(format!(
-                    "Invalid node type: {:?}",
-                    node.r#type
-                )));
+                return Err(WorkflowError::Validation(
+                    t!(
+                        "workflow.invalid_node_type",
+                        node_type = node.r#type.to_string()
+                    )
+                    .to_string(),
+                ));
             }
         }
 
         Ok(())
     }
 
-    /// 执行循环节点
+    /// Execute a loop node
     ///
-    /// 此方法执行循环节点，对输入数据进行迭代处理，并将结果设置到上下文输出中。
+    /// This method executes a loop node and set the result to context output.
     ///
-    /// # 参数
-    /// * `node` - 循环节点的配置
-    /// * `function_manager` - 函数管理器
+    /// # Arguments
+    /// * `node` - The configuration of the loop node
+    /// * `function_manager` - The function manager
     ///
-    /// # 返回值
-    /// * `WorkflowResult<()>` - 如果循环节点执行成功，返回 `Ok(())`，否则返回包含详细信息的错误
+    /// # Returns
+    /// * `WorkflowResult<()>` - Returns `Ok(())` if the loop is executed successfully,
+    ///   otherwise returns an error with details
     ///
-    /// # 错误
-    /// * 如果以下情况发生，返回 `WorkflowError`：
-    ///   - 输入数据无效
-    ///   - 函数执行失败
-    ///   - 过滤条件无效
+    /// # Errors
+    /// * Returns `WorkflowError` if:
+    ///   - The loop fails to execute
     async fn execute_loop_node(
         &self,
         node: NodeConfig,
         function_manager: Arc<FunctionManager>,
     ) -> WorkflowResult<()> {
-        // 直接从参数中解析出 WorkflowLoop 结构
+        // Directly parse the LoopConfig from the node configuration
         match node.r#type {
             NodeType::Loop(LoopConfig {
                 input,
@@ -690,111 +693,174 @@ impl WorkflowExecutor {
                 limit,
                 filter,
             }) => {
-                // let params = node.params.clone().unwrap_or_default();
-                // let loop_config: WorkflowLoop = serde_json::from_value(params)
-                //     .map_err(|e| WorkflowError::Config(format!("无效的循环节点配置: {}", e)))?;
-
-                // 解析输入字段引用
+                // parse input field reference
                 let input_reference = input.trim();
                 let input_data = self
                     .context
                     .resolve_params(Value::String(input_reference.to_string()))
                     .await?;
 
-                // 将输入数据转换为可迭代的项目集合
+                // convert input data to iterable items
                 let items: Vec<Value> = match input_data {
                     Value::Array(arr) => arr,
                     Value::Object(map) => {
-                        // 如果是对象，将每个键值对转换为包含键和值的对象
+                        // convert object to array with original key-value pairs, e.g. {a:b,c:d} -> [{a:b},{c:d}]
                         map.into_iter()
                             .map(|(k, v)| {
-                                json!({
-                                    "key": k,
-                                    "value": v
-                                })
+                                let mut obj = serde_json::Map::new();
+                                obj.insert(k, v);
+                                Value::Object(obj)
                             })
                             .collect()
                     }
+                    Value::String(s) => {
+                        let s = crate::libs::util::format_json_str(&s);
+                        // try to parse as json array
+                        match serde_json::from_str::<Vec<Value>>(&s) {
+                            Ok(values) => values,
+                            Err(_) => {
+                                // if cannot parse as array, try to parse as single object
+                                match serde_json::from_str::<Value>(&s) {
+                                    Ok(value) => vec![value],
+                                    Err(_) => vec![Value::String(s.to_string())],
+                                }
+                            }
+                        }
+                    }
                     _ => {
-                        return Err(WorkflowError::Config(format!(
-                            "循环节点输入必须是数组或对象，但收到了: {}",
-                            input_data.to_string()
-                        )))
+                        return Err(WorkflowError::Config(
+                            t!(
+                                "workflow.invalid_loop_input",
+                                input = input_data.to_string()
+                            )
+                            .to_string(),
+                        ))
                     }
                 };
 
-                // 应用限制
+                // Apply limit
                 let limit = limit.unwrap_or(items.len());
                 let actual_limit = std::cmp::min(limit, items.len());
 
-                // 准备结果数组
+                // Prepare result array
                 let mut results = HashMap::with_capacity(actual_limit);
 
-                // 迭代处理每个项目
+                // Iterate over each item
                 for item in items.into_iter().take(actual_limit) {
-                    // 设置当前项目到上下文中，以便过滤条件和函数可以引用它
+                    // Set current item to context, so that filters and functions can reference it
                     self.context
                         .set_output("item".to_string(), item.clone())
                         .await?;
 
-                    // 检查过滤条件
+                    // Check filter condition
                     if let Some(filter) = &filter {
-                        // 使用专门的条件解析方法处理过滤条件
+                        // Use specialized condition parsing method to handle filter condition
                         let pass = self.context.resolve_condition(filter).await?;
                         if !pass {
-                            // 如果过滤条件不满足，跳过此项目
+                            // If filter condition is not satisfied, skip this item
                             continue;
                         }
                     }
 
-                    // 执行所有函数
+                    // Execute all functions
                     for tool_def in &functions {
-                        // 创建函数调用参数
+                        // Create function call parameters
                         let function_name = &tool_def.function;
                         let function =
                             function_manager
                                 .get_function(function_name)
                                 .await
-                                .map_err(|e| {
-                                    WorkflowError::FunctionNotFound(format!(
-                                        "函数 {} 未找到: {}",
-                                        function_name, e
-                                    ))
+                                .map_err(|_| {
+                                    WorkflowError::FunctionNotFound(
+                                        t!("workflow.function_not_found", name = function_name)
+                                            .to_string(),
+                                    )
                                 })?;
 
-                        // 解析函数参数
+                        // Parse function parameters
                         let mut function_params = tool_def.param.clone();
                         function_params = self.context.resolve_params(function_params).await?;
 
-                        // 执行函数
-                        let result = function.execute(function_params, &self.context).await?;
-                        // 将处理后的项目添加到结果数组
-                        results.insert(function_name, result);
+                        // Execute function
+                        // let result = function.execute(function_params).await?;
+                        let result = self
+                            .execute_function_with_retry(&node.id, function, function_params)
+                            .await?;
+                        // Add processed item to results array
+                        let output = tool_def.output.as_ref().unwrap_or(&function_name);
+                        // results.insert(output, result);
+                        results
+                            .entry(output.to_string())
+                            .and_modify(|v: &mut Vec<Arc<Value>>| v.push(Arc::new(result.clone())))
+                            .or_insert_with(|| vec![Arc::new(result.clone())]);
                     }
                 }
 
-                // 将结果设置到上下文输出中
+                // Set results to context output
                 for tool_def in &functions {
-                    if results.contains_key(&tool_def.function) {
-                        let result_value = results.get(&tool_def.function).unwrap();
+                    let result_key = tool_def.output.as_ref().unwrap_or(&tool_def.function);
+                    if results.contains_key(result_key) {
+                        let default_val = vec![];
+                        let output_key = tool_def.output.as_ref().unwrap_or(&node.id);
+                        let result_value = results.get(result_key).unwrap_or(&default_val);
                         self.context
                             .set_output(
-                                tool_def.output.clone().unwrap_or(node.id.clone()),
-                                result_value.clone(),
+                                output_key.clone(),
+                                serde_json::Value::Array(
+                                    result_value
+                                        .into_iter()
+                                        .map(|rc_value| rc_value.as_ref().clone())
+                                        .collect(),
+                                ),
                             )
                             .await?;
                     }
                 }
             }
             _ => {
-                return Err(WorkflowError::Validation(format!(
-                    "Invalid node type: {:?}",
-                    node.r#type
-                )));
+                return Err(WorkflowError::Validation(
+                    t!(
+                        "workflow.invalid_node_type",
+                        node_type = node.r#type.to_string()
+                    )
+                    .to_string(),
+                ));
             }
         }
 
         Ok(())
+    }
+
+    async fn execute_function_with_retry(
+        &self,
+        node_id: &str,
+        function: Arc<dyn FunctionDefinition>,
+        param: Value,
+    ) -> WorkflowResult<Value> {
+        let params = self.context.resolve_params(param).await?;
+        for i in 0..3 {
+            match function.execute(params.clone()).await {
+                Ok(result) => {
+                    if Value::Null != result {
+                        return Ok(result);
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Function {} execution failed: {:?}, retry: {}/3",
+                        function.name(),
+                        e,
+                        i + 1
+                    );
+                    time::sleep(Duration::from_millis(1000)).await;
+                    if i == 3 {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Err(WorkflowError::MaxRetriesExceeded(node_id.to_string()))
     }
 
     /// Execute a group node
@@ -816,7 +882,7 @@ impl WorkflowExecutor {
     /// * Returns `WorkflowError` if:
     ///   - The group node cannot be marked as completed
     async fn execute_group_node(&self, node: NodeConfig) -> WorkflowResult<()> {
-        // 组节点自动完成，实际依赖由边控制
+        // A group node is completed when its dependencies and all its child nodes are completed.
         debug!("Group node {} coordinator completed", node.id);
 
         Ok(())
@@ -844,10 +910,9 @@ impl WorkflowExecutor {
         match task_set.join_next().await {
             Some(Ok(Ok(_))) => Ok(()),
             Some(Ok(Err(e))) => Err(e),
-            Some(Err(join_error)) => Err(WorkflowError::Execution(format!(
-                "Task join error: {}",
-                join_error
-            ))),
+            Some(Err(join_error)) => Err(WorkflowError::Execution(
+                t!("workflow.task_join_error", error = join_error.to_string()).to_string(),
+            )),
             None => {
                 time::sleep(Duration::from_millis(10)).await;
                 Ok(())
@@ -861,7 +926,7 @@ impl WorkflowExecutor {
     /// that all nodes have been processed and updating the workflow state accordingly.
     ///
     /// # Arguments
-    /// * [nodes](cci:1://file:///Volumes/dev/personal/dev/ai/chatspeed/src-tauri/src/workflow/executor/core.rs:715:4-729:5) - The list of nodes in the workflow
+    /// * `nodes` - The list of nodes in the workflow
     ///
     /// # Returns
     /// * `WorkflowResult<()>` - Returns `Ok(())` if the execution is finalized successfully,
@@ -873,8 +938,8 @@ impl WorkflowExecutor {
     ///   - The workflow state cannot be update
     async fn finalize_execution(&self, nodes: &[NodeConfig]) -> WorkflowResult<()> {
         let completed = self.completed_nodes.lock().await;
-        debug!("Finalizing execution. Completed nodes: {:?}", completed);
-        debug!(
+        info!("Finalizing execution. Completed nodes: {:?}", completed);
+        info!(
             "Total nodes: {}, Completed nodes: {}",
             nodes.len(),
             completed.len()
@@ -891,15 +956,15 @@ impl WorkflowExecutor {
                 .map(|n| n.id.clone())
                 .collect::<Vec<_>>();
 
-            // 检查每个缺失节点的类型
+            // Check the type of each missing node
             for node_id in &missing {
                 if let Some(node_config) = self.graph.get_node(node_id) {
                     debug!(
-                        "Missing node {} is of type {:?}",
+                        "Uncompleted node {} is of type {:?}",
                         node_id, node_config.r#type
                     );
 
-                    // 如果是组节点，检查其子节点的完成状态
+                    // If it's a group node, check the completion status of its child nodes
                     match node_config.r#type.clone() {
                         NodeType::Group(group_config) => {
                             let children = &group_config.nodes;
@@ -914,7 +979,10 @@ impl WorkflowExecutor {
                                 })
                                 .collect::<Vec<_>>();
 
-                            debug!("Children of group node {}: {:?}", node_id, children_status);
+                            debug!(
+                                "Children of uncompleted group node {}: {:?}",
+                                node_id, children_status
+                            );
                         }
                         _ => {}
                     }
@@ -922,10 +990,13 @@ impl WorkflowExecutor {
             }
 
             error!("Incomplete execution. Missing nodes: {:?}", missing);
-            Err(WorkflowError::Execution(format!(
-                "Missing nodes: {:?}",
-                missing
-            )))
+            Err(WorkflowError::Execution(
+                t!(
+                    "workflow.incomplete_execution",
+                    missing = missing.join(", ")
+                )
+                .to_string(),
+            ))
         }
     }
 
@@ -943,50 +1014,50 @@ impl WorkflowExecutor {
     async fn process_control_signals(&mut self) -> WorkflowResult<()> {
         match *self.state.read().await {
             WorkflowState::Paused => {
-                // 等待恢复或取消信号
+                // Wait for resume or cancel signal
                 tokio::select! {
                     resume = self.resume_channel.recv() => {
                         if resume.is_some() {
-                            // 收到恢复信号，继续执行
+                            // Received resume signal, continue execution
                             self.update_state(WorkflowState::Running).await?;
                             Ok(())
                         } else {
-                            // 继续等待
+                            // keep waiting
                             time::sleep(time::Duration::from_millis(100)).await;
                             Ok(())
                         }
                     }
                     cancel = self.cancel_channel.recv() => {
                         if cancel.is_some() {
-                            // 收到取消信号，停止执行
+                            // Received cancel signal, stop execution
                             self.update_state(WorkflowState::Cancelled).await?;
                             Err(WorkflowError::Cancelled(
-                                t!("workflow.executor.cancelled").to_string(),
+                                t!("workflow.cancelled").to_string(),
                             ))
                         } else {
-                            // 继续等待
+                            // keep waiting
                             time::sleep(time::Duration::from_millis(100)).await;
                             Ok(())
                         }
                     }
                     else => {
-                        // 继续等待
+                        // keep waiting
                         time::sleep(time::Duration::from_millis(100)).await;
                         Ok(())
                     }
                 }
             }
             WorkflowState::Running => {
-                // 检查暂停或取消信号
+                // Check for pause or cancel signals
                 tokio::select! {
-                    biased; // 优先处理控制信号
+                    biased; // Prioritize handling control signals
 
                     pause = self.pause_channel.recv() => {
                         if pause.is_some() {
                             self.update_state(WorkflowState::Paused).await?;
                             Ok(())
                         } else {
-                            // 继续等待
+                            // keep waiting
                             Ok(())
                         }
                     }
@@ -994,15 +1065,15 @@ impl WorkflowExecutor {
                         if cancel.is_some() {
                             self.update_state(WorkflowState::Cancelled).await?;
                             Err(WorkflowError::Cancelled(
-                                t!("workflow.executor.cancelled").to_string(),
+                                t!("workflow.cancelled").to_string(),
                             ))
                         } else {
-                            // 继续等待
+                            // keep waiting
                             Ok(())
                         }
                     }
                     else => {
-                        // 没有控制信号，继续执行
+                        // No control signals, continue execution
                         Ok(())
                     }
                 }
@@ -1028,7 +1099,7 @@ impl WorkflowExecutor {
     async fn update_state(&self, new_state: WorkflowState) -> WorkflowResult<()> {
         let mut state = self.state.write().await;
 
-        // 验证状态转换是否有效
+        // Validate state transition
         if !Self::valid_transition(&state, &new_state) {
             return Err(WorkflowError::InvalidState(format!(
                 "{:?} -> {:?}",
@@ -1036,13 +1107,13 @@ impl WorkflowExecutor {
             )));
         }
 
-        // 更新状态
+        // Update state
         *state = new_state.clone();
 
-        // 通知状态变化
+        // Notify state change
         if let Err(_) = self.state_channel.tx.send(new_state) {
             return Err(WorkflowError::Execution(
-                t!("workflow.executor.state_notification_error").to_string(),
+                t!("workflow.state_notification_error").to_string(),
             ));
         }
 
@@ -1061,15 +1132,15 @@ impl WorkflowExecutor {
     /// * `bool` - Returns `true` if the transition is valid, otherwise `false`
     fn valid_transition(current: &WorkflowState, new: &WorkflowState) -> bool {
         match (current, new) {
-            // 初始状态可以转换为就绪或运行中
+            // Initial state can transition to ready or running
             (WorkflowState::Init, WorkflowState::Ready) => true,
             (WorkflowState::Init, WorkflowState::Running) => true,
 
-            // 就绪状态可以转换为运行中或取消
+            // Ready state can transition to running or cancelled
             (WorkflowState::Ready, WorkflowState::Running) => true,
             (WorkflowState::Ready, WorkflowState::Cancelled) => true,
 
-            // 运行中状态可以转换为暂停、完成、失败或取消
+            // Running state can transition to paused, completed, failed, error, failed with retry, or review failed
             (WorkflowState::Running, WorkflowState::Paused) => true,
             (WorkflowState::Running, WorkflowState::Completed) => true,
             (WorkflowState::Running, WorkflowState::Failed { .. }) => true,
@@ -1078,23 +1149,23 @@ impl WorkflowExecutor {
             (WorkflowState::Running, WorkflowState::ReviewFailed { .. }) => true,
             (WorkflowState::Running, WorkflowState::Cancelled) => true,
 
-            // 暂停状态可以转换为运行中或取消
+            // Paused state can transition to running or cancelled
             (WorkflowState::Paused, WorkflowState::Running) => true,
             (WorkflowState::Paused, WorkflowState::Cancelled) => true,
             (WorkflowState::Paused, WorkflowState::Failed { .. }) => true,
 
-            // 错误状态可以重试
+            // Error state can retry
             (WorkflowState::Error(_), WorkflowState::Running) => true,
             (WorkflowState::Error(_), WorkflowState::Failed { .. }) => true,
 
-            // 失败但可重试状态可以转为运行中或永久失败
+            // Failed with retry state can transition to running or failed
             (WorkflowState::FailedWithRetry { .. }, WorkflowState::Running) => true,
             (WorkflowState::FailedWithRetry { .. }, WorkflowState::Failed { .. }) => true,
 
-            // 审核失败状态可以重试
+            // Review failed state can retry
             (WorkflowState::ReviewFailed { .. }, WorkflowState::Running) => true,
 
-            // 其他转换不允许
+            // Other transitions are not allowed
             _ => false,
         }
     }
@@ -1113,7 +1184,7 @@ impl WorkflowExecutor {
     pub async fn pause(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.pause_channel.send(()).await {
             return Err(WorkflowError::Execution(
-                t!("workflow.executor.pause_notification_error").to_string(),
+                t!("workflow.pause_notification_error").to_string(),
             ));
         }
         Ok(())
@@ -1133,7 +1204,7 @@ impl WorkflowExecutor {
     pub async fn resume(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.resume_channel.send(()).await {
             return Err(WorkflowError::Execution(
-                t!("workflow.executor.resume_notification_error").to_string(),
+                t!("workflow.resume_notification_error").to_string(),
             ));
         }
         Ok(())
@@ -1153,7 +1224,7 @@ impl WorkflowExecutor {
     pub async fn cancel(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.cancel_channel.send(()).await {
             return Err(WorkflowError::Execution(
-                t!("workflow.executor.cancel_notification_error").to_string(),
+                t!("workflow.cancel_notification_error").to_string(),
             ));
         }
         Ok(())

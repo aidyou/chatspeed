@@ -60,7 +60,7 @@ pub fn console_log_formatter(
         get_level(level),
         simplify_file_path(record.file().unwrap_or("")),
         record.line().unwrap_or(0),
-        message,
+        replace_sensitive_info(message.to_string().as_str()),
         reset,
     ))
 }
@@ -87,8 +87,57 @@ pub fn file_log_formatter(
         get_level(record.level()),
         simplify_file_path(record.file().unwrap_or("")),
         record.line().unwrap_or(0),
-        message
+        replace_sensitive_info(message.to_string().as_str()),
     ))
+}
+
+/// Replaces sensitive information in log messages with asterisks (`***`).
+///
+/// This function scans the log message for sensitive keywords (e.g., `api_key`, `password`),
+/// and replaces their corresponding values with `***` to prevent sensitive data leakage.
+///
+/// # Arguments
+/// * `message` - The log message to sanitize.
+///
+/// # Returns
+/// A sanitized version of the log message, where sensitive values are replaced with `***`.
+///
+/// # Examples
+/// ```
+/// let message = "api_key=1234567890&password=secret123";
+/// let sanitized_message = replace_sensitive_info(message);
+/// assert_eq!(sanitized_message, "api_key=***&password=***");
+/// ```
+///
+/// # Notes
+/// - The list of sensitive keywords includes: `api_key`, `key`, `password`, `passwd`, `secret`, `token`, `api`.
+/// - The replacement logic looks for the `=` sign after a keyword and replaces the value part with `***`.
+/// - If the value part ends with `&`, it replaces up to `&`; otherwise, it replaces to the end of the string.
+fn replace_sensitive_info(message: &str) -> String {
+    let sensitive_keywords = [
+        "api_key", "key", "password", "passwd", "secret", "token", "secret", "api",
+    ];
+    let mut sanitized_message = message.to_string();
+
+    // replace sensitive keywords
+    for keyword in sensitive_keywords {
+        if let Some(start) = sanitized_message.find(keyword) {
+            // find the '=' symbol after the keyword
+            if let Some(equals_pos) = sanitized_message[start..].find('=') {
+                // start of the value
+                let value_start = start + equals_pos + 1;
+                // find the end of the value (next '&' or end of string)
+                let value_end = sanitized_message[value_start..]
+                    .find('&')
+                    .map(|pos| value_start + pos)
+                    .unwrap_or(sanitized_message.len());
+                // replace the value part with '***'
+                sanitized_message.replace_range(value_start..value_end, "***");
+            }
+        }
+    }
+
+    sanitized_message
 }
 
 /// Sets up the application logger with console and file outputs
@@ -96,21 +145,21 @@ pub fn file_log_formatter(
 /// # Arguments
 /// * `app` - A reference to the Tauri application
 pub fn setup_logger(app: &tauri::App) {
-    // 初始化日志目录和文件
+    // Initialize log directory and file
     let log_dir = app
         .path()
         .app_log_dir()
         .expect(&t!("main.failed_to_retrieve_log_directory"));
     let log_file_path = log_dir.join("chatspeed.log");
-    // 确保日志目录存在
+    // Ensure log directory exists
     std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
-    // 创建日志文件
+    // Create log file
     File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
 
-    // 创建基础日志分发器
+    // Create base dispatcher
     let base_dispatcher = fern::Dispatch::new().level(log::LevelFilter::Debug);
 
-    // 控制台日志分发器 - 使用简洁格式
+    // Console dispatcher - concise format
     let stdout_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Debug)
         .filter(|record| {
@@ -119,7 +168,7 @@ pub fn setup_logger(app: &tauri::App) {
         .format(console_log_formatter)
         .chain(std::io::stdout());
 
-    // 文件日志分发器 - 使用详细格式
+    // File dispatcher - detailed format
     let file_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Info)
         .filter(|record| {
@@ -128,7 +177,7 @@ pub fn setup_logger(app: &tauri::App) {
         .format(file_log_formatter)
         .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));
 
-    // 应用日志配置
+    // Apply logger configuration
     base_dispatcher
         .chain(stdout_dispatcher)
         .chain(file_dispatcher)
@@ -155,28 +204,71 @@ fn get_level(level: log::Level) -> String {
 #[cfg(test)]
 use log::SetLoggerError;
 
-/// 为测试设置日志记录器
+/// Set up logger for tests
 ///
-/// 在测试环境中只输出到控制台，使用简洁格式
+/// Only output to console in test environment, using concise format
 #[cfg(test)]
 pub fn setup_test_logger() -> Result<(), SetLoggerError> {
-    if log::logger().enabled(&log::Metadata::builder().level(log::Level::Debug).build()) {
-        return Ok(()); // 日志器已经初始化
-    }
+    use std::env;
+    use std::path::PathBuf;
 
-    fern::Dispatch::new()
-        .format(console_log_formatter)
+    if log::logger().enabled(&log::Metadata::builder().level(log::Level::Debug).build()) {
+        return Ok(()); // Logger already initialized
+    }
+    let dev_root: PathBuf = env::var("PROJECT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"))
+        .parent()
+        .unwrap()
+        .into();
+    let log_dir = dev_root.join("dev_data").join("logs");
+    let log_file_path = log_dir.join("chatspeed.log");
+    // Ensure log directory exists
+    std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
+    // Create log file
+    File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
+
+    // Create base dispatcher
+    let base_dispatcher = fern::Dispatch::new().level(log::LevelFilter::Debug);
+
+    // Console dispatcher - concise format
+    let stdout_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Debug)
         .filter(|record| {
             record.target().contains("chatspeed") || record.level() < log::LevelFilter::Debug
         })
-        .chain(std::io::stdout())
-        .apply()
-        .map_err(|e| {
-            log::error!("Failed to initialize logger: {:?}", e);
-            e
-        })?;
+        .format(console_log_formatter)
+        .chain(std::io::stdout());
 
-    log::debug!("Test logger initialized successfully");
+    // File dispatcher - detailed format
+    let file_dispatcher = fern::Dispatch::new()
+        .level(log::LevelFilter::Debug)
+        .filter(|record| {
+            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Info
+        })
+        .format(file_log_formatter)
+        .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));
+
+    // Apply logger configuration
+    base_dispatcher
+        .chain(stdout_dispatcher)
+        .chain(file_dispatcher)
+        .apply()
+        .expect(&t!("main.failed_to_initialize_logger"));
+
+    log::debug!(
+        "Test logger initialized successfully, log file path: {:?}",
+        log_file_path
+    );
     Ok(())
+}
+
+mod tests {
+
+    #[test]
+    fn test_replace_sensitive_info() {
+        let message = "api_key=1234567890&password=1234567890&secret=1234567890";
+        let sanitized_message = crate::logger::replace_sensitive_info(message);
+        assert_eq!(sanitized_message, "api_key=***&password=***&secret=***");
+    }
 }

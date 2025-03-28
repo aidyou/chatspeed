@@ -1,5 +1,6 @@
-use super::error::WorkflowError;
 use std::fmt;
+
+use crate::workflow::error::WorkflowError;
 
 /// Workflow state enumeration
 #[derive(Debug, Clone, PartialEq)]

@@ -227,6 +227,7 @@ export const useChatStore = defineStore('chat', () => {
    * @returns {Promise<void>} A promise that resolves when the deletion is complete.
    */
   const deleteMessage = (id) => {
+    console.debug('delete message', id)
     return new Promise((resolve, reject) => {
       invoke('delete_message', { id }).then(() => {
         messages.value = messages.value.filter((message) => message.id !== id)

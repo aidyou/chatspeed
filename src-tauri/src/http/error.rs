@@ -27,7 +27,14 @@ impl From<reqwest::Error> for HttpError {
         } else if err.is_builder() {
             HttpError::Config(t!("http.client_build_failed", error = err.to_string()).to_string())
         } else {
-            HttpError::Request(t!("http.request_failed", error = err.to_string()).to_string())
+            HttpError::Request(
+                t!(
+                    "http.request_failed",
+                    error = err.to_string(),
+                    status = err.status().unwrap_or_default()
+                )
+                .to_string(),
+            )
         }
     }
 }

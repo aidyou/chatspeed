@@ -1,7 +1,9 @@
 use log::debug;
+use rust_i18n::t;
 use serde_json::{Number, Value};
 
-use super::{context::Context, error::WorkflowError, types::WorkflowResult};
+use super::{context::Context, types::WorkflowResult};
+use crate::workflow::error::WorkflowError;
 
 impl Context {
     /// Internal implementation, handle recursive async calls
@@ -11,7 +13,11 @@ impl Context {
                 let mut result = serde_json::Map::new();
                 for (key, value) in map {
                     let resolved = Box::pin(self.resolve_params_inner(value)).await?;
-                    debug!("Field {} resolved result: {}", key, resolved);
+                    #[cfg(debug_assertions)]
+                    {
+                        debug!("Field {} resolved result: {}", key, resolved);
+                    }
+
                     result.insert(key, resolved);
                 }
                 Ok(Value::Object(result))
@@ -20,7 +26,11 @@ impl Context {
                 let mut result = Vec::new();
                 for (index, item) in arr.iter().enumerate() {
                     let resolved = Box::pin(self.resolve_params_inner(item.clone())).await?;
-                    debug!("Array element [{}] resolved result: {}", index, resolved);
+                    #[cfg(debug_assertions)]
+                    {
+                        debug!("Array element [{}] resolved result: {}", index, resolved);
+                    }
+
                     result.push(resolved);
                 }
                 Ok(Value::Array(result))
@@ -31,7 +41,10 @@ impl Context {
                     // If the entire string is a reference, return the referenced value
                     // Remove ${ and } characters
                     let reference = &s[2..s.len() - 1];
-                    debug!("Resolving reference: {}", reference);
+                    #[cfg(debug_assertions)]
+                    {
+                        debug!("Resolving reference: {}", reference);
+                    }
 
                     // Split node ID and path
                     let parts: Vec<&str> = reference.splitn(2, '.').collect();
@@ -117,7 +130,10 @@ impl Context {
 
         // 移除 ${ 和 } 字符
         let condition = &condition[2..condition.len() - 1];
-        debug!("解析条件: {}", condition);
+        #[cfg(debug_assertions)]
+        {
+            debug!("resolve condition: {}", condition);
+        }
 
         // 解析复合条件表达式
         self.resolve_compound_condition(condition).await
@@ -158,7 +174,9 @@ impl Context {
                     i = j; // 跳过已处理的括号部分
                     continue;
                 } else {
-                    return Err(WorkflowError::Config(format!("括号不匹配: {}", condition)));
+                    return Err(WorkflowError::Config(
+                        t!("workflow.bracket_not_match", condition = condition).to_string(),
+                    ));
                 }
             } else {
                 processed_condition.push(chars[i]);
@@ -243,9 +261,9 @@ impl Context {
             let value = self
                 .resolve_params(Value::String(format!("${{{}}}", processed_condition)))
                 .await?;
-            value
-                .as_bool()
-                .ok_or(WorkflowError::Config("非布尔类型值".into()))
+            value.as_bool().ok_or(WorkflowError::Config(
+                t!("workflow.not_bool_value").to_string(),
+            ))
         }
     }
 
@@ -271,7 +289,7 @@ impl Context {
         }
 
         // 然后尝试带空格匹配（如 " > "）
-        for &(op_symbol, op_type) in &operators {
+        for &(_, op_type) in &operators {
             let spaced_op = format!(" {} ", op_type);
             if let Some((left, right)) = self.split_operator(condition, &spaced_op) {
                 return Some((op_type, left, right));
@@ -370,12 +388,12 @@ impl Context {
         match (left, right) {
             // 数值比较
             (Value::Number(a), Value::Number(b)) => {
-                let a_num = a
-                    .as_f64()
-                    .ok_or(WorkflowError::Config("左值非数字".into()))?;
-                let b_num = b
-                    .as_f64()
-                    .ok_or(WorkflowError::Config("右值非数字".into()))?;
+                let a_num = a.as_f64().ok_or(WorkflowError::Config(
+                    t!("workflow.left_value_not_number").to_string(),
+                ))?;
+                let b_num = b.as_f64().ok_or(WorkflowError::Config(
+                    t!("workflow.right_value_not_number").to_string(),
+                ))?;
                 match op {
                     ">" => Ok(a_num > b_num),
                     ">=" => Ok(a_num >= b_num),
@@ -383,20 +401,26 @@ impl Context {
                     "<=" => Ok(a_num <= b_num),
                     "==" => Ok(a_num == b_num),
                     "!=" => Ok(a_num != b_num),
-                    _ => Err(WorkflowError::Config(format!("不支持的操作符: {}", op))),
+                    _ => Err(WorkflowError::Config(
+                        t!("workflow.unsupported_operator", operator = op).to_string(),
+                    )),
                 }
             }
             // 字符串比较
             (Value::String(a), Value::String(b)) => match op {
                 "==" => Ok(a == b),
                 "!=" => Ok(a != b),
-                _ => Err(WorkflowError::Config(format!("字符串不支持 {} 操作符", op))),
+                _ => Err(WorkflowError::Config(
+                    t!("workflow.string_not_supported", operator = op).to_string(),
+                )),
             },
             // 布尔值比较
             (Value::Bool(a), Value::Bool(b)) => match op {
                 "==" => Ok(a == b),
                 "!=" => Ok(a != b),
-                _ => Err(WorkflowError::Config(format!("布尔值不支持 {} 操作符", op))),
+                _ => Err(WorkflowError::Config(
+                    t!("workflow.bool_not_supported", operator = op).to_string(),
+                )),
             },
             // 类型自动转换比较
             (Value::Bool(a), Value::Number(b)) => {
@@ -404,10 +428,9 @@ impl Context {
                 match op {
                     "==" => Ok((*a as u8 as f64) == b_num),
                     "!=" => Ok((*a as u8 as f64) != b_num),
-                    _ => Err(WorkflowError::Config(format!(
-                        "不支持的类型组合操作符: {}",
-                        op
-                    ))),
+                    _ => Err(WorkflowError::Config(
+                        t!("workflow.unsupported_type_combination", operator = op).to_string(),
+                    )),
                 }
             }
             (Value::Number(a), Value::Bool(b)) => {
@@ -415,16 +438,31 @@ impl Context {
                 match op {
                     "==" => Ok(a_num == *b as u8 as f64),
                     "!=" => Ok(a_num != *b as u8 as f64),
-                    _ => Err(WorkflowError::Config(format!(
-                        "不支持的类型组合操作符: {}",
-                        op
-                    ))),
+                    _ => Err(WorkflowError::Config(
+                        t!("workflow.unsupported_type_combination", operator = op).to_string(),
+                    )),
                 }
             }
-            _ => Err(WorkflowError::Config(format!(
-                "类型不匹配: {} {} {}",
-                left, op, right
-            ))),
+            _ => Err(WorkflowError::Config(
+                t!(
+                    "workflow.type_mismatch",
+                    operator = op,
+                    left_type = Context::get_value_type(left),
+                    right_type = Context::get_value_type(right)
+                )
+                .to_string(),
+            )),
+        }
+    }
+
+    fn get_value_type(value: &Value) -> String {
+        match value {
+            Value::Null => "null".to_string(),
+            Value::Bool(_) => "boolean".to_string(),
+            Value::Number(_) => "number".to_string(),
+            Value::String(_) => "string".to_string(),
+            Value::Array(_) => "array".to_string(),
+            Value::Object(_) => "object".to_string(),
         }
     }
 }
@@ -433,7 +471,7 @@ impl Context {
 mod tests {
     use serde_json::json;
 
-    use crate::workflow::context::Context;
+    use crate::workflow::dag::context::Context;
 
     #[tokio::test]
     async fn test_resolve_condition() {
@@ -459,7 +497,7 @@ mod tests {
 
         // 测试复合条件
         context
-            .set("item.enabled".to_string(), json!(true))
+            .set_output("item.enabled".to_string(), json!(true))
             .await
             .unwrap();
         assert!(context

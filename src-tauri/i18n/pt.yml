@@ -9,16 +9,16 @@ chat:
   request_failed: "Falha na solicitação, código de status: %{status}, resposta: %{response}"
   stream_read_error: "Erro ao ler dados do stream: %{error}"
   context:
-    content: Conteúdo
-    language: Idioma
-    location: Localização
-    role: Papel
-    time: Tempo
-  search_analysing: Analisando
-  search_fetching: Buscando
-  search_results: Resultados da busca
-  searching: Pesquisando
-  user_message_with_references: Mensagem do usuário com referências
+    content: "Conteúdo"
+    language: "Idioma"
+    location: "Localização"
+    role: "Papel"
+    time: "Tempo"
+  search_analysing: "Analisando"
+  search_fetching: "Buscando"
+  search_results: "Resultados da busca"
+  searching: "Pesquisando"
+  user_message_with_references: "Mensagem do usuário com referências"
 
 db:
   already_exists: "Os dados já existem"
@@ -59,32 +59,32 @@ db:
   tauri_error: "Erro de Tauri: %{error}"
 
 http:
-  client_build_failed: Falha ao construir cliente
-  connection_failed: Falha na conexão
-  download_failed: Falha no download
-  failed_to_clone_request: Falha ao clonar solicitação
-  failed_to_create_file: Falha ao criar arquivo
-  failed_to_open_file: Falha ao abrir arquivo
-  failed_to_parse_response: Falha ao analisar resposta
-  failed_to_read_file: Falha ao ler arquivo
-  failed_to_read_response: Falha ao ler resposta
-  failed_to_write_file: Falha ao escrever arquivo
-  headers_convert_failed: Falha ao converter cabeçalhos
-  invalid_http_method: Método HTTP inválido
-  invalid_request_config: Configuração de solicitação inválida
-  invalid_response_format: Formato de resposta inválido
-  json_parse_failed: Falha ao analisar JSON
-  mime_parse_failed: Falha ao analisar MIME
-  missing_response_body: Corpo da resposta ausente
-  missing_url: URL ausente
-  proxy_config_failed: Falha na configuração do proxy
-  read_response_failed: Falha ao ler resposta
-  request_failed: Falha na solicitação
-  request_timeout: Tempo limite da solicitação
-  response_too_large: Resposta muito grande
-  runtime_create_failed: Falha ao criar runtime
-  status_not_ok: Status não OK
-  upload_failed: Falha no upload
+  client_build_failed: "Falha ao construir cliente"
+  connection_failed: "Falha na conexão"
+  download_failed: "Falha no download"
+  failed_to_clone_request: "Falha ao clonar solicitação"
+  failed_to_create_file: "Falha ao criar arquivo"
+  failed_to_open_file: "Falha ao abrir arquivo"
+  failed_to_parse_response: "Falha ao analisar resposta"
+  failed_to_read_file: "Falha ao ler arquivo"
+  failed_to_read_response: "Falha ao ler resposta"
+  failed_to_write_file: "Falha ao escrever arquivo"
+  headers_convert_failed: "Falha ao converter cabeçalhos"
+  invalid_http_method: "Método HTTP inválido"
+  invalid_request_config: "Configuração de solicitação inválida"
+  invalid_response_format: "Formato de resposta inválido"
+  json_parse_failed: "Falha ao analisar JSON"
+  mime_parse_failed: "Falha ao analisar MIME"
+  missing_response_body: "Corpo da resposta ausente"
+  missing_url: "URL ausente"
+  proxy_config_failed: "Falha na configuração do proxy"
+  read_response_failed: "Falha ao ler resposta"
+  request_failed: "Falha na solicitação, código de status: %{status}, erro: %{error}"
+  request_timeout: "Tempo limite da solicitação"
+  response_too_large: "Resposta muito grande"
+  runtime_create_failed: "Falha ao criar runtime"
+  status_not_ok: "Status não OK"
+  upload_failed: "Falha no upload"
 
 main:
   failed_to_create_chat_store: "Falha ao criar armazenamento de chat: %{error}"

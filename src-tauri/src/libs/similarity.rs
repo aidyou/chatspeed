@@ -11,7 +11,7 @@ lazy_static::lazy_static! {
 }
 use whatlang::{Lang, Script};
 
-use crate::http::crawler::SearchResult;
+use crate::http::chp::SearchResult;
 
 static STOP_WORDS: phf::Map<&'static str, phf::Set<&'static str>> = phf_map! {
     "zh-Hans" => phf_set! {
@@ -90,18 +90,18 @@ static STOP_WORDS: phf::Map<&'static str, phf::Set<&'static str>> = phf_map! {
 /// # Returns
 /// A relevance score between 0.0 and 1.0, where 1.0 indicates a perfect match.
 pub fn compute_relevance(result: &mut SearchResult, query: &str) -> f32 {
-    // 计算标题相关性
+    // Calculate title relevance
     let title_relevance = compute_title_relevance(&result.title, query);
 
-    // 计算内容相关性
+    // Calculate content relevance
     let content_relevance =
         compute_content_relevance(&result.summary.clone().unwrap_or_default(), query);
 
-    // 计算基础分数
+    // Calculate base score
     let base_score =
         0.55 * title_relevance + 0.4 * content_relevance + 0.05 * url_quality_score(&result.url);
 
-    // 时间衰减调整
+    // Time decay adjustment
     result.score = if let Some(pd) = &result.publish_date {
         if let Some(pt) = strtotime(pd) {
             let time_decay = time_score(pt);
@@ -119,13 +119,13 @@ pub fn compute_relevance(result: &mut SearchResult, query: &str) -> f32 {
 fn url_quality_score(url: &str) -> f32 {
     let url = url.to_lowercase();
 
-    // 协议评分
+    // Protocol bonus
     let https_bonus = url.starts_with("https://") as u8 as f32 * 0.1;
 
-    // 路径深度评分（1-5级路径）
+    // Path depth bonus (1-5 level paths)
     let path_depth = url.split('/').filter(|s| !s.is_empty()).count().min(5) as f32 * 0.05;
 
-    // 顶级域名奖励
+    // Top-level domain bonus
     let tld_bonus = if [".com", ".org", ".gov", ".edu"]
         .iter()
         .any(|tld| url.contains(tld))
@@ -158,7 +158,7 @@ pub fn compute_title_relevance(title: &str, query: &str) -> f32 {
     let mut intersection = 0.0;
     let mut title_weight = 0.0;
 
-    // 改进的位置权重：前5词保持高权重，后续缓慢衰减
+    // Improved position weight: top 5 words maintain high weight, subsequent words decay slowly
     let total_words = title_tokens.len();
     for (idx, word) in title_tokens.iter().enumerate() {
         let position_weight = if idx < 5 {
@@ -174,11 +174,11 @@ pub fn compute_title_relevance(title: &str, query: &str) -> f32 {
         }
     }
 
-    // 改进的Jaccard公式
+    // Improved Jaccard formula
     let base_score =
-        (intersection / (title_weight + query_tokens.len() as f32 + 1e-5)).clamp(0.0, 0.8); // 设置上限避免满分
+        (intersection / (title_weight + query_tokens.len() as f32 + 1e-5)).clamp(0.0, 0.8); // Set upper limit to avoid full score
 
-    // 连续匹配奖励（最大0.2）
+    // Consecutive match bonus (max 0.2)
     let mut consecutive_bonus = 0.0;
     let mut current_streak = 0;
     for word in &title_tokens {
@@ -193,55 +193,17 @@ pub fn compute_title_relevance(title: &str, query: &str) -> f32 {
     (base_score + consecutive_bonus.min(0.2)).min(0.8)
 }
 
-/// Computes the relevance score between content and a query.
+/// Computes the relevance score between a content and a query.
+/// Considers multiple factors, including word frequency, position, etc.
 ///
 /// # Arguments
-/// * `content` - The content of the search result.
-/// * `query` - The search query string.
+/// * `content` - The content of the search result
+/// * `query` - The search query string
 ///
 /// # Returns
-/// A relevance score between 0.0 and 1.0, where 1.0 indicates a perfect match.
-/// 计算查询词匹配分数
-/// 基于查询词在内容中的出现比例计算
-///
-/// # Arguments
-/// * `content` - 要搜索的内容
-/// * `query` - 搜索查询词
-///
-/// # Returns
-/// 分数在 0.0 到 1.0 之间，1.0 表示所有查询词都找到了
-pub fn compute_query_match_score(content: &str, query: &str) -> f32 {
-    if content.is_empty() || query.is_empty() {
-        return 0.0;
-    }
-
-    let content_tokens = tokenize(content);
-    let query_tokens = tokenize(query);
-
-    if query_tokens.unique.is_empty() {
-        return 0.0;
-    }
-
-    let matched_terms = query_tokens
-        .unique
-        .iter()
-        .filter(|token| content_tokens.unique.contains(*token))
-        .count() as f32;
-
-    matched_terms / query_tokens.unique.len() as f32
-}
-
-/// 计算内容相关度分数
-/// 考虑多个因素，包括词频、位置等
-///
-/// # Arguments
-/// * `content` - 搜索结果的内容
-/// * `query` - 搜索查询词
-///
-/// # Returns
-/// 相关度分数在 0.0 到 1.0 之间，1.0 表示完全匹配
+/// A relevance score between 0.0 and 1.0, where 1.0 indicates a perfect match
 pub fn compute_content_relevance(content: &str, query: &str) -> f32 {
-    // 边界条件处理
+    // Boundary condition handling
     if content.is_empty() || query.is_empty() {
         return 0.0;
     }
@@ -249,26 +211,26 @@ pub fn compute_content_relevance(content: &str, query: &str) -> f32 {
     let content_lc = content.to_lowercase();
     let query_lc = query.to_lowercase();
 
-    // 计算查询词在内容中的出现次数
+    // Compute the number of times the query word appears in the content
     let query_count = content_lc.matches(&query_lc).count() as f32;
     let content_len = content_lc.len() as f32;
     let direct_match_score = (query_count * query_lc.len() as f32) / content_len;
     if direct_match_score > 0.1 {
-        // 降低直接匹配的阈值
-        let base_score = 0.5 + direct_match_score * 0.5; // 调整权重
+        // Lower the threshold for direct matches
+        let base_score = 0.5 + direct_match_score * 0.5; // Adjust weight
         return base_score.min(0.95);
     }
 
-    // 分词处理
+    // Tokenization
     let query_tokens = tokenize(&query_lc);
     let content_tokens = tokenize(&content_lc);
 
-    // 空内容处理
+    // Empty content handling
     if content_tokens.ordered.is_empty() {
         return 0.0;
     }
 
-    // 计算词频和位置信息
+    // Compute term frequency and position information
     let mut term_stats = HashMap::new();
     let mut first_positions = HashMap::new();
     for (pos, word) in content_tokens.ordered.iter().enumerate() {
@@ -280,21 +242,21 @@ pub fn compute_content_relevance(content: &str, query: &str) -> f32 {
     let mut weighted_density = 0.0;
     let mut position_score = 0.0;
 
-    // 计算 TF-IDF 和位置得分
+    // Compute TF-IDF and position score
     for word in &query_tokens.ordered {
         if let Some(count) = term_stats.get(word) {
             let tf = *count as f32 / total_terms;
             let idf = 1.0 + (total_terms / (*count as f32 + 1.0)).ln_1p();
             weighted_density += tf * idf;
 
-            // 考虑词语的位置
+            // Consider word position
             if let Some(pos) = first_positions.get(word) {
                 position_score += 1.0 / (1.0 + (*pos as f32 / 10.0));
             }
         }
     }
 
-    // 滑动窗口优化，使用可变窗口大小
+    // Sliding window optimization, using variable window size
     let mut max_window_score: f32 = 0.0;
     for window_size in 3..=7 {
         let window_score: f32 = content_tokens
@@ -311,19 +273,19 @@ pub fn compute_content_relevance(content: &str, query: &str) -> f32 {
         max_window_score = max_window_score.max(window_score);
     }
 
-    // 综合计算最终分数
+    // Comprehensive calculation of final score
     let normalized_density = weighted_density / query_tokens.ordered.len() as f32;
     let normalized_position = position_score / query_tokens.ordered.len() as f32;
 
     let final_score = (
-        normalized_density * 0.4 +    // TF-IDF 得分
-        max_window_score * 0.4 +      // 词语距离得分
+        normalized_density * 0.4 +    // TF-IDF score
+        max_window_score * 0.4 +      // Word distance score
         normalized_position * 0.2
-        // 位置得分
+        // Position score
     )
     .min(0.95);
 
-    // 如果有至少一个查询词匹配，确保最小分数
+    // If at least one query word matches, ensure minimum score
     if final_score > 0.0 {
         final_score.max(0.1)
     } else {
@@ -342,7 +304,7 @@ fn strtotime(time_str: &str) -> Option<DateTime<Local>> {
 
 fn time_score(publish_time: DateTime<Local>) -> f32 {
     let days = (Local::now() - publish_time).num_days() as f32;
-    // 新曲线：7天0.8，30天0.6，180天0.3
+    // New curve: 7 days 0.8, 30 days 0.6, 180 days 0.3
     1.0 / (0.03 * days + 1.0).powf(0.4)
 }
 
@@ -366,7 +328,7 @@ pub fn tokenize(text: &str) -> Tokenized {
             match c {
                 // Convert full-width to half-width characters
                 c if c >= '\u{ff01}' && c <= '\u{ff5e}' => {
-                    // ASCII对应范围是 0x21~0x7e
+                    // ASCII range is 0x21~0x7e
                     let ascii = (c as u32 - 0xff01 + 0x21) as u8;
                     ascii as char
                 }
@@ -393,20 +355,20 @@ pub fn tokenize(text: &str) -> Tokenized {
         })
         .collect::<String>();
 
-    // 检测语言和脚本
+    // Detect language and script
     let (lang, _) = detect_lang_and_script(&normalized);
 
-    // 根据不同的语言选择分词策略
+    // Select tokenization strategy based on language
     let mut words = match lang {
         "zh" => chinese_tokenize(&normalized),
         "ja" => japanese_tokenize(&normalized),
-        _ => space_based_tokenize(&normalized), // 包括韩语在内的其他语言都使用空格分词
+        _ => space_based_tokenize(&normalized), // including Korean and Vietnamese, use space-based tokenization
     };
 
-    // 过滤停用词
+    // Filter stop words
     words = filter_stop_words(words, lang);
 
-    // 合并连续的数字和英文字符
+    // Merge consecutive numbers and English characters
     let mut merged = Vec::new();
     let mut current = String::new();
     let mut is_last_alnum = false;
@@ -433,7 +395,7 @@ pub fn tokenize(text: &str) -> Tokenized {
         merged.push(current);
     }
 
-    // 去除重复并保持顺序
+    // Remove duplicates while preserving order
     let mut unique = HashSet::new();
     let ordered: Vec<String> = merged
         .into_iter()
@@ -451,7 +413,7 @@ pub fn tokenize(text: &str) -> Tokenized {
 /// # Returns
 /// A tuple containing the language code and script.
 pub fn detect_lang_and_script(text: &str) -> (&'static str, Script) {
-    // 优先检查是否包含中日韩字符
+    // Check for Chinese, Japanese, and Korean characters first
     let mut has_han = false;
     let mut has_kana = false;
     let mut has_hangul = false;
@@ -461,17 +423,17 @@ pub fn detect_lang_and_script(text: &str) -> (&'static str, Script) {
         match script {
             unicode_script::Script::Han => {
                 has_han = true;
-                break; // 只要发现汉字就可以确定是中文
+                break; // Only need to detect Han characters to confirm Chinese
             }
             unicode_script::Script::Hiragana | unicode_script::Script::Katakana => {
                 if !has_han {
-                    // 如果没有汉字，才考虑假名
+                    // If no Han characters, consider Kana
                     has_kana = true;
                 }
             }
             unicode_script::Script::Hangul => {
                 if !has_han && !has_kana {
-                    // 如果没有汉字和假名，才考虑谚文
+                    // If no Han characters and no Kana, consider Hangul
                     has_hangul = true;
                 }
             }
@@ -479,7 +441,7 @@ pub fn detect_lang_and_script(text: &str) -> (&'static str, Script) {
         }
     }
 
-    // 优先识别中日韩文本
+    // Prioritize Chinese, Japanese, and Korean
     if has_han {
         return ("zh", Script::Mandarin);
     } else if has_kana {
@@ -488,7 +450,7 @@ pub fn detect_lang_and_script(text: &str) -> (&'static str, Script) {
         return ("ko", Script::Hangul);
     }
 
-    // 如果没有中日韩字符，使用 whatlang 进行语言检测
+    // If no Chinese, Japanese, or Korean characters, use whatlang for language detection
     let info = whatlang::detect(text)
         .unwrap_or_else(|| whatlang::Info::new(Script::Latin, Lang::Eng, 0.0));
     (info.lang().code(), info.script())
@@ -503,7 +465,7 @@ pub fn detect_lang_and_script(text: &str) -> (&'static str, Script) {
 /// # Returns
 /// A vector of tokens.
 fn chinese_tokenize(text: &str) -> Vec<String> {
-    // 使用 jieba-rs 进行中文分词
+    // Use jieba-rs for Chinese tokenization
     JIEBA
         .cut(text, false)
         .into_iter()
@@ -534,7 +496,7 @@ fn is_cjk(c: char) -> bool {
 /// # Returns
 /// A vector of tokens.
 fn japanese_tokenize(text: &str) -> Vec<String> {
-    // 使用 tiny-segmenter 进行日语分词
+    // Use tiny-segmenter for Japanese tokenization
     ja_tokenize(text)
         .into_iter()
         .filter(|s| !s.trim().is_empty())

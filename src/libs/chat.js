@@ -248,6 +248,7 @@ export const htmlspecialchars = (text) => {
  * modify parseMarkdown function
  */
 export const parseMarkdown = (content, reference) => {
+  content = content ? content.trim() : '';
   if (!content) return ''
 
   let refs = ''
@@ -288,15 +289,19 @@ export const parseMarkdown = (content, reference) => {
   })
 
   // Handle reasoning process similar to deepseek r1
-  content = content.trim();
   if (content.startsWith('<think')) {
     if (content.indexOf('</think>') === -1) {
       content = `<div class="chat-think">
-        <div class="chat-think-title expanded"><span>${i18n.global.t('chat.reasoning')}</span></div>
-        <div class="think-content">${content.replace('<think>', '')}</div>
-      </div>\n`
+          <div class="chat-think-title expanded"><span>${i18n.global.t('chat.reasoning')}</span></div>
+          <div class="think-content">${content.replace('<think>', '')}</div>
+        </div>\n`
     }
   }
+  // remove <think>\s+</think>
+  if (/<think>\s*<\/think>/.test(content)) {
+    content = content.replace(/<think>\s*<\/think>/, '')
+  }
+
   content = content.replace(THINK_REGEX, (_match, _classAttr, className, content) => {
     const translationKey = className?.includes('thinking') ? 'chat.reasoning' : 'chat.reasoningProcess'
     return `<div class="chat-think ${className || ''}"><div class="chat-think-title expanded"><span>${i18n.global.t(translationKey)}</span></div><div class="think-content">${content}</div></div>`

@@ -1,4 +1,4 @@
-use super::types::AiSkill;
+use super::types::{AiSkill, ModelConfig};
 use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
@@ -59,7 +59,7 @@ impl MainStore {
     pub fn add_ai_model(
         &mut self,
         name: String,
-        models: Vec<String>,
+        models: Vec<ModelConfig>,
         default_model: String,
         api_protocol: String,
         base_url: String,
@@ -98,7 +98,12 @@ impl MainStore {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     name,
-                    models.join(","),
+                    serde_json::to_string(&models)
+                        .map_err(|e| {
+                            error!("Failed to serialize models: {:?}, err: {}", &models, e);
+                            e
+                        })
+                        .unwrap_or_default(),
                     default_model,
                     api_protocol,
                     base_url,
@@ -141,7 +146,7 @@ impl MainStore {
         &mut self,
         id: i64,
         name: String,
-        models: Vec<String>,
+        models: Vec<ModelConfig>,
         default_model: String,
         api_protocol: String,
         base_url: String,
@@ -164,7 +169,12 @@ impl MainStore {
              top_k = ?, disabled = ?, metadata = ? WHERE id = ?",
             (
                 name,
-                models.join(","),
+                serde_json::to_string(&models)
+                    .map_err(|e| {
+                        error!("Failed to serialize models: {:?}, err: {}", &models, e);
+                        e
+                    })
+                    .unwrap_or_default(),
                 default_model,
                 api_protocol,
                 base_url,

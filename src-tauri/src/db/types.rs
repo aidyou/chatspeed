@@ -34,6 +34,27 @@ pub struct Conversation {
 // =================================================
 // config
 // =================================================
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModelConfig {
+    pub id: String,
+    pub name: String,
+    pub group: String,
+    pub reasoning: bool,
+    #[serde(rename = "functionCall")]
+    pub function_call: bool,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            group: String::new(),
+            reasoning: false,
+            function_call: false,
+        }
+    }
+}
 
 /// Represents an AI model with various attributes.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,7 +64,7 @@ pub struct AiModel {
     /// Name of the AI model.
     pub name: String,
     /// Supported models include: gpt-4, gpt-3.5, gemini-1.5, and others.
-    pub models: Vec<String>,
+    pub models: Vec<ModelConfig>,
     /// Default model to use.
     #[serde(rename = "defaultModel")]
     pub default_model: String,

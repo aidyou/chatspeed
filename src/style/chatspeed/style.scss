@@ -59,7 +59,7 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: var(--cs-space-xxs);
+                gap: var(--cs-space-xs);
             }
 
             .label {
@@ -101,6 +101,24 @@
             //     }
             // }
         }
+
+        &.opacity {
+            background: none;
+            border: none;
+            padding: 0;
+
+            .item {
+                border: none;
+                padding: var(--cs-space-xs) var(--cs-space-sm);
+                height: 26px;
+            }
+        }
+    }
+
+    .footer {
+        display: flex;
+        justify-content: space-between;
+        padding: var(--cs-space) var(--cs-space-sm) var(--cs-space-sm);
     }
 }
 

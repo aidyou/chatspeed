@@ -102,7 +102,7 @@ http:
   missing_url: "Falta el parámetro URL en la solicitud HTTP"
   proxy_config_failed: "Error al configurar proxy: %{error}"
   read_response_failed: "Error al leer respuesta: %{error}"
-  request_failed: "Solicitud fallida: %{error}"
+  request_failed: "Solicitud fallida: error: %{error}, estado: %{status}"
   request_timeout: "Tiempo de espera de solicitud agotado"
   response_too_large: "Los datos del servidor exceden el límite de solicitud, tamaño de datos del servidor: %{content_length}, límite de solicitud: %{max_size}"
   runtime_create_failed: "Error al crear runtime: %{error}"

@@ -50,7 +50,8 @@
     "metadata": {
       "completion": "completion",
       "prompt": "prompt",
-      "tokens": "tokens"
+      "tokens": "tokens",
+      "tokensPerSecond": "tokens/sec"
     },
     "mindmapError": "Mind map rendering failed",
     "networkDisabled": "Network disabled",

@@ -77,15 +77,16 @@
     :show-close="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false">
-    <el-form :model="modelForm" :rules="modelRules" ref="formRef">
+    <el-form :model="modelForm" :rules="modelRules" ref="formRef" label-width="120px">
       <el-tabs v-model="activeTab">
+        <!-- basic info -->
         <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.model.apiProtocol')" prop="apiProtocol">
             <el-select v-model="modelForm.apiProtocol">
               <el-option v-for="(k, v) in apiProtocolOptions" :key="k" :label="v" :value="k" />
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.model.name')" prop="name">
+          <el-form-item :label="$t('settings.model.provider')" prop="name">
             <el-input v-model="modelForm.name" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.logo')" prop="logo">
@@ -93,44 +94,10 @@
               v-model="modelForm.logo"
               :placeholder="$t('settings.model.logoPlaceholder')" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.models')" prop="models">
-            <el-select
-              v-model="modelForm.modelList"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              collapse-tags
-              collapse-tags-tooltip
-              :placeholder="$t('settings.model.modelsPlaceholder')"
-              @change="handleModelChange"
-              @paste.native="handlePaste">
-              <el-option
-                v-for="item in modelForm.modelList"
-                :key="item"
-                :label="item"
-                :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item
-            :label="$t('settings.model.defaultModel')"
-            prop="defaultModel"
-            v-if="defaultModels.length > 0">
-            <el-select v-model="modelForm.defaultModel">
-              <el-option
-                v-for="model in defaultModels"
-                :key="model"
-                :label="model"
-                :value="model" />
-            </el-select>
-          </el-form-item>
           <el-form-item :label="$t('settings.model.apiUrl')" prop="baseUrl">
             <el-input v-model="modelForm.baseUrl" :placeholder="baseUrlPlaceholder" />
           </el-form-item>
-          <el-form-item
-            :label="$t('settings.model.apiKey')"
-            prop="apiKey"
-            :required="modelForm.apiProtocol !== 'ollama'">
+          <el-form-item :label="$t('settings.model.apiKey')" prop="apiKey">
             <el-input
               v-model="modelForm.apiKey"
               type="textarea"
@@ -138,6 +105,60 @@
               show-password />
           </el-form-item>
         </el-tab-pane>
+        <!-- /end basic info -->
+
+        <!-- model info -->
+        <el-tab-pane :label="$t('settings.model.modelInfo')" name="modelInfo">
+          <div class="card card-col-list">
+            <div v-if="Object.keys(modelGroups).length > 0" class="card-container">
+              <el-card
+                v-for="(models, group) in modelGroups"
+                :key="group"
+                body-class="edit-card-body">
+                <template #header>
+                  <span>{{ group }}</span>
+                </template>
+                <div class="list opacity">
+                  <div class="item" v-for="model in models" :key="model.id">
+                    <div class="label">
+                      <span>{{ model.name || model.id }}</span>
+                      <el-icon v-if="model.reasoning" class="model-icon">
+                        <cs name="reasoning" />
+                      </el-icon>
+                      <el-icon v-if="model.functionCall" class="model-icon">
+                        <cs name="function" />
+                      </el-icon>
+                    </div>
+                    <div class="value model-action">
+                      <cs name="edit" @click="onModelConfig(model)" />
+                      <cs
+                        name="trash"
+                        color="var(--el-color-danger)"
+                        @click="removeModelConfig(model.id)" />
+                    </div>
+                  </div>
+                </div>
+              </el-card>
+            </div>
+            <div
+              v-else
+              style="
+                text-align: center;
+                font-size: var(--cs-font-size-lg);
+                padding: var(--cs-space-lg);
+              ">
+              {{ $t('settings.model.noModels') }}
+            </div>
+            <div class="footer">
+              <el-button type="success" round @click="onModelConfig()">
+                <cs name="add" />{{ $t('settings.model.add') }}
+              </el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+        <!-- /end model info -->
+
+        <!-- additional info -->
         <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
           <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
             <el-input-number
@@ -199,6 +220,7 @@
             <el-switch v-model="modelForm.disabled" />
           </el-form-item>
         </el-tab-pane>
+        <!-- /end additional info -->
       </el-tabs>
     </el-form>
     <template #footer>
@@ -227,7 +249,7 @@
               class="search-input" />
           </el-col>
           <el-col :span="8">
-            <el-button type="primary" plain @click="manualAdd()" style="width: 100%"
+            <el-button type="primary" plain @click="onManualAdd()" style="width: 100%"
               ><cs name="add" /> {{ $t('settings.model.addDirectly') }}</el-button
             >
           </el-col>
@@ -276,6 +298,44 @@
       </div>
     </div>
   </el-dialog>
+
+  <!-- 模型编辑弹窗 -->
+  <el-dialog
+    v-model="modelConfigDialogVisible"
+    align-center
+    width="500px"
+    :title="$t('settings.model.modelConfig')"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-form
+      :model="modelConfigForm"
+      label-width="100px"
+      :rules="modelConfigRules"
+      ref="configFormRef">
+      <el-form-item :label="$t('settings.model.modelId')" prop="id">
+        <el-input v-model="modelConfigForm.id" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
+        <el-input v-model="modelConfigForm.name" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
+        <el-input v-model="modelConfigForm.group" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
+        <el-switch v-model="modelConfigForm.reasoning" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
+        <el-switch v-model="modelConfigForm.functionCall" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <div class="dialog-footer">
+        <el-button @click="modelConfigDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="updateModelConfig">{{ $t('common.save') }}</el-button>
+      </div>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -293,7 +353,7 @@ import { useModelStore } from '@/stores/model'
 const modelStore = useModelStore()
 
 // Computed property to get and set models from the store
-const models = computed(() => modelStore.models)
+const models = computed(() => modelStore.providers)
 
 const activeTab = ref('basic')
 const formRef = ref(null)
@@ -305,7 +365,8 @@ const apiProtocolOptions = {
   OpenAI: 'openai',
   Ollama: 'ollama',
   Gemini: 'gemini',
-  Claude: 'claude'
+  Claude: 'claude',
+  HuggingFace: 'huggingface'
 }
 
 /**
@@ -322,14 +383,13 @@ const defaultFormData = {
   apiProtocol: 'openai',
   name: '',
   logo: '',
-  models: '',
-  modelList: [],
+  models: [],
   defaultModel: '',
   baseUrl: '',
   apiKey: '',
   maxTokens: 4096,
-  temperature: 1.0,
-  topP: 1.0,
+  temperature: 0.8,
+  topP: 0.9,
   topK: 40,
   proxyType: 'bySetting',
   disabled: false
@@ -344,7 +404,7 @@ const baseUrlPlaceholder = computed(() => {
   } else if (modelForm.value.apiProtocol === 'ollama') {
     return 'http://localhost:11434/v1'
   } else if (modelForm.value.apiProtocol === 'huggingface') {
-    return 'https://api-inference.huggingface.co/models'
+    return 'https://router.huggingface.co/hf-inference/models'
   } else if (modelForm.value.apiProtocol === 'anthropic') {
     return 'https://api.anthropic.com'
   } else if (modelForm.value.apiProtocol === 'gemini') {
@@ -359,55 +419,12 @@ const modelRules = {
   name: [{ required: true, message: t('settings.model.nameRequired') }],
   models: [{ required: true, message: t('settings.model.modelsRequired') }],
   defaultModel: [{ required: true, message: t('settings.model.defaultModelRequired') }],
-  // baseUrl: [{ required: true, message: t('settings.model.apiUrlRequired') }],
-  apiKey: [
-    {
-      validator: (_rule, value, callback) => {
-        if (modelForm.value.apiProtocol === 'ollama') {
-          callback()
-        } else if (isEmpty(value)) {
-          callback(new Error(t('settings.model.apiKeyRequired')))
-        } else {
-          callback()
-        }
-      },
-      trigger: 'blur'
-    }
-  ]
+  baseUrl: [{ required: true, message: t('settings.model.baseUrlRequired') }]
 }
 
-// Computed property to derive default models from the input
-const defaultModels = computed(() => {
-  return modelInit(modelForm.value.models)
-})
-
-// Watcher to update the default model when models change
-watch(
-  () => modelForm.value.models,
-  () => {
-    if (
-      modelForm.value.defaultModel == '' ||
-      !defaultModels.value.includes(modelForm.value.defaultModel)
-    ) {
-      modelForm.value.defaultModel = defaultModels.value.length > 0 ? defaultModels.value[0] : ''
-    }
-  }
-)
-
-/**
- * Initialize models
- * @param {string} models - The models string
- * @returns {Array} - The initialized models array
- */
-const modelInit = models => {
-  return models
-    .trim()
-    .replace(/，/g, ',') // Replace Chinese comma with English comma
-    .replace(/\n/g, ',') // Replace newline with comma
-    .split(',')
-    .map(model => model.trim())
-    .filter(m => m !== '')
-}
+// =================================================
+// model utils
+// =================================================
 
 /**
  * Opens the model dialog for editing or creating a new model.
@@ -418,7 +435,7 @@ const editModel = async (id, model) => {
   activeTab.value = 'basic' // 重置为基础信息标签页
 
   if (id) {
-    const modelData = modelStore.getModelById(id)
+    const modelData = modelStore.getModelProviderById(id)
     if (!modelData) {
       showMessage(t('settings.model.notFound'), 'error')
       return
@@ -428,8 +445,7 @@ const editModel = async (id, model) => {
       apiProtocol: modelData.apiProtocol,
       name: modelData.name,
       logo: modelData?.metadata?.logo || '',
-      models: modelData.models.join(','),
-      modelList: [...modelData.models],
+      models: modelData.models,
       defaultModel: modelData.defaultModel,
       baseUrl: modelData.baseUrl,
       apiKey: modelData.apiKey,
@@ -442,8 +458,7 @@ const editModel = async (id, model) => {
     }
   } else if (model) {
     modelForm.value = { ...defaultFormData }
-    modelForm.value.modelList = [...model.models]
-    modelForm.value.models = modelForm.value.modelList.join(',')
+    modelForm.value.models = [...model.models]
     modelForm.value.apiProtocol = model.protocol
 
     const keys = ['name', 'logo', 'baseUrl', 'maxTokens', 'temperature', 'topP', 'topK']
@@ -462,7 +477,7 @@ const editModel = async (id, model) => {
  * @param {string} id - The ID of the model to copy.
  */
 const copyModel = id => {
-  const modelData = modelStore.getModelById(id)
+  const modelData = modelStore.getModelProviderById(id)
   if (!modelData) {
     showMessage(t('settings.model.notFound'), 'error')
     return
@@ -472,8 +487,7 @@ const copyModel = id => {
     apiProtocol: modelData.apiProtocol,
     name: modelData.name + '-Copy',
     logo: modelData?.metadata?.logo || '',
-    models: modelData.models.join(','),
-    modelList: modelData.models,
+    models: modelData.models,
     defaultModel: modelData.defaultModel,
     baseUrl: modelData.baseUrl,
     apiKey: modelData.apiKey,
@@ -494,13 +508,11 @@ const updateModel = () => {
   formRef.value.validate(valid => {
     console.log(modelForm.value)
     if (valid) {
-      const allModels = [...new Set(modelInit(modelForm.value.models))]
-
       const formData = {
         id: editId.value,
         apiProtocol: modelForm.value.apiProtocol.trim(),
         name: modelForm.value.name.trim(),
-        models: allModels,
+        models: modelForm.value.models,
         defaultModel: modelForm.value.defaultModel.trim(),
         baseUrl: modelForm.value.baseUrl.trim(),
         apiKey: modelForm.value.apiKey.trim(),
@@ -516,7 +528,7 @@ const updateModel = () => {
       }
 
       modelStore
-        .setModel(formData)
+        .setModelProvider(formData)
         .then(msg => {
           showMessage(msg, 'success')
           modelDialogVisible.value = false
@@ -543,7 +555,7 @@ const deleteModel = id => {
   }).then(() => {
     // User confirmed deletion
     modelStore
-      .deleteModel(id)
+      .deleteModelProvider(id)
       .then(() => {
         showMessage(t('settings.model.deleteSuccess'), 'success')
       })
@@ -553,11 +565,79 @@ const deleteModel = id => {
   })
 }
 
+// =================================================
+// Model Config area
+// =================================================
+// Reactive object to hold the form data for the model config
+const defaultModelConfig = {
+  id: '',
+  name: '',
+  group: '',
+  functionCall: false,
+  reasoning: false
+}
+const modelConfigRules = {
+  id: [{ required: true, message: t('settings.model.modelIdRequired') }]
+}
+const modelConfigForm = ref({ ...defaultModelConfig })
+const modelConfigDialogVisible = ref(false)
+const modelGroups = computed(() => {
+  return modelForm.value.models.reduce((groups, x) => {
+    if (!x.group) {
+      x.group = t('settings.model.ungrouped')
+    }
+    groups[x.group] = groups[x.group] || []
+    groups[x.group].push(x)
+    return groups
+  }, {})
+})
+/**
+ * Edits the model config: set the model config to form and open the dialog
+ * @param {Object} model - The model config to edit.
+ */
+const onModelConfig = model => {
+  if (model) {
+    model.group = model.group === t('settings.model.ungrouped') ? '' : model.group
+    modelConfigForm.value = { ...model }
+  } else {
+    modelConfigForm.value = { ...defaultModelConfig }
+  }
+  modelConfigDialogVisible.value = true
+}
+
+/**
+ * Updates the model config: update the model config in the form and close the dialog
+ */
+const updateModelConfig = () => {
+  if (!modelConfigForm.value.id) return
+  const index = modelForm.value.models.findIndex(item => item.id === modelConfigForm.value.id)
+  if (index !== -1) {
+    modelForm.value.models.splice(index, 1, { ...modelConfigForm.value })
+  } else {
+    modelForm.value.models.push({ ...modelConfigForm.value })
+  }
+  modelConfigDialogVisible.value = false
+}
+/**
+ * Remove the model config from the form and close the dialog
+ * @param {string} id - The ID of the model config to remove.
+ */
+const removeModelConfig = id => {
+  const index = modelForm.value.models.findIndex(item => item.id === id)
+  if (index !== -1) {
+    modelForm.value.models.splice(index, 1)
+  }
+}
+
+// =================================================
+// events
+// =================================================
+
 /**
  * Handles the end of a drag event and updates the model order.
  */
 const onDragEnd = () => {
-  modelStore.updateModelOrder().catch(err => {
+  modelStore.updateModelProviderOrder().catch(err => {
     showMessage(err, 'error')
     console.error('settings.model.updateOrderFailed', err)
   })
@@ -573,31 +653,7 @@ const onUpdate = e => {
   const modelsCopy = [...models.value]
   const item = modelsCopy.splice(oldIndex, 1)[0]
   modelsCopy.splice(newIndex, 0, item)
-  modelStore.setModels(modelsCopy)
-}
-
-/**
- * Handles changes in the model list and updates the models string
- * @param {Array} value - Array of selected models
- */
-const handleModelChange = value => {
-  if (value.length > 0) {
-    const lastItem = value[value.length - 1]
-    if (lastItem && lastItem.includes(',')) {
-      value.pop()
-      const newItems = modelInit(lastItem)
-      modelForm.value.modelList = [...new Set([...value, ...newItems])]
-    }
-  }
-  modelForm.value.models = modelForm.value.modelList.join(',')
-}
-
-const handlePaste = e => {
-  e.preventDefault()
-  const pastedText = e.clipboardData.getData('text')
-  const newItems = modelInit(pastedText)
-  modelForm.value.modelList = [...new Set([...modelForm.value.modelList, ...newItems])]
-  modelForm.value.models = modelForm.value.modelList.join(',')
+  modelStore.setModelProviders(modelsCopy)
 }
 
 // preset models
@@ -633,7 +689,7 @@ const showPresetModels = async () => {
       const data = await response.json()
       presetModels.value = data.models.map(x => {
         x.searchName = x.name.toLowerCase()
-        return x
+        return { ...x }
       })
     } catch (error) {
       return showMessage(t('settings.model.loadPresetError'), 'error')
@@ -644,7 +700,7 @@ const showPresetModels = async () => {
 /**
  * closes the preset models dialog and opens the edit model dialog
  */
-const manualAdd = () => {
+const onManualAdd = () => {
   presetModelsVisible.value = false
   editModel(null)
 }
@@ -655,6 +711,7 @@ const manualAdd = () => {
  */
 const importPresetModel = model => {
   presetModelsVisible.value = false
+  console.log(model)
   editModel(null, model)
 }
 </script>
@@ -772,10 +829,53 @@ const importPresetModel = model => {
   }
 }
 
+.card {
+  .el-card__header {
+    padding: var(--cs-space-sm) var(--cs-space);
+  }
+  .edit-card-body {
+    padding: var(--cs-space-sm) var(--cs-space);
+    .model-action {
+      gap: var(--cs-space-sm) !important;
+
+      .cs {
+        cursor: pointer;
+        &:hover {
+          color: var(--el-color-primary) !important;
+        }
+      }
+    }
+  }
+  &.card-col-list {
+    max-height: 450px;
+    overflow-y: auto;
+    position: relative;
+
+    .card-container {
+      display: flex;
+      flex-direction: column;
+      gap: var(--cs-space-sm);
+    }
+
+    .footer {
+      margin-top: var(--cs-space-sm);
+      position: sticky;
+      bottom: 0;
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--cs-bg-color-light);
+      padding: var(--cs-space-xs) 0;
+    }
+  }
+}
+
 .search-input {
   margin-bottom: 16px;
 }
 .el-popper {
   max-width: 550px;
+}
+.el-overlay-dialog {
+  overflow: hidden;
 }
 </style>

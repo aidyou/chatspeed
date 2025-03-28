@@ -13,7 +13,7 @@ export function apiProtocol() {
 
 // Key config for local storage
 const csStorageKey = {
-  defaultModel: 'defaultModel', // Default model configuration stored in local storage
+  defaultProvider: 'defaultProvider', // Default model configuration stored in local storage
   chatSidebarShow: 'chatSidebarShow', // Chat sidebar show stored in local storage
   currentConversationId: 'currentConversationId', // Current conversation ID stored in local storage
   defaultModelIdAtDialog: 'defaultModelIdAtDialog', // Default model ID at dialog stored in local storage

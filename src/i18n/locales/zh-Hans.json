@@ -52,7 +52,8 @@
     "metadata": {
       "completion": "completion",
       "prompt": "prompt",
-      "tokens": "tokens"
+      "tokens": "tokens",
+      "tokensPerSecond": "令牌/秒"
     },
     "mindmapError": "思维导图渲染失败",
     "newConversation": "新对话",
@@ -213,6 +214,8 @@
       "apiUrl": "API请求地址",
       "applyKey": "申请密钥",
       "basicInfo": "基本信息",
+      "baseUrlRequired": "请输入API请求地址",
+      "provider": "供应商",
       "copy": "复制模型",
       "defaultModel": "默认模型",
       "defaultModelRequired": "请选择默认模型",
@@ -228,11 +231,15 @@
       "logoPlaceholder": "供应商Logo",
       "maxTokens": "最大Token数",
       "maxTokensPlaceholder": "默认为4096",
+      "modelConfig": "模型配置",
+      "modelAlias": "模型别名",
+      "modelGroup": "模型分组",
+      "modelId": "模型ID",
+      "modelIdRequired": "请输入模型ID",
       "modelInfo": "模型信息",
       "models": "支持的模型",
       "modelsPlaceholder": "多个模型之间用逗号或者换行隔开",
       "modelsRequired": "请输入支持的模型类型",
-      "name": "模型名称",
       "nameRequired": "请输入模型名称",
       "noModels": "没有可用模型，请先添加",
       "notFound": "模型不存在或者已删除",
@@ -242,10 +249,13 @@
         "bySetting": "跟随网络设置",
         "none": "不使用代理"
       },
+      "reasoning": "推理模型",
+      "functionCall": "函数调用",
       "temperature": "温度",
       "topK": "Top K",
       "topKPlaceholder": "如果不设置或者留空，则不使用。并不是每个大模型都支持Top K",
       "topP": "Top P",
+      "ungrouped": "未分组",
       "updateSuccess": "模型已更新"
     },
     "skill": {

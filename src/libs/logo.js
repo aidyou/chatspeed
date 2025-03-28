@@ -36,6 +36,9 @@ export function getModelLogo(model) {
   if (model.startsWith('qwq:') || model.startsWith('qwq-')) {
     return 'qwen'
   }
+  if (model.startsWith('openai')) {
+    return 'gpt'
+  }
   // get all key start with `ai-${model}`
   const keys = Object.keys(iconFont).filter(key => model.startsWith(key.replace('ai-', '')))
   // get the first key

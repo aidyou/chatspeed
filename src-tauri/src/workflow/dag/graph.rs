@@ -1,15 +1,16 @@
 use log::debug;
+use rust_i18n::t;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 use tokio::sync::Mutex;
 
-use crate::workflow::{
+use crate::workflow::dag::{
     config::{EdgeConfig, NodeConfig},
-    error::WorkflowError,
     types::WorkflowResult,
 };
+use crate::workflow::error::WorkflowError;
 
 use super::config::NodeType;
 
@@ -50,10 +51,18 @@ impl WorkflowGraph {
         // 防御性验证
         for edge in &edges {
             if !node_map.contains_key(&edge.from) || !node_map.contains_key(&edge.to) {
-                return Err(WorkflowError::InvalidGraph(format!(
-                    "Edge references missing node: {} -> {}",
-                    edge.from, edge.to
-                )));
+                return Err(WorkflowError::InvalidGraph(
+                    t!(
+                        "workflow.invalid_graph",
+                        reason = t!(
+                            "workflow.edge_reference_missing",
+                            from = edge.from,
+                            to = edge.to
+                        )
+                        .to_string()
+                    )
+                    .to_string(),
+                ));
             }
         }
 
@@ -343,7 +352,7 @@ impl WorkflowGraph {
 
 #[cfg(test)]
 mod tests {
-    use crate::workflow::config::{NodeType, ToolConfig};
+    use crate::workflow::dag::config::{NodeType, ToolConfig};
 
     use super::*;
     use serde_json::json;
@@ -361,6 +370,7 @@ mod tests {
     async fn test_valid_graph() {
         let nodes = vec![sample_node("a"), sample_node("b"), sample_node("c")];
 
+        // a -> b -> c
         let edges = vec![
             EdgeConfig {
                 from: "a".into(),
@@ -410,7 +420,7 @@ mod tests {
 
         match WorkflowGraph::new(nodes, edges) {
             Err(WorkflowError::InvalidGraph(msg)) => {
-                assert!(msg.contains("Edge references missing"))
+                log::error!("{}", msg);
             }
             _ => panic!("Should detect missing node"),
         }

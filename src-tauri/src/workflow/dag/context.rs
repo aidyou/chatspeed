@@ -1,16 +1,16 @@
 use json_value_merge::Merge;
 use lru::LruCache;
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::config::NodeConfig;
-use super::error::WorkflowError;
 use super::types::WorkflowResult;
+use crate::workflow::error::WorkflowError;
 
 /// Workflow context for sharing data between nodes
 #[derive(Debug, Clone)]
@@ -19,6 +19,8 @@ pub struct Context {
     data: Arc<RwLock<ContextData>>,
     /// Cache for frequently accessed data
     cache: Arc<RwLock<LruCache<String, Value>>>,
+    // Last result key
+    last_result_key: Arc<RwLock<String>>,
     /// Cache version control for invalidation
     cache_version: Arc<AtomicU64>,
     cache_lock: Arc<tokio::sync::Mutex<()>>,
@@ -53,55 +55,25 @@ impl Context {
         Self {
             data: Arc::new(RwLock::new(ContextData::default())),
             cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()))), // Cache the latest 100 values
+            last_result_key: Arc::new(RwLock::new(String::new())),
             cache_version: Arc::new(AtomicU64::new(0)),
             cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
-    }
-
-    /// Get a value from the context with caching
-    pub async fn get(&self, key: &str) -> Option<Value> {
-        // Check cache first
-        {
-            let mut cache = self.cache.write().await;
-            if let Some(value) = cache.get(key) {
-                return Some(value.clone());
-            }
-        }
-
-        // Cache miss, get from storage
-        let data = self.data.read().await;
-        let result = data.values.get(key).cloned();
-
-        // If value is found, update cache
-        if let Some(ref value) = result {
-            let mut cache = self.cache.write().await;
-            cache.put(key.to_string(), value.clone());
-        }
-
-        result
-    }
-
-    /// Set a value in the context and update cache
-    pub async fn set(&self, key: String, value: Value) -> WorkflowResult<()> {
-        // Update storage
-        {
-            let mut data = self.data.write().await;
-            data.values.insert(key.clone(), value.clone());
-        }
-
-        // Update cache
-        {
-            let mut cache = self.cache.write().await;
-            cache.put(key, value);
-        }
-
-        Ok(())
     }
 
     /// Get a node's output
     pub async fn get_output(&self, node_id: &str) -> Option<Value> {
         let data = self.data.read().await;
         data.outputs.get(node_id).cloned()
+    }
+
+    /// Get last output
+    ///
+    /// # Returns
+    /// * `Option<Value>` - Returns the last output value if it exists, otherwise returns `None`
+    pub async fn get_last_output(&self) -> Option<Value> {
+        let key = self.last_result_key.read().await.clone();
+        self.get_output(&key).await
     }
 
     /// Set a node's execution output into context.
@@ -127,30 +99,10 @@ impl Context {
             existing_output.merge(&output);
         } else {
             // If the data does not exist, insert the new output
-            data.outputs.insert(output_key, output);
+            data.outputs.insert(output_key.clone(), output);
         }
-        Ok(())
-    }
 
-    /// Get metadata value
-    pub async fn get_metadata(&self, key: &str) -> Option<String> {
-        let data = self.data.read().await;
-        data.metadata.get(key).cloned()
-    }
-
-    /// Set metadata value
-    pub async fn set_metadata(&self, key: String, value: String) -> WorkflowResult<()> {
-        let mut data = self.data.write().await;
-        data.metadata.insert(key, value);
-        Ok(())
-    }
-
-    /// Clear all context data
-    pub async fn clear(&self) -> WorkflowResult<()> {
-        let mut data = self.data.write().await;
-        data.values.clear();
-        data.outputs.clear();
-        data.metadata.clear();
+        *self.last_result_key.write().await = output_key;
         Ok(())
     }
 
@@ -169,10 +121,16 @@ impl Context {
         node_id: &str,
         path: Option<&str>,
     ) -> WorkflowResult<Value> {
-        let output = self
-            .get_output(node_id)
-            .await
-            .ok_or_else(|| WorkflowError::Context(format!("Node output not found: {}", node_id)))?;
+        let output = self.get_output(node_id).await.ok_or_else(|| {
+            WorkflowError::Context(
+                t!(
+                    "workflow.node_output_not_found",
+                    node_id = node_id,
+                    path = path.unwrap_or_default()
+                )
+                .to_string(),
+            )
+        })?;
 
         if let Some(path) = path {
             self.access_json_path(&output, path)
@@ -190,26 +148,28 @@ impl Context {
             match current {
                 Value::Object(map) => {
                     current = map.get(part).ok_or_else(|| {
-                        WorkflowError::Context(format!("Path not found: {}", part))
+                        WorkflowError::Context(
+                            t!("workflow.json_path_not_found", path = part).to_string(),
+                        )
                     })?;
                 }
                 Value::Array(arr) => {
                     if let Ok(index) = part.parse::<usize>() {
                         current = arr.get(index).ok_or_else(|| {
-                            WorkflowError::Context(format!("Array index out of bounds: {}", index))
+                            WorkflowError::Context(
+                                t!("workflow.array_index_out_of_bounds", index = index).to_string(),
+                            )
                         })?;
                     } else {
-                        return Err(WorkflowError::Context(format!(
-                            "Invalid array index: {}",
-                            part
-                        )));
+                        return Err(WorkflowError::Context(
+                            t!("workflow.invalid_array_index", index = part).to_string(),
+                        ));
                     }
                 }
                 _ => {
-                    return Err(WorkflowError::Context(format!(
-                        "Cannot access path {} on non-object/non-array value",
-                        part
-                    )))
+                    return Err(WorkflowError::Context(
+                        t!("workflow.cannot_access_path", path = part).to_string(),
+                    ));
                 }
             }
         }
@@ -217,106 +177,23 @@ impl Context {
         Ok(current.clone())
     }
 
-    /// Get node configurations by node ID list
-    pub async fn get_node_configs(&self, node_ids: &[String]) -> WorkflowResult<Vec<NodeConfig>> {
-        // If node ID list is empty, return empty result
-        if node_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Double-check
-        let mut cache_key;
-        loop {
-            let _lock = self.cache_lock.lock().await;
-            // Get current cache version
-            let current_version = self.cache_version.load(Ordering::Acquire);
-
-            // Construct cache key, including version information to ensure cache invalidation on version change
-            cache_key = format!("node_configs:{}:v{}", node_ids.join(","), current_version);
-
-            // Check cache first
-            let mut cache = self.cache.write().await;
-            if let Some(cached_value) = cache.get(&cache_key) {
-                if let Ok(configs) = serde_json::from_value::<Vec<NodeConfig>>(cached_value.clone())
-                {
-                    return Ok(configs);
-                }
-            }
-
-            let version_after = self.cache_version.load(Ordering::Acquire);
-            if current_version == version_after {
-                break;
-            }
-        }
-
-        // Cache miss, get from metadata
-        let nodes_json = self.get_metadata("workflow_nodes").await.ok_or_else(|| {
-            WorkflowError::Config("Workflow nodes not found in context".to_string())
-        })?;
-
-        let nodes: HashMap<String, NodeConfig> = serde_json::from_str(&nodes_json)
-            .map_err(|e| WorkflowError::Config(format!("Failed to parse workflow nodes: {}", e)))?;
-
-        // Check if there are non-existent node IDs to prevent cache penetration
-        let missing_ids: Vec<String> = node_ids
-            .iter()
-            .filter(|id| !nodes.contains_key(*id))
+    // Get node state
+    pub async fn get_node_state(&self, node_id: &str) -> NodeState {
+        let data = self.data.read().await;
+        data.node_states
+            .get(node_id)
             .cloned()
-            .collect();
+            .unwrap_or(NodeState::Pending)
+    }
 
-        if !missing_ids.is_empty() {
-            return Err(WorkflowError::Config(format!(
-                "Node IDs not found: {}",
-                missing_ids.join(", ")
-            )));
-        }
-
-        // Filter out requested nodes
-        let result = node_ids
+    /// Get completed node set
+    pub async fn get_completed_nodes(&self) -> HashSet<String> {
+        let data = self.data.read().await;
+        data.node_states
             .iter()
-            .filter_map(|id| nodes.get(id).cloned())
-            .collect::<Vec<NodeConfig>>();
-
-        // Update cache, only cache non-empty results
-        if !result.is_empty() {
-            if let Ok(cache_value) = serde_json::to_value(&result) {
-                let mut cache = self.cache.write().await;
-                cache.put(cache_key, cache_value);
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// Clear all cache
-    pub async fn clear_cache(&self) {
-        let mut cache = self.cache.write().await;
-        cache.clear();
-        self.cache_version.fetch_add(1, Ordering::Release);
-    }
-
-    /// Invalidate cache version, making all cache invalid
-    pub async fn invalidate_cache(&self) {
-        self.cache_version.fetch_add(1, Ordering::Release);
-    }
-
-    /// Batch update cache
-    pub async fn batch_update_cache<T: Serialize>(
-        &self,
-        key_prefix: &str,
-        items: &HashMap<String, T>,
-    ) -> WorkflowResult<()> {
-        let current_version = self.cache_version.load(Ordering::Acquire);
-        let mut cache = self.cache.write().await;
-
-        for (key, value) in items {
-            let cache_key = format!("{}:{}:v{}", key_prefix, key, current_version);
-            if let Ok(cache_value) = serde_json::to_value(value) {
-                cache.put(cache_key, cache_value);
-            }
-        }
-
-        Ok(())
+            .filter(|(_, s)| matches!(s, NodeState::Completed))
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 
     /// Update node state
@@ -337,25 +214,6 @@ impl Context {
             })
             .or_insert(state);
     }
-
-    /// Get node state
-    pub async fn get_node_state(&self, node_id: &str) -> NodeState {
-        let data = self.data.read().await;
-        data.node_states
-            .get(node_id)
-            .cloned()
-            .unwrap_or(NodeState::Pending)
-    }
-
-    /// Get completed node set
-    pub async fn get_completed_nodes(&self) -> HashSet<String> {
-        let data = self.data.read().await;
-        data.node_states
-            .iter()
-            .filter(|(_, s)| matches!(s, NodeState::Completed))
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -368,8 +226,10 @@ mod tests {
         let ctx = Context::new();
 
         // Test basic operations
-        ctx.set("key1".to_string(), json!("value1")).await.unwrap();
-        assert_eq!(ctx.get("key1").await, Some(json!("value1")));
+        ctx.set_output("key1".to_string(), json!("value1"))
+            .await
+            .unwrap();
+        assert_eq!(ctx.get_output("key1").await, Some(json!("value1")));
 
         ctx.set_output("node1".to_string(), json!({"result": "data1"}))
             .await
@@ -378,11 +238,6 @@ mod tests {
             ctx.get_output("node1").await,
             Some(json!({"result": "data1"}))
         );
-
-        ctx.set_metadata("meta1".to_string(), "value1".to_string())
-            .await
-            .unwrap();
-        assert_eq!(ctx.get_metadata("meta1").await, Some("value1".to_string()));
     }
 
     #[tokio::test]

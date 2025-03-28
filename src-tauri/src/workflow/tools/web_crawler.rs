@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
-    http::crawler::Crawler,
+    http::chp::Chp,
     workflow::{
-        context::Context,
         error::WorkflowError,
         function_manager::{FunctionDefinition, FunctionResult, FunctionType},
     },
@@ -14,24 +14,22 @@ use crate::{
 ///
 /// This function supports HTTP and HTTPS protocols, and can handle
 /// various types of requests (GET, POST, etc.) with custom headers and body.
-pub struct Fetch {
+pub struct Crawler {
     // chatspeed bot server url
-    chatspeedbot_server: String,
+    chp_server: String,
 }
 
-impl Fetch {
-    pub fn new(chatspeedbot_server: String) -> Self {
-        Self {
-            chatspeedbot_server,
-        }
+impl Crawler {
+    pub fn new(chp_server: String) -> Self {
+        Self { chp_server }
     }
 }
 
 #[async_trait]
-impl FunctionDefinition for Fetch {
+impl FunctionDefinition for Crawler {
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "fetch"
+        "web_crawler"
     }
 
     /// Returns the type of the function.
@@ -41,7 +39,7 @@ impl FunctionDefinition for Fetch {
 
     /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Fetches data from a remote URL using HTTP or HTTPS."
+        "Crawl data from a remote URL using HTTP or HTTPS."
     }
 
     /// Returns the function calling specification in JSON format.
@@ -53,33 +51,33 @@ impl FunctionDefinition for Fetch {
     /// * `Value` - The function specification in JSON format.
     fn function_calling_spec(&self) -> Value {
         json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch data from"},
-                },
-                "required": ["url"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                    "type": "string",
-                    "description": "The title of the fetched content."
-                    },
-                    "url": {
-                    "type": "string",
-                    "description": "The URL of the fetched content."
-                    },
-                    "content": {
-                    "type": "string",
-                    "description": "The main content of the fetched page."
-                    }
-                },
-                "description": "The response containing the fetched content."
-            }
+           "name": self.name(),
+           "description": self.description(),
+           "parameters": {
+               "type": "object",
+               "properties": {
+                   "url": {"type": "string", "description": "URL to fetch"},
+               },
+               "required": ["url"]
+           },
+           "responses": {
+               "type": "object",
+               "properties": {
+                   "title": {
+                       "type": "string",
+                       "description": "Page title"
+                   },
+                   "url": {
+                       "type": "string",
+                       "description": "Source URL"
+                   },
+                   "content": {
+                       "type": "string",
+                       "description": "Page content"
+                   }
+               },
+               "description": "Fetched web content"
+           }
         })
     }
 
@@ -87,11 +85,10 @@ impl FunctionDefinition for Fetch {
     ///
     /// # Arguments
     /// * `params` - The parameters to pass to the function, including the URL.
-    /// * `context` - The context in which the function is executed.
     ///
     /// # Returns
     /// * `FunctionResult` - The result of the function execution.
-    async fn execute(&self, params: Value, _context: &Context) -> FunctionResult {
+    async fn execute(&self, params: Value) -> FunctionResult {
         // Get the URL from the parameters
         let url = params["url"]
             .as_str()
@@ -100,23 +97,25 @@ impl FunctionDefinition for Fetch {
         // Check if the URL is empty
         if url.is_empty() {
             return Err(WorkflowError::FunctionParamError(
-                "url must not be empty".to_string(),
+                t!("workflow.url_must_not_be_empty").to_string(),
             ));
         }
 
         // Check if the URL starts with http:// or https://
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(WorkflowError::FunctionParamError(
-                "url must start with http:// or https://".to_string(),
+                t!("workflow.url_invalid", url = url).to_string(),
             ));
         }
 
+        let format = params["format"].as_str().unwrap_or("html").to_string();
+
         // Create a new crawler instance
-        let crawler = Crawler::new(self.chatspeedbot_server.clone());
+        let crawler = Chp::new(self.chp_server.clone(), None);
 
         // Fetch the data from the URL
         let results = crawler
-            .fetch(url)
+            .web_crawler(url, Some(json!({"format": format})))
             .await
             .map_err(|e| WorkflowError::Execution(e.to_string()))?;
 
@@ -132,14 +131,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch() {
-        let search = Fetch::new("http://127.0.0.1:12321".to_string());
+        let search = Crawler::new("http://127.0.0.1:12321".to_string());
         let urls = [
             "https://en.wikipedia.org/wiki/Schutzstaffel",
             "https://www.ssa.gov/myaccount/",
             "https://hznews.hangzhou.com.cn/shehui/content/2025-03/04/content_8872051.htm",
         ];
         for url in urls {
-            let result = search.execute(json!({"url": url}), &Context::new()).await;
+            let result = search.execute(json!({"url": url})).await;
             println!("{:?}", result);
             assert!(result.is_ok());
         }
@@ -147,11 +146,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_invalid_url() {
-        let search = Fetch::new("http://127.0.0.1:12321".to_string());
+        let search = Crawler::new("http://127.0.0.1:12321".to_string());
         let params = json!({
             "url": "google.com",
         });
-        let result = search.execute(params, &Context::new()).await;
+        let result = search.execute(params).await;
         assert!(!result.is_ok());
     }
 }

@@ -8,12 +8,12 @@ use super::chat::setup_chat_proxy;
 use crate::ai::interaction::chat_completion::{
     complete_chat_async, complete_chat_blocking, ChatProtocol, ChatState,
 };
-use crate::ai::traits::chat::MessageType;
-use crate::constants::{CFG_SEARCH_ENGINE, CHATSPEED_CRAWLER};
-use crate::http::crawler::{Crawler, SearchProvider, SearchResult};
+use crate::ai::traits::chat::{ChatCompletionResult, MessageType};
+use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
+use crate::http::chp::{Chp, SearchProvider, SearchResult};
 use crate::{ai::traits::chat::ChatResponse, db::MainStore};
 
-const MAX_SEARCH_RESULT: i32 = 2;
+const MAX_SEARCH_RESULT: i32 = 3;
 
 // When the search results include video or image websites, they are filtered out
 static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf_set! {
@@ -30,8 +30,8 @@ static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf_set! {
 };
 
 pub async fn chat_completion_with_search(
-    window: tauri::Window, // The Tauri window instance, automatically injected by Tauri
-    chat_state: State<'_, Arc<ChatState>>, // The state of the chat system, automatically injected by Tauri
+    window: tauri::Window,
+    chat_state: State<'_, Arc<ChatState>>,
     main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
@@ -60,7 +60,7 @@ pub async fn chat_completion_with_search(
     let crawler_url = main_state
         .lock()
         .map_err(|e| e.to_string())?
-        .get_config(CHATSPEED_CRAWLER, String::new());
+        .get_config(CFG_CHP_SERVER, String::new());
 
     let search_engines = main_state
         .lock()
@@ -97,7 +97,7 @@ pub async fn chat_completion_with_search(
         dbg!(&metadata);
 
         // 步骤1：生成搜索主题和关键词
-        let search_queries = if content.len() > 150 {
+        let search_queries = if content.len() > 150 || messages.len() > 1 {
             generate_search_queries(
                 &chat_state,
                 protocol.clone(),
@@ -106,6 +106,7 @@ pub async fn chat_completion_with_search(
                 key.as_deref(),
                 chat_id.clone(),
                 &content,
+                messages.iter().rev().take(3).rev().cloned().collect(),
                 metadata.clone(),
             )
             .await?
@@ -185,7 +186,7 @@ pub async fn chat_completion_with_search(
             .await?;
 
             // 步骤5：内容提取和分析
-            let analysis_content = fetch_data(crawler_url, &ranked_results).await;
+            let analysis_content = crawl_data(crawler_url, &ranked_results).await;
 
             if !analysis_content.is_empty() {
                 // 先修改消息内容
@@ -292,15 +293,15 @@ fn setup_model(
     let mut search_api_model = model.clone();
     let mut change_proxy_type = false;
 
-    // 从配置中获取搜索模型的设置
+    // Get the search model configuration
     let search_model = main_state
         .lock()
         .map_err(|e| e.to_string())?
         .get_config("websearch_model", Value::Null);
 
-    // 如果有搜索模型的配置，则使用该配置
+    // If there is a search model configuration, use the model same as chat
     if !search_model.is_null() {
-        // 获取模型ID
+        // Get model ID
         let model_id = search_model["id"].as_i64().unwrap_or_default();
 
         let ai_model = main_state
@@ -310,9 +311,9 @@ fn setup_model(
             .get_ai_model_by_id(model_id)
             .map_err(|e| format!("Failed to get AI model: {}", e));
 
-        // 从配置中获取模型详细信息
+        // Get model details from configuration
         if let Ok(smodel) = ai_model {
-            // 更新搜索API的配置
+            // Update search API configuration
             search_api_protocol = smodel
                 .api_protocol
                 .try_into()
@@ -320,7 +321,7 @@ fn setup_model(
             search_api_url = Some(smodel.base_url.clone());
             search_api_key = Some(smodel.api_key.clone());
 
-            // 只在模型的代理类型与传入 metadata 的代理类型不同时才进行修改
+            // Only update proxyType if it is different from the model's proxyType
             let model_proxy_type = if let Some(md) = smodel.metadata {
                 md.get("proxyType").map(|v| v.clone())
             } else {
@@ -328,10 +329,10 @@ fn setup_model(
             };
             if let Some(md) = search_metadata.as_mut() {
                 if let Some(obj) = md.as_object_mut() {
-                    // 检查当前 metadata 中是否已有 proxyType
+                    // Check if current metadata already has proxyType
                     let current_proxy_type = obj.get("proxyType").map(|v| v.clone());
 
-                    // 如果当前没有 proxyType 或者与模型的 proxyType 不同，才进行更新
+                    // If current proxyType is missing or different from model proxyType, update
                     if current_proxy_type.is_none() || current_proxy_type != model_proxy_type {
                         obj.insert(
                             "proxyType".to_string(),
@@ -342,18 +343,18 @@ fn setup_model(
                 }
             }
 
-            // 从配置中获取模型名称
+            // Get model name from configuration
             let model_name = search_model["model"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string();
 
-            // 验证模型名称是否有效
-            if !smodel.models.contains(&model_name) {
+            // Validate model name
+            if !smodel.models.iter().any(|m| m.id == model_name) {
                 return Err(format!("Invalid search model: {}", model_name));
             }
 
-            // 更新搜索模型
+            // Update search model
             search_api_model = model_name;
         }
     }
@@ -417,27 +418,35 @@ async fn generate_search_queries(
     api_key: Option<&str>,
     chat_id: String,
     question: &str,
+    mut messages: Vec<Value>,
     metadata: Option<Value>,
 ) -> Result<Vec<String>, String> {
     let prompt = format!(
-        "[Rules]\n1. ​Language Detection \n   - Respond with keywords in the same language as the user's input  \n   - Handle mixed-language queries (e.g. 苹果发布会 → \"Apple event\")\n\n2. Core Extraction  \n   - Entities (nouns): [PRODUCT][LOCATION][EVENT]  \n   - Actions (verbs): [how-to][compare][find]  \n   - Modifiers: [CurrentYear][latest][free]\n\n3. Output Format  \n   - Generate 1 concise search query per query.  \n   - No additional explanation or text, only search queries.  \n   - Each query should be precise, with relevant and specific keywords.\n   - Remove any numbering or additional commentary in the output.\n\n[Examples]\nUser Input: \"Best budget 5G phones under $300\"\nYour Output: \"5G phones\" \"budget\" under $300\n\n[Response Template]\nGenerate search queries for:\n\n{}",
+        "[Rules]\n1. ​Language Detection \n   - Respond with keywords in the same language as the user's input  \n   - Handle mixed-language queries (e.g. 苹果发布会 → \"Apple event\")\n\n2. Core Extraction  \n   - Entities (nouns): [PRODUCT][LOCATION][EVENT]  \n   - Actions (verbs): [how-to][compare][find]  \n   - Modifiers: [CurrentYear][latest][free]\n\n3. Output Format  \n   - Generate 1 concise search query per query.  \n   - No additional explanation or text, only search queries.  \n   - Each query should be precise, with relevant and specific keywords.\n   - Remove any numbering or additional commentary in the output.\n\n[Examples]\nUser Input: \"Best budget 5G phones under $300\"\nYour Output: \"5G phones\" \"budget\" under $300\n\n[Response Template]\n[Current Time]{} \nGenerate search queries for:\n\n{}",
+        chrono::Local::now().to_rfc3339(),
         question
     );
+    if let Some(last_message) = messages.last_mut() {
+        *last_message = json!({"role": "user", "content": prompt});
+    } else {
+        messages.push(json!({"role": "user", "content": prompt}));
+    }
 
-    let chat_reslut = complete_chat_blocking(
+    let chat_reslut = chat_with_retry(
         state,
         chat_protocol,
         api_url,
         model,
         api_key,
         chat_id,
-        vec![json!({"role": "user", "content": prompt})],
+        messages,
         metadata,
     )
     .await?;
 
-    // 解析结果为查询词列表
+    // Parse result into query list
     let queries: Vec<String> = chat_reslut
+        .content
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_string())
@@ -469,7 +478,7 @@ async fn filter_and_rank_search_results(
         serde_json::to_string(&search_result).unwrap_or("".to_string())
     );
 
-    let chat_result = complete_chat_blocking(
+    let chat_result = chat_with_retry(
         state,
         api_protocol,
         api_url,
@@ -481,23 +490,65 @@ async fn filter_and_rank_search_results(
     )
     .await?;
 
-    // 解析结果为查询词列表
-    let queries = chat_result
-        .lines()
-        .filter(|line| {
-            let l = line.trim();
-            !l.is_empty() && !l.starts_with("```json") && !l.ends_with("```")
-        })
-        .map(|line| line.trim().to_string())
-        .collect::<Vec<String>>()
-        .join("\n");
+    // Parse result into query list
+    let queries = crate::libs::util::format_json_str(&chat_result.content);
 
     let result: Vec<SearchResult> = serde_json::from_str(&queries).map_err(|e| e.to_string())?;
 
     Ok(result)
 }
 
-// 多引擎并发搜索
+/// Chat with retry 3 times
+///
+/// # Arguments
+/// * `state` - A reference to the chat state
+/// * `api_protocol` - The API protocol to use
+/// * `api_url` - The API URL to use
+/// * `model` - The model to use
+/// * `api_key` - The API key to use
+/// * `chat_id` - The chat ID to use
+/// * `messages` - The messages to send
+///
+/// # Returns
+/// * `Ok(ChatCompletionResult)` - The chat completion result
+/// * `Err(String)` - The error message
+async fn chat_with_retry(
+    state: &ChatState,
+    api_protocol: ChatProtocol,
+    api_url: Option<&str>,
+    model: String,
+    api_key: Option<&str>,
+    chat_id: String,
+    messages: Vec<Value>,
+    metadata: Option<Value>,
+) -> Result<ChatCompletionResult, String> {
+    for i in 0..3 {
+        match complete_chat_blocking(
+            state,
+            api_protocol.clone(),
+            api_url,
+            model.clone(),
+            api_key,
+            chat_id.clone(),
+            messages.clone(),
+            metadata.clone(),
+        )
+        .await
+        {
+            Ok(chat_result) => return Ok(chat_result),
+            Err(e) => {
+                if i == 2 {
+                    return Err(e.to_string());
+                }
+                // Wait for 1 second before retrying
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
+        }
+    }
+    Err("Failed to complete chat after 3 retries".to_string())
+}
+
+// Multi-engine concurrent search
 async fn execute_multi_search(
     crawler_url: String,
     search_engines: &[String],
@@ -507,51 +558,50 @@ async fn execute_multi_search(
         return Err("Crawler URL not found".to_string());
     }
 
-    // 准备关键词 - 转换为拥有所有权的字符串以避免生命周期问题
+    // Prepare keywords - convert to owned strings to avoid lifetime issues
     let keywords_owned: Vec<String> = queries
         .iter()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .collect();
 
-    // 创建爬虫实例
-    let crawler = Crawler::new(crawler_url.clone());
+    // Create crawler instance
+    let crawler = Chp::new(crawler_url.clone(), None);
 
-    // 并发执行不同搜索引擎
+    // Concurrently execute different search engines
     let mut handles = Vec::new();
 
     for engine_str in search_engines {
-        // 尝试转换为 SearchProvider
+        // Try to convert to SearchProvider
         match SearchProvider::try_from(engine_str.as_str()) {
             Ok(provider) => {
                 let crawler_clone = crawler.clone();
                 let keywords_clone = keywords_owned.clone();
 
-                // 创建异步任务
+                // Spawn async task
                 let handle = tokio::spawn(async move {
-                    // 从拥有所有权的字符串中获取字符串切片
+                    // Get string slices from owned strings
                     let keywords_refs: Vec<&str> =
                         keywords_clone.iter().map(|s| s.as_str()).collect();
                     crawler_clone
-                        .search(provider, &keywords_refs, None, Some(20), true)
+                        .web_search(provider, &keywords_refs, None, Some(20), None, true)
                         .await
                 });
 
                 handles.push(handle);
             }
             Err(e) => {
-                eprintln!("无效的搜索引擎: {}, 错误: {}", engine_str, e);
-                // 继续处理其他搜索引擎
+                eprintln!("Invalid search engine: {}, error: {}", engine_str, e);
             }
         }
     }
 
-    // 如果没有有效的搜索引擎，返回错误
+    // If no valid search engines, return error
     if handles.is_empty() {
         return Err("没有有效的搜索引擎配置".to_string());
     }
 
-    // 等待所有搜索完成并合并结果
+    // Wait for all searches to complete and merge results
     let mut all_results = Vec::new();
     let results = futures::future::join_all(handles).await;
 
@@ -566,13 +616,13 @@ async fn execute_multi_search(
     Ok(all_results)
 }
 
-// 准备分析内容
-async fn fetch_data(crawler_url: String, results: &[SearchResult]) -> String {
+// Prepare analysis content
+async fn crawl_data(crawler_url: String, results: &[SearchResult]) -> String {
     use futures::future::join_all;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    // 最多爬取2个URL
+    // At most crawl 2 URLs
     let valid_results: Vec<&SearchResult> = results
         .iter()
         .filter(|r| r.url.starts_with("http://") || r.url.starts_with("https://"))
@@ -583,17 +633,20 @@ async fn fetch_data(crawler_url: String, results: &[SearchResult]) -> String {
         return "".to_string();
     }
 
-    let crawler = Arc::new(Crawler::new(crawler_url));
+    let crawler = Arc::new(Chp::new(crawler_url, None));
     let crawl_results = Arc::new(Mutex::new(Vec::new()));
 
-    // 创建多个并发任务
+    // Spawn multiple concurrent tasks
     let tasks = valid_results.iter().map(|result| {
         let url = result.url.clone();
         let crawler_clone = Arc::clone(&crawler);
         let results_clone = Arc::clone(&crawl_results);
 
         async move {
-            if let Ok(crawl_result) = crawler_clone.fetch(&url).await {
+            if let Ok(crawl_result) = crawler_clone
+                .web_crawler(&url, Some(json!({"format":"markdown"})))
+                .await
+            {
                 if !crawl_result.content.is_empty() {
                     let mut results = results_clone.lock().await;
                     results.push(crawl_result);
@@ -602,13 +655,13 @@ async fn fetch_data(crawler_url: String, results: &[SearchResult]) -> String {
         }
     });
 
-    // 等待所有任务完成
+    // Wait for all tasks to complete
     join_all(tasks).await;
 
-    // 获取结果
+    // Get results
     let mut final_results = crawl_results.lock().await;
 
-    // 重新设置id，从1开始累加
+    // Reset id, starting from 1
     for (index, result) in final_results.iter_mut().enumerate() {
         result.id = (index + 1) as i32;
     }

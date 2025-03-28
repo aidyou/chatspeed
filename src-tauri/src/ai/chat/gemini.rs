@@ -1,10 +1,16 @@
 use async_trait::async_trait;
+use reqwest::Response;
+use rust_i18n::t;
 use serde_json::{json, Value};
+use std::time::Instant;
 use std::{error::Error, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::ai::interaction::constants::{
+    TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
+};
 use crate::ai::network::{
-    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamChunk, StreamFormat,
+    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamFormat, TokenUsage,
 };
 use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
@@ -59,10 +65,10 @@ impl GeminiChat {
         let mut payload = json!({
             "contents": contents,
             "generationConfig": {
-                "temperature": params.get("temperature").unwrap(),
-                "topK": params.get("top_k").unwrap(),
-                "topP": params.get("top_p").unwrap(),
-                "maxOutputTokens": params.get("max_tokens").unwrap(),
+                "temperature": params.get("temperature").unwrap_or(&json!(1.0)),
+                "topK": params.get("top_k").unwrap_or(&json!(40)),
+                "topP": params.get("top_p").unwrap_or(&json!(1.0)),
+                "maxOutputTokens": params.get("max_tokens").unwrap_or(&json!(4096)),
                 "responseMimeType": "text/plain"
             }
         });
@@ -86,49 +92,74 @@ impl GeminiChat {
     async fn process_response(
         &self,
         chat_id: String,
-        response: String,
+        mut response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let StreamChunk {
-            reasoning_content,
-            content,
-            usage,
-            ..
-        } = self
-            .client
-            .process_stream_chunk(response.as_bytes().to_vec().into(), &StreamFormat::Gemini)
-            .await
-            .map_err(|e| {
-                callback(ChatResponse::new_with_arc(
-                    chat_id.clone(),
-                    e.clone(),
-                    MessageType::Error,
-                    metadata_option.clone(),
-                ));
-                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
-            })?;
+        let mut full_response = String::new();
+        let mut token_usage = TokenUsage::default();
+        let start_time = Instant::now();
 
-        if self.should_stop().await {
-            return Ok(String::new());
+        while let Some(chunk) = response.chunk().await.map_err(|e| {
+            let error = t!("chat.stream_read_error", error = e.to_string()).to_string();
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                error.clone(),
+                MessageType::Error,
+                metadata_option.clone(),
+            ));
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
+        })? {
+            if self.should_stop().await {
+                break;
+            }
+
+            let chunks = self
+                .client
+                .process_stream_chunk(chunk, &StreamFormat::Gemini)
+                .await
+                .map_err(|e| {
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        e.clone(),
+                        MessageType::Error,
+                        metadata_option.clone(),
+                    ));
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                })?;
+
+            for chunk in chunks {
+                if let Some(con) = chunk.content.clone() {
+                    if !con.is_empty() {
+                        full_response.push_str(&con);
+
+                        callback(ChatResponse::new_with_arc(
+                            chat_id.clone(),
+                            con.clone(),
+                            MessageType::Text,
+                            metadata_option.clone(),
+                        ));
+                    }
+                };
+
+                if let Some(usage) = chunk.usage {
+                    if usage.total_tokens > 0 {
+                        token_usage = usage;
+
+                        // Gemini does not provide tokens per second, so calculate it here
+                        if token_usage.tokens_per_second == 0.0 {
+                            let completion_tokens = token_usage.completion_tokens as f64;
+                            let duration = start_time.elapsed();
+                            token_usage.tokens_per_second = if duration.as_secs() > 0 {
+                                completion_tokens / duration.as_secs_f64()
+                            } else {
+                                0.0
+                            };
+                        }
+                    }
+                }
+            }
         }
-        if let Some(content) = reasoning_content {
-            callback(ChatResponse::new_with_arc(
-                chat_id.clone(),
-                content.clone(),
-                MessageType::Reasoning,
-                metadata_option.clone(),
-            ));
-        };
-
-        if let Some(con) = content.clone() {
-            callback(ChatResponse::new_with_arc(
-                chat_id.clone(),
-                con.clone(),
-                MessageType::Text,
-                metadata_option.clone(),
-            ));
-        };
 
         callback(ChatResponse::new_with_arc(
             chat_id.clone(),
@@ -136,16 +167,17 @@ impl GeminiChat {
             MessageType::Finished,
             Some(update_or_create_metadata(
                 metadata_option,
-                "tokens",
+                TOKENS,
                 json!({
-                    "total": usage.as_ref().map(|u| u.total_tokens).unwrap_or(0),
-                    "prompt": usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
-                    "completion": usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0)
+                    TOKENS_TOTAL: token_usage.total_tokens,
+                    TOKENS_PROMPT: token_usage.prompt_tokens,
+                    TOKENS_COMPLETION: token_usage.completion_tokens,
+                    TOKENS_PER_SECOND: token_usage.tokens_per_second
                 }),
             )),
         ));
 
-        Ok(content.unwrap_or_default())
+        Ok(full_response)
     }
 }
 
@@ -174,24 +206,30 @@ impl AiChatTrait for GeminiChat {
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let (params, metadata_option) = init_extra_params(extra_params.clone());
 
+        let base_url = api_url.unwrap_or("https://generativelanguage.googleapis.com/v1beta/models");
+        let query_url = if params["stream"].as_bool().unwrap_or(false) {
+            format!(
+                "{}/{}:streamGenerateContent?alt=sse&key={}",
+                base_url,
+                model,
+                api_key.unwrap_or("")
+            )
+        } else {
+            format!(
+                "{}/{}:generateContent?key={}",
+                base_url,
+                model,
+                api_key.unwrap_or("")
+            )
+        };
+
         let response = self
             .client
             .post_request(
-                &ApiConfig::new(
-                    Some(format!(
-                        "{}/{}:generateContent?key={}",
-                        api_url
-                            .unwrap_or("https://generativelanguage.googleapis.com/v1beta/models"),
-                        model,
-                        api_key.unwrap_or("")
-                    )),
-                    None,
-                    get_proxy_type(extra_params),
-                    None,
-                ),
+                &ApiConfig::new(Some(query_url), None, get_proxy_type(extra_params), None),
                 "",
                 self.build_request_body(messages, &params),
-                false,
+                true,
             )
             .await
             .map_err(|e| {
@@ -217,7 +255,17 @@ impl AiChatTrait for GeminiChat {
             )));
         }
 
-        self.process_response(chat_id.clone(), response.content, callback, metadata_option)
-            .await
+        if let Some(raw_response) = response.raw_response {
+            self.process_response(chat_id.clone(), raw_response, callback, metadata_option)
+                .await
+        } else {
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                response.content.clone(),
+                MessageType::Finished,
+                metadata_option,
+            ));
+            Ok(response.content)
+        }
     }
 }

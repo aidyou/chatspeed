@@ -5,17 +5,18 @@ use rusqlite::{params, Connection, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
-use tauri::AppHandle;
+use std::{collections::HashMap, path::Path};
+
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
 // DO NOT REMOVE: This trait import is necessary for the Manager trait to be in scope
 #[allow(unused_imports)]
 use tauri::Manager;
 
-use super::{sql::migrations::manager, types::Config, AiModel, AiSkill};
+use super::{
+    sql::migrations::manager,
+    types::{Config, ModelConfig},
+    AiModel, AiSkill,
+};
 
 impl Config {
     /// Retrieves the value associated with the specified key from the settings.
@@ -263,16 +264,37 @@ impl MainStore {
             .query_map([], |row| {
                 let metadata_str: Option<String> = row.get("metadata")?;
                 let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+                // try to JSON parse models
+                let models_str = row.get::<_, String>("models");
+                let models = models_str
+                    .and_then(|s| match serde_json::from_str::<Vec<ModelConfig>>(&s) {
+                        Ok(models) => Ok(models),
+                        Err(e) => {
+                            // Check if it's a syntax error,
+                            // which might be an old format(comma-separated)
+                            if e.is_syntax() || e.is_data() {
+                                // Handle old format: comma-separated, trim spaces
+                                Ok(s.split(',')
+                                    .map(|part| part.trim())
+                                    .filter(|part| !part.is_empty())
+                                    .map(|part| ModelConfig {
+                                        id: part.to_string(),
+                                        name: part.to_string(),
+                                        ..ModelConfig::default()
+                                    })
+                                    .collect())
+                            } else {
+                                // Other errors (like IO errors, theoretically won't happen), return default value or error
+                                Err(StoreError::StringError(e.to_string()).into())
+                            }
+                        }
+                    })
+                    .unwrap_or_default();
 
                 Ok(AiModel {
                     id: row.get("id")?,
                     name: row.get("name")?,
-                    models: row
-                        .get::<_, String>("models")?
-                        .split(',')
-                        .map(|s| s.to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect(),
+                    models,
                     default_model: row.get("default_model").unwrap_or_default(),
                     api_protocol: row.get("api_protocol").unwrap_or_default(),
                     base_url: row.get("base_url").unwrap_or_default(),

@@ -1,5 +1,5 @@
 pub mod chat_completion;
-pub mod fetch;
-pub mod request;
-pub mod search;
+pub mod plot;
 pub mod search_dedup;
+pub mod web_crawler;
+pub mod web_search;

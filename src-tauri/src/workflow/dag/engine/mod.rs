@@ -3,4 +3,4 @@
 //! This module provides the workflow engine implementation for executing workflow configurations.
 //! The engine manages plugin registration, workflow state, and node execution.
 
-mod engine;
+pub mod engine;

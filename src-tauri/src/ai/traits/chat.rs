@@ -1,3 +1,5 @@
+use crate::http::chp::SearchResult;
+
 use super::stoppable::Stoppable;
 use async_trait::async_trait;
 use log::warn;
@@ -96,6 +98,41 @@ impl ChatResponse {
             metadata,
         })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(unused)]
+pub struct Usage {
+    pub total_tokens: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ChatCompletionResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(unused)]
+    pub chat_id: Option<String>,
+
+    /// content
+    pub content: String,
+
+    /// reasoning
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(unused)]
+    pub reasoning: Option<String>,
+
+    /// token usage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(unused)]
+    pub usage: Option<Usage>,
+
+    /// reference
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(unused)]
+    pub reference: Option<Vec<SearchResult>>,
 }
 
 #[async_trait]

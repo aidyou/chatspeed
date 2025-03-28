@@ -11,6 +11,18 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-uncheck:before {
+  content: "\e7c9";
+}
+
+.cs-function:before {
+  content: "\e64d";
+}
+
+.cs-reasoning:before {
+  content: "\e64c";
+}
+
 .cs-tool:before {
   content: "\e64b";
 }

@@ -32,7 +32,7 @@
 //!
 
 use crate::constants::*;
-use crate::db::{AiModel, AiSkill, MainStore};
+use crate::db::{AiModel, AiSkill, MainStore, ModelConfig};
 use crate::db::{BackupConfig, DbBackup};
 use crate::libs::fs::{self, get_file_name};
 use crate::tray::create_tray;
@@ -248,7 +248,7 @@ pub fn get_all_ai_models(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiMo
 pub fn add_ai_model(
     state: State<Arc<Mutex<MainStore>>>,
     name: String,
-    models: Vec<String>,
+    models: Vec<ModelConfig>,
     default_model: String,
     api_protocol: String,
     base_url: String,
@@ -262,7 +262,7 @@ pub fn add_ai_model(
 ) -> Result<AiModel, String> {
     let mut config_store = state.lock().map_err(|e| e.to_string())?;
 
-    // 先添加模型获取 ID
+    // First add the model to get the ID
     let id = config_store
         .add_ai_model(
             name,
@@ -280,7 +280,7 @@ pub fn add_ai_model(
         )
         .map_err(|e| e.to_string())?;
 
-    // 直接返回新创建的模型数据
+    // Return the newly created model data
     config_store
         .config
         .get_ai_model_by_id(id)
@@ -335,7 +335,7 @@ pub fn update_ai_model(
     state: State<Arc<Mutex<MainStore>>>,
     id: i64,
     name: String,
-    models: Vec<String>,
+    models: Vec<ModelConfig>,
     default_model: String,
     api_protocol: String,
     base_url: String,

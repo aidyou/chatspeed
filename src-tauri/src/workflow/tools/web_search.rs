@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
-    http::crawler::{Crawler, SearchProvider},
+    http::chp::{Chp, SearchProvider},
     workflow::{
-        context::Context,
         error::WorkflowError,
         function_manager::{FunctionDefinition, FunctionResult, FunctionType},
     },
@@ -12,14 +12,12 @@ use crate::{
 
 pub struct Search {
     // chatspeed bot server url
-    chatspeedbot_server: String,
+    chp_server: String,
 }
 
 impl Search {
-    pub fn new(chatspeedbot_server: String) -> Self {
-        Self {
-            chatspeedbot_server,
-        }
+    pub fn new(chp_server: String) -> Self {
+        Self { chp_server }
     }
 
     /// Extract keywords from params
@@ -32,13 +30,13 @@ impl Search {
     ///
     /// # Returns
     /// * `Result<String, WorkflowError>` - The encoded keywords
-    fn extract_keywords(params: &Value) -> Result<String, WorkflowError> {
+    pub fn extract_keywords(params: &Value) -> Result<String, WorkflowError> {
         match &params["kw"] {
             Value::String(s) => {
                 let s = s.trim();
                 if s.is_empty() {
                     return Err(WorkflowError::FunctionParamError(
-                        "kw must not be empty".to_string(),
+                        t!("workflow.keyword_must_be_non_empty").to_string(),
                     ));
                 }
                 Ok(s.to_string())
@@ -50,14 +48,14 @@ impl Search {
                     .collect();
                 if keywords.is_empty() {
                     return Err(WorkflowError::FunctionParamError(
-                        "kw must be a non-empty array or string".to_string(),
+                        t!("workflow.keyword_must_be_non_empty").to_string(),
                     ));
                 }
                 let joined_keywords = keywords.join(" "); // join with space
                 Ok(joined_keywords)
             }
             _ => Err(WorkflowError::FunctionParamError(
-                "kw must be a string or array".to_string(),
+                t!("workflow.keyword_must_be_non_empty").to_string(),
             )),
         }
     }
@@ -67,7 +65,7 @@ impl Search {
 impl FunctionDefinition for Search {
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "search"
+        "web_search"
     }
 
     /// Returns the type of the function.
@@ -91,26 +89,31 @@ impl FunctionDefinition for Search {
                     "provider": {
                         "type": "string",
                         "enum": ["google", "google_news", "baidu", "baidu_news", "bing"],
-                        "description": "The search provider to use. Supported providers: google, google_news, baidu, baidu_news, bing."
+                        "description": "Search provider"
                     },
                     "kw": {
                         "type": "string",
-                        "description": "The keyword to search for."
+                        "description": "Search keyword"
                     },
                     "number": {
                         "type": "integer",
                         "default": 10,
-                        "description": "The number of results to return. Default is 10."
+                        "description": "Results count"
                     },
                     "page": {
                         "type": "integer",
                         "default": 1,
-                        "description": "The page number of the results. Default is 1."
+                        "description": "Page number"
+                    },
+                    "time_period": {
+                        "type": "string",
+                        "enum": ["day", "week", "month", "year"],
+                        "description": "Time range filter"
                     },
                     "resolve_baidu_links": {
                         "type": "boolean",
                         "default": true,
-                        "description": "Whether to resolve Baidu links. Recommended to enable for better result filtering."
+                        "description": "Resolve Baidu links"
                     }
                 },
                 "required": ["provider", "kw"]
@@ -125,37 +128,37 @@ impl FunctionDefinition for Search {
                             "properties": {
                                 "title": {
                                     "type": "string",
-                                    "description": "The title of the search result."
+                                    "description": "Result title"
                                 },
                                 "url": {
                                     "type": "string",
-                                    "description": "The URL of the search result."
+                                    "description": "Result URL"
                                 },
                                 "summary": {
                                     "type": "string",
-                                    "description": "A brief description of the search result.",
+                                    "description": "Brief description",
                                     "nullable": true
                                 },
                                 "sitename": {
                                     "type": "string",
-                                    "description": "The site name of the search result.",
+                                    "description": "Site name",
                                     "nullable": true
                                 },
                                 "publish_date": {
                                     "type": "string",
-                                    "description": "The publish date of the search result.",
+                                    "description": "Publication date",
                                     "nullable": true
                                 }
                             }
                         },
-                        "description": "The list of search results."
+                        "description": "Search results"
                     },
                     "error": {
                         "type": "string",
-                        "description": "An error message if the search failed."
+                        "description": "Error message"
                     }
                 },
-                "description": "The response containing search results or an error message."
+                "description": "Search operation result"
             }
         })
     }
@@ -164,15 +167,16 @@ impl FunctionDefinition for Search {
     ///
     /// # Arguments
     /// * `params` - The parameters of the function.
-    /// * `_context` - The context of the function.
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn execute(&self, params: Value, _context: &Context) -> FunctionResult {
+    async fn execute(&self, params: Value) -> FunctionResult {
         let provider: SearchProvider = params["provider"]
             .as_str()
             .ok_or_else(|| {
-                WorkflowError::FunctionParamError("provider must be a string".to_string())
+                WorkflowError::FunctionParamError(
+                    t!("workflow.provider_must_be_string").to_string(),
+                )
             })?
             .try_into()?;
 
@@ -180,21 +184,23 @@ impl FunctionDefinition for Search {
 
         if kw.is_empty() {
             return Err(WorkflowError::FunctionParamError(
-                "kw must not be empty".to_string(),
+                t!("workflow.keyword_must_be_non_empty").to_string(),
             ));
         }
 
         let number = params["number"].as_i64().unwrap_or(10);
         let page = params["page"].as_i64().unwrap_or(1);
         let resolve_baidu_links = params["resolve_baidu_links"].as_bool().unwrap_or(true);
+        let time_period = params["time_period"].as_str().unwrap_or("");
 
-        let crawler = Crawler::new(self.chatspeedbot_server.clone());
+        let crawler = Chp::new(self.chp_server.clone(), None);
         let results = crawler
-            .search(
+            .web_search(
                 provider,
                 &[&kw],
                 Some(page),
                 Some(number),
+                Some(time_period),
                 resolve_baidu_links,
             )
             .await
@@ -215,11 +221,12 @@ mod tests {
         for p in provider {
             let params = json!({
                     "provider": p,
-                    "kw": "五粮液",
+                    "kw": "deepseek",
                     "number": 10,
-                    "page": 1
+                    "page": 1,
+                    "time_period": "week"
             });
-            let result = search.execute(params, &Context::new()).await;
+            let result = search.execute(params).await;
             println!("{:?}", result);
             assert!(result.is_ok());
         }
@@ -230,11 +237,12 @@ mod tests {
         let search = Search::new("http://127.0.0.1:12321".to_string());
         let params = json!({
             "provider": "duckduckgo",
-            "kw": "rust生命周期",
+            "kw": "rust lifetime",
             "number": 10,
             "page": 1
         });
-        let result = search.execute(params, &Context::new()).await;
+        let result = search.execute(params).await;
+        println!("{:?}", result);
         assert!(!result.is_ok());
     }
 }

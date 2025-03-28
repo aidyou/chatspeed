@@ -43,9 +43,6 @@ pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
 /// # Returns
 /// Returns the initialized extra parameters as a `Value` object and the metadata as a Option<Value> object.
 pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) {
-    // print the value of extra_params
-    dbg!(&extra_params);
-
     // The parameters are camelCase from the frontend
     let stream = extra_params
         .clone()

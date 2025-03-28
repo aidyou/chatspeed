@@ -5,79 +5,79 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone)]
 pub enum WorkflowError {
     /// Cancelled error
-    #[error("{}", t!("workflow.error.cancelled", msg = .0))]
+    #[error("{}", t!("workflow.cancelled", msg = .0))]
     Cancelled(String),
 
     /// Circular dependency error
-    #[error("{}", t!("workflow.error.circular_dependency", nodes = .0))]
+    #[error("{}", t!("workflow.circular_dependency", nodes = .0))]
     CircularDependency(String),
 
     /// Configuration error
-    #[error("{}", t!("workflow.error.config", msg = .0))]
+    #[error("{}", t!("workflow.config", msg = .0))]
     Config(String),
 
     /// Context error
-    #[error("{}", t!("workflow.error.context", msg = .0))]
+    #[error("{}", t!("workflow.context", msg = .0))]
     Context(String),
 
     /// Execution error
-    #[error("{}", t!("workflow.error.execution", msg = .0))]
+    #[error("{}", t!("workflow.execution", msg = .0))]
     Execution(String),
 
     /// Function error
-    #[error("{}", t!("workflow.error.function", msg = .0))]
+    #[error("{}", t!("workflow.function", msg = .0))]
     Function(String),
 
     /// Function not found
-    #[error("{}", t!("workflow.error.function_not_found", name = .0))]
+    #[error("{}", t!("workflow.function_not_found", name = .0))]
     FunctionNotFound(String),
 
     /// Function already exists
-    #[error("{}", t!("workflow.error.function_already_exists", name = .0))]
+    #[error("{}", t!("workflow.function_already_exists", name = .0))]
     FunctionAlreadyExists(String),
 
     /// Function parameter error
-    #[error("{}", t!("workflow.error.function_param_error", name = .0))]
+    #[error("{}", t!("workflow.function_param_error", name = .0))]
     FunctionParamError(String),
 
     /// Max retries exceeded
-    #[error("{}", t!("workflow.error.max_retries_exceeded", node = .0))]
+    #[error("{}", t!("workflow.max_retries_exceeded", node = .0))]
     MaxRetriesExceeded(String),
 
     /// Invalid state error
-    #[error("{}", t!("workflow.error.invalid_state", reason = .0))]
+    #[error("{}", t!("workflow.invalid_state", reason = .0))]
     InvalidState(String),
 
     /// Invalid graph error
-    #[error("{}", t!("workflow.error.invalid_graph", reason = .0))]
+    #[error("{}", t!("workflow.invalid_graph", reason = .0))]
     InvalidGraph(String),
 
     /// IO error
-    #[error("{}", t!("workflow.error.io", msg = .0))]
+    #[error("{}", t!("workflow.io", msg = .0))]
     Io(String),
 
     /// Serialization error
-    #[error("{}", t!("workflow.error.serialization", msg = .0))]
+    #[error("{}", t!("workflow.serialization", msg = .0))]
     Serialization(String),
 
     /// State change failed
-    #[error("{}", t!("workflow.error.state_change_failed", reason = .0))]
+    #[error("{}", t!("workflow.state_change_failed", reason = .0))]
     StateChangeFailed(String),
 
     /// Store error
-    #[error("{}", t!("workflow.error.store", msg = .0))]
+    #[error("{}", t!("workflow.store", msg = .0))]
     Store(String),
 
     /// Timeout error
-    #[error("{}", t!("workflow.error.timeout", node = .0))]
+    #[error("{}", t!("workflow.timeout", node = .0))]
     Timeout(String),
 
     /// Validation error
-    #[error("{}", t!("workflow.error.validation", msg = .0))]
+    #[error("{}", t!("workflow.validation", msg = .0))]
     Validation(String),
 
     /// Other error
-    #[error("{}", t!("workflow.error.other", msg = .0))]
+    #[error("{}", t!("workflow.other", msg = .0))]
     Other(String),
 }
 

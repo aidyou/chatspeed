@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -212,13 +214,12 @@ pub enum NodeType {
     Group(GroupConfig),
 }
 
-impl NodeType {
-    pub fn matches(&self, node_type: &NodeType) -> bool {
-        match (self, node_type) {
-            (Self::Group(_), NodeType::Group(_)) => true,
-            (Self::Task(_), NodeType::Task(_)) => true,
-            (Self::Loop(_), NodeType::Loop(_)) => true,
-            _ => false,
+impl Display for NodeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeType::Task(_) => write!(f, "Task"),
+            NodeType::Loop(_) => write!(f, "Loop"),
+            NodeType::Group(_) => write!(f, "Group"),
         }
     }
 }
@@ -233,27 +234,11 @@ fn default_timeout() -> u64 {
     30
 }
 
-fn default_retryable() -> Option<bool> {
-    Some(false)
-}
-
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             id: String::new(),
             r#type: NodeType::Task(ToolConfig::default()),
-            timeout_secs: default_timeout(),
-            description: None,
-        }
-    }
-}
-
-impl NodeConfig {
-    /// Create a new node configuration
-    pub fn new(id: String, r#type: NodeType) -> Self {
-        Self {
-            id,
-            r#type,
             timeout_secs: default_timeout(),
             description: None,
         }
@@ -267,37 +252,4 @@ pub struct EdgeConfig {
     pub from: String,
     /// Target node identifier(s)
     pub to: String,
-}
-
-/// Custom serializer/deserializer for handling both string and array of strings
-mod string_or_vec_string {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &Vec<String>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if value.len() == 1 {
-            serializer.serialize_str(&value[0])
-        } else {
-            serializer.collect_seq(value)
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum StringOrVec {
-            String(String),
-            Vec(Vec<String>),
-        }
-
-        match StringOrVec::deserialize(deserializer)? {
-            StringOrVec::String(s) => Ok(vec![s]),
-            StringOrVec::Vec(v) => Ok(v),
-        }
-    }
 }

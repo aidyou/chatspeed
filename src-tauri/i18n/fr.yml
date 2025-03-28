@@ -79,7 +79,7 @@ http:
   missing_url: "Paramètre URL manquant dans la requête HTTP"
   proxy_config_failed: "Échec de la configuration du proxy : %{error}"
   read_response_failed: "Échec de la lecture de la réponse : %{error}"
-  request_failed: "Échec de la requête : %{error}"
+  request_failed: "Échec de la requête: erreur: %{error}, statut: %{status}"
   request_timeout: "Délai d'attente de la requête dépassé"
   response_too_large: "Les données côté serveur dépassent la limite de requête, taille des données côté serveur : %{content_length}, limite de requête : %{max_size}"
   runtime_create_failed: "Échec de la création de l'environnement d'exécution : %{error}"

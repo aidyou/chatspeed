@@ -12,4 +12,4 @@ pub use backup::{BackupConfig, DbBackup};
 pub use error::StoreError;
 pub use main_store::MainStore;
 pub use note::{Note, NoteTag};
-pub use types::{AiModel, AiSkill, Conversation};
+pub use types::{AiModel, AiSkill, Conversation, ModelConfig};

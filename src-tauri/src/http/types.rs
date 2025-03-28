@@ -367,6 +367,12 @@ impl HttpConfig {
         self
     }
 
+    /// Sets the request headers
+    pub fn headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+
     /// Adds a request header if it doesn't exist
     pub fn header_if_not_exists(
         mut self,
@@ -422,6 +428,12 @@ impl HttpConfig {
     /// Sets the stream callback for streaming responses
     pub fn stream_callback(mut self, callback: impl Fn(&[u8]) + Send + Sync + 'static) -> Self {
         self.stream_callback = Some(Arc::new(callback));
+        self
+    }
+
+    /// Sets the proxy server
+    pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
+        self.proxy = Some(proxy.into());
         self
     }
 }

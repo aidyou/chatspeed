@@ -12,10 +12,10 @@ import { isEmpty } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 
 /**
- * useModelStore defines a store for managing AI models.
- * It includes state for the list of models and related operations.
+ * useModelStore defines a store for managing AI model providers.
+ * It includes state for the list of model providers and related operations.
  */
-export const useModelStore = defineStore('model', () => {
+export const useModelStore = defineStore('modelProvider', () => {
   /**
    * Get current window label
    * @type {string}
@@ -23,24 +23,24 @@ export const useModelStore = defineStore('model', () => {
   const label = getCurrentWebviewWindow().label
 
   /**
-   * A reactive reference to store all AI models.
+   * A reactive reference to store all AI model providers.
    * @type {import('vue').Ref<Array<Object>>}
    */
-  const models = ref([]);
+  const providers = ref([]);
 
   /**
-   * Returns the available models.
-   * @returns {Array<Object>} The available models.
+   * Returns the available model providers.
+   * @returns {Array<Object>} The available model providers.
    */
-  const availableModels = computed(() => models.value.filter(m => !m.disabled))
+  const getAvailableProviders = computed(() => providers.value.filter(m => !m.disabled))
 
   /**
-   * Set the models from the backend
+   * Set the model providers from the backend
    * @param {Array|null} value
    */
-  const setModels = (value) => {
-    models.value = isEmpty(value) ? [] : [...value]
-    console.log('models', models.value)
+  const setModelProviders = (value) => {
+    providers.value = isEmpty(value) ? [] : [...value]
+    console.log('providers', providers.value)
   }
 
   let isModelLoading = false
@@ -57,18 +57,18 @@ export const useModelStore = defineStore('model', () => {
     invoke('get_all_ai_models')
       .then((result) => {
         if (isEmpty(result)) {
-          models.value = [];
+          providers.value = [];
           return;
         }
 
-        models.value = result.map(model => {
-          const processedModel = processModelData(model)
-          if (model.id === defaultModel.value.id) {
-            setDefaultModel(processedModel)
+        providers.value = result.map(model => {
+          const processedModel = processModelLogo(model)
+          if (model.id === defaultModelProvider.value.id) {
+            setDefaultModelProvider(processedModel)
           }
           return processedModel
         });
-        console.debug('models', models.value)
+        console.debug('models', providers.value)
 
         initDefaultModel();
       })
@@ -82,28 +82,28 @@ export const useModelStore = defineStore('model', () => {
   };
 
   /**
-   * Retrieves a model by its ID.
-   * @param {number} id - The ID of the model to retrieve.
-   * @returns {Object} The model object, or an empty object if not found.
+   * Retrieves a model provider by its ID.
+   * @param {number} id - The ID of the model provider to retrieve.
+   * @returns {Object} The model provider object, or an empty object if not found.
    */
-  const getModelById = (id) => {
-    if (isEmpty(models.value)) return null;
-    return models.value.find((model) => model.id === id) || null;
+  const getModelProviderById = (id) => {
+    if (isEmpty(providers.value)) return null;
+    return providers.value.find((model) => model.id === id) || null;
   }
 
   /**
    * A reactive reference to store the default model configuration.
    * @type {import('vue').Ref<Object>}
    */
-  const defaultModel = ref(csGetStorage(csStorageKey.defaultModel, {}))
+  const defaultModelProvider = ref(csGetStorage(csStorageKey.defaultProvider, {}))
 
   /**
    * Sets the default model configuration.
    * @param {Object} value - The new default model configuration.
    */
-  const setDefaultModel = (value) => {
-    defaultModel.value = !isEmpty(value) ? processModelData(value) : {}
-    csSetStorage(csStorageKey.defaultModel, defaultModel.value)
+  const setDefaultModelProvider = (value) => {
+    defaultModelProvider.value = !isEmpty(value) ? processModelLogo(value) : {}
+    csSetStorage(csStorageKey.defaultProvider, defaultModelProvider.value)
   }
 
   /**
@@ -113,18 +113,18 @@ export const useModelStore = defineStore('model', () => {
    * @returns {Object} The default model object, or an empty object if none exists.
    */
   const initDefaultModel = () => {
-    if (!isEmpty(defaultModel.value)) {
-      console.debug('load defaultModel from localstorage', defaultModel.value)
+    if (!isEmpty(defaultModelProvider.value)) {
+      console.debug('load defaultModel from localstorage', defaultModelProvider.value)
       return;
     }
-    if (isEmpty(models.value)) return;
+    if (isEmpty(providers.value)) return;
 
     // 查找标记为默认的模型，如果没有则使用第一个可用模型
-    const model = availableModels.value.find((model) => model.isDefault) ||
-      (availableModels.value.length > 0 ? availableModels.value[0] : null);
+    const model = getAvailableProviders.value.find((model) => model.isDefault) ||
+      (getAvailableProviders.value.length > 0 ? getAvailableProviders.value[0] : null);
 
     if (model) {
-      setDefaultModel(model)
+      setDefaultModelProvider(model)
     }
   }
 
@@ -133,7 +133,7 @@ export const useModelStore = defineStore('model', () => {
    * @param {Object} model
    * @returns {Object} Processed model data
    */
-  const processModelData = (model) => {
+  const processModelLogo = (model) => {
     return {
       ...model,
       logo: getModelLogo(model.defaultModel),
@@ -146,11 +146,11 @@ export const useModelStore = defineStore('model', () => {
   // =================================================
 
   /**
-   * Set a model
+   * Set a model provider
    * @param {Object} formData
    * @returns {Promise<string>} Promise that resolves to a success message
    */
-  const setModel = (formData) => {
+  const setModelProvider = (formData) => {
     if (!formData.metadata) {
       console.error('metadata is empty:', formData)
     }
@@ -161,12 +161,12 @@ export const useModelStore = defineStore('model', () => {
           sendSyncState('model', label)
 
           if (formData.id) {
-            const modelIndex = models.value.findIndex(m => m.id === formData.id)
+            const modelIndex = providers.value.findIndex(m => m.id === formData.id)
             if (modelIndex !== -1) {
-              models.value[modelIndex] = processModelData(modelData)
+              providers.value[modelIndex] = processModelLogo(modelData)
             }
           } else {
-            models.value.push(processModelData(modelData))
+            providers.value.push(processModelLogo(modelData))
           }
 
           resolve(i18n.global.t(`settings.model.${formData.id ? 'updateSuccess' : 'addSuccess'}`))
@@ -179,18 +179,18 @@ export const useModelStore = defineStore('model', () => {
   }
 
   /**
-   * Delete a model from the server and update the model store
+   * Delete a model provider from the server and update the model store
    * @param {number} id
    * @returns {Promise<void>}
    */
-  const deleteModel = (id) => {
+  const deleteModelProvider = (id) => {
     return new Promise((resolve, reject) => {
       invoke('delete_ai_model', { id })
         .then(() => {
           sendSyncState('model', label)
-          const index = models.value.findIndex(m => m.id === id);
+          const index = providers.value.findIndex(m => m.id === id);
           if (index !== -1) {
-            models.value.splice(index, 1);
+            providers.value.splice(index, 1);
           }
           resolve()
         })
@@ -202,12 +202,12 @@ export const useModelStore = defineStore('model', () => {
   }
 
   /**
-   * Update the order of models on the server
+   * Update the order of model providers on the server
    * @returns {Promise<void>}
    */
-  const updateModelOrder = () => {
+  const updateModelProviderOrder = () => {
     return new Promise((resolve, reject) => {
-      invoke('update_ai_model_order', { modelIds: models.value.map(model => model.id) })
+      invoke('update_ai_model_order', { modelIds: providers.value.map(model => model.id) })
         .then(() => {
           sendSyncState('model', label)
           resolve()
@@ -227,15 +227,15 @@ export const useModelStore = defineStore('model', () => {
   updateModelStore();
 
   return {
-    models,
-    availableModels,
-    setModels,
+    providers,
+    getAvailableProviders,
+    setModelProviders,
     updateModelStore,
-    defaultModel,
-    setDefaultModel,
-    getModelById,
-    setModel,
-    deleteModel,
-    updateModelOrder
+    defaultModelProvider,
+    setDefaultModelProvider,
+    getModelProviderById,
+    setModelProvider,
+    deleteModelProvider,
+    updateModelProviderOrder
   };
 })
