@@ -22,6 +22,11 @@
 //!   }
 //! }
 //! ```
+//! **Note**:
+//!  - When multiple nodes specify same output field:
+//!  - For arrays: results are concatenated
+//!  - For objects: fields are merged (later values overwrite)
+//!  - Access via `${output_field}` without node reference
 //!
 //!
 //! ### Loop Node Definition (Iterative Task)
@@ -63,6 +68,11 @@
 //! }
 //! ```
 //!
+//! **Parallel Behavior**:
+//! - When `parallel: true`, all child nodes execute concurrently
+//! - When `parallel: false`, child nodes execute sequentially (each waits for previous to complete)
+//! - Group-level parallelism does NOT affect external dependency resolution
+//!
 //! ## Critical Rules
 //! 1. **Tool Ownership**:
 //!    - Only **nodes** require a `tool` configuration
@@ -81,50 +91,67 @@
 //! ```json
 //! [
 //!   {
-//!     "id": "data_fetching",
-//!     "desc": "Fetch weather and transport data",
+//!     "id": "web_search_group",
+//!     "desc": "Search for web content",
 //!     "parallel": true,
 //!     "nodes": [
 //!       {
-//!         "id": "fetch_weather",
+//!         "id": "search_google",
 //!         "tool": {
-//!           "function": "weather_api",
-//!           "param": {"location": "Tokyo"}
+//!           "function": "web_search",
+//!           "param": {"kw": "deepseek r1", "provider": "google", "number": 10},
+//!           "output": "search_result"
 //!         }
 //!       },
 //!       {
-//!         "id": "fetch_transport",
+//!         "id": "search_baidu",
 //!         "tool": {
-//!           "function": "transport_api",
-//!           "param": {"from": "Osaka", "to": "Tokyo"}
+//!           "function": "web_search",
+//!           "param": {"kw": "deepseek r1", "provider": "baidu", "number": 10},
+//!           "output": "search_result"
 //!         }
 //!       }
 //!     ]
 //!   },
 //!   {
-//!     "id": "plan_trip",
-//!     "dependencies": ["data_fetching"],
+//!     "id": "dedup_search_result",
+//!     "dependencies": ["web_search_group"],
 //!     "tool": {
-//!       "function": "trip_planner",
+//!       "function": "search_dedup",
 //!       "param": {
-//!         "weather": "${fetch_weather.forecast}",
-//!         "train_schedule": "${fetch_transport.timetable}"
-//!       }
+//!         "query": "deepseek r1",
+//!         "results": "${search_result}"
+//!       },
+//!       "output": "dedup_result"
 //!     }
 //!   },
 //!   {
-//!     "id": "loop1",
-//!     "dependencies": ["parallel_group_1"],
+//!     "id": "get_related_results",
+//!     "dependencies": ["dedup_search_result"],
+//!     "tool": {
+//!         "function": "chat_completion",
+//!         "param": {
+//!             "model_name": "general",
+//!             "messages": [{
+//!                 "role": "user",
+//!                 "content": "```json\n${dedup_result}\n```\nExtract the top 5 most relevant results about \"deepseek r1\" from the JSON data above. Requirements:\n1. Preserve all original fields (url, summary, title etc.)\n2. Return a valid JSON array format\n3. Do not include any explanations\n\nExpected output format:\n[{\"url\": \"...\", \"summary\": \"...\", \"title\": \"...\"}, ...]"
+//!             }]
+//!         },
+//!         "output": "related_results"
+//!       }
+//!    },
+//!   {
+//!     "id": "loop_crawler",
+//!     "dependencies": ["get_related_results"],
 //!     "loop":{
-//!         "input": "${parallel_group_1}",
+//!         "input": "${related_results}",
 //!         "functions": [
 //!             {
-//!                 "function": "function2",
-//!                 "param": { "key": "${item.key}" }
+//!                 "function": "web_crawler",
+//!                 "param": { "url": "${item.url}", "format": "markdown" },
+//!                 "output": "crawled_content"
 //!             }
-//!         ],
-//!         "limit": 10,
-//!         "filter": "${item.score > 0.5}"
+//!         ]
 //!     }
 //!   }
 //! ]

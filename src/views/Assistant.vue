@@ -220,7 +220,7 @@
             v-for="model in providers"
             @click.stop="onModelSelect(model)"
             :key="model.id"
-            :class="{ active: currentModel.id === model.id }">
+            :class="{ active: currentModelProvider.id === model.id }">
             <div class="name">
               <img
                 :src="model.providerLogo"
@@ -229,7 +229,7 @@
               <logo :name="model.logo" size="16" v-else />
               <span>{{ model.name }}</span>
             </div>
-            <div class="icon" v-if="currentModel.id === model.id">
+            <div class="icon" v-if="currentModelProvider.id === model.id">
               <cs name="check" />
             </div>
           </div>
@@ -248,11 +248,11 @@
               v-for="(model, index) in models"
               @click.stop="onSubModelSelect(model.id)"
               :key="index"
-              :class="{ active: currentModel?.defaultModel === model.id }">
+              :class="{ active: currentModelProvider?.defaultModel === model.id }">
               <div class="name">
                 <span>{{ model.name || model.id.split('/').pop() }}</span>
               </div>
-              <div class="icon" v-if="currentModel?.defaultModel === model.id">
+              <div class="icon" v-if="currentModelProvider?.defaultModel === model.id">
                 <cs name="check" />
               </div>
             </div>
@@ -341,9 +341,10 @@ let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 
 const providers = computed(() => modelStore.getAvailableProviders)
-const currentModel = ref({ ...modelStore.defaultModelProvider })
+// Do not remove this, it's useful when user does not set default model at assistant dialog
+const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
 const currentSubModels = computed(() =>
-  currentModel.value.models?.reduce((groups, x) => {
+  currentModelProvider.value.models?.reduce((groups, x) => {
     if (!x.group) {
       x.group = t('settings.model.ungrouped')
     }
@@ -426,14 +427,14 @@ watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], ()
 })
 
 watch(
-  () => currentModel.value,
+  () => currentModelProvider.value,
   () => {
     // get default sub model from local storage
     const defaultSubModel = csGetStorage(csStorageKey.defaultModelAtDialog)
     if (defaultSubModel) {
-      const model = currentModel.value.models.find(m => m === defaultSubModel)
+      const model = currentModelProvider.value.models.find(m => m.id === defaultSubModel)
       if (model) {
-        currentModel.value.defaultModel = model
+        currentModelProvider.value.defaultModel = defaultSubModel
       }
     }
   }
@@ -457,7 +458,7 @@ onMounted(async () => {
       // If model is not found, we should keep the system default model (modelStore.defaultModelProvider)
       // instead of setting an empty object or null.
       // This ensures fallback to system default when user-defined model has been deleted.
-      currentModel.value = { ...model }
+      currentModelProvider.value = { ...model }
     }
   }
 
@@ -537,7 +538,7 @@ onUnmounted(() => {
 // functions
 // =================================================
 const proxyType = computed(() => {
-  return currentModel.value?.metadata?.proxyType === 'bySetting'
+  return currentModelProvider.value?.metadata?.proxyType === 'bySetting'
     ? settingStore.settings.proxyType || 'none'
     : 'bySetting'
 })
@@ -584,19 +585,19 @@ const sendMessage = async () => {
 
   try {
     await invoke('chat_completion', {
-      apiProtocol: currentModel.value.apiProtocol,
-      apiProtocol: currentModel.value.apiProtocol,
-      apiUrl: currentModel.value.baseUrl,
-      apiKey: currentModel.value.apiKey,
-      model: currentModel.value.defaultModel,
+      apiProtocol: currentModelProvider.value.apiProtocol,
+      apiProtocol: currentModelProvider.value.apiProtocol,
+      apiUrl: currentModelProvider.value.baseUrl,
+      apiKey: currentModelProvider.value.apiKey,
+      model: currentModelProvider.value.defaultModel,
       chatId: lastChatId.value,
       messages: messages,
       networkEnabled: networkEnabled.value,
       metadata: {
-        maxTokens: currentModel.value.maxTokens,
-        temperature: currentModel.value.temperature,
-        topP: currentModel.value.topP,
-        topK: currentModel.value.topK,
+        maxTokens: currentModelProvider.value.maxTokens,
+        temperature: currentModelProvider.value.temperature,
+        topP: currentModelProvider.value.topP,
+        topK: currentModelProvider.value.topK,
         label: settingStore.label,
         proxyType: proxyType.value,
         useContext: skillIndex.value == 0
@@ -676,7 +677,7 @@ const handleChatMessage = async payload => {
       tokens: payload?.metadata?.tokens?.total || 0,
       prompt: payload?.metadata?.tokens?.prompt || 0,
       completion: payload?.metadata?.tokens?.completion || 0,
-      provider: currentModel.value.defaultModel || '',
+      provider: currentModelProvider.value.defaultModel || '',
       reference: chatState.value?.reference || [],
       reasoning: chatState.value?.reasoning || ''
     }
@@ -753,7 +754,7 @@ const onPin = async () => {
  * @param {Object} model model config
  */
 const onModelSelect = model => {
-  currentModel.value = { ...model }
+  currentModelProvider.value = { ...model }
   csSetStorage(csStorageKey.defaultModelIdAtDialog, model.id)
 }
 
@@ -762,7 +763,7 @@ const onModelSelect = model => {
  * @param {Object} model model config
  */
 const onSubModelSelect = model => {
-  currentModel.value.defaultModel = model
+  currentModelProvider.value.defaultModel = model
   selectGroupVisible.value = false
   inputRef.value?.focus()
   csSetStorage(csStorageKey.defaultModelAtDialog, model)

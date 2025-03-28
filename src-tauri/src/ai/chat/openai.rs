@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use reqwest::Response;
-use rust_i18n::t;
 use serde_json::{json, Value};
 use std::time::Instant;
 use std::{error::Error, sync::Arc};
@@ -10,7 +9,7 @@ use crate::ai::interaction::constants::{
     TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
 };
 use crate::ai::network::{
-    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamFormat, TokenUsage,
+    ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamFormat, StreamProcessor, TokenUsage,
 };
 use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
@@ -42,7 +41,7 @@ impl OpenAIChat {
     async fn handle_stream_response(
         &self,
         chat_id: String,
-        mut response: Response,
+        response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
@@ -50,76 +49,85 @@ impl OpenAIChat {
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
 
-        while let Some(chunk) = response.chunk().await.map_err(|e| {
-            let error = t!("chat.stream_read_error", error = e.to_string()).to_string();
-            callback(ChatResponse::new_with_arc(
-                chat_id.clone(),
-                error.clone(),
-                MessageType::Error,
-                metadata_option.clone(),
-            ));
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, error))
-        })? {
+        let processor = StreamProcessor::new();
+        let mut event_receiver = processor
+            .process_stream(response, &StreamFormat::OpenAI)
+            .await;
+
+        while let Some(event) = event_receiver.recv().await {
             if self.should_stop().await {
+                processor.stop();
                 break;
             }
 
-            let chunks = self
-                .client
-                .process_stream_chunk(chunk, &StreamFormat::OpenAI)
-                .await
-                .map_err(|e| {
-                    callback(ChatResponse::new_with_arc(
-                        chat_id.clone(),
-                        e.clone(),
-                        MessageType::Error,
-                        metadata_option.clone(),
-                    ));
-                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
-                })?;
+            match event {
+                Ok(chunk) => {
+                    let chunks = self
+                        .client
+                        .process_stream_chunk(chunk, &StreamFormat::OpenAI)
+                        .await
+                        .map_err(|e| {
+                            callback(ChatResponse::new_with_arc(
+                                chat_id.clone(),
+                                e.clone(),
+                                MessageType::Error,
+                                metadata_option.clone(),
+                            ));
+                            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                        })?;
 
-            for chunk in chunks {
-                if let Some(new_usage) = chunk.usage {
-                    if new_usage.total_tokens > 0 {
-                        token_usage = new_usage;
+                    for chunk in chunks {
+                        if let Some(new_usage) = chunk.usage {
+                            if new_usage.total_tokens > 0 {
+                                token_usage = new_usage;
 
-                        // OpenAI does not provide tokens per second, so calculate it here
-                        if token_usage.tokens_per_second == 0.0 {
-                            let completion_tokens = token_usage.completion_tokens as f64;
-                            let duration = start_time.elapsed();
-                            token_usage.tokens_per_second = if duration.as_secs() > 0 {
-                                completion_tokens / duration.as_secs_f64()
-                            } else {
-                                0.0
-                            };
+                                // OpenAI does not provide tokens per second, so calculate it here
+                                if token_usage.tokens_per_second == 0.0 {
+                                    let completion_tokens = token_usage.completion_tokens as f64;
+                                    let duration = start_time.elapsed();
+                                    token_usage.tokens_per_second = if duration.as_secs() > 0 {
+                                        completion_tokens / duration.as_secs_f64()
+                                    } else {
+                                        0.0
+                                    };
+                                }
+                            }
+                        }
+
+                        if let Some(content) = chunk.reasoning_content {
+                            if !content.is_empty() {
+                                full_response.push_str(&format!("<think>{}</think>", content));
+
+                                callback(ChatResponse::new_with_arc(
+                                    chat_id.clone(),
+                                    content,
+                                    MessageType::Reasoning,
+                                    metadata_option.clone(),
+                                ));
+                            }
+                        }
+
+                        if let Some(content) = chunk.content {
+                            if !content.is_empty() {
+                                full_response.push_str(&content);
+                                let msg_type = chunk.msg_type.unwrap_or(MessageType::Text);
+                                callback(ChatResponse::new_with_arc(
+                                    chat_id.clone(),
+                                    content,
+                                    msg_type,
+                                    metadata_option.clone(),
+                                ));
+                            }
                         }
                     }
                 }
-
-                if let Some(content) = chunk.reasoning_content {
-                    if !content.is_empty() {
-                        full_response.push_str(&format!("<think>{}</think>", content));
-
-                        callback(ChatResponse::new_with_arc(
-                            chat_id.clone(),
-                            content,
-                            MessageType::Reasoning,
-                            metadata_option.clone(),
-                        ));
-                    }
-                }
-
-                if let Some(content) = chunk.content {
-                    if !content.is_empty() {
-                        full_response.push_str(&content);
-                        let msg_type = chunk.msg_type.unwrap_or(MessageType::Text);
-                        callback(ChatResponse::new_with_arc(
-                            chat_id.clone(),
-                            content,
-                            msg_type,
-                            metadata_option.clone(),
-                        ));
-                    }
+                Err(e) => {
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        e,
+                        MessageType::Error,
+                        metadata_option.clone(),
+                    ));
                 }
             }
         }

@@ -11,7 +11,7 @@ const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g;
 const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g;
 const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/; // just deal the first think tag
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g;
-const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
+// const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
 const THINK_CONTENT_REGEX = /<think>[\s\S]+?<\/think>/;
 const PLACEHOLDER_RESTORE_REGEX = /___(?:CODE|MATH|BLOCK_MATH|THINK)_\d+___/g;
 

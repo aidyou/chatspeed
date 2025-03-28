@@ -318,8 +318,7 @@
 
           <!-- footer -->
           <el-footer class="input-container">
-            <div class="skill-list-container">
-               
+            <div class="skill-list-container" v-show="isSkillListVisible">
               <SkillList
                 ref="skillListRef"
                 @onSelected="onSkillSelected"
