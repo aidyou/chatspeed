@@ -17,28 +17,39 @@ export function getModelLogo(model) {
   if (model.indexOf('/') !== -1) {
     model = model.split('/').slice(-1)[0]
   }
-  if (model === 'k1' || model === 'kimi' || model.startsWith('k1@') || model.startsWith('kimi@')) {
-    return 'moonshot'
+  // Exact match dictionary
+  const exactMatch = {
+    'k1': 'moonshot',
+    'kimi': 'moonshot',
+    'deep_seek': 'deepseek'
+  };
+
+  // Prefix match dictionary
+  const prefixMatch = {
+    'k1@': 'moonshot',
+    'kimi@': 'moonshot',
+    'ds-': 'deepseek',
+    'deep_seek': 'deepseek',
+    'glm-': 'chatglm',
+    'meta-': 'llama',
+    'hunyuan': 'hunyuan',
+    'qwq:': 'qwen',
+    'qwq-': 'qwen',
+    'openai': 'gpt',
+  };
+
+  // Check exact matches first
+  if (exactMatch[model]) {
+    return exactMatch[model];
   }
-  if (model === 'deep_seek' || model.startsWith('ds-') || model.startsWith('deep_seek')) {
-    return 'deepseek'
+
+  // Then check prefix matches
+  for (const [prefix, logo] of Object.entries(prefixMatch)) {
+    if (model.startsWith(prefix)) {
+      return logo;
+    }
   }
-  if (model.startsWith('glm-')) {
-    return 'chatglm'
-  }
-  // 对一些模型的名称做处理
-  if (model.startsWith('meta-')) {
-    return 'llama'
-  }
-  if (model.startsWith('hunyuan')) {
-    return 'hunyuan'
-  }
-  if (model.startsWith('qwq:') || model.startsWith('qwq-')) {
-    return 'qwen'
-  }
-  if (model.startsWith('openai')) {
-    return 'gpt'
-  }
+
   // get all key start with `ai-${model}`
   const keys = Object.keys(iconFont).filter(key => model.startsWith(key.replace('ai-', '')))
   // get the first key

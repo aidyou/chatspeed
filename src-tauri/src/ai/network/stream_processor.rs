@@ -6,7 +6,6 @@ use std::sync::{
 use super::StreamFormat;
 use bytes::BytesMut;
 use reqwest::Response;
-use serde::de;
 use tokio::sync::mpsc;
 
 /// A processor for handling Server-Sent Events (SSE) streams

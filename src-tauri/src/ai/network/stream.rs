@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::ai::traits::chat::MessageType;
 
-use super::GeminiResponse;
+use super::{AnthropicEventType, AnthropicStreamEvent, GeminiResponse, OpenAIStreamResponse};
 
 /// Represents different types of stream response formats
 pub enum StreamFormat {
@@ -77,7 +77,7 @@ impl StreamParser {
         match format {
             StreamFormat::OpenAI => Self::parse_openai(chunk),
             StreamFormat::Gemini => Self::parse_gemini(chunk),
-            StreamFormat::StandardSSE => Self::parse_sse(chunk),
+            StreamFormat::StandardSSE => Self::parse_standard_sse(chunk),
             StreamFormat::Anthropic => Self::parse_anthropic(chunk),
             StreamFormat::Custom(parser) => parser(chunk).map(|content| {
                 vec![StreamChunk {
@@ -109,58 +109,39 @@ impl StreamParser {
                     });
                     continue;
                 }
-                match serde_json::from_str::<Value>(data) {
-                    Ok(json) => {
-                        // Handle errors first
-                        if let Some(error) = json.get("error") {
-                            let emsg = error["message"]
-                                .as_str()
-                                .map(String::from)
-                                .unwrap_or("Unknown Error".to_string());
-                            return Err(emsg);
-                        }
-
-                        // chat content
-                        let content = json["choices"][0]["delta"]["content"]
-                            .as_str()
-                            .map(String::from);
-
-                        // reasoning content
-                        let reasoning_content = json["choices"][0]["delta"]["reasoning_content"]
-                            .as_str()
-                            .map(String::from);
-
-                        // message type
-                        let msg_type = json["choices"][0]["delta"]["type"]
-                            .as_str()
-                            .and_then(|s| MessageType::from_str(s));
-
-                        let usage = if let Some(usage) = json.get("usage") {
-                            let total_tokens = usage["total_tokens"].as_u64().unwrap_or_default();
-                            let prompt_tokens = usage["prompt_tokens"].as_u64().unwrap_or_default();
-                            let completion_tokens =
-                                usage["completion_tokens"].as_u64().unwrap_or_default();
-
-                            Some(TokenUsage {
-                                total_tokens,
-                                prompt_tokens,
-                                completion_tokens,
+                match serde_json::from_str::<OpenAIStreamResponse>(data) {
+                    Ok(response) => {
+                        // handle all choices
+                        for choice in response.choices {
+                            let usage = response.usage.as_ref().map(|usage| TokenUsage {
+                                total_tokens: usage.total_tokens,
+                                prompt_tokens: usage.prompt_tokens,
+                                completion_tokens: usage.completion_tokens,
                                 tokens_per_second: 0.0,
-                            })
-                        } else {
-                            None
-                        };
+                            });
 
-                        chunks.push(StreamChunk {
-                            reasoning_content,
-                            content,
-                            usage,
-                            msg_type,
-                        });
+                            chunks.push(StreamChunk {
+                                reasoning_content: choice.delta.reasoning_content,
+                                content: choice.delta.content,
+                                usage,
+                                msg_type: choice
+                                    .delta
+                                    .msg_type
+                                    .and_then(|t| MessageType::from_str(&t)),
+                            });
+                        }
                     }
                     Err(e) => {
+                        if let Ok(json) = serde_json::from_str::<Value>(data) {
+                            if let Some(error) = json.get("error") {
+                                let emsg = error["message"]
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| "Unknown Error".to_string());
+                                return Err(emsg);
+                            }
+                        }
                         log::error!("Failed to parse OpenAI response: {}, error:{}", data, e);
-                        // return Err(e.to_string());
                     }
                 }
             }
@@ -178,21 +159,27 @@ impl StreamParser {
                 let data = line["data:".len()..].trim();
                 match serde_json::from_str::<GeminiResponse>(data) {
                     Ok(gemini_response) => {
-                        let usage = TokenUsage {
-                            total_tokens: gemini_response.usage_metadata.total_token_count,
-                            prompt_tokens: gemini_response.usage_metadata.prompt_token_count,
-                            completion_tokens: gemini_response.usage_metadata.total_token_count
-                                - gemini_response.usage_metadata.prompt_token_count,
-                            tokens_per_second: 0.0,
-                        };
-                        for candidate in &gemini_response.candidates {
-                            for part in &candidate.content.parts {
-                                chunks.push(StreamChunk {
-                                    reasoning_content: None,
-                                    content: Some(part.text.clone()),
-                                    usage: Some(usage.clone()),
-                                    msg_type: Some(MessageType::Text),
+                        let usage =
+                            gemini_response
+                                .usage_metadata
+                                .map(|usage_metadata| TokenUsage {
+                                    total_tokens: usage_metadata.total_token_count,
+                                    prompt_tokens: usage_metadata.prompt_token_count,
+                                    completion_tokens: usage_metadata.total_token_count
+                                        - usage_metadata.prompt_token_count,
+                                    tokens_per_second: 0.0,
                                 });
+
+                        if let Some(candidates) = gemini_response.candidates {
+                            for candidate in candidates {
+                                for part in &candidate.content.parts {
+                                    chunks.push(StreamChunk {
+                                        reasoning_content: None,
+                                        content: Some(part.text.clone()),
+                                        usage: usage.clone(),
+                                        msg_type: Some(MessageType::Text),
+                                    });
+                                }
                             }
                         }
                     }
@@ -248,7 +235,7 @@ impl StreamParser {
     }
 
     /// Parse standard SSE format
-    fn parse_sse(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
+    fn parse_standard_sse(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
 
@@ -264,102 +251,135 @@ impl StreamParser {
             }
             if line.starts_with("data:") {
                 let data = line["data:".len()..].trim();
-                match serde_json::from_str::<Value>(data) {
-                    Ok(json) => {
-                        let content = json
-                            .get("content")
-                            .and_then(Value::as_str)
-                            .map(String::from);
-                        let reasoning_content = json
-                            .get("reasoning_content")
-                            .and_then(Value::as_str)
-                            .map(String::from);
-                        let r#type = json
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .and_then(|s| MessageType::from_str(s));
-
-                        let usage = json.get("usage").and_then(|usage| {
-                            Some(TokenUsage {
-                                total_tokens: usage["total_tokens"].as_u64().unwrap_or_default(),
-                                prompt_tokens: usage["prompt_tokens"].as_u64().unwrap_or_default(),
-                                completion_tokens: usage["completion_tokens"]
-                                    .as_u64()
-                                    .unwrap_or_default(),
-                                tokens_per_second: 0.0,
-                            })
-                        });
-                        chunks.push(StreamChunk {
-                            reasoning_content,
-                            content,
-                            usage,
-                            msg_type: r#type,
-                        });
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse OpenAI response: {}, error:{}", data, e);
-                    }
-                }
+                chunks.push(StreamChunk {
+                    reasoning_content: None,
+                    content: Some(data.to_string()),
+                    usage: None,
+                    msg_type: None,
+                });
             }
         }
         Ok(chunks)
     }
 
-    // /// Parse HuggingFace format
-    // fn parse_huggingface(chunk: Bytes) -> Result<StreamChunk, String> {
-    //     let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
-
-    //     if let Ok(json) = serde_json::from_str::<Value>(&chunk_str) {
-    //         let content = json["completion"].as_str().map(String::from);
-    //         return Ok(StreamChunk {
-    //             content,
-    //             usage: None, // HuggingFace 不提供 token 统计
-    //         });
-    //     }
-    //     Ok(StreamChunk {
-    //         content: None,
-    //         usage: None,
-    //     })
-    // }
-
-    /// Parse Anthropic format
+    /// Parse Anthropic format with full event streaming support
     fn parse_anthropic(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
+        let mut current_content = String::new();
+        let mut current_index = 0;
 
         for line in chunk_str.lines() {
-            if line.starts_with("data: ") {
-                let data = &line["data: ".len()..];
-                if data == "[DONE]" {
-                    chunks.push(StreamChunk {
-                        reasoning_content: None,
-                        content: None,
-                        usage: None,
-                        msg_type: Some(MessageType::Finished),
-                    });
+            if !line.starts_with("event:") || !line.contains("data:") {
+                continue;
+            }
+
+            let data = match line.find("data:") {
+                Some(pos) => line[pos + "data:".len()..].trim(),
+                None => {
+                    log::error!("Failed to find 'data: ' in line: {}", line);
                     continue;
                 }
-                match serde_json::from_str::<Value>(data) {
-                    Ok(json) => {
-                        let content = json["completion"].as_str().map(String::from);
-                        let usage = json.get("usage").map(|usage| TokenUsage {
-                            total_tokens: usage["input_tokens"].as_u64().unwrap_or(0)
-                                + usage["output_tokens"].as_u64().unwrap_or(0),
-                            prompt_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
-                            completion_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
-                            tokens_per_second: 0.0,
-                        });
+            };
 
-                        chunks.push(StreamChunk {
-                            reasoning_content: None,
-                            content,
-                            usage,
-                            msg_type: Some(MessageType::Text),
-                        });
+            match serde_json::from_str::<AnthropicStreamEvent>(data) {
+                Ok(event) => {
+                    match event.event_type {
+                        AnthropicEventType::MessageStart => {
+                            // Initialize new message
+                            current_content.clear();
+                        }
+                        AnthropicEventType::ContentBlockStart => {
+                            // Start new content block
+                            if let Some(index) = event.index {
+                                current_index = index;
+                            }
+                        }
+                        AnthropicEventType::ContentBlockDelta => {
+                            // handle content block delta
+                            if let (Some(index), Some(delta)) = (event.index, event.delta) {
+                                match delta["type"].as_str() {
+                                    Some("text_delta") => {
+                                        if let Some(text) = delta["text"].as_str() {
+                                            if index == current_index {
+                                                current_content.push_str(text);
+                                                chunks.push(StreamChunk {
+                                                    reasoning_content: None,
+                                                    content: Some(text.to_string()),
+                                                    usage: None,
+                                                    msg_type: Some(MessageType::Text),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Some("thinking_delta") => {
+                                        // handle thinking delta
+                                        if let Some(thinking) = delta["thinking"].as_str() {
+                                            chunks.push(StreamChunk {
+                                                reasoning_content: Some(thinking.to_string()),
+                                                content: None,
+                                                usage: None,
+                                                msg_type: Some(MessageType::Reasoning),
+                                            });
+                                        }
+                                    }
+                                    _ => {} // 忽略其他delta类型
+                                }
+                            }
+                        }
+                        AnthropicEventType::ContentBlockStop => {
+                            // Finalize current content block
+                            if !current_content.is_empty() {
+                                chunks.push(StreamChunk {
+                                    reasoning_content: None,
+                                    content: Some(current_content.clone()),
+                                    usage: None,
+                                    msg_type: Some(MessageType::Text),
+                                });
+                                current_content.clear();
+                            }
+                        }
+                        AnthropicEventType::MessageDelta => {
+                            // Handle final message updates
+                            if let Some(usage) = event.usage {
+                                let token_usage = TokenUsage {
+                                    total_tokens: usage["input_tokens"].as_u64().unwrap_or(0)
+                                        + usage["output_tokens"].as_u64().unwrap_or(0),
+                                    prompt_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
+                                    completion_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+                                    tokens_per_second: 0.0,
+                                };
+                                chunks.push(StreamChunk {
+                                    reasoning_content: None,
+                                    content: None,
+                                    usage: Some(token_usage),
+                                    msg_type: Some(MessageType::Finished),
+                                });
+                            }
+                        }
+                        AnthropicEventType::MessageStop => {
+                            // Finalize message
+                            chunks.push(StreamChunk {
+                                reasoning_content: None,
+                                content: None,
+                                usage: None,
+                                msg_type: Some(MessageType::Finished),
+                            });
+                        }
+                        AnthropicEventType::Error => {
+                            if let Some(error) = event.error {
+                                let emsg = error["message"]
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| "Unknown Error".to_string());
+                                return Err(emsg);
+                            }
+                        }
+                        _ => {} // Ignore ping and other unknown events
                     }
-                    Err(e) => {
-                        log::error!("Failed to parse Anthropic response: {}, error:{}", data, e);
-                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to parse Anthropic event: {}, error: {}", data, e);
                 }
             }
         }

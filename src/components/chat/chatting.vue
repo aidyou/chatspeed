@@ -1,5 +1,14 @@
 <template>
   <div class="content">
+    <div class="chat-log" v-if="log.length > 0" ref="chatLogRef">
+      <template v-for="(item, idx) in log" :key="idx">
+        <div class="item" v-if="item.trim() != ''">{{ item }}</div>
+      </template>
+    </div>
+    <div class="chat-plan" v-if="plan.length > 0">
+      <div class="item" v-for="(item, idx) in plan" :key="idx">{{ item }}</div>
+    </div>
+
     <div class="chat-reference" v-if="reference.length > 0">
       <div
         class="chat-reference-title"
@@ -34,7 +43,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { parseMarkdown } from '@/libs/chat'
 
 const props = defineProps({
@@ -57,11 +66,39 @@ const props = defineProps({
   isReasoning: {
     type: Boolean,
     default: false
+  },
+  log: {
+    type: Array,
+    default: () => []
+  },
+  plan: {
+    type: Array,
+    default: () => []
   }
 })
 
 const showReference = ref(false)
 const showThink = ref(true)
+const chatLogRef = ref(null)
+
+watch(
+  props.log,
+  () => {
+    if (chatLogRef.value) {
+      const shouldScroll =
+        chatLogRef.value.scrollHeight > chatLogRef.value.clientHeight &&
+        chatLogRef.value.scrollTop + chatLogRef.value.clientHeight >=
+          chatLogRef.value.scrollHeight - 50
+
+      if (shouldScroll) {
+        requestAnimationFrame(() => {
+          chatLogRef.value.scrollTop = chatLogRef.value.scrollHeight
+        })
+      }
+    }
+  },
+  { deep: true }
+)
 
 const cicleIndex = ref(0)
 const cicle = ['◒', '◐', '◓', '◑', '☯']

@@ -472,11 +472,11 @@
             display: flex;
             flex-direction: row;
             align-items: center;
-            font-size: var(--cs-font-size-sm);
+            font-size: var(--cs-font-size-xs);
+            gap: var(--cs-space-xs);
 
             .item {
                 display: inline-block;
-                margin-right: var(--cs-space-sm);
                 color: var(--cs-text-color-secondary);
 
                 label {
@@ -644,6 +644,41 @@
         list-style: decimal;
         line-height: 2;
     }
+}
+
+.chat-log {
+    border-left: 3px solid var(--cs-border-color);
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+    padding: 0 var(--cs-space-sm);
+    margin: var(--cs-space-xs) 0 var(--cs-space);
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+
+    .item {
+        border: none !important;
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.5;
+        margin: var(--cs-space-xs) 0;
+
+        &::before {
+            font-family: "chatspeed";
+            content: "\e64f";
+            display: inline-block;
+            margin-right: var(--cs-space-xxs);
+        }
+    }
+}
+
+.chat-plan {
+    border-left: 3px solid var(--cs-border-color);
+    padding: 0 var(--cs-space-sm);
+    margin: var(--cs-space-xs) 0 var(--cs-space);
 }
 
 .icon-btn {

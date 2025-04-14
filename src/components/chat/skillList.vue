@@ -139,9 +139,13 @@ const show = () => {
 const hide = () => {
   isVisible.value = false
 }
+const toggle = () => {
+  isVisible.value = !isVisible.value
+}
 defineExpose({
   show,
   hide,
+  toggle,
   isVisible
 })
 </script>

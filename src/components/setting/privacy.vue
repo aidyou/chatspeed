@@ -47,9 +47,8 @@
       <h3>Security</h3>
       <ul>
         <li>
-          Your API keys and configurations are stored in a SQLite database in the application data
-          directory. As an open-source application, we maintain transparency about our data storage
-          methods.
+          Your API keys and configurations are stored in the application data directory. As an
+          open-source application, we maintain transparency about our data storage methods.
         </li>
         <li>
           All data remains on your local device and is subject to your device's security measures.
@@ -98,8 +97,8 @@
       <h3>安全性</h3>
       <ul>
         <li>
-          您的 API 密钥和配置信息存储在应用程序数据目录下的 SQLite
-          数据库中。作为开源应用，我们对数据存储方式保持透明。
+          您的 API
+          密钥和配置信息存储在应用程序数据目录下。作为开源应用，我们对数据存储方式保持透明。
         </li>
         <li>所有数据都保留在您的本地设备上，受您设备的安全措施保护。</li>
       </ul>

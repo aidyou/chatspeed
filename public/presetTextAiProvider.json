@@ -167,8 +167,192 @@
     },
     {
       "protocol": "openai",
+      "name": "Openrouter",
+      "logo": "https://openrouter.ai/favicon.ico",
+      "desc": "A unified interface for LLMs. Find the best models & prices for your prompts.",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "models": [
+        {
+          "id": "deepseek/deepseek-r1:free",
+          "name": "R1",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-r1-distill-llama-70b:free",
+          "name": "R1-70b",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-r1-distill-qwen-32b:free",
+          "name": "R1-32b",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-r1-distill-qwen-14b:free",
+          "name": "R1-14b",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-r1-zero:free",
+          "name": "R1-zero",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-chat:free",
+          "name": "V3",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-v3-base:free",
+          "name": "v3-base",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek/deepseek-chat-v3-0324:free",
+          "name": "v3-0324",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "qwen/qwq-32b:free",
+          "name": "qwq-32b",
+          "group": "Qwen",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "qwen/qwen2.5-vl-72b-instruct:free",
+          "name": "2.5-vl-72b-it",
+          "group": "Qwen",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "qwen/qwen-2.5-coder-32b-instruct:free",
+          "name": "2.5-coder-32b-it",
+          "group": "Qwen",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemini-2.5-pro-exp-03-25:free",
+          "name": "Gemini-2.5-pro",
+          "group": "Gemini",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemini-2.0-pro-exp-02-05:free",
+          "name": "Gemini-2.0-pro",
+          "group": "Gemini",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemini-2.0-flash-thinking-exp:free",
+          "name": "Gemini-2.0-thinking",
+          "group": "Gemini",
+          "reasoning": true,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemini-2.0-flash-exp:free",
+          "name": "Gemini-2.0-flash",
+          "group": "Gemini",
+          "reasoning": true,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemma-3-27b-it:free",
+          "name": "Gemma3-27b",
+          "group": "Gemma",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemma-3-12b-it:free",
+          "name": "Gemma3-12b",
+          "group": "Gemma",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemma-2-9b-it:free",
+          "name": "Gemma3-9b",
+          "group": "Gemma",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "google/gemma-3-4b-it:free",
+          "name": "Gemma3-4b",
+          "group": "Gemma",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "meta-llama/llama-4-maverick:free",
+          "name": "Llama-4-maverick",
+          "group": "Llama",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "meta-llama/llama-4-scout:free",
+          "name": "Llama-4-scout",
+          "group": "Llama",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "name": "Llama-3.3-70b",
+          "group": "Llama",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "mistralai/mistral-small-3.1-24b-instruct:free",
+          "name": "Mistral-sm-3.1-24b",
+          "group": "Mistral",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "mistralai/mistral-nemo:free",
+          "name": "Mistral-nemo",
+          "group": "Mistral",
+          "reasoning": false,
+          "functionCall": false
+        }
+      ],
+      "maxTokens": 4096,
+      "temperature": 0.8,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://openrouter.ai/docs",
+      "modelListUrl": "https://openrouter.ai/models",
+      "keyApplyUrl": "https://openrouter.ai/keys"
+    },
+    {
+      "protocol": "openai",
       "name": "Groq",
-      "logo": "https://console.groq.com/favicon.ico",
+      "logo": "https://groq.com/wp-content/uploads/2024/02/android-icon-192x192-1-150x150.png",
       "desc": "Experience the fastest inference in the world",
       "baseUrl": "https://api.groq.com/openai/v1",
       "models": [
@@ -278,85 +462,6 @@
       "documentationUrl": "https://console.groq.com/docs/overview",
       "modelListUrl": "https://console.groq.com/docs/models",
       "keyApplyUrl": "https://console.groq.com/keys"
-    },
-    {
-      "protocol": "openai",
-      "name": "Openrouter",
-      "logo": "https://openrouter.ai/favicon.ico",
-      "desc": "A unified interface for LLMs. Find the best models & prices for your prompts.",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "models": [
-        {
-          "id": "deepseek/deepseek-chat:free",
-          "name": "chat",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek/deepseek-r1:free",
-          "name": "R1",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek/deepseek-r1-distill-llama-70b:free",
-          "name": "R1-70b",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek/deepseek-r1-distill-qwen-32b",
-          "name": "R1-32b",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek/deepseek-r1-zero:free",
-          "name": "R1-zero",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "qwen/qwq-32b:free",
-          "name": "qwq-32b",
-          "group": "Qwen",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "qwen/qwen2.5-vl-72b-instruct:free",
-          "name": "2.5-vl-72b-it",
-          "group": "Qwen",
-          "reasoning": false,
-          "functionCall": true
-        },
-        {
-          "id": "qwen/qwen-2.5-coder-32b-instruct:free",
-          "name": "2.5-coder-32b-it",
-          "group": "Qwen",
-          "reasoning": false,
-          "functionCall": true
-        },
-        {
-          "id": "google/gemma-3-27b-it:free",
-          "name": "Gemma3-27b",
-          "group": "Google",
-          "reasoning": false,
-          "functionCall": true
-        }
-      ],
-      "maxTokens": 4096,
-      "temperature": 0.8,
-      "topP": 0.9,
-      "topK": 40,
-      "documentationUrl": "https://openrouter.ai/docs",
-      "modelListUrl": "https://openrouter.ai/models",
-      "keyApplyUrl": "https://openrouter.ai/keys"
     },
     {
       "protocol": "openai",
@@ -475,6 +580,91 @@
       "keyApplyUrl": "https://dash.cloudflare.com/profile/api-tokens"
     },
     {
+      "protocol": "openai",
+      "name": "Github",
+      "logo": "https://github.githubassets.com/favicons/favicon.png",
+      "desc": "A catalog and playground of AI models to help you build AI features and products.",
+      "baseUrl": "https://models.inference.ai.azure.com",
+      "models": [
+        {
+          "id": "gpt-4o",
+          "name": "4o",
+          "group": "ChatGPT",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "gpt-4o-mini",
+          "name": "4o-mini",
+          "group": "ChatGPT",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "DeepSeek-V3",
+          "name": "DS-V3",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "DeepSeek-R1",
+          "name": "DS-R1",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "Llama-3.3-70B-Instruct",
+          "name": "Llama-30B-it",
+          "group": "Llama",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "Meta-Llama-3.1-405B-Instruct",
+          "name": "llama-3.1-405B-it",
+          "group": "Llama",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "Phi-4",
+          "name": "Phi-4",
+          "group": "Phi",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "Phi-4-mini-instruct",
+          "name": "Phi-4-mini",
+          "group": "Phi",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "Mistral-Large-2411",
+          "name": "Mistral-Lg",
+          "group": "Mistral",
+          "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "Ministral-3B",
+          "name": "Mistral-3B",
+          "group": "Mistral",
+          "reasoning": false,
+          "functionCall": false
+        }
+      ],
+      "maxTokens": 4000,
+      "temperature": 0.8,
+      "topP": 0.9,
+      "topK": 40,
+      "modelListUrl": "https://github.com/marketplace/models/",
+      "keyApplyUrl": "https://github.com/settings/personal-access-tokens"
+    },
+    {
       "protocol": "ollama",
       "name": "Ollama",
       "logo": "https://ollama.com/public/apple-touch-icon.png",
@@ -488,88 +678,6 @@
       "documentationUrl": "https://github.com/ollama/ollama/tree/main/docs",
       "modelListUrl": "https://ollama.com/library",
       "keyApplyUrl": ""
-    },
-    {
-      "protocol": "huggingface",
-      "name": "HuggingFace",
-      "logo": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
-      "desc": "We’re on a journey to advance and democratize artificial intelligence through open source and open science.",
-      "baseUrl": "https://router.huggingface.co/hf-inference/models",
-      "models": [
-        {
-          "id": "google/gemma-3-27b-it",
-          "name": "gemma-3-27b",
-          "group": "Google",
-          "reasoning": false,
-          "functionCall": true
-        },
-        {
-          "id": "Qwen/QwQ-32B",
-          "name": "QwQ-32b",
-          "group": "Qwen",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-          "name": "R1-32b",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        }
-      ],
-      "maxTokens": 4096,
-      "temperature": 0.8,
-      "topP": 0.9,
-      "topK": 40,
-      "documentationUrl": "https://huggingface.co/docs",
-      "modelListUrl": "https://huggingface.co/models",
-      "keyApplyUrl": "https://huggingface.co/settings/tokens"
-    },
-    {
-      "protocol": "openai",
-      "name": "阿里云百炼",
-      "logo": "https://img.alicdn.com/tfs/TB1_ZXuNcfpK1RjSZFOXXa6nFXa-32-32.ico",
-      "desc": "阿里云百炼是一家基于云计算的领先技术公司，提供计算、存储、网络等多种云服务。阿里云百炼著名的云计算服务包括计算、存储、网络等多种云服务，是全球领先的云计算服务商。",
-      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "models": [],
-      "maxTokens": 8192,
-      "temperature": 0.8,
-      "topP": 0.9,
-      "topK": 40,
-      "documentationUrl": "https://help.aliyun.com/zh/model-studio/getting-started/what-is-model-studio",
-      "modelListUrl": "https://help.aliyun.com/zh/model-studio/getting-started/models",
-      "keyApplyUrl": "https://bailian.console.aliyun.com/?apiKey=1#/api-key"
-    },
-    {
-      "protocol": "openai",
-      "name": "Volcengine(火山引擎)",
-      "logo": "https://portal.volccdn.com/obj/volcfe/misc/favicon.png",
-      "desc": "火山引擎是字节跳动旗下的云服务平台，将字节跳动快速发展过程中积累的增长方法、技术能力和应用工具开放给外部企业，提供云基础、视频与内容分发、数智平台VeDI、人工智能、开发与运维等服务，帮助企业在数字化升级中实现持续增长。.",
-      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
-      "models": [
-        {
-          "id": "deepseek-r1-250120",
-          "name": "R1",
-          "group": "Deepseek",
-          "reasoning": true,
-          "functionCall": false
-        },
-        {
-          "id": "deepseek-v3-250324",
-          "name": "V3",
-          "group": "Deepseek",
-          "reasoning": false,
-          "functionCall": true
-        }
-      ],
-      "maxTokens": 8192,
-      "temperature": 1.0,
-      "topP": 1.0,
-      "topK": 40,
-      "documentationUrl": "https://github.com/ollama/ollama/tree/main/docs",
-      "modelListUrl": "https://ollama.com/library",
-      "keyApplyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D"
     },
     {
       "protocol": "gemini",
@@ -644,6 +752,154 @@
       "keyApplyUrl": "https://aistudio.google.com/app/apikey"
     },
     {
+      "protocol": "huggingface",
+      "name": "HuggingFace",
+      "logo": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+      "desc": "We’re on a journey to advance and democratize artificial intelligence through open source and open science.",
+      "baseUrl": "https://router.huggingface.co/hf-inference/models",
+      "models": [
+        {
+          "id": "google/gemma-3-27b-it",
+          "name": "gemma-3-27b",
+          "group": "Google",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "Qwen/QwQ-32B",
+          "name": "QwQ-32b",
+          "group": "Qwen",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+          "name": "R1-32b",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        }
+      ],
+      "maxTokens": 4096,
+      "temperature": 0.8,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://huggingface.co/docs",
+      "modelListUrl": "https://huggingface.co/models",
+      "keyApplyUrl": "https://huggingface.co/settings/tokens"
+    },
+    {
+      "protocol": "openai",
+      "name": "阿里云百炼",
+      "logo": "https://img.alicdn.com/tfs/TB1_ZXuNcfpK1RjSZFOXXa6nFXa-32-32.ico",
+      "desc": "阿里云百炼是一家基于云计算的领先技术公司，提供计算、存储、网络等多种云服务。阿里云百炼著名的云计算服务包括计算、存储、网络等多种云服务，是全球领先的云计算服务商。",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "models": [
+        {
+          "id": "qwen-max",
+          "name": "Max",
+          "group": "Qwen",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "qwen-plus",
+          "name": "Plus",
+          "group": "Qwen",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "qwen-turbo",
+          "name": "Turbo",
+          "group": "Qwen",
+          "reasoning": false,
+          "functionCall": true
+        },
+        {
+          "id": "qwq-32b",
+          "name": "QwQ-32b",
+          "group": "Qwen",
+          "reasoning": true,
+          "functionCall": true
+        }
+      ],
+      "maxTokens": 8192,
+      "temperature": 0.8,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://help.aliyun.com/zh/model-studio/getting-started/what-is-model-studio",
+      "modelListUrl": "https://help.aliyun.com/zh/model-studio/getting-started/models",
+      "keyApplyUrl": "https://bailian.console.aliyun.com/?apiKey=1#/api-key"
+    },
+    {
+      "protocol": "openai",
+      "name": "百度千帆",
+      "logo": "https://bce.bdstatic.com/img/favicon.ico",
+      "desc": "百度智能云千帆大模型服务与开发平台ModelBuilder是面向企业开发者的一站式大模型开发及服务运行平台，不仅提供了包括文心一言底层模型和第三方开源大模型，还提供了各种AI开发工具和整套开发环境，从数据管理到服务云端部署，完备的流程助力各行业生成式AI应用需求落地。",
+      "baseUrl": "https://qianfan.baidubce.com/v2",
+      "models": [
+        {
+          "id": "deepseek-r1",
+          "name": "R1",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek-r1-distill-qwen-32b",
+          "name": "R1-32b",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek-v3",
+          "name": "V3-0324",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": false
+        }
+      ],
+      "maxTokens": 8192,
+      "temperature": 0.8,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Zm2ycv77m",
+      "modelListUrl": "https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu#%E6%94%AF%E6%8C%81%E6%A8%A1%E5%9E%8B%E5%88%97%E8%A1%A8",
+      "keyApplyUrl": "https://console.bce.baidu.com/iam/#/iam/apikey/list"
+    },
+    {
+      "protocol": "openai",
+      "name": "Volcengine(火山引擎)",
+      "logo": "https://portal.volccdn.com/obj/volcfe/misc/favicon.png",
+      "desc": "火山引擎是字节跳动旗下的云服务平台，将字节跳动快速发展过程中积累的增长方法、技术能力和应用工具开放给外部企业，提供云基础、视频与内容分发、数智平台VeDI、人工智能、开发与运维等服务，帮助企业在数字化升级中实现持续增长。",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "models": [
+        {
+          "id": "deepseek-r1-250120",
+          "name": "R1",
+          "group": "Deepseek",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "deepseek-v3-250324",
+          "name": "V3",
+          "group": "Deepseek",
+          "reasoning": false,
+          "functionCall": true
+        }
+      ],
+      "maxTokens": 8192,
+      "temperature": 1.0,
+      "topP": 1.0,
+      "topK": 40,
+      "documentationUrl": "https://github.com/ollama/ollama/tree/main/docs",
+      "modelListUrl": "https://ollama.com/library",
+      "keyApplyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D"
+    },
+    {
       "protocol": "openai",
       "name": "HunYuan(混元)",
       "logo": "https://cloudcache.tencent-cloud.com/qcloud/favicon.ico",
@@ -652,9 +908,23 @@
       "models": [
         {
           "id": "hunyuan-lite",
-          "name": "hunyuan-lite",
+          "name": "hunyuan-lite(免费)",
           "group": "HunYuan",
           "reasoning": false,
+          "functionCall": false
+        },
+        {
+          "id": "hunyuan-T1",
+          "name": "T1",
+          "group": "HunYuan",
+          "reasoning": true,
+          "functionCall": false
+        },
+        {
+          "id": "hunyuan-TurboS",
+          "name": "TurboS",
+          "group": "HunYuan",
+          "reasoning": true,
           "functionCall": false
         }
       ],

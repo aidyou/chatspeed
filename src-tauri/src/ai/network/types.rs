@@ -197,23 +197,15 @@ impl ErrorFormat {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiResponse {
-    pub candidates: Vec<Candidate>,
-    pub usage_metadata: UsageMetadata,
-    pub model_version: String,
+    pub candidates: Option<Vec<Candidate>>,
+    pub usage_metadata: Option<UsageMetadata>,
 }
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageMetadata {
     pub prompt_token_count: u64,
     pub total_token_count: u64,
-    pub prompt_tokens_details: Vec<TokensDetails>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TokensDetails {
-    pub modality: String,
-    pub token_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,4 +221,79 @@ pub struct Content {
 #[derive(Debug, Deserialize)]
 pub struct Part {
     pub text: String,
+}
+
+/// OpenAI compatible response format
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAIStreamResponse {
+    #[serde(default)]
+    pub choices: Vec<OpenAIStreamChoice>,
+    pub usage: Option<OpenAIUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAIStreamChoice {
+    pub delta: OpenAIStreamDelta,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAIStreamDelta {
+    pub content: Option<String>,
+    pub reasoning_content: Option<String>,
+    #[serde(rename = "type")]
+    pub msg_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAIUsage {
+    pub total_tokens: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+/// Anthropic stream event types
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnthropicEventType {
+    MessageStart,
+    ContentBlockStart,
+    ContentBlockDelta,
+    ContentBlockStop,
+    MessageDelta,
+    MessageStop,
+    Ping,
+    Error,
+}
+
+/// Anthropic stream event
+#[derive(Debug, Deserialize)]
+pub struct AnthropicStreamEvent {
+    #[serde(rename = "type")]
+    pub event_type: AnthropicEventType,
+    /*
+    /// Full message object (only available in message_start/message_stop events)
+    /// Example usage:
+    /// - message_start: contains initial message metadata (id, model, etc)
+    /// - message_stop: contains final message state and usage statistics
+    #[serde(default)]
+    pub message: Option<Value>,
+    */
+    /*
+    /// Content block object (only available in content_block_start events)
+    /// Example usage:
+    /// - content_block_start: contains the initial state of content blocks
+    /// - For text blocks: {"type": "text", "text": ""}
+    /// - For tool_use blocks: {"type": "tool_use", "id": "toolu_...", "name": "...", "input": {}}
+    #[serde(default)]
+    pub content_block: Option<Value>,
+    */
+    #[serde(default)]
+    pub index: Option<u32>,
+    #[serde(default)]
+    pub delta: Option<Value>,
+    #[serde(default)]
+    pub error: Option<Value>,
+    #[serde(default)]
+    pub usage: Option<Value>,
 }

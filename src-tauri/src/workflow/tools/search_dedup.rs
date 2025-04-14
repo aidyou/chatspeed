@@ -11,16 +11,16 @@ use crate::{
     },
 };
 
-pub struct SearchDedupTool;
+pub struct SearchDedup;
 
-impl SearchDedupTool {
+impl SearchDedup {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl FunctionDefinition for SearchDedupTool {
+impl FunctionDefinition for SearchDedup {
     fn name(&self) -> &str {
         "search_dedup"
     }
@@ -100,7 +100,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_dedup_tool() {
-        let tool = SearchDedupTool;
+        let tool = SearchDedup;
 
         // 测试正常情况
         let results = json!([

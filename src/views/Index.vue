@@ -208,6 +208,8 @@
                   :content="message.content"
                   :reference="message.metadata?.reference || []"
                   :reasoning="message.metadata?.reasoning || ''"
+                  :log="chatState.log"
+                  :plan="chatState.plan"
                   v-else />
                 <div class="metadata">
                   <div class="buttons">
@@ -264,9 +266,12 @@
                       <span>{{ message?.metadata?.tokens }}</span>
                     </div>
                     <div class="item" v-if="message?.metadata?.tokensPerSecond">
-                      <span
-                        >{{ Math.round((message?.metadata?.tokensPerSecond * 100) / 100) }}
-                        {{ $t('chat.metadata.tokensPerSecond') }}</span
+                      <span>
+                        {{
+                          $t('chat.metadata.speed', {
+                            speed: Math.round((message?.metadata?.tokensPerSecond * 100) / 100)
+                          })
+                        }}</span
                       >
                     </div>
                   </div>
@@ -278,28 +283,19 @@
               </div>
             </div>
 
-            <!-- clear context -->
-            <div
-              v-if="
-                !isChatting &&
-                messagesForShow.length > 1 &&
-                !messagesForShow[messagesForShow.length - 1]?.metadata?.contextCleared
-              "
-              class="clear-context"
-              @click="onClearContext">
-              <cs name="clear" /> {{ $t('chat.clearContext') }}
-            </div>
-
             <!-- chatting message -->
             <div v-if="isChatting" class="message assistant" :class="{ loading: isChatting }">
               <div class="avatar">
-                <logo :name="currentModel?.logo" />
+                <logo
+                  :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
                 <chatting
                   :content="currentAssistantMessage"
                   :reference="chatState.reference"
                   :reasoning="chatState.reasoning"
+                  :log="chatState.log"
+                  :plan="chatState.plan"
                   :is-reasoning="chatState.isReasoning" />
               </div>
             </div>
@@ -344,24 +340,7 @@
               </div>
             </div>
             <div class="input">
-              <div class="icons">
-                <el-tooltip
-                  :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-                  :hide-after="0"
-                  placement="top">
-                  <cs
-                    name="connected"
-                    class="small"
-                    :class="{ active: networkEnabled }"
-                    @click="onToggleNetwork"
-                    v-if="crawlerAvailable" />
-                </el-tooltip>
-                <cs
-                  class="small"
-                  :class="{ active: isSkillListVisible }"
-                  name="tool"
-                  @click="onOpenSkillSelector" />
-              </div>
+              <!-- message input -->
               <el-input
                 ref="inputRef"
                 v-model="inputMessage"
@@ -374,13 +353,57 @@
                 @input="onInput"
                 @compositionstart="onCompositionStart"
                 @compositionend="onCompositionEnd" />
-              <div class="icons">
-                <cs name="stop" @click="onStopChat" v-if="isChatting" />
-                <cs
-                  v-else
-                  name="send"
-                  @click="sendMessage(null)"
-                  :class="{ disabled: !canSendMessage }" />
+
+              <!-- chat icons -->
+              <div class="input-footer">
+                <div class="icons">
+                  <el-tooltip
+                    :content="
+                      $t(`chat.${!deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled'}`)
+                    "
+                    :hide-after="0"
+                    placement="top"
+                    v-if="crawlerAvailable">
+                    <label @click="onDeepSearchEnabled" :class="{ active: deepSearchEnabled }">
+                      <cs name="skill-deep-search" class="small" />
+                      {{ $t('chat.deepsearch') }}
+                    </label>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+                    :hide-after="0"
+                    placement="top"
+                    v-if="crawlerAvailable && !deepSearchEnabled">
+                    <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
+                      <cs name="connected" class="small" />
+                      {{ $t('chat.network') }}
+                    </label>
+                  </el-tooltip>
+                  <label
+                    @click="onToggleSkillSelector"
+                    :class="{ active: isSkillListVisible }"
+                    v-if="!deepSearchEnabled">
+                    <cs class="small" name="tool" />{{ $t('chat.skills') }}
+                  </label>
+                  <el-tooltip
+                    :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
+                    :hide-after="0"
+                    placement="top"
+                    v-if="!deepSearchEnabled">
+                    <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
+                      <cs name="clear-context" class="small" />
+                      {{ $t('chat.context') }}
+                    </label>
+                  </el-tooltip>
+                </div>
+                <div class="icons">
+                  <cs name="stop" @click="onStopChat" v-if="isChatting" />
+                  <cs
+                    v-else
+                    name="send"
+                    @click="sendMessage(null)"
+                    :class="{ disabled: !canSendMessage }" />
+                </div>
               </div>
             </div>
           </el-footer>
@@ -512,6 +535,7 @@ const currentSubModels = computed(() =>
 )
 const currentModelAlias = computed(() => {
   const cfg = currentModel.value.models.find(m => m.id === currentModel.value.defaultModel)
+  console.log(currentModel.value.defaultModel)
   return cfg?.name || cfg?.id.split('/').pop()
 })
 
@@ -548,7 +572,10 @@ const getDefaultChatState = () => ({
   message: '',
   reference: [],
   reasoning: '',
-  isReasoning: false
+  isReasoning: false,
+  log: [],
+  plan: [],
+  model: ''
 })
 
 const chatState = ref(getDefaultChatState())
@@ -558,6 +585,7 @@ const chatState = ref(getDefaultChatState())
 const networkEnabled = ref(csGetStorage(csStorageKey.networkEnabled, true))
 // When deep search is enabled, the AI will automatically plan the user's questions
 // and break them down into executable steps for research.
+const deepSearchEnabled = ref(csGetStorage(csStorageKey.deepSearchEnabled, false))
 const crawlerAvailable = computed(() => {
   return (
     settingStore.settings.chatspeedCrawler != '' &&
@@ -588,6 +616,8 @@ const takeNoteRules = {
   tags: [{ required: true, message: t('chat.noteTagsRequired'), trigger: 'blur' }],
   title: [{ required: true, message: t('chat.noteTitleRequired'), trigger: 'blur' }]
 }
+// clear context
+const disableContext = ref(csGetStorage(csStorageKey.disableContext, false))
 
 /**
  * Try to get the user's language from the setting, if not found, return 'English'
@@ -831,7 +861,7 @@ const loadMessagesForObserver = async () => {
         : newMessages[newMessages.length - 1].id
 
     // Add new messages
-    messagesForShow.value.unshift(...newMessages)
+    messagesForShow.value.splice(0, 0, ...newMessages)
     hasMoreMessages.value = startIndex > 0
 
     // Wait for DOM update and scroll to the correct position
@@ -904,7 +934,7 @@ const sendMessage = async (messageId = null) => {
   }
 
   let historyMessages = []
-  if (settingStore.settings.historyMessages > 0) {
+  if (settingStore.settings.historyMessages > 0 && !disableContext.value) {
     historyMessages = chatStore.messages.slice(-1 * settingStore.settings.historyMessages * 2)
     if (
       historyMessages.length > 0 &&
@@ -925,20 +955,14 @@ const sendMessage = async (messageId = null) => {
   chatStore
     .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
     .then(async () => {
-      chatState.value = getDefaultChatState()
-      chatErrorMessage.value = ''
-      replyMessage.value = ''
-      inputMessage.value = ''
-      currentAssistantMessage.value = ''
+      resetChat()
       isChatting.value = true
       lastChatId.value = Uuid()
 
       // Scroll to bottom immediately
-      scrollToBottomIfNeeded()
-      setTimeout(() => {
-        // Scroll again after 800ms to prevent issues caused by the first scroll when the window's vdom has not been updated yet
-        scrollToBottomIfNeeded()
-      }, 800)
+      nextTick(() => {
+        scrollToBottom()
+      })
       try {
         await invoke('chat_completion', {
           apiProtocol: currentModel.value.apiProtocol,
@@ -955,7 +979,8 @@ const sendMessage = async (messageId = null) => {
             topK: currentModel.value.topK,
             label: windowLabel.value,
             proxyType: proxyType.value,
-            useContext: !selectedSkill.value
+            useContext: !selectedSkill.value,
+            model: currentModel.value.defaultModel
           }
         })
       } catch (error) {
@@ -994,11 +1019,84 @@ const newChat = () => {
   })
 }
 
+/**
+ * Execute deep search
+ * @param {string} messageId
+ */
+const deepSearch = (messageId = null) => {
+  if (!crawlerAvailable.value) {
+    console.error('crawler not available')
+    return
+  }
+  if (!deepSearchEnabled.value) {
+    return
+  }
+  let userMessage = messageId
+    ? chatStore.messages.find(m => m.id === messageId)?.content?.trim() || ''
+    : inputMessage.value.trim()
+  if (!userMessage) {
+    console.error('no user message to send')
+    return
+  }
+  resetScrollBehavior() // reset scroll behavior
+
+  chatStore
+    .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
+    .then(async () => {
+      resetChat()
+      isChatting.value = true
+      lastChatId.value = Uuid()
+
+      // Scroll to bottom immediately
+      nextTick(() => {
+        scrollToBottom()
+      })
+      try {
+        await invoke('deep_search', {
+          chatId: lastChatId.value,
+          question: userMessage,
+          metadata: {
+            label: windowLabel.value,
+            model: currentModel.value.defaultModel
+          }
+        })
+      } catch (error) {
+        chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
+        console.error('error on sendMessage:', error)
+        isChatting.value = false
+      }
+    })
+    .catch(error => {
+      chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
+      console.error('error on addChatMessage:', error)
+    })
+}
+/**
+ * Automatically send message or deep search based on settings
+ * @param {int} messageId
+ */
+const sendMessageAuto = (messageId = null) => {
+  if (deepSearchEnabled.value) {
+    deepSearch(messageId)
+  } else {
+    sendMessage(messageId)
+  }
+}
+/**
+ * Reset chat state
+ */
+const resetChat = () => {
+  chatState.value = getDefaultChatState()
+  chatErrorMessage.value = ''
+  replyMessage.value = ''
+  inputMessage.value = ''
+  currentAssistantMessage.value = ''
+}
+
 const title = ref('')
 const titleGenerating = ref(false)
 const titleRetryCount = ref(0)
 const MAX_TITLE_RETRY = 3
-
 /**
  * Generate a title for the current conversation by AI
  */
@@ -1159,8 +1257,24 @@ const handleChatMessage = async payload => {
         chatState.value.message = messages[1].trim()
       }
       break
+
+    case 'log':
+      chatState.value.log.push(payload?.chunk || '')
+      break
+    case 'plan':
+      if (payload?.chunk) {
+        try {
+          const plan = JSON.parse(payload?.chunk || '[]')
+          chatState.value.plan = Array.isArray(plan) ? [...plan] : []
+        } catch (e) {
+          console.log('error on parse plan:', e)
+          console.log('chunk', payload?.chunk)
+        }
+      }
+      break
   }
 
+  chatState.value.model = payload?.metadata?.model || currentModel.value.defaultModel || ''
   currentAssistantMessage.value = chatState.value.message
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
@@ -1180,24 +1294,36 @@ const handleChatMessage = async payload => {
           chatMessagesRef.value.scrollTop + chatMessagesRef.value.clientHeight >=
           chatMessagesRef.value.scrollHeight - 10
       }
+      // 保存当前状态用于后续恢复
+      const originalMessage = chatState.value.message.trim()
+      const originalReference =
+        chatState.value.reference && Array.isArray(chatState.value.reference)
+          ? [...chatState.value.reference]
+          : []
+      const originalReasoning = chatState.value.reasoning || ''
+
+      // 提前重置状态（核心优化点）
+      chatState.value = getDefaultChatState()
+      currentAssistantMessage.value = ''
+
       try {
         await chatStore.addChatMessage(
           chatStore.currentConversationId,
           'assistant',
-          chatState.value.message.trim(),
+          originalMessage,
           {
             tokens: payload?.metadata?.tokens?.total || 0,
             prompt: payload?.metadata?.tokens?.prompt || 0,
             completion: payload?.metadata?.tokens?.completion || 0,
             tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
-            provider: currentModel.value.defaultModel || '',
-            reference: chatState.value.reference || [],
-            reasoning: chatState.value.reasoning || ''
+            provider: payload?.metadata?.model || currentModel.value.defaultModel || '',
+            reference: originalReference,
+            reasoning: originalReasoning
           }
         )
         // 一次性更新所有状态，减少DOM重绘次数
-        chatState.value = getDefaultChatState()
-        currentAssistantMessage.value = ''
+        // chatState.value = getDefaultChatState()
+        // currentAssistantMessage.value = ''
 
         // 在DOM更新后恢复滚动位置
         nextTick(() => {
@@ -1475,7 +1601,7 @@ const onSubModelChange = modelId => {
   const logo = currentModel.value?.metadata?.logo || ''
   // update the database record
   modelStore
-    .setModel({
+    .setModelProvider({
       ...currentModel.value,
       defaultModel: modelId,
       metadata: {
@@ -1493,27 +1619,24 @@ const onSubModelChange = modelId => {
  * Stop chat
  */
 const onStopChat = () => {
-  invoke('stop_chat', { apiProtocol: currentModel.value.apiProtocol })
+  const cmd = deepSearchEnabled.value ? 'stop_deep_search' : 'stop_chat'
+  const param = { chatId: lastChatId.value }
+  if (!deepSearchEnabled.value) {
+    param.apiProtocol = currentModel.value.apiProtocol
+  }
+  invoke(cmd, param)
     .then(() => {
-      if (currentAssistantMessage.value.trim().length > 0) {
+      if (chatState.value.message.trim()) {
         chatStore
           .addChatMessage(
             chatStore.currentConversationId,
             'assistant',
-            currentAssistantMessage.value.trim(),
+            chatState.value.message.trim(),
             {
               reference: chatState.value?.reference || [],
               reasoning: chatState.value?.reasoning || ''
             }
           )
-          .then(() => {
-            currentAssistantMessage.value = ''
-            nextTick(() => {
-              if (!userHasScrolled.value || isScrolledToBottom.value) {
-                scrollToBottomIfNeeded()
-              }
-            })
-          })
           .catch(error => {
             chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
           })
@@ -1525,6 +1648,14 @@ const onStopChat = () => {
     .finally(() => {
       lastChatId.value = ''
       isChatting.value = false
+      currentAssistantMessage.value = ''
+      chatState.value = getDefaultChatState()
+
+      nextTick(() => {
+        if (!userHasScrolled.value || isScrolledToBottom.value) {
+          scrollToBottomIfNeeded()
+        }
+      })
     })
 }
 
@@ -1533,7 +1664,7 @@ const onStopChat = () => {
  * @param {Number} id message id
  */
 const onResendMessage = id => {
-  sendMessage(id)
+  sendMessageAuto(id)
 }
 
 /**
@@ -1600,10 +1731,24 @@ const onSkillSelected = skill => {
   // clear the search keyword
   skillSearchKeyword.value = ''
 }
-
+/**
+ * Toggle the network enabled state
+ */
 const onToggleNetwork = () => {
   networkEnabled.value = !networkEnabled.value
   csSetStorage(csStorageKey.networkEnabled, networkEnabled.value)
+}
+
+/**
+ * Toggle the deep search enabled state
+ */
+const onDeepSearchEnabled = () => {
+  deepSearchEnabled.value = !deepSearchEnabled.value
+  csSetStorage(csStorageKey.deepSearchEnabled, deepSearchEnabled.value)
+
+  if (deepSearchEnabled.value) {
+    replyMessage.value = ''
+  }
 }
 
 /**
@@ -1616,16 +1761,17 @@ const onSkillListVisibleChanged = v => {
 /**
  * Open the skill selector
  */
-const onOpenSkillSelector = () => {
+const onToggleSkillSelector = () => {
   if (skillListRef.value) {
-    skillListRef.value.show()
+    skillListRef.value.toggle()
   }
 }
-
-const onClearContext = () => {
-  chatStore.clearContext().catch(error => {
-    showMessage(t('chat.errorOnClearContext', { error }), 'error', 3000)
-  })
+/**
+ * Toggle the clear the global context enabled state
+ */
+const onGlobalClearContext = () => {
+  disableContext.value = !disableContext.value
+  csSetStorage(csStorageKey.disableContext, disableContext.value)
 }
 
 // =================================================
@@ -1666,7 +1812,7 @@ const onKeyEnter = event => {
   }
   if (!composing.value && !compositionJustEnded.value) {
     event.preventDefault()
-    sendMessage()
+    sendMessageAuto()
   }
 }
 
@@ -1934,9 +2080,8 @@ const onTakeNote = message => {
   .messages {
     flex: 1;
     overflow-y: auto;
-    padding: var(--cs-space);
+    padding: var(--cs-space-xs);
     padding-bottom: var(--cs-space);
-    //padding-bottom: calc(65px + var(--cs-space));
 
     .message {
       display: flex;
@@ -2008,7 +2153,7 @@ const onTakeNote = message => {
   footer.input-container {
     flex-shrink: 0;
     background-color: transparent;
-    padding: var(--cs-space-sm);
+    padding: 0 var(--cs-space-sm) var(--cs-space-sm);
     height: unset;
     z-index: 1;
 
@@ -2070,20 +2215,15 @@ const onTakeNote = message => {
             background-color: var(--cs-bg-color-light);
           }
         }
-
-        // 当只有一个项目时占满
-        //&:only-child {
-        //  max-width: 100%;
-        //}
       }
     }
 
     .input {
       display: flex;
-      align-items: flex-end;
+      flex-direction: column;
       background-color: var(--cs-input-bg-color);
-      border-radius: var(--cs-border-radius-xxl);
-      padding: var(--cs-space-sm);
+      border-radius: var(--cs-border-radius-lg);
+      padding: var(--cs-space-sm) var(--cs-space) var(--cs-space-xs);
 
       .icons {
         display: flex;
@@ -2091,23 +2231,40 @@ const onTakeNote = message => {
         justify-content: center;
         padding: var(--cs-space-xs);
         cursor: pointer;
+        gap: var(--cs-space-xs);
 
         .cs {
-          font-size: 20px !important;
+          font-size: var(--cs-font-size-xl) !important;
           color: var(--cs-text-color-secondary);
 
           &.small {
-            font-size: 16px !important;
-            padding-bottom: var(--cs-space-xxs);
-            padding-left: var(--cs-space-xs);
-
-            &:first-child {
-              padding-left: 0;
-            }
+            font-size: var(--cs-font-size-md) !important;
           }
 
           &.cs-send {
             color: var(--cs-text-color-primary);
+          }
+        }
+        label {
+          font-size: var(--cs-font-size-sm);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          color: var(--cs-text-color-secondary);
+          background-color: var(--cs-bg-color);
+          border-radius: var(--cs-border-radius-lg);
+          padding: var(--cs-space-xs) var(--cs-space-sm);
+          border: 1px solid var(--cs-bg-color);
+
+          &:hover,
+          &.active {
+            color: var(--cs-color-primary);
+            border: 1px solid var(--cs-color-primary);
+
+            .cs {
+              color: var(--cs-color-primary);
+            }
           }
         }
       }
@@ -2124,6 +2281,12 @@ const onTakeNote = message => {
           padding-left: var(--cs-space-xxs);
           padding-right: var(--cs-space-xxs);
         }
+      }
+      .input-footer {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
       }
     }
   }

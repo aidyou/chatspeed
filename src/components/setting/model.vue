@@ -70,6 +70,7 @@
     </div>
   </div>
 
+  <!-- model editor -->
   <el-dialog
     v-model="modelDialogVisible"
     width="560px"
@@ -101,7 +102,8 @@
             <el-input
               v-model="modelForm.apiKey"
               type="textarea"
-              :autosize="{ minRows: 1, maxRows: 5 }"
+              :autosize="{ minRows: 2, maxRows: 5 }"
+              :placeholder="$t('settings.model.apiKeyPlaceholder')"
               show-password />
           </el-form-item>
         </el-tab-pane>
@@ -130,6 +132,16 @@
                       </el-icon>
                     </div>
                     <div class="value model-action">
+                      <el-tooltip
+                        :content="$t('settings.model.defaultModel')"
+                        placement="top"
+                        :hide-after="0"
+                        transition="none">
+                        <cs
+                          :name="model.id == modelForm.defaultModel ? 'check-circle' : 'uncheck'"
+                          @click="onDefaultModelChange(model.id)" />
+                      </el-tooltip>
+
                       <cs name="edit" @click="onModelConfig(model)" />
                       <cs
                         name="trash"
@@ -231,7 +243,45 @@
     </template>
   </el-dialog>
 
-  <!-- 预设模型列表弹窗 -->
+  <!-- model config -->
+  <el-dialog
+    v-model="modelConfigDialogVisible"
+    align-center
+    width="500px"
+    :title="$t('settings.model.modelConfig')"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-form
+      :model="modelConfigForm"
+      label-width="100px"
+      :rules="modelConfigRules"
+      ref="configFormRef">
+      <el-form-item :label="$t('settings.model.modelId')" prop="id">
+        <el-input v-model="modelConfigForm.id" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
+        <el-input v-model="modelConfigForm.name" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
+        <el-input v-model="modelConfigForm.group" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
+        <el-switch v-model="modelConfigForm.reasoning" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
+        <el-switch v-model="modelConfigForm.functionCall" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <div class="dialog-footer">
+        <el-button @click="modelConfigDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="updateModelConfig">{{ $t('common.save') }}</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
+  <!-- preset models -->
   <el-dialog
     v-model="presetModelsVisible"
     :title="$t('settings.model.presetModels')"
@@ -297,44 +347,6 @@
         </el-card>
       </div>
     </div>
-  </el-dialog>
-
-  <!-- 模型编辑弹窗 -->
-  <el-dialog
-    v-model="modelConfigDialogVisible"
-    align-center
-    width="500px"
-    :title="$t('settings.model.modelConfig')"
-    :show-close="false"
-    :close-on-click-modal="false"
-    :close-on-press-escape="false">
-    <el-form
-      :model="modelConfigForm"
-      label-width="100px"
-      :rules="modelConfigRules"
-      ref="configFormRef">
-      <el-form-item :label="$t('settings.model.modelId')" prop="id">
-        <el-input v-model="modelConfigForm.id" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
-        <el-input v-model="modelConfigForm.name" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
-        <el-input v-model="modelConfigForm.group" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
-        <el-switch v-model="modelConfigForm.reasoning" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
-        <el-switch v-model="modelConfigForm.functionCall" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <div class="dialog-footer">
-        <el-button @click="modelConfigDialogVisible = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" @click="updateModelConfig">{{ $t('common.save') }}</el-button>
-      </div>
-    </template>
   </el-dialog>
 </template>
 
@@ -418,7 +430,6 @@ const modelRules = {
   apiProtocol: [{ required: true, message: t('settings.model.apiProtocolRequired') }],
   name: [{ required: true, message: t('settings.model.nameRequired') }],
   models: [{ required: true, message: t('settings.model.modelsRequired') }],
-  defaultModel: [{ required: true, message: t('settings.model.defaultModelRequired') }],
   baseUrl: [{ required: true, message: t('settings.model.baseUrlRequired') }]
 }
 
@@ -506,7 +517,17 @@ const copyModel = id => {
  */
 const updateModel = () => {
   formRef.value.validate(valid => {
-    console.log(modelForm.value)
+    // console.log(modelForm.value)
+    if (!modelForm.value.models.length) {
+      showMessage(t('settings.model.modelsRequired'), 'error')
+      return
+    }
+    if (modelForm.value.defaultModel === '') {
+      modelForm.value.defaultModel = modelForm.value.models[0].id
+    } else if (!modelForm.value.models.some(x => x.id === modelForm.value.defaultModel)) {
+      modelForm.value.defaultModel = modelForm.value.models[0].id
+    }
+
     if (valid) {
       const formData = {
         id: editId.value,
@@ -579,6 +600,7 @@ const defaultModelConfig = {
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
 }
+const prevModelConfigId = ref('')
 const modelConfigForm = ref({ ...defaultModelConfig })
 const modelConfigDialogVisible = ref(false)
 const modelGroups = computed(() => {
@@ -597,12 +619,22 @@ const modelGroups = computed(() => {
  */
 const onModelConfig = model => {
   if (model) {
+    prevModelConfigId.value = model.id
     model.group = model.group === t('settings.model.ungrouped') ? '' : model.group
     modelConfigForm.value = { ...model }
   } else {
+    prevModelConfigId.value = ''
     modelConfigForm.value = { ...defaultModelConfig }
   }
   modelConfigDialogVisible.value = true
+}
+
+/**
+ * Changes the default model for the current model provider.
+ * @param {string} id - The ID of the model to set as the default model.
+ */
+const onDefaultModelChange = id => {
+  modelForm.value.defaultModel = id
 }
 
 /**
@@ -610,8 +642,13 @@ const onModelConfig = model => {
  */
 const updateModelConfig = () => {
   if (!modelConfigForm.value.id) return
-  const index = modelForm.value.models.findIndex(item => item.id === modelConfigForm.value.id)
+  const idToUpdate = prevModelConfigId.value ?? modelConfigForm.value.id
+  const index = modelForm.value.models.findIndex(item => item.id === idToUpdate)
+
   if (index !== -1) {
+    if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {
+      modelForm.value.defaultModel = modelConfigForm.value.id
+    }
     modelForm.value.models.splice(index, 1, { ...modelConfigForm.value })
   } else {
     modelForm.value.models.push({ ...modelConfigForm.value })
@@ -626,6 +663,11 @@ const removeModelConfig = id => {
   const index = modelForm.value.models.findIndex(item => item.id === id)
   if (index !== -1) {
     modelForm.value.models.splice(index, 1)
+
+    if (modelForm.value.defaultModel === id) {
+      modelForm.value.defaultModel =
+        modelForm.value.models.length > 0 ? modelForm.value.models[0].id : ''
+    }
   }
 }
 

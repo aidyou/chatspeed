@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use rust_i18n::t;
@@ -13,43 +13,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ModelName {
-    Reasoning,
-    General,
-}
-
-impl fmt::Display for ModelName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModelName::Reasoning => write!(f, "reasoning"),
-            ModelName::General => write!(f, "general"),
-        }
-    }
-}
-
-impl AsRef<str> for ModelName {
-    fn as_ref(&self) -> &str {
-        match self {
-            ModelName::Reasoning => "reasoning",
-            ModelName::General => "general",
-        }
-    }
-}
-
-impl TryFrom<&str> for ModelName {
-    type Error = WorkflowError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "reasoning" => Ok(ModelName::Reasoning),
-            "general" => Ok(ModelName::General),
-            _ => Err(WorkflowError::FunctionParamError(
-                t!("workflow.invalid_model_name", model_name = value).to_string(),
-            )),
-        }
-    }
-}
+use super::ModelName;
 
 /// A function that sends an HTTP request.
 pub struct ChatCompletion {

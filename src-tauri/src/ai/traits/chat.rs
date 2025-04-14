@@ -17,6 +17,8 @@ pub enum MessageType {
     Step,
     Text,
     Think,
+    Log,
+    Plan,
 }
 
 impl Default for MessageType {
@@ -48,6 +50,8 @@ impl From<MessageType> for &str {
             MessageType::Reasoning | MessageType::Think => "reasoning",
             MessageType::Reference => "reference",
             MessageType::Step => "step",
+            MessageType::Log => "log",
+            MessageType::Plan => "plan",
         }
     }
 }
@@ -67,6 +71,8 @@ impl MessageType {
             "reference" => Some(MessageType::Reference),
             "step" => Some(MessageType::Step),
             "text" => Some(MessageType::Text),
+            "log" => Some(MessageType::Log),
+            "plan" => Some(MessageType::Plan),
             _ => {
                 warn!("Invalid message type: {}, returning None", value);
                 Some(MessageType::Text)

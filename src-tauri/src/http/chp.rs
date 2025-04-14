@@ -2,8 +2,8 @@ use reqwest::{Client, StatusCode};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::convert::TryFrom;
 use std::fmt::Display;
+use std::{convert::TryFrom, str::FromStr};
 use url::form_urlencoded::byte_serialize;
 
 use crate::http::{
@@ -83,6 +83,14 @@ impl Display for SearchProvider {
 impl From<SearchProvider> for String {
     fn from(provider: SearchProvider) -> Self {
         provider.to_string()
+    }
+}
+
+impl FromStr for SearchProvider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
     }
 }
 

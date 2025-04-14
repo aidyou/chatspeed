@@ -1,6 +1,6 @@
-use rust_i18n::t;
 use serde_json::{json, Value};
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 use tokio::sync::Mutex;
@@ -21,16 +21,87 @@ use crate::{
 
 use super::constants::{API_KEY_ROTATOR, BASE_URL};
 
-/// Macro to initialize a HashMap of chat interfaces.
-/// This macro takes key-value pairs and constructs a HashMap where keys are strings
-/// and values are chat interface instances.
+/// Macro for initializing a nested HashMap structure for chat interfaces
+///
+/// Creates a two-level HashMap where:
+/// - First level keys are ChatProtocol variants
+/// - Second level maps chat IDs to their respective instances
+///
+/// # Parameters
+/// - `$key`: One or more ChatProtocol variants to initialize
+///
+/// # Returns
+/// Returns a HashMap<ChatProtocol, HashMap<String, AiChatEnum>> structure
+///
+/// # Example
+/// ```no_run
+/// let chats = init_chats! {
+///     ChatProtocol::OpenAI,
+///     ChatProtocol::Anthropic,
+///     ChatProtocol::Gemini
+/// };
+///
+/// assert!(chats.contains_key(&ChatProtocol::OpenAI));
+/// assert!(chats.contains_key(&ChatProtocol::Anthropic));
+/// assert!(chats.contains_key(&ChatProtocol::Gemini));
+/// ```
 macro_rules! init_chats {
-    ($($key:expr => $value:expr),+ $(,)?) => {{
+    ($($key:expr),+ $(,)?) => {{
         let mut chats = HashMap::new();
         $(
-            chats.insert($key, $value);
+            chats.insert($key, HashMap::new());
         )+
         chats
+    }};
+}
+
+/// Macro for getting or creating a chat interface instance
+///
+/// This macro provides thread-safe lazy initialization of chat interface instances.
+/// It follows the pattern: Protocol → ChatID → Instance
+///
+/// # Parameters
+/// - `$chats`: HashMap containing chat instances (Type: `HashMap<ChatProtocol, HashMap<String, AiChatEnum>>`)
+/// - `$protocol`: Chat protocol type (Type: `ChatProtocol`)
+/// - `$chat_id`: Unique session identifier (Type: `String`)
+///
+/// # Returns
+/// Cloned instance of the chat interface (Type: `AiChatEnum`)
+///
+/// # Behavior
+/// 1. Gets or creates protocol-level HashMap
+/// 2. Gets or creates chat instance using the provided ID
+/// 3. Returns a cloned reference to the instance
+///
+/// # Example
+/// ```no_run
+/// let mut chats = HashMap::new();
+/// let protocol = ChatProtocol::OpenAI;
+/// let chat_id = "session_123".to_string();
+///
+/// // First call creates new instance
+/// let chat1 = get_or_create_chat!(chats, protocol, chat_id);
+///
+/// // Subsequent calls return same instance
+/// let chat2 = get_or_create_chat!(chats, protocol, chat_id);
+///
+/// assert!(std::ptr::eq(&chat1, &chat2));
+/// ```
+macro_rules! get_or_create_chat {
+    ($chats:expr, $protocol:expr, $chat_id:expr) => {{
+        $chats
+            .entry($protocol.clone())
+            .or_insert_with(HashMap::new)
+            .entry($chat_id.clone())
+            .or_insert_with(|| match $protocol {
+                ChatProtocol::OpenAI => AiChatEnum::OpenAI(OpenAIChat::new()),
+                ChatProtocol::Anthropic => AiChatEnum::Anthropic(AnthropicChat::new()),
+                ChatProtocol::Gemini => AiChatEnum::Gemini(GeminiChat::new()),
+                ChatProtocol::Ollama | ChatProtocol::HuggingFace => {
+                    AiChatEnum::OpenAI(OpenAIChat::new())
+                }
+            })
+            .clone()
     }};
 }
 
@@ -53,13 +124,17 @@ macro_rules! impl_chat_method {
 pub enum AiChatEnum {
     Anthropic(AnthropicChat),
     Gemini(GeminiChat),
-    // HuggingFace(HuggingFaceChat),
     OpenAI(OpenAIChat),
 }
 
 /// Struct representing the state of the chat system, holding a collection of chat interfaces.
 pub struct ChatState {
-    pub chats: Arc<Mutex<HashMap<ChatProtocol, AiChatEnum>>>,
+    /// 协议类型 -> 聊天ID -> 聊天实例
+    /// Protocol -> Chat ID -> Chat instance
+    pub chats: Arc<Mutex<HashMap<ChatProtocol, HashMap<String, AiChatEnum>>>>,
+    // 新增深度搜索状态跟踪
+    // New depth search state tracking
+    pub active_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub channels: Arc<WindowChannels>,
 }
 
@@ -70,15 +145,16 @@ impl ChatState {
     /// A new instance of `ChatState` containing initialized chat interfaces.
     pub fn new(channels: Arc<WindowChannels>) -> Self {
         let chats = init_chats! {
-            ChatProtocol::OpenAI => AiChatEnum::OpenAI(OpenAIChat::new()),
-            ChatProtocol::Ollama => AiChatEnum::OpenAI(OpenAIChat::new()),
-            ChatProtocol::HuggingFace => AiChatEnum::OpenAI(OpenAIChat::new()),
-            ChatProtocol::Anthropic => AiChatEnum::Anthropic(AnthropicChat::new()),
-            ChatProtocol::Gemini => AiChatEnum::Gemini(GeminiChat::new()),
+            ChatProtocol::OpenAI,
+            ChatProtocol::Ollama,
+            ChatProtocol::HuggingFace,
+            ChatProtocol::Anthropic,
+            ChatProtocol::Gemini
         };
 
         Self {
             chats: Arc::new(Mutex::new(chats)),
+            active_searches: Arc::new(Mutex::new(HashMap::new())),
             channels,
         }
     }
@@ -248,30 +324,36 @@ pub async fn complete_chat_async(
         }
     }
 
-    let chats = chat_state.chats.lock().await;
-    match chats.get(&chat_protocol).cloned() {
-        Some(chat_interface) => {
-            let _ = tokio::spawn(async move {
-                // reset stop flag
-                chat_interface.set_stop_flag(false).await;
-                chat_interface
-                    .chat(
-                        api_url_clone.as_deref(),
-                        &model,
-                        api_key_clone.as_deref(),
-                        chat_id,
-                        messages,
-                        metadata,
-                        callback,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())
-            });
+    let mut chats = chat_state.chats.lock().await;
+    let chat_interface = get_or_create_chat!(chats, chat_protocol, chat_id);
 
-            Ok(())
+    let chats_ref = chat_state.chats.clone();
+    let protocol_clone = chat_protocol.clone();
+    let chat_id_clone = chat_id.clone();
+
+    let _ = tokio::spawn(async move {
+        // reset stop flag
+        chat_interface.set_stop_flag(false).await;
+        let _ = chat_interface
+            .chat(
+                api_url_clone.as_deref(),
+                &model,
+                api_key_clone.as_deref(),
+                chat_id,
+                messages,
+                metadata,
+                callback,
+            )
+            .await
+            .map_err(|e| e.to_string());
+
+        let mut chats = chats_ref.lock().await;
+        if let Some(protocol_chats) = chats.get_mut(&protocol_clone) {
+            protocol_chats.remove(&chat_id_clone);
         }
-        None => Err(t!("chat.invalid_api_provider", provider = chat_protocol).to_string()),
-    }
+    });
+
+    Ok(())
 }
 
 /// Get the base URL for HuggingFace

@@ -159,6 +159,19 @@ impl DefaultApiClient {
             }
         }
 
+        // Site URL for rankings on openrouter.ai
+        headers.insert(
+            "HTTP-Referer",
+            HeaderValue::from_str("https://github.com/aidyou/chatspeed")
+                .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+        );
+        // Site title for rankings on openrouter.ai
+        headers.insert(
+            "X-Title",
+            HeaderValue::from_str("Chatspeed")
+                .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+        );
+
         Ok(headers)
     }
 

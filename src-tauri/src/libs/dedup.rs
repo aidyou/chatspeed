@@ -77,6 +77,22 @@ pub fn normalize_title(title: &str) -> String {
     normalized
 }
 
+/// Performs multi-stage deduplication and ranking of search results
+///
+/// This function processes search results through three phases:
+/// 1. URL-based deduplication (removes duplicate URLs and filters unwanted file types)
+/// 2. Relevance scoring (calculates match score against query)
+/// 3. Semantic deduplication (removes near-duplicate content using simhash)
+///
+/// # Arguments
+/// * `results` - Raw search results to process (may contain duplicates)
+/// * `query` - Original search query used for relevance scoring
+///
+/// # Returns
+/// Processed results with:
+/// - Duplicates removed
+/// - Irrelevant file types filtered
+/// - Items ranked by relevance score (descending)
 pub fn dedup_and_rank_results(mut results: Vec<SearchResult>, query: &str) -> Vec<SearchResult> {
     if results.is_empty() {
         return results;

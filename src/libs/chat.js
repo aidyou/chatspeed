@@ -118,6 +118,11 @@ function buildHistoryMessages(historyMessages) {
       return acc
     }
 
+    // Skip if current message has same role as previous message
+    if (acc.messages.length > 0 && message.role === acc.messages[acc.messages.length - 1].role) {
+      return acc
+    }
+
     // Collect message
     acc.messages.unshift({
       role: message.role,
@@ -340,7 +345,7 @@ export const parseMarkdown = (content, reference) => {
   })
 
   // Process math formulas before markdown parsing
-  if (content.includes('$')) {
+  if (content.includes('$$')) {
     // Process block math formulas
     content = content.replace(MATH_BLOCK_REGEX, (_match, formula) => {
       // Handle Chinese characters
@@ -349,14 +354,19 @@ export const parseMarkdown = (content, reference) => {
       }
       return `<div class="katex katex-block" data-formula="${encodeURIComponent(formula)}"></div>`
     })
+
+    // 在 markdown 文档解析单`$`包裹的共识非常容易识别错误，所以还是不要支持行内公式好。
+    //
+    // Parsing single `$` wrapped formulas in markdown documents is very prone to recognition errors, so inline formulas are not supported.
+    //
     // Process inline math formulas
-    content = content.replace(MATH_INLINE_REGEX, (_match, formula) => {
-      // Handle Chinese characters
-      if (CHINESE_CHARS_REGEX.test(formula)) {
-        formula = formula.replace(CHINESE_CHARS_GROUP_REGEX, '\\text{$1}')
-      }
-      return `<span class="katex katex-inline" data-formula="${encodeURIComponent(formula)}"></span>`
-    })
+    // content = content.replace(MATH_INLINE_REGEX, (_match, formula) => {
+    //   // Handle Chinese characters
+    //   if (CHINESE_CHARS_REGEX.test(formula)) {
+    //     formula = formula.replace(CHINESE_CHARS_GROUP_REGEX, '\\text{$1}')
+    //   }
+    //   return `<span class="katex katex-inline" data-formula="${encodeURIComponent(formula)}"></span>`
+    // })
   }
 
   // Restore all protected content in a single pass

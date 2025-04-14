@@ -136,6 +136,8 @@ pub async fn run() -> Result<()> {
             stop_chat,
             sync_state,
             detect_language,
+            deep_search,
+            stop_deep_search,
             // message
             get_conversation_by_id,
             get_all_conversations,

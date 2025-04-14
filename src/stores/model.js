@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed, provide } from 'vue';
+import { ref, computed, provide, nextTick } from 'vue';
 import i18n from '@/i18n/index.js'
 
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -60,13 +60,8 @@ export const useModelStore = defineStore('modelProvider', () => {
           providers.value = [];
           return;
         }
-
         providers.value = result.map(model => {
-          const processedModel = processModelLogo(model)
-          if (model.id === defaultModelProvider.value.id) {
-            setDefaultModelProvider(processedModel)
-          }
-          return processedModel
+          return processModelLogo(model)
         });
         console.debug('models', providers.value)
 
@@ -74,7 +69,6 @@ export const useModelStore = defineStore('modelProvider', () => {
       })
       .catch((error) => {
         console.error('Failed to update model store:', error);
-        // 可以考虑添加用户提示
       })
       .finally(() => {
         isModelLoading = false
@@ -102,6 +96,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    * @param {Object} value - The new default model configuration.
    */
   const setDefaultModelProvider = (value) => {
+    console.log('setDefaultModelProvider', value)
     defaultModelProvider.value = !isEmpty(value) ? processModelLogo(value) : {}
     csSetStorage(csStorageKey.defaultProvider, defaultModelProvider.value)
   }
@@ -113,15 +108,24 @@ export const useModelStore = defineStore('modelProvider', () => {
    * @returns {Object} The default model object, or an empty object if none exists.
    */
   const initDefaultModel = () => {
-    if (!isEmpty(defaultModelProvider.value)) {
-      console.debug('load defaultModel from localstorage', defaultModelProvider.value)
-      return;
-    }
     if (isEmpty(providers.value)) return;
 
+    if (!isEmpty(defaultModelProvider.value)) {
+      console.debug('load defaultModel from localstorage', defaultModelProvider.value)
+
+      // check if the default model is available
+      const currentDefaultModel = getModelProviderById(defaultModelProvider.value.id)
+      // current default model has existed, update and return
+      if (currentDefaultModel) {
+        setDefaultModelProvider(currentDefaultModel)
+        return;
+      }
+    }
+
+
     // 查找标记为默认的模型，如果没有则使用第一个可用模型
-    const model = getAvailableProviders.value.find((model) => model.isDefault) ||
-      (getAvailableProviders.value.length > 0 ? getAvailableProviders.value[0] : null);
+    const model = getAvailableProviders.value.find((model) => model.isDefault)
+      ?? getAvailableProviders.value[0] ?? null;
 
     if (model) {
       setDefaultModelProvider(model)
@@ -158,16 +162,23 @@ export const useModelStore = defineStore('modelProvider', () => {
       const command = formData.id ? 'update_ai_model' : 'add_ai_model'
       invoke(command, formData)
         .then((modelData) => {
-          sendSyncState('model', label)
-
           if (formData.id) {
             const modelIndex = providers.value.findIndex(m => m.id === formData.id)
             if (modelIndex !== -1) {
-              providers.value[modelIndex] = processModelLogo(modelData)
+              providers.value[modelIndex] = { ...processModelLogo(modelData) }
             }
           } else {
             providers.value.push(processModelLogo(modelData))
           }
+
+          // Update default model
+          if (formData.id === defaultModelProvider.value.id) {
+            setDefaultModelProvider(processModelLogo(modelData))
+          }
+
+          nextTick(() => {
+            sendSyncState('model', label)
+          })
 
           resolve(i18n.global.t(`settings.model.${formData.id ? 'updateSuccess' : 'addSuccess'}`))
         })
@@ -187,11 +198,13 @@ export const useModelStore = defineStore('modelProvider', () => {
     return new Promise((resolve, reject) => {
       invoke('delete_ai_model', { id })
         .then(() => {
-          sendSyncState('model', label)
           const index = providers.value.findIndex(m => m.id === id);
           if (index !== -1) {
             providers.value.splice(index, 1);
           }
+          nextTick(() => {
+            sendSyncState('model', label)
+          })
           resolve()
         })
         .catch((err) => {
@@ -209,7 +222,9 @@ export const useModelStore = defineStore('modelProvider', () => {
     return new Promise((resolve, reject) => {
       invoke('update_ai_model_order', { modelIds: providers.value.map(model => model.id) })
         .then(() => {
-          sendSyncState('model', label)
+          nextTick(() => {
+            sendSyncState('model', label)
+          })
           resolve()
         })
         .catch(err => {
@@ -229,12 +244,12 @@ export const useModelStore = defineStore('modelProvider', () => {
   return {
     providers,
     getAvailableProviders,
-    setModelProviders,
     updateModelStore,
     defaultModelProvider,
-    setDefaultModelProvider,
     getModelProviderById,
     setModelProvider,
+    setModelProviders,
+    setDefaultModelProvider,
     deleteModelProvider,
     updateModelProviderOrder
   };

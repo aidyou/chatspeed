@@ -1,5 +1,7 @@
 pub mod dag;
 pub mod error;
-pub mod function_manager;
+mod function_manager;
 pub mod react;
 pub mod tools;
+
+pub use function_manager::FunctionManager;

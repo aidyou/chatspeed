@@ -107,6 +107,8 @@ impl WindowChannels {
                             || chunk.r#type == MessageType::Error
                             || chunk.r#type == MessageType::Step
                             || chunk.r#type == MessageType::Reference
+                            || chunk.r#type == MessageType::Log
+                            || chunk.r#type == MessageType::Plan
                         {
                             #[cfg(debug_assertions)]
                             log::debug!(

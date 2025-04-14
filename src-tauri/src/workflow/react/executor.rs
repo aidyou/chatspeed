@@ -19,7 +19,7 @@ use crate::{
             },
             types::{FunctionCall, Plan, PlanStatus, StepError, StepResult, StepStatus},
         },
-        tools::chat_completion::ModelName,
+        tools::ModelName,
     },
 };
 
@@ -909,10 +909,9 @@ impl ReactExecutor {
                         match function_call.name.as_str() {
                             "web_search" => {
                                 if let Some(arguments) = &function_call.arguments {
-                                    let kw =
-                                        crate::workflow::tools::web_search::Search::extract_keywords(
-                                            arguments,
-                                        )?;
+                                    let kw = crate::workflow::tools::Search::extract_keywords(
+                                        arguments,
+                                    )?;
                                     let dedup_tool = self
                                         .context
                                         .function_manager

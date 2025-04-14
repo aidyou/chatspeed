@@ -756,9 +756,9 @@ const DIRECTIVE_CONFIG = {
         })
 
         // Process inline formulas
-        el.querySelectorAll('.katex-inline').forEach(inline => {
-          renderFormula(inline, false)
-        })
+        // el.querySelectorAll('.katex-inline').forEach(inline => {
+        //   renderFormula(inline, false)
+        // })
       },
       updated: el => {
         // Process block formulas
@@ -769,11 +769,11 @@ const DIRECTIVE_CONFIG = {
         })
 
         // Process inline formulas
-        el.querySelectorAll('.katex-inline').forEach(inline => {
-          if (!inline.innerHTML) {
-            renderFormula(inline, false)
-          }
-        })
+        // el.querySelectorAll('.katex-inline').forEach(inline => {
+        //   if (!inline.innerHTML) {
+        //     renderFormula(inline, false)
+        //   }
+        // })
       }
     }
   },

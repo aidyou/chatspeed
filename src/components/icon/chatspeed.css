@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-clear-context:before {
+  content: "\e70c";
+}
+
 .cs-uncheck:before {
   content: "\e7c9";
 }
@@ -703,7 +707,7 @@
   content: "\e60a";
 }
 
-.cs-ai-mixtral:before {
+.cs-ai-mistral:before {
   content: "\e6bc";
 }
 

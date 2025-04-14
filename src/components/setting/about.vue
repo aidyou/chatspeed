@@ -10,48 +10,80 @@
         storage.
       </p>
 
-      <h3>Key Features</h3>
+      <h3>Core Features</h3>
       <ul>
         <li>
           Multi-Model Support
           <ul>
-            <li>Compatible with OpenAI, Gemini, Ollama, and Claude</li>
-            <li>Comprehensive model parameter configuration</li>
-            <li>Proxy settings support</li>
+            <li>
+              Compatible with OpenAI, Gemini, Ollama and Claude via OpenAI-compatible protocols
+            </li>
+            <li>Multiple API keys per model with automatic rotation (A/B switching)</li>
+            <li>Streaming responses with real-time character output</li>
+            <li>Chain-of-thought visualization (Deepseek) and reasoning output (OpenAI)</li>
+            <li>Complete parameter configuration (temperature, top_p, top_k, max_tokens, etc.)</li>
+            <li>Customizable HTTP proxy support</li>
           </ul>
         </li>
         <li>
-          Advanced Chat Interface
+          Web Search
           <ul>
-            <li>ChatGPT-style layout with dark/light themes</li>
-            <li>Multi-language support</li>
-            <li>Message reference and resend capabilities</li>
-            <li>Rich text parsing (mindmap, mermaid, code blocks)</li>
+            <li>Integrated search engines: Google, Bing, Baidu</li>
+            <li>Automatic webpage context parsing via Chatspeed crawler</li>
+            <li>Real-time web retrieval expanding AI knowledge</li>
+            <li>Deep search with multi-query task decomposition</li>
+          </ul>
+        </li>
+        <li>
+          Chat Interface
+          <ul>
+            <li>Clean UI with light/dark themes</li>
+            <li>Multi-language interface support</li>
+            <li>Message referencing and resend capabilities</li>
+            <li>Rich content parsing: code blocks, mind maps, flowcharts, tables, formulas</li>
+          </ul>
+        </li>
+        <li>
+          AI Assistant
+          <ul>
+            <li>Instant Q&A responses</li>
+            <li>Auto-detect input language for translation</li>
+            <li>Enables Deepseek R1-like reasoning through prompt-enhanced general models</li>
+            <li>AI-generated mind maps and flowcharts</li>
+            <li>Custom skill creation beyond pre-built options</li>
           </ul>
         </li>
         <li>
           Skill Management
           <ul>
-            <li>Custom skill creation</li>
-            <li>Quick skill access</li>
-            <li>Icon and image support</li>
+            <li>Visual skill builder</li>
+            <li>Quick-access skills with hotkeys</li>
+            <li>Icon library with custom uploads</li>
           </ul>
         </li>
         <li>
-          Data Management
+          Smart Notes
           <ul>
-            <li>Local data storage</li>
-            <li>Chat history management</li>
-            <li>Database backup and restore</li>
+            <li>Save notable AI responses to knowledge base</li>
+            <li>Tag-based organization and search</li>
+            <li>Multi-format display: reasoning steps, code, diagrams, tables</li>
+          </ul>
+        </li>
+        <li>
+          Data Security
+          <ul>
+            <li>Local encrypted storage</li>
+            <li>Chat history archiving</li>
+            <li>Database backup/restore</li>
           </ul>
         </li>
       </ul>
 
       <h3>Open Source</h3>
       <p>
-        ChatSpeed is proudly open source, built with Vue 3 and Tauri. We believe in transparency and
-        community-driven development. All our code is available for review, contribution, and
-        improvement at <a href="#" @click="openGithub">GitHub</a>.
+        ChatSpeed is an open-source project built with Vue 3 and Tauri under MIT license. All code
+        is available on <a href="#" @click="openGithub">GitHub</a>, welcoming developer
+        contributions.
       </p>
     </div>
     <el-divider />
@@ -69,44 +101,78 @@
         <li>
           多模型支持
           <ul>
-            <li>兼容 OpenAI、Gemini、Ollama 和 Claude</li>
-            <li>完整的模型参数配置</li>
-            <li>代理设置支持</li>
+            <li>
+              兼容 OpenAI、Gemini、Ollama 和 Claude，通过 OpenAI 兼容协议可接入绝大多数主流大模型
+            </li>
+            <li>支持单个模型配置多个 API 密钥，对话时自动轮换使用（AB 模式交替调用）</li>
+            <li>流式输出模式（逐字输出体验）</li>
+            <li>支持 Deepseek 的思考链输出展示与 OpenAI 的推理输出</li>
+            <li>完整的模型参数配置体系（温度、top_p、max_tokens 等）</li>
+            <li>HTTP网络代理设置支持</li>
+          </ul>
+        </li>
+        <li>
+          联网搜索
+          <ul>
+            <li>支持搜索引擎：Google、Bing、百度</li>
+            <li>
+              通过部署 Chatspeed 爬虫组件，可自动解析对话中的网页链接内容作为上下文，增强 AI
+              处理能力
+            </li>
+            <li>实时检索网络信息，拓展 AI 知识边界</li>
+            <li>深度搜索功能：根据问题自动拆解任务并执行多轮搜索，最终汇总分析结果</li>
           </ul>
         </li>
         <li>
           高级聊天界面
           <ul>
-            <li>类 ChatGPT 的界面布局，支持明暗主题</li>
-            <li>多语言支持</li>
-            <li>消息引用和重发功能</li>
-            <li>富文本解析（思维导图、流程图、代码块）</li>
+            <li>简洁的界面布局，支持明/暗主题模式</li>
+            <li>多语言界面支持</li>
+            <li>消息引用与重新发送功能</li>
+            <li>支持富文本解析，包括：代码块、思维导图、流程图、表格、公式等</li>
+          </ul>
+        </li>
+        <li>
+          智能助手
+          <ul>
+            <li>即时问答响应</li>
+            <li>智能翻译：自动识别输入语言并转换为第一/第二语言</li>
+            <li>通过技能通用模型能力，实现类 Deepseek R1 的推理能力</li>
+            <li>AI 辅助生成思维导图与流程图</li>
+            <li>除内置技能外，支持创建任意自定义技能</li>
           </ul>
         </li>
         <li>
           技能管理
           <ul>
-            <li>自定义技能创建</li>
-            <li>技能快捷调用</li>
-            <li>图标和图片支持</li>
+            <li>可视化技能创建</li>
+            <li>技能快捷唤出（支持快捷键绑定）</li>
+            <li>图标素材支持（内置库+自定义上传）</li>
+          </ul>
+        </li>
+        <li>
+          智记功能
+          <ul>
+            <li>在 AI 对话过程中，可随时将精彩回答保存至智记知识库</li>
+            <li>支持按标签分类归档，提供高效的知识管理能力</li>
+            <li>富媒体展示：支持推理过程、代码块、思维导图、流程图、表格、公式等专业格式解析</li>
           </ul>
         </li>
         <li>
           数据管理
           <ul>
-            <li>本地数据存储</li>
-            <li>聊天历史管理</li>
-            <li>数据库备份和还原</li>
+            <li>本地加密存储</li>
+            <li>对话历史归档管理</li>
+            <li>数据库备份与恢复</li>
           </ul>
         </li>
       </ul>
 
       <h3>开源项目</h3>
       <p>
-        ChatSpeed 是一个基于 Vue 3 和 Tauri
-        构建的开源项目。我们坚信透明和社区驱动的开发理念。所有代码都开放在
-        <a href="#" @click="openGithub">GitHub</a>
-        上供审查、贡献和改进。
+        ChatSpeed 是基于 Vue 3 和 Tauri 构建的开源项目，遵循 MIT 协议。所有代码均已开源至
+        <a href="#" @click="openGithub">GitHub 代码平台</a>
+        ，欢迎开发者参与贡献。
       </p>
     </div>
   </div>

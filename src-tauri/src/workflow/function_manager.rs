@@ -12,11 +12,11 @@ use crate::constants::CFG_CHP_SERVER;
 use crate::db::{AiModel, MainStore};
 use crate::workflow::error::WorkflowError;
 
-use super::tools::chat_completion::{ChatCompletion, ModelName};
-use super::tools::plot::Plot;
-use super::tools::search_dedup::SearchDedupTool;
-use super::tools::web_crawler::Crawler;
-use super::tools::web_search::Search;
+use super::tools::Crawler;
+use super::tools::Plot;
+use super::tools::Search;
+use super::tools::SearchDedup;
+use super::tools::{ChatCompletion, ModelName};
 
 /// The result type of a function call.
 pub type FunctionResult = Result<Value, WorkflowError>;
@@ -131,8 +131,7 @@ impl FunctionManager {
         // if ChatSpeedBot server is available, register search and fetch tools
         if !chp_server.is_empty() {
             // register search dedup tool
-            self.register_function(Arc::new(SearchDedupTool::new()))
-                .await?;
+            self.register_function(Arc::new(SearchDedup::new())).await?;
 
             // register search tool
             self.register_function(Arc::new(Search::new(chp_server.clone())))
@@ -243,7 +242,7 @@ impl FunctionManager {
     ///
     /// # Returns
     /// * `Result<AiModel, WorkflowError>` - The AI model or an error
-    fn get_model(
+    pub fn get_model(
         main_store: &Arc<std::sync::Mutex<MainStore>>,
         model_type: &str,
     ) -> Result<AiModel, WorkflowError> {
@@ -296,6 +295,13 @@ impl FunctionManager {
                     )
                     .to_string(),
                 )
+            })
+            .map(|mut m| {
+                match reasoning_model["model"].as_str() {
+                    Some(md) => m.default_model = md.to_string(),
+                    None => {}
+                };
+                m
             })?;
 
         setup_chat_proxy(&main_store, &mut ai_model.metadata)?;

@@ -48,14 +48,17 @@ use super::chat_web_search::chat_completion_with_search;
 use crate::ai::interaction::chat_completion::{complete_chat_async, ChatProtocol, ChatState};
 use crate::ai::traits::chat::{ChatResponse, MessageType};
 use crate::commands::constants::{TIME_IND, URL_REGEX};
-use crate::constants::CFG_CHP_SERVER;
+use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::db::MainStore;
-use crate::http::chp::Chp;
+use crate::http::chp::{Chp, SearchProvider};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
+use crate::workflow::tools::{DeepSearch, ModelName};
+use crate::workflow::FunctionManager;
 
 use chrono::Local;
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::State;
 use whatlang::detect;
@@ -223,14 +226,28 @@ pub async fn chat_completion(
     network_enabled: Option<bool>,
     mut metadata: Option<Value>,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    log::debug!("Starting chat completion for protocol: {}", api_protocol);
+
     let tx = chat_state
         .channels
         .get_or_create_channel(window.clone())
         .await?;
 
+    if messages.is_empty() {
+        return Err(t!("chat.empty_messages").to_string());
+    }
+    if model.is_empty() {
+        return Err(t!("chat.empty_model").to_string());
+    }
+    if chat_id.is_empty() {
+        return Err(t!("chat.empty_chat_id").to_string());
+    }
+
     let protocol: ChatProtocol = api_protocol.try_into().map_err(|e: String| e.to_string())?;
 
-    setup_chat_proxy(&main_state, &mut metadata)?;
+    setup_chat_proxy(&main_state, &mut metadata)
+        .map_err(|e| format!("Failed to setup chat proxy: {}", e))?;
 
     // 如果网络搜索已启用，匹配出最后一条用户提问的信息中的 url
     // 将 url 的内容抓取出来拼接到最后一条用户消息中
@@ -297,6 +314,9 @@ pub async fn chat_completion(
     }
 
     setup_chat_context(&main_state, &mut messages, &mut metadata);
+
+    #[cfg(debug_assertions)]
+    log::debug!("Processed messages count: {}", messages.len());
 
     let callback = move |chunk: Arc<ChatResponse>| {
         let _ = tx.try_send(chunk);
@@ -382,22 +402,22 @@ pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Resul
 pub async fn stop_chat(
     state: State<'_, Arc<ChatState>>,
     api_protocol: String,
+    chat_id: &str,
 ) -> Result<(), String> {
     let protocol: ChatProtocol = api_protocol
         .clone()
         .try_into()
-        .map_err(|e: String| e.to_string())?;
+        .map_err(|e: String| format!("Invalid API protocol: {}", e))?;
     // Lock the chat state to access the chat interfaces.
-    let chats = state.chats.lock().await;
-    let chat_interface = chats.get(&protocol);
+    let mut chats = state.chats.lock().await;
 
-    match chat_interface {
-        Some(chat_enum) => {
-            chat_enum.set_stop_flag(true).await; // Set the stop flag to true.
-            Ok(()) // Return success.
+    if let Some(protocol_chats) = chats.get_mut(&protocol) {
+        if let Some(chat) = protocol_chats.remove(chat_id) {
+            chat.set_stop_flag(true).await; // Set the stop flag to true.
+            return Ok(()); // Return success.
         }
-        None => Err(t!("chat.invalid_api_provider", provider = api_protocol).to_string()), // Handle invalid API provider case.
     }
+    Err(t!("chat.chat_not_found").to_string()) // Handle chat not found case.
 }
 
 /// Detects the language of a given text and returns the corresponding language code.
@@ -422,6 +442,123 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
         }
     } else {
         Err(t!("chat.failed_to_detect_language").to_string())
+    }
+}
+
+/// Tauri command to perform a deep search for a given question.
+/// This command uses the configured search engine providers to search for the question on the web.
+///
+/// # Arguments
+/// - `window` - The Tauri window instance, automatically injected by Tauri
+/// - `chat_state` - The state of the chat system, automatically injected by Tauri
+/// - `main_state` - The main application state, automatically injected by Tauri
+/// - `chat_id` - Unique identifier for this chat session
+/// - `question` - The question to search for.
+/// - `metadata` - Optional extra parameters for the chat.
+///
+/// # Returns
+/// A `Result` indicating success or an error message.
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// const result = await invoke('deep_search', {
+///     chatId: 'unique-chat-id',
+///     question: 'What is the best programming language?'
+///     metadata: {
+///         "label": "main"
+///     }
+/// })
+/// ```
+#[tauri::command]
+pub async fn deep_search(
+    window: tauri::Window,
+    chat_state: State<'_, Arc<ChatState>>,
+    main_store: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    chat_id: &str,
+    question: &str,
+    metadata: Option<Value>,
+) -> Result<(), String> {
+    // Get crawler URL, it use to fetch web page contents
+    let crawler_url = main_store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get_config(CFG_CHP_SERVER, String::new());
+
+    // Get search engine providers from config
+    // e.g. ["google", "bing", "duckduckgo"]
+    let search_providers = main_store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get_config(CFG_SEARCH_ENGINE, vec![])
+        .into_iter()
+        .filter_map(|s: String| s.trim().parse::<SearchProvider>().ok())
+        .collect::<Vec<SearchProvider>>();
+
+    let tx = chat_state.channels.get_or_create_channel(window).await?;
+    let callback = move |chunk: Arc<ChatResponse>| {
+        let _ = tx.try_send(chunk);
+    };
+
+    let ds = DeepSearch::new(
+        chat_state.inner().clone(),
+        None,
+        crawler_url,
+        search_providers,
+        Arc::new(callback),
+    );
+    let stop_flag = ds.get_stop_flag();
+    chat_state
+        .active_searches
+        .lock()
+        .await
+        .insert(chat_id.to_string(), stop_flag);
+
+    // Get the model configured for the deep search
+    let reasoning_model =
+        FunctionManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref())
+            .map_err(|e| e.to_string())?;
+    ds.add_model(ModelName::Reasoning, reasoning_model).await;
+    let general_model = FunctionManager::get_model(main_store.inner(), ModelName::General.as_ref())
+        .map_err(|e| e.to_string())?;
+    ds.add_model(ModelName::General, general_model).await;
+
+    let _ = ds
+        .execute_deep_search(chat_id, question, metadata, 20)
+        .await?;
+
+    Ok(())
+}
+
+/// Tauri command to stop the ongoing deep search for a specific chat session.
+/// This command sets the stop flag for the selected chat interface.
+///
+/// # Arguments
+/// - `state` - The state of the chat system, automatically injected by Tauri
+/// - `chat_id` - Unique identifier for this chat session
+///
+/// # Returns
+/// A `Result` indicating success or an error message.
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// const result = await invoke('stop_deep_search', { chatId: 'unique-chat-id' })
+/// ```
+#[tauri::command]
+pub async fn stop_deep_search(
+    state: State<'_, Arc<ChatState>>,
+    chat_id: &str,
+) -> Result<(), String> {
+    let mut active_searches = state.active_searches.lock().await;
+    if let Some(flag) = active_searches.get(chat_id) {
+        flag.store(true, Ordering::Release);
+        active_searches.remove(chat_id);
+        Ok(())
+    } else {
+        Err(t!("search.search_not_found").to_string())
     }
 }
 
