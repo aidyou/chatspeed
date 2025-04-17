@@ -66,10 +66,11 @@ Program trading filings 2024-2025 → (No explicit temporal need)
    ✓ Exact query phrases only
    ✓ No explanations or metadata!
 ▢ Temporal Logic:
-   ✓ Use {{current_year}} ONLY when question contains "latest", "current" or explicit year
-   ✓ For multi-year ranges: {{last_year}}-{{current_year}} format
+   ✓ Use {{current_year}} ONLY when question contains "latest", "current", "recent" or "this year"
+   ✓ For multi-year ranges: automatically calculate range like {{last_year}}-{{current_year}} when question contains "last X years"
    ✓ Fiscal quarters: Q1-Q4 {{current_year}}
    ✗ Avoid time placeholders in non-temporal queries
+   ✗ Avoid using outdated years for queries unless explicitly specified by user (e.g. "last year", "year before last")
 
 ### Response Examples
 
