@@ -76,6 +76,15 @@ pub fn setup_chat_proxy(
             .unwrap_or("none")
             .to_string();
 
+        // 如果模型本身已经设置了代理服务器，则直接返回即可
+        // if proxy_type is "http" and proxyServer is set, return directly
+        if proxy_type == "http" {
+            let ps = md.get("proxyServer").and_then(Value::as_str).unwrap_or("");
+            if ps.starts_with("http://") || ps.starts_with("https://") {
+                return Ok(());
+            }
+        }
+
         // 如果代理类型是"bySetting"，从配置中获取
         if proxy_type == "bySetting" {
             let config_store = main_state.lock().map_err(|e| e.to_string())?;
@@ -185,6 +194,7 @@ pub fn setup_chat_context(
 /// - `api_key` - The API key to use for the chat.
 /// - `chat_id` - Unique identifier for this chat session
 /// - `messages` - The messages to send to the chat.
+/// - `tools` - Optional tools to use for the chat.
 /// - `network_enabled` - Whether to enable network search for URLs in the user message
 /// - `_deep_search_enabled` - Whether to enable deep search (currently unused)
 /// - `metadata` - Optional extra parameters for the chat.
@@ -223,6 +233,7 @@ pub async fn chat_completion(
     api_key: Option<&str>,
     chat_id: String,
     mut messages: Vec<Value>,
+    // tools: Option<Vec<MCPToolDeclaration>>,
     network_enabled: Option<bool>,
     mut metadata: Option<Value>,
 ) -> Result<(), String> {
@@ -331,6 +342,7 @@ pub async fn chat_completion(
         api_key,
         chat_id,
         messages,
+        None,
         metadata,
         callback,
     )

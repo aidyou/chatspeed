@@ -13,6 +13,7 @@ use std::{collections::HashMap, path::Path};
 use tauri::Manager;
 
 use super::{
+    mcp::Mcp,
     sql::migrations::manager,
     types::{Config, ModelConfig},
     AiModel, AiSkill,
@@ -117,6 +118,15 @@ impl Config {
     pub fn set_ai_skills(&mut self, ai_skills: Vec<AiSkill>) {
         self.ai_skills = ai_skills;
     }
+
+    /// Retrieves a thread-safe clone of the MCP configurations.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Arc<Vec<ModelConfig>>` containing the MCP configurations.
+    pub fn get_mcps(&self) -> Vec<Mcp> {
+        self.mcps.clone()
+    }
 }
 
 /// Manages unified storage for the application, including chat history and configuration.
@@ -180,11 +190,13 @@ impl MainStore {
         let settings = Self::get_all_config(conn)?;
         let ai_models = Self::get_all_ai_models(conn)?;
         let ai_skills = Self::get_all_ai_skills(conn)?;
+        let mcps = Self::get_all_mcps(conn)?;
 
         Ok(Config {
             settings,
             ai_models,
             ai_skills,
+            mcps,
         })
     }
 

@@ -320,6 +320,7 @@
     "type": {
       "about": "About",
       "general": "General",
+      "mcp": "MCP",
       "model": "AI Engine",
       "privacy": "Privacy",
       "skill": "Skill"

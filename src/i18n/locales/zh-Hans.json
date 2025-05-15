@@ -11,8 +11,6 @@
     "confirmDeleteMessage": "确定要删除这个消息吗？",
     "context": "上下文",
     "contextCleared": "上下文已清除",
-    "enableContext": "点击开启上下文记忆",
-    "disableContext": "点击关闭上下文记忆",
     "conversationNotFound": "对话不存在或者已删除",
     "conversationTitle": "对话主题",
     "conversationTitleUpdated": "对话主题已更新",
@@ -29,12 +27,14 @@
       "twoDaysAgo": "前天",
       "yesterday": "昨天"
     },
-    "deepsearch": "深度搜索",
-    "deepSearchEnabled": "开启深度搜索：AI 将深入分析问题并联网搜索相关信息",
     "deepSearchDisabled": "关闭深度搜索",
+    "deepSearchEnabled": "开启深度搜索：AI 将深入分析问题并联网搜索相关信息",
+    "deepsearch": "深度搜索",
     "deleteMessage": "删除消息",
     "diagramError": "流程图渲染失败",
+    "disableContext": "点击关闭上下文记忆",
     "editConversationTitle": "编辑对话主题",
+    "enableContext": "点击开启上下文记忆",
     "errorOnClearContext": "清除上下文失败",
     "errorOnCopyMessage": "复制消息失败: {error}",
     "errorOnDeleteConversation": "删除对话失败: {error}",
@@ -56,8 +56,8 @@
     "metadata": {
       "completion": "输出",
       "prompt": "输入",
-      "tokens": "累计令牌",
-      "speed": "输出速率：{speed} 令牌/秒"
+      "speed": "输出速率：{speed} 令牌/秒",
+      "tokens": "累计令牌"
     },
     "mindmapError": "思维导图渲染失败",
     "network": "联网",
@@ -116,6 +116,7 @@
   "menu": {
     "about": "关于",
     "assistant": "桌面助手",
+    "mcp": "MCP",
     "model": "AI引擎",
     "note": "智记",
     "quit": "退出",
@@ -163,8 +164,9 @@
       "primaryLanguage": "第一语言",
       "primaryLanguageTooltip": "主要作为语言翻译自动识别失败时的首选项",
       "proxyPassword": "代理密码",
-      "proxyPasswordPlaceholder": "如无须验证，留空即可",
+      "proxyPasswordPlaceholder": "若代理需要验证则填写",
       "proxyServer": "代理服务器地址",
+      "proxyServerInvalid": "代理服务器地址无效",
       "proxyServerPlaceholder": "如：http://127.0.0.1:8080",
       "proxyType": "代理类型",
       "proxyTypes": {
@@ -173,7 +175,7 @@
         "system": "跟随系统"
       },
       "proxyUsername": "代理用户名",
-      "proxyUsernamePlaceholder": "如无须验证，留空即可",
+      "proxyUsernamePlaceholder": "若代理需要验证则填写",
       "restore": "恢复备份",
       "restoreConfirm": "确定要恢复这个备份吗？恢复后当前的所有数据将被覆盖！",
       "restoreConfirmTitle": "恢复备份确认",
@@ -216,8 +218,8 @@
       "addSuccess": "模型已添加",
       "additionalInfo": "附加信息",
       "apiKey": "API密钥",
-      "apiKeyRequired": "请输入API密钥",
       "apiKeyPlaceholder": "多个API密钥请用换行符分隔（系统将自动轮换使用）",
+      "apiKeyRequired": "请输入API密钥",
       "apiProtocol": "API协议",
       "apiProtocolRequired": "请选择API协议",
       "apiUrl": "API请求地址",
@@ -252,18 +254,27 @@
       "notFound": "模型不存在或者已删除",
       "presetModels": "预设模型",
       "provider": "供应商",
-      "proxyType": "代理类型",
       "proxyTypes": {
         "bySetting": "跟随网络设置",
+        "http": "HTTP代理",
         "none": "不使用代理"
       },
+      "proxyServerRequired": "请输入代理服务器地址",
       "reasoning": "推理模型",
       "temperature": "温度",
+      "temperaturePlaceholder": "控制模型输出的随机性。值越大，输出越随机。",
       "topK": "Top K",
-      "topKPlaceholder": "如果不设置或者留空，则不使用。并不是每个大模型都支持Top K",
+      "topKPlaceholder": "控制模型从概率最高的K个词中选择。值越小，输出越确定。设为0或留空则不启用。OpenAi兼容接口不支持。",
       "topP": "Top P",
+      "topPPlaceholder": "控制模型从概率最高的P个词中选择。值越小，输出越确定。设为0或留空则不启用。",
       "ungrouped": "未分组",
-      "updateSuccess": "模型已更新"
+      "updateSuccess": "模型已更新",
+      "frequencyPenalty": "频率惩罚",
+      "frequencyPenaltyPlaceholder": "调整模型重复生成相同词语的频率。值越大，重复越少。",
+      "presencePenalty": "存在惩罚",
+      "presencePenaltyPlaceholder": "调整模型重复已出现词语的可能性。值越大，越不容易重复。",
+      "stop": "终止标记",
+      "stopPlaceholder": "设置模型生成文本时遇到即停止的标记。多个请用换行符分隔。"
     },
     "skill": {
       "add": "添加技能",
@@ -320,6 +331,7 @@
     "type": {
       "about": "关于",
       "general": "通用",
+      "mcp": "MCP",
       "model": "AI引擎",
       "privacy": "隐私",
       "skill": "技能"

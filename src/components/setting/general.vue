@@ -932,7 +932,12 @@ const onProxyTypeChange = value => {
  * Handles the change of proxy server
  */
 const onProxyServerChange = () => {
-  setSetting('proxyServer', settings.value.proxyServer || '')
+  const server = settings.value.proxyServer || ''
+  if (server && !server.startsWith('http://') && !server.startsWith('https://')) {
+    showMessage(t('settings.general.proxyServerInvalid'), 'error')
+    return
+  }
+  setSetting('proxyServer', server)
 }
 
 const onProxyUsernameChange = () => {

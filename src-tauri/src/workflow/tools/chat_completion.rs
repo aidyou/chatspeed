@@ -5,7 +5,10 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
-    ai::interaction::chat_completion::{complete_chat_blocking, ChatState},
+    ai::{
+        interaction::chat_completion::{complete_chat_blocking, ChatState},
+        traits::chat::MCPToolDeclaration,
+    },
     db::AiModel,
     workflow::{
         error::WorkflowError,
@@ -174,6 +177,10 @@ impl FunctionDefinition for ChatCompletion {
             WorkflowError::FunctionParamError(t!("workflow.messages_must_be_array").to_string())
         })?;
 
+        let tools = params
+            .get("tools")
+            .and_then(|v| serde_json::from_value::<Vec<MCPToolDeclaration>>(v.clone()).ok());
+
         let result = complete_chat_blocking(
             &self.chat_state,
             model.api_protocol.try_into()?,
@@ -182,6 +189,7 @@ impl FunctionDefinition for ChatCompletion {
             Some(model.api_key.as_str()),
             chat_id,
             messages.to_vec(),
+            tools,
             model.metadata,
         )
         .await?;

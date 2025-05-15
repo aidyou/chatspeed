@@ -2,9 +2,12 @@ use bytes::Bytes;
 use serde_json::Value;
 use std::fmt;
 
-use crate::ai::traits::chat::MessageType;
+use crate::ai::traits::chat::{MessageType, ToolCallDeclaration};
 
-use super::{AnthropicEventType, AnthropicStreamEvent, GeminiResponse, OpenAIStreamResponse};
+use super::{
+    AnthropicEventType, AnthropicStreamEvent, GeminiFunctionCall, GeminiResponse,
+    OpenAIStreamResponse,
+};
 
 /// Represents different types of stream response formats
 pub enum StreamFormat {
@@ -63,6 +66,10 @@ pub struct StreamChunk {
     pub usage: Option<TokenUsage>,
     // Message type, text,step,reference
     pub msg_type: Option<MessageType>,
+    /// Tool calls
+    pub tool_calls: Option<Vec<ToolCallDeclaration>>,
+    /// Finish reason (specific to OpenAI)
+    pub finish_reason: Option<String>,
 }
 
 /// Stream response parser
@@ -85,6 +92,8 @@ impl StreamParser {
                     content,
                     usage: None,
                     msg_type: None,
+                    tool_calls: None,
+                    finish_reason: None,
                 }]
             }),
         }
@@ -96,6 +105,7 @@ impl StreamParser {
         // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
+        // log::debug!("openai - {}", chunk_str);
 
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
@@ -106,6 +116,8 @@ impl StreamParser {
                         content: None,
                         usage: None,
                         msg_type: Some(MessageType::Finished),
+                        tool_calls: None,
+                        finish_reason: Some("[DONE]".to_string()),
                     });
                     continue;
                 }
@@ -120,6 +132,20 @@ impl StreamParser {
                                 tokens_per_second: 0.0,
                             });
 
+                            let tool_calls = choice.delta.tool_calls.as_ref().map(|calls| {
+                                calls
+                                    .iter()
+                                    .map(|call| ToolCallDeclaration {
+                                        index: call.index,
+                                        id: call.id.clone().unwrap_or_default(),
+                                        name: call.function.name.clone().unwrap_or_default(),
+                                        arguments: call.function.arguments.clone(),
+                                        results: None,
+                                    })
+                                    .collect::<Vec<ToolCallDeclaration>>()
+                            });
+
+                            // Push a chunk for the delta content and usage
                             chunks.push(StreamChunk {
                                 reasoning_content: choice.delta.reasoning_content,
                                 content: choice.delta.content,
@@ -128,6 +154,8 @@ impl StreamParser {
                                     .delta
                                     .msg_type
                                     .and_then(|t| MessageType::from_str(&t)),
+                                tool_calls: tool_calls,
+                                finish_reason: choice.finish_reason.clone(),
                             });
                         }
                     }
@@ -152,7 +180,10 @@ impl StreamParser {
     /// Parse Google AI (Gemini) format
     fn parse_gemini(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
+        // Gemini stream format is "data: {json}\r\n"
+        // Non-stream format is just "{json}"
         let mut chunks = Vec::new();
+        // log::debug!("gemini - {}", chunk_str);
 
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
@@ -171,15 +202,60 @@ impl StreamParser {
                                 });
 
                         if let Some(candidates) = gemini_response.candidates {
-                            for candidate in candidates {
-                                for part in &candidate.content.parts {
-                                    chunks.push(StreamChunk {
-                                        reasoning_content: None,
-                                        content: Some(part.text.clone()),
-                                        usage: usage.clone(),
-                                        msg_type: Some(MessageType::Text),
-                                    });
+                            for candidate in candidates.into_iter() {
+                                let mut tool_calls_in_chunk: Vec<ToolCallDeclaration> = Vec::new();
+                                let mut text_content: Option<String> = None;
+
+                                for (part_index, part) in
+                                    candidate.content.parts.into_iter().enumerate()
+                                {
+                                    // Check if the part is a function call
+                                    // Note: Gemini's Part struct needs to be updated to handle functionCall
+                                    // Assuming Part now has an optional functionCall field
+                                    if let Some(func_call) = part.function_call {
+                                        // Serialize args Value to String
+                                        let args_string = serde_json::to_string(&func_call.args)
+                                            .map_err(|e| format!("Failed to serialize Gemini tool call arguments: {}", e))?;
+
+                                        tool_calls_in_chunk.push(ToolCallDeclaration {
+                                            // Use a combination of candidate and part index for uniqueness if needed,
+                                            // but simple part_index might suffice if only one candidate is streamed.
+                                            // Let's use part_index for now, assuming single candidate stream.
+                                            index: part_index as u32,
+                                            id: String::new(), // Gemini stream delta doesn't provide ID
+                                            name: func_call.name,
+                                            arguments: Some(args_string),
+                                            results: None,
+                                        });
+                                    } else if let Some(text_val) = part.text {
+                                        if !text_val.is_empty() {
+                                            // Accumulate text content from text parts
+                                            text_content =
+                                                Some(text_content.unwrap_or_default() + &text_val);
+                                        }
+                                    }
                                 }
+
+                                let msg_type = if text_content.is_some() {
+                                    Some(MessageType::Text)
+                                } else if !tool_calls_in_chunk.is_empty() {
+                                    Some(MessageType::ToolCall)
+                                } else {
+                                    None
+                                };
+                                // Push a chunk for this candidate's content and tool calls
+                                chunks.push(StreamChunk {
+                                    reasoning_content: None, // Gemini doesn't have explicit reasoning_content in this format
+                                    content: text_content,
+                                    usage: usage.clone(),
+                                    msg_type,
+                                    tool_calls: if !tool_calls_in_chunk.is_empty() {
+                                        Some(tool_calls_in_chunk)
+                                    } else {
+                                        None
+                                    },
+                                    finish_reason: candidate.finish_reason.clone(),
+                                });
                             }
                         }
                     }
@@ -188,6 +264,7 @@ impl StreamParser {
                     }
                 }
             } else if !line.is_empty() {
+                // Handle non-stream response (full JSON object)
                 // Non-stream response
                 match serde_json::from_str::<Value>(&chunk_str) {
                     Ok(json) => {
@@ -195,6 +272,38 @@ impl StreamParser {
                         let content = json["candidates"][0]["content"]["parts"][0]["text"]
                             .as_str()
                             .map(String::from);
+
+                        // Extract tool calls from non-stream response
+                        let tool_calls: Option<Vec<ToolCallDeclaration>> = json["candidates"][0]
+                            ["content"]["parts"]
+                            .as_array()
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter_map(|part| {
+                                        part.get("functionCall")
+                                            .and_then(|func_call_val| {
+                                                serde_json::from_value::<GeminiFunctionCall>(
+                                                    func_call_val.clone(),
+                                                )
+                                                .ok()
+                                            })
+                                            .map(|func_call| {
+                                                // Serialize args Value to String
+                                                let args_string =
+                                                    serde_json::to_string(&func_call.args)
+                                                        .unwrap_or_default();
+                                                ToolCallDeclaration {
+                                                    index: 0,          // Non-stream doesn't have index per part, use 0 or generate
+                                                    id: String::new(), // Non-stream doesn't provide ID
+                                                    name: func_call.name,
+                                                    arguments: Some(args_string),
+                                                    results: None,
+                                                }
+                                            })
+                                    })
+                                    .collect()
+                            });
 
                         // Extract token usage
                         let usage = if let Some(usage) = json.get("usageMetadata") {
@@ -216,7 +325,13 @@ impl StreamParser {
                             reasoning_content: None,
                             content,
                             usage,
-                            msg_type: Some(MessageType::Finished),
+                            msg_type: if tool_calls.is_some() {
+                                Some(MessageType::ToolCall)
+                            } else {
+                                Some(MessageType::Finished)
+                            }, // Determine message type based on content or tool calls
+                            tool_calls: None,
+                            finish_reason: None,
                         });
                     }
                     Err(e) => {
@@ -246,6 +361,8 @@ impl StreamParser {
                     content: None,
                     usage: None,
                     msg_type: Some(MessageType::Finished),
+                    tool_calls: None,
+                    finish_reason: None,
                 });
                 continue;
             }
@@ -256,6 +373,8 @@ impl StreamParser {
                     content: Some(data.to_string()),
                     usage: None,
                     msg_type: None,
+                    tool_calls: None,
+                    finish_reason: None,
                 });
             }
         }
@@ -265,124 +384,238 @@ impl StreamParser {
     /// Parse Anthropic format with full event streaming support
     fn parse_anthropic(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
-        let mut chunks = Vec::new();
-        let mut current_content = String::new();
-        let mut current_index = 0;
+        let mut stream_chunks = Vec::new();
+        // log::debug!("anthropic raw event block: {}", chunk_str); // For debugging the whole event block
+
+        // The StreamProcessor provides a full SSE message (event lines + data lines) as one `chunk`.
+        // We need to parse the `data:` line which contains the JSON payload.
+        // Anthropic's `data:` payload itself contains a `type` field that indicates the event type.
+        let mut data_json_str: Option<String> = None;
 
         for line in chunk_str.lines() {
-            if !line.starts_with("event:") || !line.contains("data:") {
-                continue;
+            if line.starts_with("data:") {
+                data_json_str = Some(line["data:".len()..].trim().to_string());
+                break; // Assuming only one data line per event block from StreamProcessor
             }
+        }
 
-            let data = match line.find("data:") {
-                Some(pos) => line[pos + "data:".len()..].trim(),
-                None => {
-                    log::error!("Failed to find 'data: ' in line: {}", line);
-                    continue;
-                }
-            };
+        if data_json_str.is_none() {
+            // This might happen for empty lines or malformed events, can be ignored or logged.
+            // log::warn!("Anthropic stream: No data field found in event block: {}", chunk_str);
+            return Ok(stream_chunks); // Return empty if no data
+        }
 
-            match serde_json::from_str::<AnthropicStreamEvent>(data) {
-                Ok(event) => {
-                    match event.event_type {
-                        AnthropicEventType::MessageStart => {
-                            // Initialize new message
-                            current_content.clear();
-                        }
-                        AnthropicEventType::ContentBlockStart => {
-                            // Start new content block
-                            if let Some(index) = event.index {
-                                current_index = index;
+        let data_str = data_json_str.unwrap();
+        if data_str.is_empty() {
+            return Ok(stream_chunks); // Return empty if data is empty
+        }
+
+        match serde_json::from_str::<AnthropicStreamEvent>(&data_str) {
+            Ok(event) => {
+                // log::debug!("Parsed Anthropic event: {:?}", event); // For detailed event logging
+                match event.event_type {
+                    AnthropicEventType::MessageStart => {
+                        // Potentially extract input_tokens from event.message.usage if needed
+                        // log::debug!("Anthropic MessageStart: {:?}", event.message);
+                    }
+                    AnthropicEventType::ContentBlockStart => {
+                        if let (Some(index), Some(content_block)) =
+                            (event.index, event.content_block)
+                        {
+                            if content_block.block_type == "tool_use" {
+                                let tool_call = ToolCallDeclaration {
+                                    index,
+                                    id: content_block.id.unwrap_or_default(),
+                                    name: content_block.name.unwrap_or_default(),
+                                    arguments: Some(String::new()), // Initialize for accumulation
+                                    results: None,
+                                };
+                                stream_chunks.push(StreamChunk {
+                                    reasoning_content: None,
+                                    content: None,
+                                    usage: None,
+                                    msg_type: Some(MessageType::ToolCall),
+                                    tool_calls: Some(vec![tool_call]),
+                                    finish_reason: None,
+                                });
                             }
                         }
-                        AnthropicEventType::ContentBlockDelta => {
-                            // handle content block delta
-                            if let (Some(index), Some(delta)) = (event.index, event.delta) {
-                                match delta["type"].as_str() {
-                                    Some("text_delta") => {
-                                        if let Some(text) = delta["text"].as_str() {
-                                            if index == current_index {
-                                                current_content.push_str(text);
-                                                chunks.push(StreamChunk {
+                    }
+                    AnthropicEventType::ContentBlockDelta => {
+                        if let (Some(index), Some(delta_value)) = (event.index, event.delta) {
+                            if let Some(delta_type) =
+                                delta_value.get("type").and_then(Value::as_str)
+                            {
+                                match delta_type {
+                                    "text_delta" => {
+                                        if let Some(text) =
+                                            delta_value.get("text").and_then(Value::as_str)
+                                        {
+                                            if !text.is_empty() {
+                                                stream_chunks.push(StreamChunk {
                                                     reasoning_content: None,
                                                     content: Some(text.to_string()),
                                                     usage: None,
                                                     msg_type: Some(MessageType::Text),
+                                                    tool_calls: None,
+                                                    finish_reason: None,
                                                 });
                                             }
                                         }
                                     }
-                                    Some("thinking_delta") => {
-                                        // handle thinking delta
-                                        if let Some(thinking) = delta["thinking"].as_str() {
-                                            chunks.push(StreamChunk {
-                                                reasoning_content: Some(thinking.to_string()),
-                                                content: None,
-                                                usage: None,
-                                                msg_type: Some(MessageType::Reasoning),
-                                            });
+                                    "input_json_delta" => {
+                                        if let Some(partial_json) =
+                                            delta_value.get("partial_json").and_then(Value::as_str)
+                                        {
+                                            if !partial_json.is_empty() {
+                                                let tool_call_delta = ToolCallDeclaration {
+                                                    index,
+                                                    id: String::new(), // ID/Name are in ContentBlockStart
+                                                    name: String::new(),
+                                                    arguments: Some(partial_json.to_string()),
+                                                    results: None,
+                                                };
+                                                stream_chunks.push(StreamChunk {
+                                                    reasoning_content: None,
+                                                    content: None,
+                                                    usage: None,
+                                                    msg_type: Some(MessageType::ToolCall),
+                                                    tool_calls: Some(vec![tool_call_delta]),
+                                                    finish_reason: None,
+                                                });
+                                            }
                                         }
                                     }
-                                    _ => {} // 忽略其他delta类型
+                                    _ => {
+                                        // log::debug!("Unhandled Anthropic content_block_delta type: {}", delta_type);
+                                    }
                                 }
                             }
                         }
-                        AnthropicEventType::ContentBlockStop => {
-                            // Finalize current content block
-                            if !current_content.is_empty() {
-                                chunks.push(StreamChunk {
-                                    reasoning_content: None,
-                                    content: Some(current_content.clone()),
-                                    usage: None,
-                                    msg_type: Some(MessageType::Text),
-                                });
-                                current_content.clear();
-                            }
-                        }
-                        AnthropicEventType::MessageDelta => {
-                            // Handle final message updates
-                            if let Some(usage) = event.usage {
-                                let token_usage = TokenUsage {
-                                    total_tokens: usage["input_tokens"].as_u64().unwrap_or(0)
-                                        + usage["output_tokens"].as_u64().unwrap_or(0),
-                                    prompt_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
-                                    completion_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
-                                    tokens_per_second: 0.0,
-                                };
-                                chunks.push(StreamChunk {
-                                    reasoning_content: None,
-                                    content: None,
-                                    usage: Some(token_usage),
-                                    msg_type: Some(MessageType::Finished),
+                    }
+                    AnthropicEventType::ContentBlockStop => {
+                        // Signals end of a content block.
+                        // Arguments/text already streamed.
+                        // log::debug!("Anthropic ContentBlockStop for index: {:?}", event.index);
+                    }
+                    AnthropicEventType::MessageDelta => {
+                        let mut usage_chunk: Option<TokenUsage> = None;
+                        let mut finish_reason_chunk: Option<String> = None;
+
+                        if let Some(usage_val) = event.usage {
+                            // MessageDelta typically only contains output_tokens
+                            let output_tokens = usage_val
+                                .get("output_tokens")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            if output_tokens > 0 {
+                                // Only create usage if there are tokens
+                                usage_chunk = Some(TokenUsage {
+                                    total_tokens: output_tokens, // Will be summed up later with prompt_tokens
+                                    prompt_tokens: 0, // Prompt tokens are in message_start or message_stop
+                                    completion_tokens: output_tokens,
+                                    tokens_per_second: 0.0, // Calculated later
                                 });
                             }
                         }
-                        AnthropicEventType::MessageStop => {
-                            // Finalize message
-                            chunks.push(StreamChunk {
+
+                        if let Some(delta_value) = event.delta {
+                            if let Some(stop_reason) =
+                                delta_value.get("stop_reason").and_then(Value::as_str)
+                            {
+                                finish_reason_chunk = Some(stop_reason.to_string());
+                                // If stop_reason is "tool_use", this is the primary signal.
+                            }
+                        }
+
+                        if usage_chunk.is_some() || finish_reason_chunk.is_some() {
+                            stream_chunks.push(StreamChunk {
                                 reasoning_content: None,
                                 content: None,
-                                usage: None,
-                                msg_type: Some(MessageType::Finished),
+                                usage: usage_chunk,
+                                msg_type: None, // This chunk is for metadata/signal
+                                tool_calls: None,
+                                finish_reason: finish_reason_chunk,
                             });
                         }
-                        AnthropicEventType::Error => {
-                            if let Some(error) = event.error {
-                                let emsg = error["message"]
-                                    .as_str()
-                                    .map(String::from)
-                                    .unwrap_or_else(|| "Unknown Error".to_string());
-                                return Err(emsg);
+                    }
+                    AnthropicEventType::MessageStop => {
+                        // Message stream finished.
+                        // `event.message` might contain final `id`, `role`, `model`, `stop_reason`, `stop_sequence`, and `usage` (with both input_tokens and output_tokens).
+                        // We can extract final usage here if needed.
+                        let mut final_usage: Option<TokenUsage> = None;
+                        if let Some(message_val) = event.message {
+                            if let Some(usage_val) = message_val.get("usage") {
+                                let input_tokens = usage_val
+                                    .get("input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                let output_tokens = usage_val
+                                    .get("output_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0);
+                                final_usage = Some(TokenUsage {
+                                    total_tokens: input_tokens + output_tokens,
+                                    prompt_tokens: input_tokens,
+                                    completion_tokens: output_tokens,
+                                    tokens_per_second: 0.0, // Calculated later
+                                });
                             }
                         }
-                        _ => {} // Ignore ping and other unknown events
+
+                        stream_chunks.push(StreamChunk {
+                            reasoning_content: None,
+                            content: None,
+                            usage: final_usage,
+                            msg_type: Some(MessageType::Finished),
+                            tool_calls: None,
+                            finish_reason: None, // Actual finish_reason (like "tool_use" or "end_turn") is in message.stop_reason or earlier message_delta
+                        });
+                    }
+                    AnthropicEventType::Ping => {
+                        // Keep-alive, can be ignored.
+                    }
+                    AnthropicEventType::Error => {
+                        if let Some(error_val) = event.error {
+                            let error_type = error_val
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown_error");
+                            let error_message = error_val
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Unknown error from Anthropic");
+                            log::error!(
+                                "Anthropic API Error: type: {}, message: {}",
+                                error_type,
+                                error_message
+                            );
+                            return Err(format!("Anthropic API Error: {}", error_message));
+                        } else {
+                            log::error!(
+                                "Anthropic Error event with no error details: {}",
+                                data_str
+                            );
+                            return Err("Unknown error from Anthropic (no details)".to_string());
+                        }
                     }
                 }
-                Err(e) => {
-                    log::error!("Failed to parse Anthropic event: {}, error: {}", data, e);
-                }
+            }
+            Err(e) => {
+                // It's possible to receive non-JSON data or malformed JSON.
+                // Decide whether to error out or log and continue.
+                // For Anthropic, data should always be JSON.
+                log::error!(
+                    "Failed to parse Anthropic event JSON: {}, error: {}",
+                    data_str,
+                    e
+                );
+                // Depending on strictness, you might want to return an Err here.
+                // For robustness, we can try to continue if other events might be valid.
+                // However, a JSON parsing error usually indicates a problem.
+                // return Err(format!("JSON parsing error for Anthropic stream: {}", e));
             }
         }
-        Ok(chunks)
+        Ok(stream_chunks)
     }
 }

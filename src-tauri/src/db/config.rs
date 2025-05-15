@@ -87,7 +87,7 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| StoreError::JsonError(e.to_string()))?;
 
         self.conn
             .execute(

@@ -320,6 +320,7 @@
     "type": {
       "about": "À propos",
       "general": "Général",
+      "mcp": "MCP",
       "model": "Moteur d'IA",
       "privacy": "Confidentialité",
       "skill": "Compétence"

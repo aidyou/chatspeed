@@ -344,7 +344,7 @@ pub async fn create_or_focus_setting_window(
         .title("")
         .decorations(false)
         .maximizable(false)
-        .inner_size(650.0, 700.0)
+        .inner_size(650.0, 750.0)
         .min_inner_size(650.0, 600.0)
         .center();
 

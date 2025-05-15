@@ -1,0 +1,50 @@
+[
+  {
+    "name": "puppeteer",
+    "description": "Provides browser automation capabilities using Puppeteer.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+    "config": {
+      "mcpServers": {
+        "puppeteer": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-puppeteer"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "chromium",
+    "description": "Provides time and timezone conversion capabilities. ",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+    "config": {
+      "mcpServers": {
+        "time": {
+          "command": "python",
+          "args": [
+            "-m",
+            "mcp_server_time"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "memory",
+    "description": "A basic implementation of persistent memory using a local knowledge graph. This lets AI remember information about the user across chats. ",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    "config": {
+      "mcpServers": {
+        "memory": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-memory"
+          ]
+        }
+      }
+    }
+  }
+]

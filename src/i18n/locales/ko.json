@@ -320,6 +320,7 @@
     "type": {
       "about": "정보",
       "general": "일반",
+      "mcp": "MCP",
       "model": "AI 엔진",
       "privacy": "개인 정보 보호",
       "skill": "스킬"

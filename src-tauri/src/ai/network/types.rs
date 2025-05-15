@@ -211,6 +211,8 @@ pub struct UsageMetadata {
 #[derive(Debug, Deserialize)]
 pub struct Candidate {
     pub content: Content,
+    #[serde(default, rename = "finishReason")]
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,7 +222,17 @@ pub struct Content {
 
 #[derive(Debug, Deserialize)]
 pub struct Part {
-    pub text: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default, rename = "functionCall")]
+    pub function_call: Option<GeminiFunctionCall>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiFunctionCall {
+    pub name: String,
+    pub args: Value, // Gemini args are typically a JSON object
 }
 
 /// OpenAI compatible response format
@@ -235,6 +247,8 @@ pub struct OpenAIStreamResponse {
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamChoice {
     pub delta: OpenAIStreamDelta,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +257,24 @@ pub struct OpenAIStreamDelta {
     pub reasoning_content: Option<String>,
     #[serde(rename = "type")]
     pub msg_type: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolCall {
+    pub index: u32,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub call_type: Option<String>,
+    pub function: ToolFunction,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolFunction {
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,23 +303,9 @@ pub enum AnthropicEventType {
 pub struct AnthropicStreamEvent {
     #[serde(rename = "type")]
     pub event_type: AnthropicEventType,
-    /*
-    /// Full message object (only available in message_start/message_stop events)
-    /// Example usage:
-    /// - message_start: contains initial message metadata (id, model, etc)
-    /// - message_stop: contains final message state and usage statistics
-    #[serde(default)]
-    pub message: Option<Value>,
-    */
-    /*
     /// Content block object (only available in content_block_start events)
-    /// Example usage:
-    /// - content_block_start: contains the initial state of content blocks
-    /// - For text blocks: {"type": "text", "text": ""}
-    /// - For tool_use blocks: {"type": "tool_use", "id": "toolu_...", "name": "...", "input": {}}
     #[serde(default)]
-    pub content_block: Option<Value>,
-    */
+    pub content_block: Option<AnthropicContentBlock>,
     #[serde(default)]
     pub index: Option<u32>,
     #[serde(default)]
@@ -296,4 +314,22 @@ pub struct AnthropicStreamEvent {
     pub error: Option<Value>,
     #[serde(default)]
     pub usage: Option<Value>,
+    /// Full message object (only available in message_start/message_stop events)
+    #[serde(default)]
+    pub message: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: String, // "text" or "tool_use"
+    #[serde(default)]
+    pub text: Option<String>, // For text blocks
+    #[serde(default)]
+    pub id: Option<String>, // For tool_use blocks
+    #[serde(default)]
+    pub name: Option<String>, // For tool_use blocks
+    #[serde(default)]
+    pub input: Option<Value>, // For tool_use blocks (initial empty object)
 }

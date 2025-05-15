@@ -130,6 +130,7 @@ tray:
   about: "Über"
   assistant: "Desktop-Assistent"
   chat: "Chat"
+  mcp: "MCP"
   model: "KI-Engine"
   note: "Intelligente Notiz"
   quit: "Beenden"

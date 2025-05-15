@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod main_store;
 // pub mod plugin;
+mod mcp;
 mod note;
 mod sql;
 mod types;

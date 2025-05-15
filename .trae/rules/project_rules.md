@@ -13,6 +13,7 @@
 - **Trait definitions** in Rust should be placed in `traits.rs`, and **struct definitions** can be placed in `types.rs` if there are many.
 - **Refer to Tauri v2 documentation** before generating code, as there is a significant difference between Tauri v1 and v2.
 - **Review Rust code syntax carefully** after generating code. Ensure it adheres to proper lifetimes and variable usage to avoid errors.
+- **Rust documentation comments** should placed at file start and start with `//!`
 
 ## Frontend Development Guidelines
 
@@ -25,5 +26,6 @@
 ## Code Comments and Documentation
 
 - **Generate method, function, and code block comments in English**. Avoid starting comments with phrases like "this function" or "this class". Ensure comments are clear and concise, providing context and explanations where necessary.
+- **Function comments** should comprehensively cover aspects such as a detailed description of the function's purpose, definitions of parameters and return values, how exceptions are handled, and any relevant notes.
 - **Do not remove necessary comments** from the original code.
 - **All comments, including code comments, must be in English**.

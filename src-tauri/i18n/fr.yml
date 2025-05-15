@@ -130,6 +130,7 @@ tray:
   about: "À propos"
   assistant: "Assistant de bureau"
   chat: "Conversation"
+  mcp: "MCP"
   model: "Moteur d'IA"
   note: "Note intelligente"
   quit: "Quitter"

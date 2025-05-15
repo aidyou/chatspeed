@@ -34,7 +34,7 @@ impl FunctionDefinition for Crawler {
 
     /// Returns the type of the function.
     fn function_type(&self) -> FunctionType {
-        FunctionType::CHP
+        FunctionType::MCP
     }
 
     /// Returns the description of the function.

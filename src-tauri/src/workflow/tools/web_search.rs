@@ -70,7 +70,7 @@ impl FunctionDefinition for Search {
 
     /// Returns the type of the function.
     fn function_type(&self) -> FunctionType {
-        FunctionType::CHP
+        FunctionType::MCP
     }
 
     /// Returns a brief description of the function.

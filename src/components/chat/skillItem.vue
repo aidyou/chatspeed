@@ -1,25 +1,29 @@
 <template>
   <div class="item" :class="{ active: active }">
-    <div class="img" v-if="skill.logo">
-      <img :src="skill.logo" class="skill-logo" />
-    </div>
-    <div class="icon" v-else>
-      <cs :name="skill.icon" />
+    <div class="icon">
+      <cs :name="skill.icon" v-if="skill.icon" />
+      <avatar
+        :text="skill.name"
+        :size="24"
+        bgColor="var(--cs-bg-color)"
+        textColor="var(--cs-text-color-secondary)"
+        v-else />
     </div>
     <div class="name">{{ skill.name }}</div>
     <div class="desc">{{ skill?.metadata?.description || '' }}</div>
   </div>
 </template>
 <script setup>
+import avatar from '@/components/common/avatar.vue'
 const props = defineProps({
   skill: {
     type: Object,
-    required: true,
+    required: true
   },
   active: {
     type: Boolean,
-    default: false,
-  },
+    default: false
+  }
 })
 </script>
 <style lang="scss" scoped>
@@ -32,7 +36,6 @@ const props = defineProps({
   border-radius: var(--cs-border-radius);
   color: var(--cs-text-color-secondary);
 
-  .img,
   .icon {
     width: 24px;
     height: 24px;
@@ -42,13 +45,6 @@ const props = defineProps({
     display: flex;
     align-items: center;
     justify-content: center;
-
-    img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      border-radius: var(--cs-border-radius-round);
-    }
   }
 
   .name {

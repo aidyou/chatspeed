@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::mcp::Mcp;
+
 // use crate::plugins::traits::PluginType;
 
 // =================================================
@@ -135,10 +137,12 @@ pub struct AiSkill {
 pub struct Config {
     /// A HashMap storing the settings as key-value pairs.
     pub settings: HashMap<String, Value>,
-    /// A thread-safe vector of AI models.
+    /// A vector of AI models.
     pub ai_models: Vec<AiModel>,
-    /// A thread-safe vector of AI skills.
+    /// A vector of AI skills.
     pub ai_skills: Vec<AiSkill>,
+    /// Mcp server configurations.
+    pub mcps: Vec<Mcp>,
 }
 
 // =================================================

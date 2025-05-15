@@ -103,8 +103,48 @@
               v-model="modelForm.apiKey"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 5 }"
-              :placeholder="$t('settings.model.apiKeyPlaceholder')"
-              show-password />
+              :placeholder="$t('settings.model.apiKeyPlaceholder')" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.general.proxyType')" prop="proxyType">
+            <el-radio-group v-model="modelForm.proxyType">
+              <el-radio
+                :label="proxyType.value"
+                :value="proxyType.value"
+                v-for="proxyType in proxyTypeOptions"
+                :key="proxyType.value"
+                >{{ proxyType.label }}</el-radio
+              >
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item
+            :label="$t('settings.general.proxyServer')"
+            prop="proxyServer"
+            v-show="modelForm.proxyType === 'http'">
+            <el-input
+              v-model="modelForm.proxyServer"
+              type="text"
+              :placeholder="$t('settings.general.proxyServerPlaceholder')" />
+          </el-form-item>
+          <el-form-item
+            :label="$t('settings.general.proxyUsername')"
+            prop="proxyUsername"
+            v-show="modelForm.proxyType === 'http'">
+            <el-input
+              v-model="modelForm.proxyUsername"
+              type="text"
+              :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
+          </el-form-item>
+          <el-form-item
+            :label="$t('settings.general.proxyPassword')"
+            prop="proxyPassword"
+            v-show="modelForm.proxyType === 'http'">
+            <el-input
+              v-model="modelForm.proxyPassword"
+              type="text"
+              :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.disabled')" prop="disabled">
+            <el-switch v-model="modelForm.disabled" />
           </el-form-item>
         </el-tab-pane>
         <!-- /end basic info -->
@@ -183,24 +223,37 @@
               :placeholder="$t('settings.model.maxTokensPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
-            <el-slider
-              v-model="modelForm.temperature"
-              :min="0"
-              :max="2"
-              :step="0.1"
-              show-input
-              :format-tooltip="value => value.toFixed(1)"
-              input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.temperaturePlaceholder')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <el-slider
+                v-model="modelForm.temperature"
+                :min="0"
+                :max="2"
+                :step="0.1"
+                show-input
+                :show-tooltip="false"
+                input-size="small" />
+            </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.topP')" prop="topP">
-            <el-slider
-              v-model="modelForm.topP"
-              :min="0"
-              :max="1"
-              :step="0.1"
-              show-input
-              :format-tooltip="value => value.toFixed(1)"
-              input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.topPPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <el-slider
+                v-model="modelForm.topP"
+                :min="0"
+                :max="1"
+                :step="0.1"
+                show-input
+                :format-tooltip="value => value.toFixed(1)"
+                :show-tooltip="false"
+                input-size="small" />
+            </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.topK')" prop="topK">
             <el-tooltip
@@ -214,22 +267,48 @@
                 :max="100"
                 :step="1"
                 show-input
+                :show-tooltip="false"
                 input-size="small" />
             </el-tooltip>
           </el-form-item>
-          <el-form-item :label="$t('settings.model.proxyType')" prop="proxyType">
-            <el-radio-group v-model="modelForm.proxyType">
-              <el-radio
-                :label="proxyType.value"
-                :value="proxyType.value"
-                v-for="proxyType in proxyTypeOptions"
-                :key="proxyType.value"
-                >{{ proxyType.label }}</el-radio
-              >
-            </el-radio-group>
+          <el-form-item :label="$t('settings.model.frequencyPenalty')" prop="frequencyPenalty">
+            <el-tooltip
+              :content="$t('settings.model.frequencyPenaltyPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <el-slider
+                v-model="modelForm.frequencyPenalty"
+                :min="-2"
+                :max="2"
+                :step="1"
+                show-input
+                :show-tooltip="false"
+                input-size="small" />
+            </el-tooltip>
           </el-form-item>
-          <el-form-item :label="$t('settings.model.disabled')" prop="disabled">
-            <el-switch v-model="modelForm.disabled" />
+          <el-form-item :label="$t('settings.model.presencePenalty')" prop="presencePenalty">
+            <el-tooltip
+              :content="$t('settings.model.presencePenaltyPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <el-slider
+                v-model="modelForm.presencePenalty"
+                :min="-2"
+                :max="2"
+                :step="1"
+                show-input
+                :show-tooltip="false"
+                input-size="small" />
+            </el-tooltip>
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.stop')" prop="stop">
+            <el-input
+              v-model="modelForm.stop"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 5 }"
+              :placeholder="$t('settings.model.stopPlaceholder')" />
           </el-form-item>
         </el-tab-pane>
         <!-- /end additional info -->
@@ -385,7 +464,7 @@ const apiProtocolOptions = {
  * Computed property to generate proxy type options for the select input
  */
 const proxyTypeOptions = computed(() => {
-  return ['bySetting', 'none'].map(key => ({
+  return ['bySetting', 'http', 'none'].map(key => ({
     label: t(`settings.model.proxyTypes.${key}`),
     value: key
   }))
@@ -403,7 +482,14 @@ const defaultFormData = {
   temperature: 0.8,
   topP: 0.9,
   topK: 40,
+  presencePenalty: 0.0,
+  frequencyPenalty: 0.0,
+  responseFormat: 'text',
+  stop: '',
   proxyType: 'bySetting',
+  proxyServer: '',
+  proxyUsername: '',
+  proxyPassword: '',
   disabled: false
 }
 // Reactive object to hold the form data for the model
@@ -436,7 +522,31 @@ const modelRules = {
 // =================================================
 // model utils
 // =================================================
-
+const createFromModel = srcModel => {
+  return {
+    apiProtocol: srcModel.apiProtocol,
+    name: srcModel.name,
+    logo: srcModel?.metadata?.logo || '',
+    models: srcModel.models,
+    defaultModel: srcModel.defaultModel,
+    baseUrl: srcModel.baseUrl,
+    apiKey: srcModel.apiKey,
+    maxTokens: srcModel.maxTokens,
+    temperature: srcModel.temperature,
+    topP: srcModel.topP,
+    topK: srcModel.topK,
+    disabled: srcModel.disabled,
+    // metadata
+    presencePenalty: srcModel?.metadata?.presencePenalty || 0.0,
+    frequencyPenalty: srcModel?.metadata?.frequencyPenalty || 0.0,
+    responseFormat: srcModel?.metadata?.responseFormat || 'text',
+    stop: srcModel?.metadata?.stop || '',
+    proxyType: srcModel?.metadata?.proxyType,
+    proxyServer: srcModel?.metadata?.proxyServer || '',
+    proxyUsername: srcModel?.metadata?.proxyUsername || '',
+    proxyPassword: srcModel?.metadata?.proxyPassword || ''
+  }
+}
 /**
  * Opens the model dialog for editing or creating a new model.
  * @param {string|null} id - The ID of the model to edit, or null to create a new model.
@@ -452,21 +562,7 @@ const editModel = async (id, model) => {
       return
     }
     editId.value = id
-    modelForm.value = {
-      apiProtocol: modelData.apiProtocol,
-      name: modelData.name,
-      logo: modelData?.metadata?.logo || '',
-      models: modelData.models,
-      defaultModel: modelData.defaultModel,
-      baseUrl: modelData.baseUrl,
-      apiKey: modelData.apiKey,
-      maxTokens: modelData.maxTokens,
-      temperature: modelData.temperature,
-      topP: modelData.topP,
-      topK: modelData.topK,
-      disabled: modelData.disabled,
-      proxyType: modelData?.metadata?.proxyType
-    }
+    modelForm.value = createFromModel(modelData)
   } else if (model) {
     modelForm.value = { ...defaultFormData }
     modelForm.value.models = [...model.models]
@@ -494,21 +590,8 @@ const copyModel = id => {
     return
   }
   editId.value = null
-  modelForm.value = {
-    apiProtocol: modelData.apiProtocol,
-    name: modelData.name + '-Copy',
-    logo: modelData?.metadata?.logo || '',
-    models: modelData.models,
-    defaultModel: modelData.defaultModel,
-    baseUrl: modelData.baseUrl,
-    apiKey: modelData.apiKey,
-    maxTokens: modelData.maxTokens,
-    temperature: modelData.temperature,
-    topP: modelData.topP,
-    topK: modelData.topK,
-    disabled: modelData.disabled,
-    proxyType: modelData?.metadata?.proxyType
-  }
+  modelForm.value = createFromModel(modelData)
+  modelForm.value.name = modelData.name + '-Copy'
   modelDialogVisible.value = true
 }
 
@@ -521,6 +604,19 @@ const updateModel = () => {
     if (!modelForm.value.models.length) {
       showMessage(t('settings.model.modelsRequired'), 'error')
       return
+    }
+    if (modelForm.value.proxyType === 'http') {
+      if (!modelForm.value.proxyServer) {
+        showMessage(t('settings.model.proxyServerRequired'), 'error')
+        return
+      }
+      if (
+        modelForm.value.proxyServer.indexOf('http://') !== 0 &&
+        modelForm.value.proxyServer.indexOf('https://') !== 0
+      ) {
+        showMessage(t('settings.general.proxyServerInvalid'), 'error')
+        return
+      }
     }
     if (modelForm.value.defaultModel === '') {
       modelForm.value.defaultModel = modelForm.value.models[0].id
@@ -543,8 +639,16 @@ const updateModel = () => {
         topK: toInt(modelForm.value.topK),
         disabled: modelForm.value.disabled,
         metadata: {
+          logo: modelForm.value.logo || '',
+          frequencyPenalty: modelForm.value.frequencyPenalty,
+          presencePenalty: modelForm.value.presencePenalty,
+          responseFormat: modelForm.value.responseFormat,
+          n: Math.max(0, modelForm.value.n),
+          stop: modelForm.value.stop.trim() || '',
           proxyType: modelForm.value.proxyType || 'bySetting',
-          logo: modelForm.value.logo || ''
+          proxyServer: modelForm.value.proxyServer.trim() || '',
+          proxyUsername: modelForm.value.proxyUsername.trim() || '',
+          proxyPassword: modelForm.value.proxyPassword.trim() || ''
         }
       }
 

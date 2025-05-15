@@ -24,8 +24,8 @@
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
-            <cs :name="element.icon" color="primary" size="18px" v-if="!element.logo" />
-            <img :src="element.logo" v-else class="skill-logo" />
+            <cs :name="element.icon" color="primary" size="18px" v-if="element.icon" />
+            <avatar :text="element.name" :size="20" v-else />
             {{ element.name }}
           </div>
 
@@ -198,7 +198,7 @@ const { t } = useI18n()
 
 import { Sortable } from 'sortablejs-vue3'
 
-// import fileSelector from '@/components/common/fileSelector.vue'
+import avatar from '@/components/common/avatar.vue'
 import iconfonts from '@/components/icon/type.js'
 import { isEmpty, showMessage } from '@/libs/util'
 
@@ -380,10 +380,10 @@ const updateSkill = () => {
           useSystemRole: skillForm.value.useSystemRole || false
         }
       }
-      if (isEmpty(formData.logo) && isEmpty(formData.icon)) {
-        showMessage(t('settings.skill.iconOrLogoRequired'), 'error')
-        return
-      }
+      // if (isEmpty(formData.logo) && isEmpty(formData.icon)) {
+      //   showMessage(t('settings.skill.iconOrLogoRequired'), 'error')
+      //   return
+      // }
 
       skillStore
         .setSkill(formData)

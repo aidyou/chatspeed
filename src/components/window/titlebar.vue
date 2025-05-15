@@ -95,6 +95,7 @@ const availableMenus = [
   'setting',
   'model',
   'skill',
+  'mcp',
   'divider',
   'about',
   'quit'
@@ -250,6 +251,7 @@ const handleCommand = async command => {
       case 'setting':
         await invoke('open_setting_window', { settingType: 'general' })
         break
+      case 'mcp':
       case 'model':
       case 'skill':
       case 'about':

@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-mcp:before {
+  content: "\e650";
+}
+
 .cs-clear-context:before {
   content: "\e70c";
 }

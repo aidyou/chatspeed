@@ -130,6 +130,7 @@ tray:
   about: "About"
   assistant: "Desktop Assistant"
   chat: "Chat"
+  mcp: "MCP"
   model: "AI Engine"
   note: "Smart Note"
   quit: "Quit"

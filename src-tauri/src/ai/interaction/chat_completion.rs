@@ -6,8 +6,9 @@ use std::{collections::HashMap, fmt::Display};
 use tokio::sync::Mutex;
 
 use crate::ai::interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL};
-use crate::ai::traits::chat::{ChatCompletionResult, MessageType, Usage};
+use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType, Usage};
 use crate::http::chp::SearchResult;
+use crate::workflow::FunctionManager;
 use crate::{
     ai::{
         chat::{anthropic::AnthropicChat, gemini::GeminiChat, openai::OpenAIChat},
@@ -136,6 +137,8 @@ pub struct ChatState {
     // New depth search state tracking
     pub active_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub channels: Arc<WindowChannels>,
+    // function manager
+    pub function_manager: Arc<Mutex<FunctionManager>>,
 }
 
 impl ChatState {
@@ -152,10 +155,14 @@ impl ChatState {
             ChatProtocol::Gemini
         };
 
+        let function_manager = FunctionManager::new();
+        // TODO register functions here
+
         Self {
             chats: Arc::new(Mutex::new(chats)),
             active_searches: Arc::new(Mutex::new(HashMap::new())),
             channels,
+            function_manager: Arc::new(Mutex::new(function_manager)),
         }
     }
 }
@@ -181,6 +188,7 @@ impl AiChatEnum {
         api_key: Option<&str>,
         chat_id: String,
         messages: Vec<Value>,
+        tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -192,6 +200,7 @@ impl AiChatEnum {
             api_key,
             chat_id,
             messages,
+            tools,
             extra_params,
             callback
         )
@@ -280,6 +289,7 @@ pub async fn complete_chat_async(
     api_key: Option<&str>,
     chat_id: String,
     messages: Vec<Value>,
+    tools: Option<Vec<MCPToolDeclaration>>,
     mut metadata: Option<Value>,
     callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
 ) -> Result<(), String> {
@@ -341,6 +351,7 @@ pub async fn complete_chat_async(
                 api_key_clone.as_deref(),
                 chat_id,
                 messages,
+                tools,
                 metadata,
                 callback,
             )
@@ -395,6 +406,7 @@ pub async fn complete_chat_blocking(
     api_key: Option<&str>,
     chat_id: String,
     messages: Vec<Value>,
+    tools: Option<Vec<MCPToolDeclaration>>,
     metadata: Option<Value>,
 ) -> Result<ChatCompletionResult, String> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<ChatResponse>>(100);
@@ -415,6 +427,7 @@ pub async fn complete_chat_blocking(
         api_key,
         chat_id.clone(),
         messages,
+        tools,
         metadata,
         callback,
     )

@@ -384,6 +384,7 @@ impl DeepSearch {
                 Some(&model.api_key),
                 chat_id.to_string(),
                 vec![json!({"role": "user", "content": prompt})],
+                None,
                 chat_metadata.clone(),
                 callback,
             )
@@ -1040,6 +1041,7 @@ impl DeepSearch {
                 Some(model.api_key.as_str()),
                 chat_id.clone(),
                 messages.clone(),
+                None,
                 chat_metadata.clone(),
             )
             .await
@@ -1220,7 +1222,7 @@ impl FunctionDefinition for DeepSearch {
         })
     }
 
-    async fn execute(&self, param: serde_json::Value) -> FunctionResult {
+    async fn execute(&self, _param: serde_json::Value) -> FunctionResult {
         todo!()
     }
 }

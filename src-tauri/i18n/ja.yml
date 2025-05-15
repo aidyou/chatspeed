@@ -130,6 +130,7 @@ tray:
   about: "バージョン情報"
   assistant: "デスクトップアシスタント"
   chat: "チャット"
+  mcp: "MCP"
   model: "AIエンジン"
   note: "智記"
   quit: "終了"

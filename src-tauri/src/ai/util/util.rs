@@ -16,6 +16,13 @@ pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
         "temperature",
         "topP",
         "topK",
+        "presencePenalty",
+        "frequencyPenalty",
+        "responseFormat",
+        "stop",
+        "n",
+        "user",
+        "toolChoice",
         "proxyType",
         "proxyServer",
         "proxyUsername",
@@ -45,24 +52,108 @@ pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
 pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) {
     // The parameters are camelCase from the frontend
     let stream = extra_params
-        .clone()
+        .as_ref()
         .and_then(|params| params.get("stream").and_then(|v| v.as_bool()));
     let max_tokens = extra_params
-        .clone()
+        .as_ref()
         .and_then(|params| params.get("maxTokens").and_then(|v| v.as_u64()));
     let temperature = extra_params
-        .clone()
+        .as_ref()
         .and_then(|params| params.get("temperature").and_then(|v| v.as_f64()));
     let top_p = extra_params
-        .clone()
+        .as_ref()
         .and_then(|params| params.get("topP").and_then(|v| v.as_f64()));
     let top_k = extra_params
-        .clone()
+        .as_ref()
         .and_then(|params| params.get("topK").and_then(|v| v.as_u64()));
     let top_k = match top_k {
         Some(value) if value > 0 => value,
         _ => 40,
     };
+
+    // OpenAI API: number, Optional, Defaults to 0.0
+    // Number between -2.0 and 2.0.
+    // Positive values penalize new tokens based on whether they appear in the text so far,
+    // increasing the model's likelihood to talk about new topics.
+    let presence_penalty = extra_params
+        .as_ref()
+        .and_then(|params| params.get("presencePenalty").and_then(|v| v.as_f64()));
+    // OpenAI API: number, Optional, Defaults to 0.0
+    // Number between -2.0 and 2.0.
+    // Positive values penalize new tokens based on their existing frequency in the text so far,
+    // decreasing the model's likelihood to repeat the same line verbatim.
+    let frequency_penalty = extra_params
+        .as_ref()
+        .and_then(|params| params.get("frequencyPenalty").and_then(|v| v.as_f64()));
+
+    // OpenAI API: object, Optional, Defaults to {"type": "text"}
+    // An object specifying the format that the model must output.
+    // Setting to { "type": "json_object" } enables JSON mode.
+    // Important: when using JSON mode, you must also instruct the model to produce JSON yourself via a system or user message.
+    let response_format = extra_params
+        .as_ref()
+        .and_then(|params| params.get("responseFormat").and_then(|v| v.as_str()));
+
+    let tool_choice = extra_params.as_ref().and_then(|params| {
+        params
+            .get("toolChoice")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+
+    // Stop sequences: can be a string or an array of strings
+    let stop_sequences = extra_params.as_ref().and_then(|params| {
+        params.get("stop").and_then(|v| {
+            if v.is_string() {
+                v.as_str().map(|s| {
+                    s.split('\n')
+                        .filter_map(|part| {
+                            let trimmed = part.trim();
+                            if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(trimmed.to_string())
+                            }
+                        })
+                        .collect::<Vec<String>>()
+                })
+            } else if v.is_array() {
+                v.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|val| val.as_str().map(String::from))
+                        .collect()
+                })
+            } else {
+                None
+            }
+        })
+    });
+
+    let n_candidate_count = extra_params
+        .as_ref()
+        .and_then(|params| params.get("n").and_then(|v| v.as_u64()));
+
+    let user_id = extra_params.as_ref().and_then(|params| {
+        params
+            .get("user")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
+    // Prepare response_format object for OpenAI compatibility
+    let response_format_obj = match response_format {
+        Some("json_object") => json!({"type": "json_object"}),
+        Some("text") => json!({"type": "text"}),
+        Some(other) if !other.is_empty() => {
+            // Log a warning for unrecognized response_format, and default to "text"
+            log::warn!(
+                "Unrecognized response_format value '{}', defaulting to 'text'.",
+                other
+            );
+            json!({"type": "text"})
+        }
+        _ => json!({"type": "text"}), // Default for None or empty string from frontend
+    };
+
     (
         // Keep the Rust underscore style
         json!({
@@ -71,6 +162,13 @@ pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) 
             "temperature": temperature.unwrap_or(1.0),
             "top_p": top_p.unwrap_or(1.0),
             "top_k": top_k,
+            "tool_choice": tool_choice.unwrap_or("auto".to_string()),
+            "presence_penalty": presence_penalty.unwrap_or(0.0),
+            "frequency_penalty": frequency_penalty.unwrap_or(0.0),
+            "response_format": response_format_obj,
+            "stop_sequences": stop_sequences.map_or(Value::Null, |s| json!(s)),
+            "candidate_count": n_candidate_count.map_or(Value::Null, |n| json!(n)),
+            "user_id": user_id.map_or(Value::Null, |u| json!(u)),
         }),
         get_meta_data(extra_params),
     )

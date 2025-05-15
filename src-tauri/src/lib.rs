@@ -6,6 +6,7 @@ mod db;
 mod http;
 mod libs;
 mod logger;
+mod mcp;
 mod shortcut;
 mod test;
 mod tray;

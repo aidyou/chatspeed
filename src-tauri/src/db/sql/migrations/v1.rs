@@ -162,6 +162,21 @@ pub const INIT_SQL: &[(&str, &str)] = &[
         "idx_note_tag_items_name",
         "CREATE INDEX IF NOT EXISTS idx_note_tag_items_name ON note_tag_items (name)",
     ),
+    (
+        "mcp",
+        "CREATE TABLE IF NOT EXISTS mcp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            config TEXT NOT NULL,
+            disabled BOOLEAN NOT NULL DEFAULT FALSE,
+            disabled_tools TEXT
+        )",
+    ),
+    (
+        "mcp_name_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_name ON mcp (name)",
+    )
 ];
 
 /// Executes initial database schema creation
@@ -174,7 +189,7 @@ pub fn run_migration(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     // insert database version
-    tx.execute("INSERT INTO db_version (version) VALUES (1)", [])?;
+    tx.execute("INSERT OR REPLACE INTO db_version (version) VALUES (1)", [])?;
 
     // commit transaction
     tx.commit()?;

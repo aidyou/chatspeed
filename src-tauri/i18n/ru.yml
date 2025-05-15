@@ -130,6 +130,7 @@ tray:
   about: "О программе"
   assistant: "Настольный помощник"
   chat: "Чат"
+  mcp: "MCP"
   model: "AI Движок"
   note: "Заметки"
   quit: "Выход"

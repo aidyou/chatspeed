@@ -130,6 +130,7 @@ tray:
   about: "정보"
   assistant: "데스크톱 도우미"
   chat: "채팅"
+  mcp: "MCP"
   model: "AI 엔진"
   note: "메모"
   quit: "종료"

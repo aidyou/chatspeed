@@ -44,6 +44,9 @@ pub enum WorkflowError {
     #[error("{}", t!("workflow.max_retries_exceeded", node = .0))]
     MaxRetriesExceeded(String),
 
+    #[error("{}", t!("workflow.initialization", msg =.0))]
+    Initialization(String),
+
     /// Invalid state error
     #[error("{}", t!("workflow.invalid_state", reason = .0))]
     InvalidState(String),

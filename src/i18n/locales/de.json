@@ -320,6 +320,7 @@
     "type": {
       "about": "Über",
       "general": "Allgemein",
+      "mcp": "MCP",
       "model": "KI-Engine",
       "privacy": "Datenschutz",
       "skill": "Fähigkeit"

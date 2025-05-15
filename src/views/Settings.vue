@@ -28,6 +28,10 @@
       <skill />
     </el-main>
 
+    <el-main v-show="settingType === 'mcp'" class="main">
+      <mcp />
+    </el-main>
+
     <el-main v-show="settingType === 'privacy'" class="main">
       <privacy />
     </el-main>
@@ -45,6 +49,7 @@ import { useI18n } from 'vue-i18n'
 
 import about from '@/components/setting/about.vue'
 import general from '@/components/setting/general.vue'
+import mcp from '@/components/setting/mcp.vue'
 import model from '@/components/setting/model.vue'
 import skill from '@/components/setting/skill.vue'
 import privacy from '@/components/setting/privacy.vue'
@@ -60,6 +65,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.general'), icon: 'setting', id: 'general' },
   { label: t('settings.type.model'), icon: 'model', id: 'model' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
+  { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' }
 ])

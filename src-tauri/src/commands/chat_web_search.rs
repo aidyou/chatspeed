@@ -8,7 +8,7 @@ use super::chat::setup_chat_proxy;
 use crate::ai::interaction::chat_completion::{
     complete_chat_async, complete_chat_blocking, ChatProtocol, ChatState,
 };
-use crate::ai::traits::chat::{ChatCompletionResult, MessageType};
+use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType};
 use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::http::chp::{Chp, SearchProvider, SearchResult};
 use crate::{ai::traits::chat::ChatResponse, db::MainStore};
@@ -440,6 +440,7 @@ async fn generate_search_queries(
         api_key,
         chat_id,
         messages,
+        None,
         metadata,
     )
     .await?;
@@ -486,6 +487,7 @@ async fn filter_and_rank_search_results(
         api_key,
         chat_id,
         vec![json!({"role": "user", "content": prompt})],
+        None,
         metadata,
     )
     .await?;
@@ -520,6 +522,7 @@ async fn chat_with_retry(
     api_key: Option<&str>,
     chat_id: String,
     messages: Vec<Value>,
+    tools: Option<Vec<MCPToolDeclaration>>,
     metadata: Option<Value>,
 ) -> Result<ChatCompletionResult, String> {
     for i in 0..3 {
@@ -531,6 +534,7 @@ async fn chat_with_retry(
             api_key,
             chat_id.clone(),
             messages.clone(),
+            tools.clone(),
             metadata.clone(),
         )
         .await
@@ -696,6 +700,7 @@ async fn generate_final_answer(
         api_key,
         chat_id,
         messages,
+        None,
         metadata,
         callback,
     )

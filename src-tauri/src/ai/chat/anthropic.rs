@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::Response;
 use serde_json::{json, Value};
 use std::time::Instant;
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::ai::interaction::constants::{
@@ -11,7 +11,7 @@ use crate::ai::interaction::constants::{
 use crate::ai::network::{
     ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, StreamFormat, StreamProcessor, TokenUsage,
 };
-use crate::ai::traits::chat::{ChatResponse, MessageType};
+use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, ToolCallDeclaration};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
 use crate::impl_stoppable;
@@ -41,16 +41,77 @@ impl AnthropicChat {
     ///
     /// # Returns
     /// A JSON payload formatted according to Anthropic API requirements
-    fn build_request_body(&self, model: &str, messages: Vec<Value>, params: &Value) -> Value {
-        json!({
+    fn build_request_body(
+        &self,
+        model: &str,
+        messages: Vec<Value>,
+        tools: Option<Vec<MCPToolDeclaration>>,
+        params: &Value,
+    ) -> Value {
+        let mut processed_messages = messages.clone();
+        let mut system_prompt = None;
+
+        if let Some(first_message) = messages.first() {
+            if first_message.get("role").and_then(Value::as_str) == Some("system") {
+                system_prompt = first_message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                processed_messages = messages.iter().skip(1).cloned().collect();
+            }
+        }
+
+        let mut payload = json!({
             "model": model,
-            "messages": messages,
+            "messages": processed_messages,
             "max_tokens": params.get("max_tokens").unwrap_or(&json!(4096)),
             "temperature": params.get("temperature").unwrap_or(&json!(1.0)),
             "stream": params.get("stream").unwrap_or(&json!(true)),
             "top_p": params.get("top_p").unwrap_or(&json!(1.0)),
             "top_k": params.get("top_k").unwrap_or(&json!(40)),
-        })
+        });
+
+        if let Some(obj) = payload.as_object_mut() {
+            if let Some(prompt) = system_prompt {
+                if !prompt.is_empty() {
+                    obj.insert("system".to_string(), json!(prompt));
+                }
+            }
+
+            if let Some(stop_sequences) = params.get("stop_sequences").and_then(|v| v.as_array()) {
+                if !stop_sequences.is_empty() {
+                    obj.insert("stop_sequences".to_string(), json!(stop_sequences));
+                }
+            }
+
+            if let Some(user_id) = params.get("user_id").and_then(|v| v.as_str()) {
+                if !user_id.is_empty() {
+                    obj.insert("metadata".to_string(), json!({ "user_id": user_id }));
+                }
+            }
+
+            if params.get("tool_choice").and_then(|tc| tc.as_str()) != Some("none") {
+                if let Some(tools_vec) = tools {
+                    let anthropic_tools = tools_vec
+                        .into_iter()
+                        .map(|tool| tool.to_anthropic())
+                        .collect::<Vec<Value>>();
+                    if !anthropic_tools.is_empty() {
+                        obj.insert("tools".to_string(), json!(anthropic_tools));
+                    }
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            log::debug!(
+                "anthropic payload: {}",
+                serde_json::to_string_pretty(&payload).unwrap_or_default()
+            )
+        }
+
+        payload
     }
 
     /// Processes streaming response
@@ -70,6 +131,9 @@ impl AnthropicChat {
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
 
+        // Accumulates tool call parts. Key is tool_call.index
+        let mut accumulated_tool_calls: HashMap<u32, ToolCallDeclaration> = HashMap::new();
+
         let processor = StreamProcessor::new();
         let mut event_receiver = processor
             .process_stream(response, &StreamFormat::Anthropic)
@@ -82,10 +146,13 @@ impl AnthropicChat {
             }
 
             match event {
-                Ok(chunk) => {
+                Ok(raw_bytes_from_sse_processor) => {
                     let chunks = self
                         .client
-                        .process_stream_chunk(chunk, &StreamFormat::Anthropic)
+                        .process_stream_chunk(
+                            raw_bytes_from_sse_processor,
+                            &StreamFormat::Anthropic,
+                        )
                         .await
                         .map_err(|e| {
                             callback(ChatResponse::new_with_arc(
@@ -97,15 +164,26 @@ impl AnthropicChat {
                             Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                         })?;
 
+                    let mut send_tool_calls_signal = false;
+
                     for chunk in chunks {
                         if let Some(new_usage) = chunk.usage {
-                            token_usage = new_usage;
+                            // Prompt tokens usually come once, typically with MessageStop.
+                            if new_usage.prompt_tokens > 0 {
+                                token_usage.prompt_tokens = new_usage.prompt_tokens;
+                            }
+                            // Completion tokens accumulate from MessageDelta and MessageStop.
+                            token_usage.completion_tokens += new_usage.completion_tokens;
+                            token_usage.total_tokens =
+                                token_usage.prompt_tokens + token_usage.completion_tokens;
 
-                            // Anthropic does not provide tokens per second, so calculate it here
-                            let completion_tokens = token_usage.completion_tokens as f64;
+                            // Calculate tokens_per_second based on accumulated completion_tokens
+                            let current_completion_tokens = token_usage.completion_tokens as f64;
                             let duration = start_time.elapsed();
-                            token_usage.tokens_per_second = if duration.as_secs() > 0 {
-                                completion_tokens / duration.as_secs_f64()
+                            token_usage.tokens_per_second = if duration.as_secs_f64() > 0.0
+                                && current_completion_tokens > 0.0
+                            {
+                                current_completion_tokens / duration.as_secs_f64()
                             } else {
                                 0.0
                             };
@@ -134,6 +212,65 @@ impl AnthropicChat {
                                     metadata_option.clone(),
                                 ));
                             }
+                        }
+
+                        // Accumulate tool call parts
+                        if let Some(tool_call_parts) = chunk.tool_calls {
+                            for part in tool_call_parts {
+                                let entry = accumulated_tool_calls
+                                    .entry(part.index)
+                                    .or_insert_with(|| ToolCallDeclaration {
+                                        index: part.index,
+                                        id: part.id.clone(),
+                                        name: part.name.clone(),
+                                        arguments: Some(String::new()), // Initialize for accumulation
+                                        results: None,
+                                    });
+
+                                // Update id/name if they were empty and this part provides them
+                                // (e.g. first part is content_block_start)
+                                if !part.id.is_empty() && entry.id.is_empty() {
+                                    entry.id = part.id.clone();
+                                }
+                                if !part.name.is_empty() && entry.name.is_empty() {
+                                    entry.name = part.name.clone();
+                                }
+
+                                // Append arguments if this part has them (e.g. from input_json_delta)
+                                if let Some(args_chunk) = part.arguments {
+                                    if !args_chunk.is_empty() {
+                                        entry
+                                            .arguments
+                                            .get_or_insert_with(String::new)
+                                            .push_str(&args_chunk);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check for finish reason that signals tool call completion
+                        if chunk.finish_reason.as_deref() == Some("tool_use") {
+                            send_tool_calls_signal = true;
+                        }
+                    }
+
+                    // If a "tool_use" signal was received, send accumulated tool calls
+                    if send_tool_calls_signal {
+                        if !accumulated_tool_calls.is_empty() {
+                            for tcd in accumulated_tool_calls.values() {
+                                match serde_json::to_string(tcd) {
+                                    Ok(serialized_tcd) => {
+                                        callback(ChatResponse::new_with_arc(
+                                            chat_id.clone(),
+                                            serialized_tcd,
+                                            MessageType::ToolCall,
+                                            metadata_option.clone(),
+                                        ));
+                                    }
+                                    Err(e) => log::error!("Failed to serialize tool call for Anthropic: {:?}, error: {}", tcd, e),
+                                }
+                            }
+                            accumulated_tool_calls.clear(); // Clear after sending
                         }
                     }
                 }
@@ -188,6 +325,7 @@ impl AiChatTrait for AnthropicChat {
         api_key: Option<&str>,
         chat_id: String,
         messages: Vec<Value>,
+        tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
@@ -213,7 +351,7 @@ impl AiChatTrait for AnthropicChat {
                     Some(headers),
                 ),
                 "messages",
-                self.build_request_body(model, messages, &params),
+                self.build_request_body(model, messages, tools, &params),
                 true,
             )
             .await

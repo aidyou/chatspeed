@@ -21,8 +21,8 @@ pub fn get_db_version(conn: &Connection) -> Result<i32, StoreError> {
 pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     let current_version = get_db_version(conn)?;
 
-    // if current version is 0, run v1 migration
-    if current_version == 0 {
+    // if current version is 1, run v1 migration
+    if current_version <= 1 {
         crate::db::sql::migrations::v1::run_migration(conn)?;
         return Ok(());
     }

@@ -320,6 +320,7 @@
     "type": {
       "about": "バージョン情報",
       "general": "一般",
+      "mcp": "MCP",
       "model": "AIエンジン",
       "privacy": "プライバシー",
       "skill": "スキル"
