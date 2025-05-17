@@ -154,15 +154,6 @@ impl SseClient {
 
 #[async_trait::async_trait]
 impl McpClient for SseClient {
-    async fn status(&self) -> McpStatus {
-        self.status.read().await.clone()
-    }
-
-    async fn set_status(&self, status: McpStatus) {
-        let mut s = self.status.write().await;
-        *s = status;
-    }
-
     /// Performs the actual SSE connection logic.
     /// This method is called by the default `start` implementation in the `McpClient` trait.
     ///
@@ -191,7 +182,15 @@ impl McpClient for SseClient {
         let mut transport = match transport_result {
             Ok(t) => t,
             Err(e) => {
-                return Err(McpClientError::StartError(e.to_string()));
+                // Optional: Wrap with t! for more context if desired
+                return Err(McpClientError::StartError(
+                    t!(
+                        "mcp.client.sse_transport_start_failed",
+                        url = url,
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                ));
             }
         };
 
@@ -204,9 +203,17 @@ impl McpClient for SseClient {
         let client_service = match client_service_result {
             Ok(cs) => cs,
             Err(e) => {
-                let err_msg = e.to_string();
-                log::error!("Start SseClient error: {}", err_msg); // Use {} for String
-                return Err(McpClientError::StartError(err_msg));
+                // Optional: Wrap with t!
+                let detailed_error = e.to_string();
+                log::error!("Start SseClient error: {}", detailed_error);
+                return Err(McpClientError::StartError(
+                    t!(
+                        "mcp.client.sse_service_start_failed",
+                        url = url,
+                        error = detailed_error
+                    )
+                    .to_string(),
+                ));
             }
         };
         Ok(client_service)
@@ -228,11 +235,22 @@ impl McpClient for SseClient {
     fn config(&self) -> McpServerConfig {
         self.config.clone()
     }
+
+    async fn status(&self) -> McpStatus {
+        self.status.read().await.clone()
+    }
+
+    async fn set_status(&self, status: McpStatus) {
+        let mut s = self.status.write().await;
+        *s = status;
+    }
 }
 
+#[cfg(test)]
 mod test {
-    use super::*;
-    use crate::mcp::client::McpClient as _;
+    use crate::mcp::client::{
+        sse::SseClient, McpClient as _, McpClientError, McpProtocolType, McpServerConfig,
+    };
 
     #[tokio::test]
     async fn sse_test() -> Result<(), McpClientError> {

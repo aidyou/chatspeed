@@ -6,7 +6,7 @@ use crate::{
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
     },
 };
 
@@ -30,11 +30,6 @@ impl FunctionDefinition for Crawler {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "web_crawler"
-    }
-
-    /// Returns the type of the function.
-    fn function_type(&self) -> FunctionType {
-        FunctionType::MCP
     }
 
     /// Returns the description of the function.
@@ -90,9 +85,9 @@ impl FunctionDefinition for Crawler {
     /// * `FunctionResult` - The result of the function execution.
     async fn execute(&self, params: Value) -> FunctionResult {
         // Get the URL from the parameters
-        let url = params["url"]
-            .as_str()
-            .ok_or_else(|| WorkflowError::FunctionParamError("url must be a string".to_string()))?;
+        let url = params["url"].as_str().ok_or_else(|| {
+            WorkflowError::FunctionParamError(t!("workflow.url_must_be_string").to_string())
+        })?;
 
         // Check if the URL is empty
         if url.is_empty() {
@@ -117,7 +112,11 @@ impl FunctionDefinition for Crawler {
         let results = crawler
             .web_crawler(url, Some(json!({"format": format})))
             .await
-            .map_err(|e| WorkflowError::Execution(e.to_string()))?;
+            .map_err(|e_str| {
+                WorkflowError::Execution(
+                    t!("workflow.web_crawler_failed", url = url, details = e_str).to_string(),
+                )
+            })?;
 
         // Return the results as JSON
         Ok(json!(results))

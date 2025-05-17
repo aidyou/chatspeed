@@ -3,6 +3,7 @@ pub mod chat_web_search;
 pub mod clipboard;
 pub mod constants;
 pub mod fs;
+pub mod mcp;
 pub mod message;
 pub mod note;
 pub mod os;

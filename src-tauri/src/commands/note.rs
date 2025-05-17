@@ -24,6 +24,7 @@
 //! console.log(notes);
 //! ```
 
+use rust_i18n::t;
 use std::sync::{Arc, Mutex};
 use tauri::{command, State};
 
@@ -69,7 +70,9 @@ pub fn add_note(
     metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
     dbg!(&metadata);
-    let mut main_store = state.lock().map_err(|e| e.to_string())?;
+    let mut main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .add_note(
             &title,
@@ -105,7 +108,9 @@ pub fn add_note(
 /// ```
 #[command]
 pub fn get_tags(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<NoteTag>, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.get_tags().map_err(|e| e.to_string())
 }
 
@@ -134,7 +139,9 @@ pub fn get_notes(
     state: State<Arc<Mutex<MainStore>>>,
     tag_id: Option<i64>,
 ) -> Result<Vec<Note>, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.get_notes(tag_id).map_err(|e| e.to_string())
 }
 
@@ -160,7 +167,9 @@ pub fn get_notes(
 /// ```
 #[command]
 pub fn get_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<Note, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.get_note(id).map_err(|e| e.to_string())
 }
 
@@ -186,7 +195,9 @@ pub fn get_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<Note, St
 /// ```
 #[command]
 pub fn delete_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
-    let mut main_store = state.lock().map_err(|e| e.to_string())?;
+    let mut main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.delete_note(id).map_err(|e| e.to_string())
 }
 
@@ -212,6 +223,8 @@ pub fn delete_note(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), S
 /// ```
 #[command]
 pub fn search_notes(state: State<Arc<Mutex<MainStore>>>, kw: &str) -> Result<Vec<Note>, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.search_notes(kw).map_err(|e| e.to_string())
 }

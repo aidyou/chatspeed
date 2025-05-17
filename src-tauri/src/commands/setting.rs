@@ -73,7 +73,9 @@ use tauri::{command, AppHandle};
 pub fn get_all_config(
     state: State<Arc<Mutex<MainStore>>>,
 ) -> Result<HashMap<String, Value>, String> {
-    let config_store = state.lock().map_err(|e| e.to_string())?;
+    let config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     let mut settings = config_store.config.settings.clone();
     settings.insert(
         "httpServer".to_string(),
@@ -131,8 +133,9 @@ pub fn set_config(
     key: &str,
     value: Value,
 ) -> Result<(), String> {
-    // Attempt to acquire the lock on the MainStore
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     // Set the configuration value
     match config_store
@@ -156,7 +159,9 @@ pub fn set_config(
 /// Reload the configuration from the database
 #[command]
 pub fn reload_config(state: State<Arc<Mutex<MainStore>>>) -> Result<(), String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.reload_config().map_err(|e| e.to_string())
 }
 
@@ -176,7 +181,9 @@ pub fn reload_config(state: State<Arc<Mutex<MainStore>>>) -> Result<(), String> 
 /// * `Result<AiModel, String>` - The AI model or an error message
 #[command]
 pub fn get_ai_model_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<AiModel, String> {
-    let config_store = state.lock().map_err(|e| e.to_string())?;
+    let config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .config
         .get_ai_model_by_id(id)
@@ -204,7 +211,9 @@ pub fn get_ai_model_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 /// ```
 #[command]
 pub fn get_all_ai_models(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiModel>, String> {
-    let config_store = state.lock().map_err(|e| e.to_string())?;
+    let config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     Ok(config_store.config.get_ai_models())
 }
 
@@ -260,7 +269,9 @@ pub fn add_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel, String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     // First add the model to get the ID
     let id = config_store
@@ -347,7 +358,9 @@ pub fn update_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel, String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     config_store
         .update_ai_model(
@@ -397,7 +410,9 @@ pub fn update_ai_model_order(
     state: State<Arc<Mutex<MainStore>>>,
     model_ids: Vec<i64>,
 ) -> Result<(), String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .update_ai_model_order(model_ids)
         .map_err(|e| e.to_string())
@@ -425,7 +440,9 @@ pub fn update_ai_model_order(
 /// ```
 #[command]
 pub fn delete_ai_model(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.delete_ai_model(id).map_err(|e| e.to_string())
 }
 
@@ -445,7 +462,9 @@ pub fn delete_ai_model(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(
 /// * `Result<AiSkill, String>` - The AI skill or an error message
 #[command]
 pub fn get_ai_skill_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<AiSkill, String> {
-    let config_store = state.lock().map_err(|e| e.to_string())?;
+    let config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .config
         .get_ai_skill_by_id(id)
@@ -473,7 +492,9 @@ pub fn get_ai_skill_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 /// ```
 #[command]
 pub fn get_all_ai_skills(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiSkill>, String> {
-    let config_store = state.lock().map_err(|e| e.to_string())?;
+    let config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     Ok(config_store.config.get_ai_skills())
 }
 
@@ -507,7 +528,9 @@ pub fn add_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill, String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo).map_err(|e| e.to_string())?
@@ -551,7 +574,9 @@ pub fn update_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill, String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo).map_err(|e| e.to_string())?
@@ -579,7 +604,9 @@ pub fn update_ai_skill_order(
     state: State<Arc<Mutex<MainStore>>>,
     skill_ids: Vec<i64>,
 ) -> Result<(), String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .update_ai_skill_order(skill_ids)
         .map_err(|e| e.to_string())
@@ -607,7 +634,9 @@ pub fn update_ai_skill_order(
 /// ```
 #[command]
 pub fn delete_ai_skill(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
-    let mut config_store = state.lock().map_err(|e| e.to_string())?;
+    let mut config_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.delete_ai_skill(id).map_err(|e| e.to_string())
 }
 
@@ -618,7 +647,7 @@ pub fn delete_ai_skill(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(
 pub async fn update_shortcut(app: tauri::AppHandle, key: &str, value: &str) -> Result<(), String> {
     dbg!("update_shortcut", key, value);
     crate::shortcut::update_shortcut(&app, value, key)
-        .map_err(|e| format!("Failed to update shortcut: {}", e))
+        .map_err(|e| t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string())
 }
 
 /// Uploads a logo image to the server.
@@ -650,7 +679,14 @@ fn upload_logo(image_path: String) -> Result<String, String> {
     let month = chrono::Local::now().format("%Y%m").to_string();
     let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
     let upload_file_dir = Path::new(&upload_dir).join(month);
-    std::fs::create_dir_all(&upload_file_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&upload_file_dir).map_err(|e| {
+        t!(
+            "setting.failed_to_create_upload_dir",
+            path = upload_file_dir.display(),
+            error = e.to_string()
+        )
+        .to_string()
+    })?;
 
     let http_server_dir = HTTP_SERVER_DIR.read().clone();
     // Check if the file is in the static/tmp directory
@@ -664,7 +700,15 @@ fn upload_logo(image_path: String) -> Result<String, String> {
     if tmp_file_path.exists() {
         let upload_file_path = upload_file_dir.join(&save_name);
         // Move the temporary file to upload directory
-        std::fs::rename(&tmp_file_path, &upload_file_path).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp_file_path, &upload_file_path).map_err(|e| {
+            t!(
+                "setting.failed_to_move_logo_file",
+                from = tmp_file_path.display(),
+                to = upload_file_path.display(),
+                error = e.to_string()
+            )
+            .to_string()
+        })?;
         return Ok(upload_file_path
             .to_string_lossy()
             .to_string()
@@ -677,7 +721,14 @@ fn upload_logo(image_path: String) -> Result<String, String> {
         &upload_file_dir,
         Some(DEFAULT_THUMBNAIL_WIDTH),
         Some(DEFAULT_THUMBNAIL_HEIGHT),
-    )?;
+    )
+    .map_err(|e| {
+        t!(
+            "setting.failed_to_save_logo_thumbnail",
+            error = e.to_string()
+        )
+        .to_string()
+    })?;
 
     Ok(save_path
         .to_string_lossy()

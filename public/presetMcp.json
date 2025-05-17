@@ -16,7 +16,7 @@
     }
   },
   {
-    "name": "chromium",
+    "name": "time",
     "description": "Provides time and timezone conversion capabilities. ",
     "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
     "config": {

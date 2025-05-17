@@ -1,11 +1,11 @@
-use crate::http::chp::SearchResult;
+use crate::{ai::error::AiError, http::chp::SearchResult};
 
 use super::stoppable::Stoppable;
 use async_trait::async_trait;
 use log::warn;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
-use std::{default::Default, error::Error, sync::Arc};
+use std::{default::Default, sync::Arc};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -323,5 +323,5 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-    ) -> Result<String, Box<dyn Error + Send + Sync>>;
+    ) -> Result<String, AiError>;
 }

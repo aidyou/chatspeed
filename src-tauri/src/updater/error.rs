@@ -8,19 +8,19 @@ use rust_i18n::t;
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     /// Error during version check
-    #[error("{}", t!("updater.version_check_failed", "error" = _0))]
+    #[error("{0}")]
     VersionCheckError(String),
 
     /// Error during download
-    #[error("{}", t!("updater.download_failed", "error" = _0))]
+    #[error("{0}")]
     DownloadError(String),
 
     /// Configuration error
-    #[error("{}", t!("updater.config_error", "error" = _0))]
+    #[error("{0}")]
     ConfigError(String),
 
     /// Error during version check
-    #[error("{}", t!("updater.check_failed", "error" = _0))]
+    #[error("{0}")]
     CheckError(String),
 
     /// Version mismatch

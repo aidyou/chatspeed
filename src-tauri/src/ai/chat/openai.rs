@@ -2,8 +2,7 @@ use async_trait::async_trait;
 use reqwest::Response;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::time::Instant;
-use std::{error::Error, sync::Arc};
+use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 use crate::ai::interaction::constants::{
@@ -15,7 +14,7 @@ use crate::ai::network::{
 use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, ToolCallDeclaration};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
-use crate::impl_stoppable;
+use crate::{ai::error::AiError, impl_stoppable};
 
 /// OpenAI chat implementation
 #[derive(Clone)]
@@ -45,7 +44,8 @@ impl OpenAIChat {
         response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+        provider_name: String, // Added to correctly attribute errors
+    ) -> Result<String, AiError> {
         let mut full_response = String::new();
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
@@ -71,13 +71,18 @@ impl OpenAIChat {
                         .process_stream_chunk(chunk, &StreamFormat::OpenAI)
                         .await
                         .map_err(|e| {
+                            let err = AiError::StreamProcessingFailed {
+                                provider: provider_name.clone(),
+                                details: e.to_string(),
+                            };
+                            log::error!("{} stream processing error: {}", provider_name, err);
                             callback(ChatResponse::new_with_arc(
                                 chat_id.clone(),
-                                e.clone(),
+                                err.to_string(),
                                 MessageType::Error,
                                 metadata_option.clone(),
                             ));
-                            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                            err
                         })?;
 
                     for chunk in chunks {
@@ -157,43 +162,60 @@ impl OpenAIChat {
 
                         // If finish_reason is tool_calls, send accumulated tool calls
                         if chunk.finish_reason == Some("tool_calls".to_string()) {
-                            for tcd in accumulated_tool_calls.values() {
-                                let serialized_tcd =
-                                    // Trim arguments to remove leading and trailing whitespace
-                                    serde_json::to_string(&{
-                                        let mut trimmed_tcd = tcd.clone();
-                                        if let Some(args) = trimmed_tcd.arguments.as_mut() {
-                                            *args = args.trim().to_string();
+                            if !accumulated_tool_calls.is_empty() {
+                                for tcd in accumulated_tool_calls.values() {
+                                    let mut trimmed_tcd = tcd.clone();
+                                    if let Some(args) = trimmed_tcd.arguments.as_mut() {
+                                        *args = args.trim().to_string();
+                                    }
+                                    match serde_json::to_string(&trimmed_tcd) {
+                                        Ok(serialized_tcd) => {
+                                            callback(ChatResponse::new_with_arc(
+                                                chat_id.clone(),
+                                                serialized_tcd,
+                                                MessageType::ToolCall,
+                                                metadata_option.clone(),
+                                            ));
+                                            #[cfg(debug_assertions)]
+                                            {
+                                                log::debug!(
+                                                    "tool_call: {}",
+                                                    serde_json::to_string_pretty(tcd)
+                                                        .unwrap_or_default()
+                                                );
+                                            }
                                         }
-                                        trimmed_tcd
-                                    })
-                                    .unwrap_or_else(|e| {
-                                        log::error!("Failed to serialize ToolCallDeclaration: {}", e);
-                                        "{}".to_string() // return empty string if serialization fails
-                                    });
-                                callback(ChatResponse::new_with_arc(
-                                    chat_id.clone(),
-                                    serialized_tcd,
-                                    MessageType::ToolCall,
-                                    metadata_option.clone(),
-                                ));
-
-                                #[cfg(debug_assertions)]
-                                {
-                                    log::debug!(
-                                        "tool_call: {}",
-                                        serde_json::to_string_pretty(tcd).unwrap_or_default()
-                                    );
+                                        Err(e) => {
+                                            let err = AiError::ToolCallSerializationFailed {
+                                                details: e.to_string(),
+                                            };
+                                            log::error!(
+                                                "{} tool call serialization error for tool {:?}: {}",
+                                                provider_name, tcd.name, err
+                                            );
+                                            callback(ChatResponse::new_with_arc(
+                                                chat_id.clone(),
+                                                err.to_string(),
+                                                MessageType::Error,
+                                                metadata_option.clone(),
+                                            ));
+                                        }
+                                    }
                                 }
+                                accumulated_tool_calls.clear(); // Clear for next batch
                             }
-                            accumulated_tool_calls.clear(); // Clear for next batch (though uncommon)
                         }
                     }
                 }
                 Err(e) => {
+                    let err = AiError::StreamProcessingFailed {
+                        provider: provider_name.clone(),
+                        details: e.to_string(),
+                    };
+                    log::error!("{} stream event error: {}", provider_name, err);
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
-                        e,
+                        err.to_string(),
                         MessageType::Error,
                         metadata_option.clone(),
                     ));
@@ -247,8 +269,15 @@ impl AiChatTrait for OpenAIChat {
         tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    ) -> Result<String, AiError> {
         let (params, metadata_option) = init_extra_params(extra_params.clone());
+
+        let provider_name_for_error =
+            if api_url.is_some() && api_url != Some("https://api.openai.com/v1") {
+                "OpenAI Compatible".to_string() // User-facing name for compatible APIs
+            } else {
+                "OpenAI".to_string()
+            };
 
         let mut payload = json!({
             "model": model,
@@ -321,32 +350,45 @@ impl AiChatTrait for OpenAIChat {
                 true,
             )
             .await
-            .map_err(|e| {
+            .map_err(|network_err| {
+                let err = AiError::ApiRequestFailed {
+                    provider: provider_name_for_error.clone(),
+                    details: network_err.to_string(),
+                };
+                log::error!("{} API request failed: {}", provider_name_for_error, err);
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
-                    e.clone(),
+                    err.to_string(),
                     MessageType::Error,
                     metadata_option.clone(),
                 ));
-                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                err
             })?;
 
         if response.is_error {
+            let err = AiError::ApiRequestFailed {
+                provider: provider_name_for_error.clone(),
+                details: response.content.clone(),
+            };
+            log::error!("{} API returned an error: {}", provider_name_for_error, err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                response.content.clone(),
+                err.to_string(),
                 MessageType::Error,
                 metadata_option,
             ));
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                response.content,
-            )));
+            return Err(err);
         }
 
         if let Some(raw_response) = response.raw_response {
-            self.handle_stream_response(chat_id.clone(), raw_response, callback, metadata_option)
-                .await
+            self.handle_stream_response(
+                chat_id.clone(),
+                raw_response,
+                callback,
+                metadata_option,
+                provider_name_for_error,
+            )
+            .await
         } else {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),

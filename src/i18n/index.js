@@ -16,7 +16,7 @@ console.log(savedLocale)
 const i18n = createI18n({
   legacy: false,
   locale: savedLocale,
-  fallbackLocale: 'en', 
+  fallbackLocale: 'en',
   messages: {
     de: { ...common, ...de },
     en: { ...common, ...en },

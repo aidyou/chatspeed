@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tokio::time::{timeout, Duration};
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -17,6 +18,7 @@ use super::util::get_tools;
 
 /// MCP protocol type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum McpProtocolType {
     /// Server-Sent Events protocol
     Sse,
@@ -96,6 +98,10 @@ pub struct McpServerConfig {
     /// Disabled tools
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
+
+    /// Timeout in seconds for operations like list_tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
 }
 
 impl Default for McpServerConfig {
@@ -110,40 +116,52 @@ impl Default for McpServerConfig {
             args: Default::default(),
             env: Default::default(),
             disabled_tools: Default::default(),
+            timeout: Some(60),
         }
     }
 }
 
-/// Collection of MCP servers
-pub type McpServers = HashMap<String, McpServerConfig>;
-
 #[derive(Debug, Error, Clone)]
 pub enum McpClientError {
     /// Call error
-    #[error("{}", t!("mcp.client.call_error", error =.0))]
+    #[error("{0}")]
     CallError(String),
     /// Configuration error
-    #[error("{}", t!("mcp.client.config_error", error =.0))]
+    #[error("{0}")]
     ConfigError(String),
     /// Start error
-    #[error("{}", t!("mcp.client.failed_to_start", error = .0))]
+    #[error("{0}")]
     StartError(String),
     /// Stop error
-    #[error("{}", t!("mcp.client.failed_to_stop", error =.0))]
+    #[error("{0}")]
     StopError(String),
 
-    #[error("{}", t!("mcp.client.failed_to_get_status", error =.0))]
+    #[error("{0}")]
     StatusError(String),
 }
 
 pub type McpClientResult<T> = Result<T, McpClientError>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum McpStatus {
+    #[serde(rename = "running")]
     Running,
+    #[serde(rename = "stopped")]
     Stopped,
+    #[serde(rename = "error")]
     Error(String),
 }
+
+impl Display for McpStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            McpStatus::Running => write!(f, "Running"),
+            McpStatus::Stopped => write!(f, "Stopped"),
+            McpStatus::Error(err) => write!(f, "Error: {}", err),
+        }
+    }
+}
+
 /// Main trait containing methods for an MCP client.
 /// This trait is designed to be object-safe for use with `dyn McpClient`.
 #[async_trait::async_trait]
@@ -218,11 +236,21 @@ pub trait McpClient: Send + Sync {
         let client_arc = self.client();
         let guard = client_arc.read().await; // Use read lock
         if let Some(service_instance) = guard.as_ref() {
-            let tools = service_instance
-                .list_tools(Default::default())
-                .await
-                .map_err(|e| McpClientError::StatusError(e.to_string()))?;
-            Ok(get_tools(&tools))
+            let timeout_secs = self.config().timeout.unwrap_or(60);
+            match timeout(
+                Duration::from_secs(timeout_secs),
+                service_instance.list_tools(Default::default()),
+            )
+            .await
+            {
+                Ok(result) => {
+                    let tools = result.map_err(|e| McpClientError::StatusError(e.to_string()))?;
+                    Ok(get_tools(&tools))
+                }
+                Err(_) => Err(McpClientError::StatusError(
+                    t!("mcp.client.list_tools_timeout", name = self.config().name).to_string(),
+                )),
+            }
         } else {
             Err(McpClientError::StatusError(
                 t!("mcp.client.no_running", client = self.name()).to_string(),

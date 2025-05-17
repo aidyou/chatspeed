@@ -1,4 +1,5 @@
 use log::{debug, error, info, warn};
+use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc};
 
@@ -51,13 +52,14 @@ impl ReactExecutor {
         max_retries: u32,
     ) -> Result<Self, WorkflowError> {
         // Initialize function manager
-        let function_manager = FunctionManager::new();
+        let function_manager = Arc::new(FunctionManager::new());
         function_manager
+            .clone()
             .register_workflow_tools(chat_state.clone(), main_store.clone())
             .await?;
 
         // Create context
-        let context = ReactContext::new(function_manager, max_retries);
+        let context = ReactContext::new(function_manager.clone(), max_retries);
 
         // Create plan manager
         let plan_manager = PlanManager::new();
@@ -109,10 +111,9 @@ impl ReactExecutor {
     /// The result of the plan execution or an error if execution fails
     async fn execute_react(&mut self) -> Result<Value, WorkflowError> {
         // Get current plan
-        let current_plan = self
-            .context
-            .get_current_plan()
-            .ok_or_else(|| WorkflowError::Config("No active plan".to_string()))?;
+        let current_plan = self.context.get_current_plan().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.no_active_plan").to_string())
+        })?;
 
         info!("Starting plan execution: {}", &current_plan.name);
 
@@ -121,7 +122,7 @@ impl ReactExecutor {
 
         if steps.is_empty() {
             return Err(WorkflowError::Config(
-                "No detailed execution plan".to_string(),
+                t!("workflow.react.no_detailed_execution_plan").to_string(),
             ));
         }
         let step_len = steps.len();
@@ -209,7 +210,7 @@ impl ReactExecutor {
 
         // Update plan status to running
         let current_plan = self.context.get_current_plan().ok_or_else(|| {
-            WorkflowError::Config("No active plan during step initialization".to_string())
+            WorkflowError::Config(t!("workflow.react.no_active_plan_init").to_string())
         })?;
         let mut updated_plan = current_plan.clone();
         updated_plan.status = PlanStatus::Running;
@@ -405,7 +406,7 @@ impl ReactExecutor {
 
         // Update current plan with step result
         let current_plan = self.context.get_current_plan().ok_or_else(|| {
-            WorkflowError::Config("No active plan during step finalization".to_string())
+            WorkflowError::Config(t!("workflow.react.no_active_plan_finalization").to_string())
         })?;
         let mut updated_plan = current_plan.clone();
 
@@ -441,13 +442,60 @@ impl ReactExecutor {
     /// The summary of the plan execution
     async fn finalize_plan_execution(
         &mut self,
-        current_plan: Plan,
+        _current_plan: Plan,
         steps: &[Step],
         step_results: Vec<Value>,
     ) -> Result<Value, WorkflowError> {
-        // Generate summary report
-        debug!("Generating plan execution summary report");
-        let summary = self.generate_summary(step_results).await?;
+        info!("生成计划执行总结");
+        // Clear previous context
+        self.context.clear_messages();
+
+        // Get current plan
+        let current_plan = self.context.get_current_plan().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.no_executing_plan").to_string())
+        })?;
+
+        // Add step results
+        self.context.add_user_message(format!(
+            "{}\n\n计划名称：{}\n\n计划目标：{}\n\n步骤执行结果：\n[Start of Steps Execution Results]\n{}\n[End of Steps Execution Results]",
+            SUMMARY_PROMPT,
+            current_plan.name,
+            current_plan.goal,
+            serde_json::to_string_pretty(&step_results).unwrap_or_default(),
+        ));
+
+        // Get messages for chat completion
+        let messages = self.context.get_chat_messages(None);
+
+        // Call chat completion API for summary generation
+        let chat_response = self
+            .chat_completion(ModelName::General, messages)
+            .await
+            .map_err(|e| {
+                WorkflowError::Config(
+                    t!(
+                        "workflow.react.summary_chat_completion_failed",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+
+        // Extract assistant response
+        let content = chat_response["content"].as_str().unwrap_or("").to_string();
+
+        // Add assistant message to context
+        self.context.add_assistant_message(content.clone(), None);
+
+        debug!("✅ 总结生成阶段调用聊天完成API成功: \n{}", content);
+
+        // Create summary JSON
+        let summary = json!({
+            "plan_name": current_plan.name,
+            "plan_goal": current_plan.goal,
+            "step_results": step_results,
+            "summary": content
+        });
 
         // Mark plan as completed
         self.context
@@ -490,7 +538,7 @@ impl ReactExecutor {
         let summary = if !call_results.is_empty() {
             call_results.join("\n")
         } else {
-            "还没有收集到任何信息".to_string()
+            t!("workflow.react.no_information_collected").to_string() // Localized
         };
 
         let search_result = if let Some(sr) = self.context.step_state.last_search_result.clone() {
@@ -518,7 +566,7 @@ impl ReactExecutor {
                 errors.join("\n\n")
             )
         } else {
-            "目前没有错误信息".to_string()
+            t!("workflow.react.no_error_information").to_string() // Localized
         };
 
         let step_count = self.context.get_step_len();
@@ -534,9 +582,9 @@ impl ReactExecutor {
                     .last_tool_result
                     .as_ref()
                     .map(|r| r.clone())
-                    .unwrap_or("还没有工具调用信息".to_string())
+                    .unwrap_or(t!("workflow.react.no_tool_call_information").to_string()) // Localized
                     .as_str(),
-            ) // Add empty string for tool_result
+            )
             .replace("{tool_error}", &error_logs)
             .replace(
                 "{step_index}",
@@ -548,10 +596,6 @@ impl ReactExecutor {
             .replace("{current_time}", &chrono::Utc::now().to_rfc3339());
 
         self.context.add_user_message(formatted_prompt);
-        // self.context.add_user_message(format!(
-        //     "{}\n\n可用的工具函数列表:\n```json\n{}\n```{}{}{}\n\n当前时间：{}\n当前步骤: [{}/{}]{}\n目标: {}",
-        //     REASONING_PROMPT, &self.tool_spec, search_result,  tool_message, error_logs,chrono::Utc::now().to_rfc3339(),self.context.step_state.step_index, step_count, step_name, step_goal
-        // ));
 
         Ok(())
     }
@@ -571,7 +615,10 @@ impl ReactExecutor {
         let (step_name, step_goal) = if let Some(step) = step {
             (step.name.clone(), step.goal.clone())
         } else {
-            ("Unknown".to_string(), "Unknown".to_string())
+            (
+                t!("workflow.react.unknown_step_name").to_string(),
+                t!("workflow.react.unknown_step_goal").to_string(),
+            ) // Localized
         };
         self.create_reasoning_messages(&step_name, &step_goal)
             .await?;
@@ -593,12 +640,20 @@ impl ReactExecutor {
         let chat_response = self
             .chat_completion(ModelName::Reasoning, messages)
             .await
-            .map_err(|e| WorkflowError::Execution(format!("思考阶段调用聊天完成API失败: {}", e)))?;
+            .map_err(|e| {
+                WorkflowError::Execution(
+                    t!(
+                        "workflow.react.reasoning_chat_completion_failed",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         // Extract assistant response
-        let assistant_message = chat_response["content"]
-            .as_str()
-            .ok_or(WorkflowError::Config("助手消息内容为空".to_string()))?;
+        let assistant_message = chat_response["content"].as_str().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.assistant_message_empty").to_string())
+        })?;
 
         let mut result_message = StepResult::default();
 
@@ -666,7 +721,7 @@ impl ReactExecutor {
             );
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             return Err(WorkflowError::Config(
-                "推理阶段生成的 JSON 配置文件格式错误".to_string(),
+                t!("workflow.react.reasoning_json_format_error").to_string(),
             ));
         }
 
@@ -699,10 +754,9 @@ impl ReactExecutor {
         }
 
         // Get current plan
-        let current_plan = self
-            .context
-            .get_current_plan()
-            .ok_or_else(|| WorkflowError::Config("没有正在执行的计划".to_string()))?;
+        let current_plan = self.context.get_current_plan().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.no_executing_plan").to_string())
+        })?;
 
         // Extract function call information
         if let Some(function_call) = assistant_message.function_call.clone() {
@@ -756,12 +810,13 @@ impl ReactExecutor {
                 }
                 Err(e) => {
                     // Handle tool execution error, but don't update the entire plan status
-                    let error_message = format!(
-                        "tool call failed\ntool_name: {}\narguments: {}\nerror: {}",
-                        function_call.name,
-                        arguments,
-                        e.to_string()
-                    );
+                    let error_message = t!(
+                        "workflow.react.tool_call_failed_details",
+                        tool_name = function_call.name,
+                        arguments = arguments.to_string(),
+                        error = e.to_string()
+                    )
+                    .to_string();
 
                     // Record function execution error to step history
                     self.context.add_toolresult_record(
@@ -813,17 +868,21 @@ impl ReactExecutor {
                         if updated_plan.retry_count > self.context.max_retries {
                             // Record final failure status to step history
                             self.context.add_completion_record(
-                                StepStatus::Failed.to_string(),
-                                format!(
-                                    "Plan execution failed, exceeded maximum retries: {}",
-                                    error_message
-                                ),
+                                StepStatus::Failed.to_string(), // Status
+                                t!(
+                                    "workflow.react.plan_execution_failed_max_retries",
+                                    error = error_message
+                                )
+                                .to_string(), // Message
                             );
 
-                            return Err(WorkflowError::MaxRetriesExceeded(format!(
-                                "Plan execution failed, exceeded maximum retries: {}",
-                                error_message
-                            )));
+                            return Err(WorkflowError::MaxRetriesExceeded(
+                                t!(
+                                    "workflow.react.plan_max_retries_exceeded",
+                                    error = error_message
+                                )
+                                .to_string(),
+                            ));
                         }
                     }
 
@@ -832,7 +891,11 @@ impl ReactExecutor {
                         "status": StepStatus::Error.to_string(),
                         "function": function_call.name.clone(),
                         "parameters": arguments.clone(),
-                        "error": format!("Function execution failed, function: {}, param: {}, error: {}", function_call.name, arguments, e.to_string()),
+                        "error": t!(
+                            "workflow.react.function_execution_failed_details",
+                            function = function_call.name, param = arguments, error = e.to_string()
+                        )
+                        .to_string(),
                         "retry_count": current_plan.retry_count,
                         "max_retries": self.context.max_retries,
                         "timestamp": chrono::Utc::now().to_rfc3339()
@@ -853,13 +916,14 @@ impl ReactExecutor {
             };
             Ok(function_result)
         } else {
+            // No function call found in assistant message
             Ok(StepResult::new(
                 StepStatus::Error,
                 None,
                 None,
                 None,
                 Some(StepStatus::Error),
-                Some("未找到工具函数信息，无法执行操作".to_string()),
+                Some(t!("workflow.react.function_info_not_found").to_string()),
                 Some(StepError::FunctionNotFound),
                 None,
             ))
@@ -896,15 +960,16 @@ impl ReactExecutor {
                 if let Some(result) = &action_result.action_result {
                     if result["result"].is_null() {
                         return Err(WorkflowError::Execution(
-                            "执行函数失败，未能获得结果".to_string(),
+                            t!("workflow.react.function_execution_no_result").to_string(),
                         ));
                     }
                     if let Some(function_call) = &action_result.function_call {
-                        let current_step = self
-                            .context
-                            .get_current_step()
-                            .cloned()
-                            .ok_or(WorkflowError::Execution("无法获取当前步骤".to_string()))?;
+                        let current_step =
+                            self.context.get_current_step().cloned().ok_or_else(|| {
+                                WorkflowError::Execution(
+                                    t!("workflow.react.cannot_get_current_step").to_string(),
+                                )
+                            })?;
 
                         match function_call.name.as_str() {
                             "web_search" => {
@@ -1033,7 +1098,7 @@ impl ReactExecutor {
                         // Add function error message
                         self.context.add_tool_message(
                             "FunctionNotFoundError".to_string(),
-                            "未提供函数调用信息，导致本步骤无法继续执行".to_string(),
+                            t!("workflow.react.function_info_not_provided").to_string(), // Localized
                             false,
                         );
                     }
@@ -1051,8 +1116,10 @@ impl ReactExecutor {
                 });
 
                 // Record completion status to step history
-                self.context
-                    .add_completion_record("success".to_string(), "Step completed".to_string());
+                self.context.add_completion_record(
+                    "success".to_string(),
+                    t!("workflow.react.step_completed_message").to_string(),
+                ); // Localized
 
                 return Ok(StepResult::new(
                     StepStatus::Completed,
@@ -1099,8 +1166,17 @@ impl ReactExecutor {
 
         chat_response["content"].as_str().map(|content| {
             serde_json::from_str::<serde_json::Value>(&format_json_str(content))
-                .ok()
-                .and_then(|v| {
+                .map_err(|e| {
+                    WorkflowError::Execution(
+                        t!(
+                            "workflow.react.summary_json_parse_failed",
+                            content = content,
+                            error = e.to_string()
+                        )
+                        .to_string(),
+                    )
+                }) // Added error handling
+                .map(|v| {
                     let summary = Self::get_string_from_value(&v, "summary");
                     debug!("Observing: web_crawler summary: {}", &summary);
                     if !summary.is_empty() {
@@ -1117,12 +1193,9 @@ impl ReactExecutor {
                         }));
                     }
 
-                    Some(())
+                    Ok::<(), WorkflowError>(())
                 })
-                .ok_or_else(|| {
-                    error!("Failed to parse JSON, content: {}", content);
-                })
-        });
+        }); // Propagate the error
         Ok(())
     }
 
@@ -1184,7 +1257,7 @@ impl ReactExecutor {
             }
         }
         Err(WorkflowError::MaxRetriesExceeded(
-            "Generate plan failed after 3 retries".to_string(),
+            t!("workflow.react.generate_plan_max_retries_exceeded").to_string(), // Localized
         ))
     }
     /// Generate a plan based on user request
@@ -1214,12 +1287,18 @@ impl ReactExecutor {
             .chat_completion(ModelName::Reasoning, messages)
             .await
             .map_err(|e| {
-                WorkflowError::Config(format!("计划生成阶段调用聊天完成API失败: {}", e))
+                WorkflowError::Config(
+                    t!(
+                        "workflow.react.plan_generation_chat_completion_failed",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
             })?;
 
-        let content = chat_response["content"]
-            .as_str()
-            .ok_or(WorkflowError::Config("计划生成失败".to_string()))?;
+        let content = chat_response["content"].as_str().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.plan_generation_failed").to_string())
+        })?;
 
         // Add assistant message to context
         self.context
@@ -1228,21 +1307,29 @@ impl ReactExecutor {
         // Parse plan from assistant response
         let json_str_content = format_json_str(&content);
         let plan_json = serde_json::from_str::<Value>(&json_str_content).map_err(|e| {
-            WorkflowError::Config(format!(
-                "解析计划JSON失败, JSON字符串: {}, 错误: {}",
-                json_str_content, e
-            ))
+            WorkflowError::Config(
+                t!(
+                    "workflow.react.plan_json_parse_failed",
+                    json_string = json_str_content,
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
         debug!("计划详情：{}", &content);
 
         // Extract plan details
         let plan_name = plan_json["plan_name"]
             .as_str()
-            .ok_or(WorkflowError::Config("计划名称解析失败".to_string()))?
+            .ok_or_else(|| {
+                WorkflowError::Config(t!("workflow.react.plan_name_parse_failed").to_string())
+            })?
             .to_string();
         let plan_goal = plan_json["goal"]
             .as_str()
-            .ok_or(WorkflowError::Config("计划目标解析失败".to_string()))?
+            .ok_or_else(|| {
+                WorkflowError::Config(t!("workflow.react.plan_goal_parse_failed").to_string())
+            })?
             .to_string();
 
         // Create plan
@@ -1252,7 +1339,11 @@ impl ReactExecutor {
         let mut updated_plan = plan.clone();
         updated_plan
             .set_steps_from_json(plan_json.clone())
-            .map_err(|e| WorkflowError::Config(format!("设置计划步骤失败: {}", e)))?;
+            .map_err(|e_str| {
+                WorkflowError::Config(
+                    t!("workflow.react.set_plan_steps_failed", error = e_str).to_string(),
+                )
+            })?;
 
         self.plan_manager.update_plan(updated_plan.clone()).await?;
         self.context.set_current_plan(updated_plan.clone());
@@ -1293,26 +1384,9 @@ impl ReactExecutor {
         self.context.clear_messages();
 
         // Get current plan
-        let current_plan = self
-            .context
-            .get_current_plan()
-            .ok_or_else(|| WorkflowError::Config("没有正在执行的计划".to_string()))?;
-
-        // let mut step_results = Vec::new();
-        // let mut i = 1;
-        // for step in current_plan.steps.iter() {
-        //     if let Some(result) = &step.result {
-        //         if let Some(summary) = result["summary"].as_str() {
-        //             self.context
-        //                 .add_user_message(format!("步骤 {} 执行结果：\n{}", step.name, summary));
-        //             step_results.push(format!(
-        //                 "[summary {} begin]\n{}\n[summary {} end]",
-        //                 i, summary, i
-        //             ));
-        //             i += 1;
-        //         }
-        //     }
-        // }
+        let current_plan = self.context.get_current_plan().ok_or_else(|| {
+            WorkflowError::Config(t!("workflow.react.no_executing_plan").to_string())
+        })?;
 
         // Add step results
         self.context.add_user_message(format!(
@@ -1331,7 +1405,13 @@ impl ReactExecutor {
             .chat_completion(ModelName::General, messages)
             .await
             .map_err(|e| {
-                WorkflowError::Config(format!("总结生成阶段调用聊天完成API失败: {}", e))
+                WorkflowError::Config(
+                    t!(
+                        "workflow.react.summary_chat_completion_failed",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
             })?;
 
         // Extract assistant response
@@ -1379,24 +1459,33 @@ impl ReactExecutor {
         tools_used: &Vec<String>,
     ) -> Option<WorkflowError> {
         // Format error message
-        let error_msg = format!("{} phase error: {}", phase_name, error);
+        let error_msg = t!(
+            "workflow.react.phase_error_details",
+            phase = phase_name,
+            error = error.to_string()
+        )
+        .to_string();
         warn!("{}", error_msg);
 
         // Record error and increment retry count
-        self.context.add_user_message(format!(
-            "{} phase error: {}\nPlease try again to achieve the step goal.",
-            phase_name, error_msg
-        ));
+        self.context.add_user_message(
+            t!(
+                "workflow.react.phase_error_user_message",
+                phase = phase_name,
+                error = error_msg
+            )
+            .to_string(),
+        );
         *retry_count += 1;
 
         // If exceeded maximum retries, record step failure
         if *retry_count >= self.context.max_retries {
             // Record step failure
             self.context.add_step_execution_record(
-                "failed".to_string(),
+                "failed".to_string(), // Action
                 step_index,
                 step_name.to_string(),
-                step_goal.to_string(),
+                step_goal.to_string(), // Goal
                 Some(error_msg.clone()),
                 Some(*retry_count),
                 Some(self.context.max_retries),
@@ -1405,7 +1494,13 @@ impl ReactExecutor {
             );
 
             // Return error result
-            return Some(WorkflowError::MaxRetriesExceeded(error_msg));
+            let final_error_msg = t!(
+                "workflow.react.step_max_retries_exceeded",
+                step_name = step_name,
+                error = error_msg
+            )
+            .to_string();
+            return Some(WorkflowError::MaxRetriesExceeded(final_error_msg));
         }
 
         // If not exceeded maximum retries, continue to next iteration

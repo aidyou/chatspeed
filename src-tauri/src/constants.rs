@@ -1,6 +1,5 @@
 use lazy_static::*;
 use parking_lot::RwLock as PLRwLock;
-use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -72,6 +71,7 @@ lazy_static! {
     pub static ref STORE_DIR: Arc<PLRwLock<PathBuf>> = {
         #[cfg(debug_assertions)]
         {
+            use std::env;
             let project_root = if cfg!(test) {
                 // In test environment, get project root directory from environment variable
                 env::var("PROJECT_ROOT")

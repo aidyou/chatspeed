@@ -35,7 +35,7 @@ impl MainStore {
             )
             .map_err(|e| {
                 if e == rusqlite::Error::QueryReturnedNoRows {
-                    StoreError::NotFound(t!("db.conversion_not_found").to_string())
+                    StoreError::NotFound(t!("db.conversation_not_found").to_string())
                 } else {
                     StoreError::from(e)
                 }
@@ -94,7 +94,18 @@ impl MainStore {
 
         let messages = stmt.query_map([conversation_id], |row| {
             let metadata_str: Option<String> = row.get("metadata")?;
-            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+            let metadata = metadata_str.and_then(|s| {
+                serde_json::from_str(&s)
+                    .map_err(|e| {
+                        log::warn!(
+                            "Failed to parse metadata JSON for message: {}, error: {}",
+                            s,
+                            e
+                        );
+                        e
+                    })
+                    .ok()
+            });
 
             Ok(Message {
                 id: row.get("id")?,
@@ -210,7 +221,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn.execute(
             "INSERT INTO messages (conversation_id, role, content, metadata, timestamp)
@@ -256,7 +271,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn.execute(
             "UPDATE messages SET metadata = ? WHERE id = ?",

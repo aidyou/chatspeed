@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use rust_i18n::t;
 use serde_json::Value;
 use std::fmt;
 
@@ -162,10 +163,10 @@ impl StreamParser {
                     Err(e) => {
                         if let Ok(json) = serde_json::from_str::<Value>(data) {
                             if let Some(error) = json.get("error") {
-                                let emsg = error["message"]
-                                    .as_str()
-                                    .map(String::from)
-                                    .unwrap_or_else(|| "Unknown Error".to_string());
+                                let emsg =
+                                    error["message"].as_str().map(String::from).unwrap_or_else(
+                                        || t!("network.stream.unknown_openai_error").to_string(),
+                                    );
                                 return Err(emsg);
                             }
                         }
@@ -211,11 +212,13 @@ impl StreamParser {
                                 {
                                     // Check if the part is a function call
                                     // Note: Gemini's Part struct needs to be updated to handle functionCall
-                                    // Assuming Part now has an optional functionCall field
+                                    // Assuming Part now has an optional functionCall field (it does)
                                     if let Some(func_call) = part.function_call {
                                         // Serialize args Value to String
-                                        let args_string = serde_json::to_string(&func_call.args)
-                                            .map_err(|e| format!("Failed to serialize Gemini tool call arguments: {}", e))?;
+                                        let args_string = serde_json::to_string(&func_call.args).map_err(|e| {
+                                            t!("network.stream.gemini_tool_arg_serialization_error", error = e.to_string())
+                                                .to_string()
+                                        })?;
 
                                         tool_calls_in_chunk.push(ToolCallDeclaration {
                                             // Use a combination of candidate and part index for uniqueness if needed,
@@ -340,7 +343,10 @@ impl StreamParser {
                             chunk_str,
                             e
                         );
-                        return Err(format!("Failed to parse Gemini response: {}", e));
+                        return Err(
+                            t!("network.stream.gemini_parse_error", error = e.to_string())
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -586,17 +592,23 @@ impl StreamParser {
                                 .and_then(Value::as_str)
                                 .unwrap_or("Unknown error from Anthropic");
                             log::error!(
-                                "Anthropic API Error: type: {}, message: {}",
+                                "Anthropic API Error - type: {}, message: {}", // Log in English
                                 error_type,
                                 error_message
                             );
-                            return Err(format!("Anthropic API Error: {}", error_message));
+                            return Err(t!(
+                                "network.stream.anthropic_api_error_format",
+                                message = error_message
+                            )
+                            .to_string());
                         } else {
                             log::error!(
-                                "Anthropic Error event with no error details: {}",
+                                "Anthropic Error event with no error details in stream: {}", // Log in English
                                 data_str
                             );
-                            return Err("Unknown error from Anthropic (no details)".to_string());
+                            return Err(
+                                t!("network.stream.unknown_anthropic_error_no_details").to_string()
+                            );
                         }
                     }
                 }
@@ -610,10 +622,6 @@ impl StreamParser {
                     data_str,
                     e
                 );
-                // Depending on strictness, you might want to return an Err here.
-                // For robustness, we can try to continue if other events might be valid.
-                // However, a JSON parsing error usually indicates a problem.
-                // return Err(format!("JSON parsing error for Anthropic stream: {}", e));
             }
         }
         Ok(stream_chunks)

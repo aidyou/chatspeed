@@ -12,6 +12,7 @@ use super::types::{Plugin, PluginFile, PluginListItem, RuntimeType};
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
 use rusqlite::{params, OptionalExtension};
+use rust_i18n::t;
 
 impl ToString for RuntimeType {
     fn to_string(&self) -> String {
@@ -31,10 +32,9 @@ impl TryFrom<String> for RuntimeType {
             "python" => Ok(RuntimeType::Python),
             "javascript" => Ok(RuntimeType::JavaScript),
             "typescript" => Ok(RuntimeType::TypeScript),
-            _ => Err(StoreError::InvalidData(format!(
-                "Invalid runtime type: {}",
-                s
-            ))),
+            _ => Err(StoreError::InvalidData(
+                t!("db.plugin_invalid_runtime_type", runtime_type = s).to_string(),
+            )),
         }
     }
 }
@@ -61,14 +61,30 @@ impl MainStore {
             .as_ref()
             .map(|v| serde_json::to_string(v))
             .transpose()
-            .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!(
+                        "db.plugin_json_serialize_failed_input_schema",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         let output_schema = plugin
             .output_schema
             .as_ref()
             .map(|v| serde_json::to_string(v))
             .transpose()
-            .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!(
+                        "db.plugin_json_serialize_failed_output_schema",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         self.conn.execute(
             r#"
@@ -131,12 +147,28 @@ impl MainStore {
                             .get::<_, Option<String>>("input_schema")?
                             .map(|s| serde_json::from_str(&s))
                             .transpose()
-                            .map_err(|e| StoreError::DatabaseError(e.to_string()))?,
+                            .map_err(|e| {
+                                StoreError::JsonError(
+                                    t!(
+                                        "db.plugin_json_deserialize_failed_input_schema",
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
+                                )
+                            })?,
                         output_schema: row
                             .get::<_, Option<String>>("output_schema")?
                             .map(|s| serde_json::from_str(&s))
                             .transpose()
-                            .map_err(|e| StoreError::DatabaseError(e.to_string()))?,
+                            .map_err(|e| {
+                                StoreError::JsonError(
+                                    t!(
+                                        "db.plugin_json_deserialize_failed_output_schema",
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
+                                )
+                            })?,
                         icon: row.get("icon")?,
                         readme: row.get("readme")?,
                         checksum: row.get("checksum")?,
@@ -211,14 +243,30 @@ impl MainStore {
             .as_ref()
             .map(|v| serde_json::to_string(v))
             .transpose()
-            .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!(
+                        "db.plugin_json_serialize_failed_input_schema",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         let output_schema = plugin
             .output_schema
             .as_ref()
             .map(|v| serde_json::to_string(v))
             .transpose()
-            .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!(
+                        "db.plugin_json_serialize_failed_output_schema",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         let affected = self.conn.execute(
             r#"
@@ -252,10 +300,9 @@ impl MainStore {
         )?;
 
         if affected == 0 {
-            return Err(StoreError::NotFound(format!(
-                "Plugin not found with uuid: {}",
-                plugin.uuid
-            )));
+            return Err(StoreError::NotFound(
+                t!("db.plugin_not_found_by_uuid", uuid = plugin.uuid).to_string(),
+            ));
         }
 
         Ok(())
@@ -282,10 +329,9 @@ impl MainStore {
             .execute("DELETE FROM plugins WHERE uuid = ?", [uuid])?;
 
         if affected == 0 {
-            return Err(StoreError::NotFound(format!(
-                "Plugin not found with uuid: {}",
-                uuid
-            )));
+            return Err(StoreError::NotFound(
+                t!("db.plugin_not_found_by_uuid", uuid = uuid).to_string(),
+            ));
         }
 
         Ok(())
@@ -356,10 +402,9 @@ impl MainStore {
         )?;
 
         if affected == 0 {
-            return Err(StoreError::NotFound(format!(
-                "Plugin file not found with uuid: {}",
-                file.uuid
-            )));
+            return Err(StoreError::NotFound(
+                t!("db.plugin_file_not_found_by_uuid", uuid = file.uuid).to_string(),
+            ));
         }
 
         Ok(())
@@ -386,10 +431,9 @@ impl MainStore {
             .execute("DELETE FROM plugin_files WHERE uuid = ?", [uuid])?;
 
         if affected == 0 {
-            return Err(StoreError::NotFound(format!(
-                "Plugin file not found with uuid: {}",
-                uuid
-            )));
+            return Err(StoreError::NotFound(
+                t!("db.plugin_file_not_found_by_uuid", uuid = uuid).to_string(),
+            ));
         }
 
         Ok(())

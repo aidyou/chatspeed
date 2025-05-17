@@ -91,15 +91,6 @@ impl StdioClient {
 /// Implementation of McpClient trait for Stdio transport
 #[async_trait::async_trait]
 impl McpClient for StdioClient {
-    async fn status(&self) -> McpStatus {
-        self.status.read().await.clone()
-    }
-
-    async fn set_status(&self, status: McpStatus) {
-        let mut s = self.status.write().await;
-        *s = status;
-    }
-
     /// Performs the actual Stdio process starting logic.
     /// This method is called by the default `start` implementation in the `McpClient` trait.
     ///
@@ -139,12 +130,30 @@ impl McpClient for StdioClient {
         }
 
         let process = TokioChildProcess::new(&mut cmd).map_err(|e| {
-            return McpClientError::StartError(e.to_string());
+            // Optional: Wrap with t!
+            let detailed_error = e.to_string();
+            McpClientError::StartError(
+                t!(
+                    "mcp.client.stdio_process_creation_failed",
+                    command = cmd_str,
+                    error = detailed_error
+                )
+                .to_string(),
+            )
         })?;
 
         ().serve(process).await.map_err(|e| {
-            log::error!("Start StdioClient error: {}", e);
-            McpClientError::StartError(e.to_string())
+            // Optional: Wrap with t!
+            let detailed_error = e.to_string();
+            log::error!("Start StdioClient error: {}", detailed_error);
+            McpClientError::StartError(
+                t!(
+                    "mcp.client.stdio_service_start_failed",
+                    command = cmd_str,
+                    error = detailed_error
+                )
+                .to_string(),
+            )
         })
     }
 
@@ -159,8 +168,18 @@ impl McpClient for StdioClient {
     fn config(&self) -> McpServerConfig {
         self.config.clone()
     }
+
+    async fn status(&self) -> McpStatus {
+        self.status.read().await.clone()
+    }
+
+    async fn set_status(&self, status: McpStatus) {
+        let mut s = self.status.write().await;
+        *s = status;
+    }
 }
 
+#[cfg(test)]
 mod test {
     use crate::mcp::client::{McpClient as _, McpClientError};
 
@@ -168,23 +187,10 @@ mod test {
     async fn stdio_test() -> Result<(), McpClientError> {
         let config = crate::mcp::client::McpServerConfig {
             protocol_type: crate::mcp::client::McpProtocolType::Stdio,
-            command: Some("uvx".into()),
+            command: Some("npx".into()),
             args: Some(vec![
-                "-i".into(),
-                "https://mirrors.aliyun.com/pypi/simple/".into(),
-                "cstoolbox@1.0.5".into(),
-            ]),
-            env: Some(vec![
-                ("CS_HEADLESS".into(), "true".into()),
-                // ("CS_PROXY", "http://localhost:15154"),
-                (
-                    "CS_EXECUTABLE_PATH".into(),
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into(),
-                ),
-                (
-                    "CS_USER_DATA_DIR".into(),
-                    "~/Library/Application Support/Google/Chrome".into(),
-                ),
+                "-y".into(),
+                "@modelcontextprotocol/server-puppeteer".into(),
             ]),
             ..Default::default()
         };
@@ -196,7 +202,7 @@ mod test {
 
         let result = client
             .call(
-                "web_crawler",
+                "puppeteer_navigate",
                 serde_json::json!({ "url": "https://github.com/aidyou/chatspeed" }),
             )
             .await?;

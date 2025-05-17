@@ -44,6 +44,7 @@ import { useModelStore } from '@/stores/model'
 import { useSkillStore } from '@/stores/skill'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
+import { useMcpStore } from './stores/mcp'
 
 // Import update management components
 import UpdateDialog from '@/components/updater/UpdateDialog.vue'
@@ -52,6 +53,7 @@ import RestartDialog from '@/components/updater/RestartDialog.vue'
 
 const router = useRouter()
 const settingStore = useSettingStore()
+const mcpStore = useMcpStore()
 const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const updateStore = useUpdateStore()
@@ -155,7 +157,9 @@ onMounted(async () => {
     if (event.payload.label === getCurrentWebviewWindow().label) {
       return
     }
-    if (event.payload.type === 'model') {
+    if (event.payload.label === 'mcp') {
+      mcpStore.fetchMcpServers()
+    } else if (event.payload.type === 'model') {
       modelStore.updateModelStore()
     } else if (event.payload.type === 'skill') {
       skillStore.updateSkillStore()

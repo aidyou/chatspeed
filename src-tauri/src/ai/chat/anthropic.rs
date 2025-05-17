@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use reqwest::Response;
 use serde_json::{json, Value};
-use std::time::Instant;
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 use crate::ai::interaction::constants::{
@@ -14,7 +13,7 @@ use crate::ai::network::{
 use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, ToolCallDeclaration};
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
-use crate::impl_stoppable;
+use crate::{ai::error::AiError, impl_stoppable};
 
 /// Represents the Anthropic chat implementation
 #[derive(Clone)]
@@ -126,7 +125,7 @@ impl AnthropicChat {
         response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    ) -> Result<String, AiError> {
         let mut full_response = String::new();
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
@@ -155,13 +154,18 @@ impl AnthropicChat {
                         )
                         .await
                         .map_err(|e| {
+                            let err = AiError::StreamProcessingFailed {
+                                provider: "Anthropic".to_string(),
+                                details: e.to_string(),
+                            };
+                            log::error!("Anthropic stream processing error: {}", err);
                             callback(ChatResponse::new_with_arc(
                                 chat_id.clone(),
-                                e.to_string(),
+                                err.to_string(),
                                 MessageType::Error,
                                 metadata_option.clone(),
                             ));
-                            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                            err
                         })?;
 
                     let mut send_tool_calls_signal = false;
@@ -262,12 +266,30 @@ impl AnthropicChat {
                                     Ok(serialized_tcd) => {
                                         callback(ChatResponse::new_with_arc(
                                             chat_id.clone(),
-                                            serialized_tcd,
+                                            serialized_tcd, // Send the raw data for tool call
                                             MessageType::ToolCall,
                                             metadata_option.clone(),
                                         ));
                                     }
-                                    Err(e) => log::error!("Failed to serialize tool call for Anthropic: {:?}, error: {}", tcd, e),
+                                    Err(e) => {
+                                        let err = AiError::ToolCallSerializationFailed {
+                                            details: e.to_string(),
+                                        };
+                                        log::error!(
+                                            "Anthropic tool call serialization error for tool {:?}: {}",
+                                            tcd.name, err
+                                        );
+                                        callback(ChatResponse::new_with_arc(
+                                            chat_id.clone(),
+                                            err.to_string(),
+                                            MessageType::Error,
+                                            metadata_option.clone(),
+                                        ));
+                                        // Decide if this should be a fatal error for the stream.
+                                        // For now, we log, send an error message, and continue processing other tool calls or stream parts.
+                                        // If it should be fatal, uncomment the next line:
+                                        // return Err(err);
+                                    }
                                 }
                             }
                             accumulated_tool_calls.clear(); // Clear after sending
@@ -275,9 +297,14 @@ impl AnthropicChat {
                     }
                 }
                 Err(e) => {
+                    let err = AiError::StreamProcessingFailed {
+                        provider: "Anthropic".to_string(),
+                        details: e.to_string(),
+                    };
+                    log::error!("Anthropic stream event error: {}", err);
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
-                        e,
+                        err.to_string(),
                         MessageType::Error,
                         metadata_option.clone(),
                     ));
@@ -328,7 +355,7 @@ impl AiChatTrait for AnthropicChat {
         tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    ) -> Result<String, AiError> {
         let (params, metadata_option) = init_extra_params(extra_params.clone());
 
         let headers = json!({
@@ -355,27 +382,34 @@ impl AiChatTrait for AnthropicChat {
                 true,
             )
             .await
-            .map_err(|e| {
+            .map_err(|network_err| {
+                let err = AiError::ApiRequestFailed {
+                    provider: "Anthropic".to_string(),
+                    details: network_err.to_string(),
+                };
+                log::error!("Anthropic API request failed: {}", err);
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
-                    e.clone(),
+                    err.to_string(),
                     MessageType::Error,
                     metadata_option.clone(),
                 ));
-                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                err
             })?;
 
         if response.is_error {
+            let err = AiError::ApiRequestFailed {
+                provider: "Anthropic".to_string(),
+                details: response.content.clone(),
+            };
+            log::error!("Anthropic API returned an error: {}", err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                response.content.clone(),
+                err.to_string(),
                 MessageType::Error,
                 metadata_option.clone(),
             ));
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                response.content,
-            )));
+            return Err(err);
         }
 
         if let Some(raw_response) = response.raw_response {

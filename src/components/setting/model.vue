@@ -430,14 +430,14 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 const { t } = useI18n()
 
 import { Sortable } from 'sortablejs-vue3'
 
-import { isEmpty, showMessage, toInt, toFloat } from '@/libs/util'
+import { showMessage, toInt, toFloat } from '@/libs/util'
 import { useModelStore } from '@/stores/model'
 
 // models

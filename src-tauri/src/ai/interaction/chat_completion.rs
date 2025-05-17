@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 use tokio::sync::Mutex;
 
+use crate::ai::error::AiError;
 use crate::ai::interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL};
 use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType, Usage};
 use crate::http::chp::SearchResult;
@@ -138,7 +139,7 @@ pub struct ChatState {
     pub active_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub channels: Arc<WindowChannels>,
     // function manager
-    pub function_manager: Arc<Mutex<FunctionManager>>,
+    pub function_manager: Arc<FunctionManager>,
 }
 
 impl ChatState {
@@ -162,7 +163,7 @@ impl ChatState {
             chats: Arc::new(Mutex::new(chats)),
             active_searches: Arc::new(Mutex::new(HashMap::new())),
             channels,
-            function_manager: Arc::new(Mutex::new(function_manager)),
+            function_manager: Arc::new(function_manager),
         }
     }
 }
@@ -191,7 +192,7 @@ impl AiChatEnum {
         tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<String, AiError> {
         impl_chat_method!(
             self,
             chat,
@@ -292,7 +293,8 @@ pub async fn complete_chat_async(
     tools: Option<Vec<MCPToolDeclaration>>,
     mut metadata: Option<Value>,
     callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-) -> Result<(), String> {
+) -> Result<(), AiError> {
+    // Changed String to AiError, though current impl always Ok(())
     let mut api_url_clone = if api_url == Some("") || api_url.is_none() {
         if chat_protocol == ChatProtocol::OpenAI {
             if let Some(base_url) = BASE_URL.get(&chat_protocol.to_string()) {
@@ -344,7 +346,7 @@ pub async fn complete_chat_async(
     let _ = tokio::spawn(async move {
         // reset stop flag
         chat_interface.set_stop_flag(false).await;
-        let _ = chat_interface
+        let result = chat_interface
             .chat(
                 api_url_clone.as_deref(),
                 &model,
@@ -355,8 +357,11 @@ pub async fn complete_chat_async(
                 metadata,
                 callback,
             )
-            .await
-            .map_err(|e| e.to_string());
+            .await;
+        // Log the error if one occurs during the chat execution in the spawned task.
+        if let Err(e) = result {
+            log::error!("Chat execution failed for chat_id {}: {}", chat_id_clone, e);
+        }
 
         let mut chats = chats_ref.lock().await;
         if let Some(protocol_chats) = chats.get_mut(&protocol_clone) {
@@ -408,7 +413,7 @@ pub async fn complete_chat_blocking(
     messages: Vec<Value>,
     tools: Option<Vec<MCPToolDeclaration>>,
     metadata: Option<Value>,
-) -> Result<ChatCompletionResult, String> {
+) -> Result<ChatCompletionResult, AiError> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<ChatResponse>>(100);
 
     let callback = move |chunk: Arc<ChatResponse>| {
@@ -431,7 +436,11 @@ pub async fn complete_chat_blocking(
         metadata,
         callback,
     )
-    .await?;
+    .await
+    .map_err(|e| {
+        log::error!("Failed to initiate asynchronous chat: {}", e);
+        e
+    })?;
 
     // Receive and process results
     let mut content = String::new();
@@ -447,12 +456,25 @@ pub async fn complete_chat_blocking(
                 MessageType::Reference => {
                     if let Ok(parsed_chunk) =
                         serde_json::from_str::<Vec<SearchResult>>(&chunk.chunk)
-                            .map_err(|e| e.to_string())
                     {
                         reference.extend(parsed_chunk);
+                    } else {
+                        let err_details = format!(
+                            "Failed to deserialize SearchResult from chunk: {}",
+                            chunk.chunk
+                        );
+                        log::error!("{}", err_details);
+                        return Err(AiError::DeserializationFailed {
+                            context: "SearchResult".to_string(),
+                            details: err_details,
+                        });
                     }
                 }
-                MessageType::Error => return Err(chunk.chunk.clone()),
+                MessageType::Error => {
+                    return Err(AiError::UpstreamChatError {
+                        message: chunk.chunk.clone(),
+                    })
+                }
                 MessageType::Finished => {
                     if let Some(metadata) = chunk.metadata.as_ref() {
                         if let Some(tokens) = metadata.get(TOKENS) {

@@ -50,14 +50,14 @@ impl UpdateManager {
 
         let new_version = Version::parse(&version_info.version).map_err(|e| {
             UpdateError::VersionCheckError(
-                t!("updater.invalid_version_format", "error" = e.to_string()).to_string(),
+                t!("updater.invalid_version_format", error = e.to_string()).to_string(),
             )
         })?;
         let current = Version::parse(&current_version).map_err(|e| {
             UpdateError::VersionCheckError(
                 t!(
                     "updater.invalid_current_version_format",
-                    "error" = e.to_string()
+                    error = e.to_string()
                 )
                 .to_string(),
             )
@@ -71,10 +71,11 @@ impl UpdateManager {
     /// Returns Some(VersionInfo) if an update is available, None if no update is available.
     /// The version info includes the new version number, download URL, and release notes.
     pub async fn check_update(&self) -> Result<Option<VersionInfo>> {
-        let updater = self
-            .app
-            .updater()
-            .map_err(|e| UpdateError::CheckError(e.to_string()))?;
+        let updater = self.app.updater().map_err(|e| {
+            UpdateError::CheckError(
+                t!("updater.updater_init_failed", error = e.to_string()).to_string(),
+            )
+        })?;
 
         match updater.check().await {
             Ok(Some(update)) => {
@@ -97,7 +98,9 @@ impl UpdateManager {
             }
             Err(e) => {
                 warn!("Failed to check for updates: {}", e);
-                Err(UpdateError::CheckError(e.to_string()))
+                Err(UpdateError::CheckError(
+                    t!("updater.check_update_request_failed", error = e.to_string()).to_string(),
+                ))
             }
         }
     }
@@ -111,16 +114,21 @@ impl UpdateManager {
     /// * `Ok(())` if the update was successfully downloaded and installed
     /// * `Err(UpdateError)` if there was an error during the process
     pub async fn download_and_install(&self, version_info: &VersionInfo) -> Result<()> {
-        let updater = self
-            .app
-            .updater()
-            .map_err(|e| UpdateError::CheckError(e.to_string()))?;
+        let updater = self.app.updater().map_err(|e| {
+            UpdateError::CheckError(
+                t!("updater.updater_init_failed", error = e.to_string()).to_string(),
+            )
+        })?;
 
         // 检查更新
         let update = updater
             .check()
             .await
-            .map_err(|e| UpdateError::CheckError(e.to_string()))?
+            .map_err(|e| {
+                UpdateError::CheckError(
+                    t!("updater.check_update_request_failed", error = e.to_string()).to_string(),
+                )
+            })?
             .ok_or_else(|| UpdateError::UpdateNotFound)?;
 
         // 验证版本信息
@@ -150,7 +158,11 @@ impl UpdateManager {
                 },
             )
             .await
-            .map_err(|e| UpdateError::DownloadError(e.to_string()))?;
+            .map_err(|e| {
+                UpdateError::DownloadError(
+                    t!("updater.download_install_failed", error = e.to_string()).to_string(),
+                )
+            })?;
 
         info!("Update installation completed");
         Ok(())

@@ -342,7 +342,7 @@ impl Chp {
             .await?;
 
         let items = value.as_array().ok_or(HttpError::Response(
-            t!("http.invalid_response_format", error = "Expected an array").to_string(),
+            t!("http.chp_search_expected_array").to_string(),
         ))?;
 
         let mut results = Vec::new();

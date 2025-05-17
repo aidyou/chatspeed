@@ -6,29 +6,29 @@ use thiserror::Error;
 #[derive(Error, Debug, Serialize)]
 pub enum StoreError {
     /// Error variant for Tauri-related errors.
-    #[error("{}", t!("db.tauri_error", error = _0))]
+    #[error("{0}")]
     TauriError(String),
 
     /// Error variant for database-related errors.
-    #[error("{}", t!("db.database_error", error = _0))]
+    #[error("{0}")]
     DatabaseError(String),
 
-    #[error("{}", t!("db.invalid_data", error = _0))]
+    #[error("{0}")]
     InvalidData(String),
 
     /// Error variant for JSON-related errors.
-    #[error("{}", t!("db.json_error", error = _0))]
+    #[error("{0}")]
     JsonError(String),
 
     /// Error variant for I/O-related errors.
-    #[error("{}", t!("db.io_error", error = _0))]
+    #[error("{0}")]
     IoError(String),
 
     /// Error variant for not found errors.
-    #[error("{}", t!("db.not_found", error = _0))]
+    #[error("{0}")]
     NotFound(String),
 
-    #[error("{}", t!("db.string_error", error = _0))]
+    #[error("{0}")]
     StringError(String),
 
     /// Error variant for already exists errors.
@@ -46,10 +46,11 @@ pub enum StoreError {
 /// This macro reduces boilerplate by automating the implementation of the `From` trait
 /// for different error types, allowing for seamless error conversion.
 macro_rules! impl_from_error {
-    ($variant:ident, $error_type:ty) => {
+    ($variant:ident, $error_type:ty, $t_key:literal) => {
         impl From<$error_type> for StoreError {
             /// Converts the given error into a `StoreError` variant.
             ///
+            /// It now uses the provided t! macro key to format the error message.
             /// # Arguments
             ///
             /// - `err`: The error to convert.
@@ -58,7 +59,7 @@ macro_rules! impl_from_error {
             ///
             /// A `StoreError` variant containing the error message.
             fn from(err: $error_type) -> Self {
-                StoreError::$variant(err.to_string())
+                StoreError::$variant(t!($t_key, error = err.to_string()).to_string())
             }
         }
     };
@@ -75,7 +76,7 @@ impl From<StoreError> for rusqlite::Error {
 }
 
 // Implement `From` trait for specific error types using the `impl_from_error` macro.
-impl_from_error!(DatabaseError, rusqlite::Error);
-impl_from_error!(TauriError, tauri::Error);
-impl_from_error!(JsonError, serde_json::Error);
-impl_from_error!(IoError, std::io::Error);
+impl_from_error!(DatabaseError, rusqlite::Error, "db.database_error");
+impl_from_error!(TauriError, tauri::Error, "db.tauri_error");
+impl_from_error!(JsonError, serde_json::Error, "db.json_error");
+impl_from_error!(IoError, std::io::Error, "db.io_error");

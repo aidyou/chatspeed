@@ -283,7 +283,7 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
 
         tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
-                log::error!("{}", t!("main.failed_to_fix_note_window_visual", error = e));
+                log::error!("Failed to fix note window visual: {}", e);
             }
         });
     }
@@ -374,7 +374,7 @@ pub async fn create_or_focus_setting_window(
 
         tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
-                log::error!("{}", t!("main.failed_to_fix_window_visual", error = e));
+                log::error!("Failed to fix settings window visual: {}", e);
             }
         });
     }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use arboard::Clipboard;
+use rust_i18n::t;
 use serde_json::json;
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -111,11 +112,14 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
             // get content from paste buffer
             if let Ok(mut clipboard) = Clipboard::new().map_err(|e| e.to_string()) {
                 let content = clipboard.get_text().unwrap_or_default();
-                app.emit(
+                if let Err(e) = app.emit(
                     "assistant-window-paste",
                     json!({ "label": "assistant", "content": content }),
-                )
-                .unwrap();
+                ) {
+                    log::error!("Failed to emit assistant-window-paste event: {}", e);
+                }
+            } else {
+                log::error!("Failed to initialize clipboard for paste shortcut.");
             }
         }
         CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => {
@@ -234,10 +238,18 @@ pub fn update_shortcut(
                             old_shortcut,
                             err
                         );
-                        return Err(format!("Failed to unregister old shortcut: {}", err).into());
+                        return Err(t!(
+                            "main.shortcut.failed_to_unregister_old",
+                            error = err.to_string()
+                        )
+                        .into());
                     }
                 } else {
-                    log::debug!("Old shortcut {} was not registered", old_shortcut);
+                    log::debug!(
+                        "Old shortcut {} for type {} was not registered or empty",
+                        old_shortcut,
+                        shortcut_type
+                    );
                 }
             }
         }
@@ -251,7 +263,11 @@ pub fn update_shortcut(
                 log::debug!("Unregistering existing shortcut: {}", new_shortcut);
                 if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
                     log::error!("Failed to unregister shortcut '{}': {}", new_shortcut, err);
-                    return Err(format!("Failed to unregister existing shortcut: {}", err).into());
+                    return Err(t!(
+                        "main.shortcut.failed_to_unregister_existing",
+                        error = err.to_string()
+                    )
+                    .into());
                 }
             }
 
@@ -262,7 +278,7 @@ pub fn update_shortcut(
                 handle_shortcut(app_handle, &shortcut_type);
             })?;
         } else {
-            return Err(format!("Invalid shortcut format: {}", new_shortcut).into());
+            return Err(t!("main.shortcut.invalid_format", shortcut = new_shortcut).into());
         }
     }
 

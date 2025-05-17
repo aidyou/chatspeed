@@ -29,6 +29,7 @@
 
 use crate::db::{Conversation, MainStore};
 
+use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -59,7 +60,9 @@ use tauri::{command, Emitter, Manager, State};
 pub fn get_all_conversations(
     state: State<Arc<Mutex<MainStore>>>,
 ) -> Result<Vec<Conversation>, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .get_all_conversations()
         .map_err(|e| e.to_string())
@@ -90,7 +93,9 @@ pub fn get_conversation_by_id(
     state: State<Arc<Mutex<MainStore>>>,
     id: i64,
 ) -> Result<Conversation, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .get_conversation_by_id(id)
         .map_err(|e| e.to_string())
@@ -118,7 +123,9 @@ pub fn get_conversation_by_id(
 /// ```
 #[command]
 pub fn add_conversation(state: State<Arc<Mutex<MainStore>>>, title: String) -> Result<i64, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .add_conversation(title)
         .map_err(|e| e.to_string())
@@ -152,7 +159,9 @@ pub fn update_conversation(
     title: Option<String>,
     is_favorite: Option<bool>,
 ) -> Result<(), String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .update_conversation(id, title, is_favorite)
         .map_err(|e| e.to_string())
@@ -180,7 +189,9 @@ pub fn update_conversation(
 /// ```
 #[command]
 pub fn delete_conversation(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .delete_conversation(id)
         .map_err(|e| e.to_string())
@@ -214,7 +225,9 @@ pub fn get_messages_for_conversation(
     label: Option<String>,
 ) -> Result<(), String> {
     let label = label.unwrap_or(window.label().to_string());
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     let messages = main_store
         .get_messages_for_conversation(conversation_id)
         .map_err(|e| e.to_string())?;
@@ -261,7 +274,9 @@ pub fn add_message(
     content: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<i64, String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .add_message(conversation_id, role, content, metadata)
         .map_err(|e| e.to_string())
@@ -289,7 +304,9 @@ pub fn add_message(
 /// ```
 #[command]
 pub fn delete_message(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.delete_message(id).map_err(|e| e.to_string())
 }
 /// Update the metadata of a message
@@ -318,7 +335,9 @@ pub fn update_message_metadata(
     id: i64,
     metadata: serde_json::Value,
 ) -> Result<(), String> {
-    let main_store = state.lock().map_err(|e| e.to_string())?;
+    let main_store = state
+        .lock()
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .update_message_metadata(id, Some(metadata))
         .map_err(|e| e.to_string())

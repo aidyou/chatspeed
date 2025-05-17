@@ -2,6 +2,7 @@ use crate::workflow::{
     error::WorkflowError,
     react::types::{Plan, PlanStatus},
 };
+use rust_i18n::t;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -63,7 +64,9 @@ impl PlanManager {
             .iter()
             .find(|p| p.id == id)
             .cloned()
-            .ok_or_else(|| WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            .ok_or_else(|| {
+                WorkflowError::Config(t!("workflow.react.plan_not_found", id = id).to_string())
+            })
     }
 
     /// Retrieves all plans
@@ -102,10 +105,9 @@ impl PlanManager {
             self.plans[index] = plan;
             Ok(())
         } else {
-            Err(WorkflowError::Config(format!(
-                "找不到ID为{}的计划",
-                plan.id
-            )))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = plan.id).to_string(),
+            ))
         }
     }
 
@@ -128,7 +130,9 @@ impl PlanManager {
             self.plans[index].update_status(status);
             Ok(self.plans[index].clone())
         } else {
-            Err(WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = id).to_string(),
+            ))
         }
     }
 
@@ -151,7 +155,9 @@ impl PlanManager {
             self.plans[index].record_error(error);
             Ok(self.plans[index].clone())
         } else {
-            Err(WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = id).to_string(),
+            ))
         }
     }
 
@@ -174,7 +180,9 @@ impl PlanManager {
             self.plans[index].complete(summary);
             Ok(self.plans[index].clone())
         } else {
-            Err(WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = id).to_string(),
+            ))
         }
     }
 
@@ -192,7 +200,9 @@ impl PlanManager {
             self.plans[index].reset();
             Ok(self.plans[index].clone())
         } else {
-            Err(WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = id).to_string(),
+            ))
         }
     }
 
@@ -210,7 +220,9 @@ impl PlanManager {
             self.plans.remove(index);
             Ok(())
         } else {
-            Err(WorkflowError::Config(format!("找不到ID为{}的计划", id)))
+            Err(WorkflowError::Config(
+                t!("workflow.react.plan_not_found", id = id).to_string(),
+            ))
         }
     }
 

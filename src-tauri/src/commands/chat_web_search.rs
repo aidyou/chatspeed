@@ -49,14 +49,14 @@ pub async fn chat_completion_with_search(
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     if content.is_empty() {
-        return Err("Failed to find user message content".to_string());
+        return Err(t!("chat.failed_to_find_user_message_content").to_string());
     }
 
     let tx = chat_state
         .channels
         .get_or_create_channel(window.clone())
         .await?;
-
+    // User confirmed db.failed_to_lock_main_store
     let crawler_url = main_state
         .lock()
         .map_err(|e| e.to_string())?
@@ -64,7 +64,7 @@ pub async fn chat_completion_with_search(
 
     let search_engines = main_state
         .lock()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
         .get_config(CFG_SEARCH_ENGINE, vec![])
         .into_iter()
         .filter_map(|s: String| {
@@ -351,7 +351,7 @@ fn setup_model(
 
             // Validate model name
             if !smodel.models.iter().any(|m| m.id == model_name) {
-                return Err(format!("Invalid search model: {}", model_name));
+                return Err(t!("chat.invalid_search_model", model_name = model_name).to_string());
             }
 
             // Update search model
@@ -547,9 +547,9 @@ async fn chat_with_retry(
                 // Wait for 1 second before retrying
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             }
-        }
+        };
     }
-    Err("Failed to complete chat after 3 retries".to_string())
+    Err(t!("chat.chat_completion_failed_after_retries", retries = 3).to_string())
 }
 
 // Multi-engine concurrent search
@@ -559,7 +559,7 @@ async fn execute_multi_search(
     queries: &[String],
 ) -> Result<Vec<SearchResult>, String> {
     if crawler_url.is_empty() {
-        return Err("Crawler URL not found".to_string());
+        return Err(t!("chat.crawler_url_not_found").to_string());
     }
 
     // Prepare keywords - convert to owned strings to avoid lifetime issues
@@ -602,7 +602,7 @@ async fn execute_multi_search(
 
     // If no valid search engines, return error
     if handles.is_empty() {
-        return Err("没有有效的搜索引擎配置".to_string());
+        return Err(t!("chat.no_valid_search_engine_config").to_string());
     }
 
     // Wait for all searches to complete and merge results
@@ -704,7 +704,8 @@ async fn generate_final_answer(
         metadata,
         callback,
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }

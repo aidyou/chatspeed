@@ -24,15 +24,16 @@ impl WorkflowEngine {
         main_store: Arc<std::sync::Mutex<MainStore>>,
         chat_state: Arc<ChatState>,
     ) -> Result<Self, WorkflowError> {
-        let function_manager = FunctionManager::new();
+        let function_manager = Arc::new(FunctionManager::new());
         function_manager
+            .clone()
             .register_workflow_tools(chat_state.clone(), main_store.clone())
             .await?;
 
         Ok(Self {
             chat_state,
             main_store,
-            function_manager: Arc::new(function_manager),
+            function_manager,
             context: Arc::new(Context::new()),
         })
     }

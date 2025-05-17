@@ -69,6 +69,7 @@ pub fn setup_chat_proxy(
 ) -> Result<(), String> {
     // If the proxy type is http, get the proxy server and username/password from the config
     if let Some(md) = metadata.as_mut() {
+        // metadata is Value::Object
         // 从元数据中获取代理类型字符串
         let mut proxy_type = md
             .get("proxyType")
@@ -76,7 +77,7 @@ pub fn setup_chat_proxy(
             .unwrap_or("none")
             .to_string();
 
-        // 如果模型本身已经设置了代理服务器，则直接返回即可
+        // 如果模型本身已经设置了代理服务器(proxyServer)，则直接返回即可
         // if proxy_type is "http" and proxyServer is set, return directly
         if proxy_type == "http" {
             let ps = md.get("proxyServer").and_then(Value::as_str).unwrap_or("");
@@ -87,19 +88,29 @@ pub fn setup_chat_proxy(
 
         // 如果代理类型是"bySetting"，从配置中获取
         if proxy_type == "bySetting" {
-            let config_store = main_state.lock().map_err(|e| e.to_string())?;
+            let config_store = main_state.lock().map_err(|e| {
+                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
+            })?;
             proxy_type = config_store.get_config("proxy_type", "none".to_string());
             md["proxyType"] = json!(proxy_type);
         }
         if proxy_type == "http" {
-            let config_store = main_state.lock().map_err(|e| e.to_string())?;
+            let config_store = main_state.lock().map_err(|e| {
+                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
+            })?;
             let proxy_server = config_store.get_config("proxy_server", String::new());
             if !proxy_server.is_empty() {
-                md["proxyServer"] = json!(proxy_server);
-                md["proxyUsername"] =
-                    json!(config_store.get_config("proxy_username", String::new()));
-                md["proxyPassword"] =
-                    json!(config_store.get_config("proxy_password", String::new()));
+                if let Some(obj) = md.as_object_mut() {
+                    obj.insert("proxyServer".to_string(), json!(proxy_server));
+                    obj.insert(
+                        "proxyUsername".to_string(),
+                        json!(config_store.get_config("proxy_username", String::new())),
+                    );
+                    obj.insert(
+                        "proxyPassword".to_string(),
+                        json!(config_store.get_config("proxy_password", String::new())),
+                    );
+                }
             }
         }
     }
@@ -140,7 +151,10 @@ pub fn setup_chat_context(
         // 只在第一轮对话提供上下文信息
         // Just add context to first message
         if messages.len() == 1 {
-            if let Ok(config_store) = main_state.lock() {
+            if let Ok(config_store) = main_state
+                .lock()
+                .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
+            {
                 let location = config_store.get_config("location", String::new());
                 if !location.is_empty() {
                     context.push(t!("chat.context.location", location = location));
@@ -151,7 +165,9 @@ pub fn setup_chat_context(
                 }
                 let language = config_store.get_config("primary_language", String::new());
                 if !language.is_empty() {
-                    // get available languages
+                    // get available languages, map_err to avoid panic
+                    // if get_available_lang fails, it will not add language context
+                    // which is acceptable
                     if let Ok(available_languages) = get_available_lang() {
                         if available_languages.contains_key(&language) {
                             context.push(t!(
@@ -258,7 +274,7 @@ pub async fn chat_completion(
     let protocol: ChatProtocol = api_protocol.try_into().map_err(|e: String| e.to_string())?;
 
     setup_chat_proxy(&main_state, &mut metadata)
-        .map_err(|e| format!("Failed to setup chat proxy: {}", e))?;
+        .map_err(|e| t!("chat.failed_to_setup_proxy", error = e).to_string())?;
 
     // 如果网络搜索已启用，匹配出最后一条用户提问的信息中的 url
     // 将 url 的内容抓取出来拼接到最后一条用户消息中
@@ -266,7 +282,7 @@ pub async fn chat_completion(
         // 获取爬虫接口地址
         let crawler_url = main_state
             .lock()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
             .get_config(CFG_CHP_SERVER, String::new());
 
         // 获取最后一条用户消息的内容
@@ -346,7 +362,8 @@ pub async fn chat_completion(
         metadata,
         callback,
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -388,10 +405,16 @@ pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Resul
         }
     }
     if crawled_contents.is_empty() {
-        return Ok("".to_string());
+        return Ok("".to_string()); // Return empty string if no content crawled
     }
 
-    serde_json::to_string(&crawled_contents).map_err(|e| e.to_string())
+    serde_json::to_string(&crawled_contents).map_err(|e| {
+        t!(
+            "chat.json_serialize_crawler_results_failed",
+            error = e.to_string()
+        )
+        .to_string()
+    })
 }
 
 /// Tauri command to stop the ongoing chat for a specific API provider.
@@ -444,8 +467,15 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
     let detected_lang = detect(text);
 
     if let Some(info) = detected_lang {
-        let languages = get_available_lang().map_err(|e| e.to_string())?;
-        let lang_code = lang_to_iso_639_1(&info.lang().code()).map_err(|e| e.to_string())?;
+        let languages = get_available_lang()
+            .map_err(|e| t!("chat.failed_to_get_available_languages", error = e).to_string())?;
+        let lang_code = lang_to_iso_639_1(&info.lang().code()).map_err(|e| {
+            t!(
+                "chat.failed_to_convert_language_code",
+                error = e.to_string()
+            )
+            .to_string()
+        })?;
 
         if let Some(lang_name) = languages.get(lang_code) {
             Ok(json!({ "lang": lang_name.to_string(), "code": lang_code }))
@@ -495,14 +525,14 @@ pub async fn deep_search(
     // Get crawler URL, it use to fetch web page contents
     let crawler_url = main_store
         .lock()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
         .get_config(CFG_CHP_SERVER, String::new());
 
     // Get search engine providers from config
     // e.g. ["google", "bing", "duckduckgo"]
     let search_providers = main_store
         .lock()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
         .get_config(CFG_SEARCH_ENGINE, vec![])
         .into_iter()
         .filter_map(|s: String| s.trim().parse::<SearchProvider>().ok())
@@ -529,11 +559,26 @@ pub async fn deep_search(
 
     // Get the model configured for the deep search
     let reasoning_model =
-        FunctionManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref())
-            .map_err(|e| e.to_string())?;
+        FunctionManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref()).map_err(
+            |e| {
+                t!(
+                    "workflow.failed_to_get_model",
+                    model_type = ModelName::Reasoning.as_ref(),
+                    error = e.to_string()
+                )
+                .to_string()
+            },
+        )?;
     ds.add_model(ModelName::Reasoning, reasoning_model).await;
     let general_model = FunctionManager::get_model(main_store.inner(), ModelName::General.as_ref())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            t!(
+                "workflow.failed_to_get_model",
+                model_type = ModelName::General.as_ref(),
+                error = e.to_string()
+            )
+            .to_string()
+        })?;
     ds.add_model(ModelName::General, general_model).await;
 
     let _ = ds
@@ -570,7 +615,7 @@ pub async fn stop_deep_search(
         active_searches.remove(chat_id);
         Ok(())
     } else {
-        Err(t!("search.search_not_found").to_string())
+        Err(t!("chat.search_not_found").to_string())
     }
 }
 

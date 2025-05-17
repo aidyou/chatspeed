@@ -169,8 +169,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             name TEXT NOT NULL,
             description TEXT NOT NULL,
             config TEXT NOT NULL,
-            disabled BOOLEAN NOT NULL DEFAULT FALSE,
-            disabled_tools TEXT
+            disabled BOOLEAN NOT NULL DEFAULT FALSE
         )",
     ),
     (

@@ -7,6 +7,7 @@ use crate::MainWindowPosition;
 
 use log::error;
 use rusqlite::Result;
+use rust_i18n::t;
 use serde_json::Value;
 use std::path::Path;
 
@@ -87,7 +88,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::JsonError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn
             .execute(
@@ -161,7 +166,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn.execute(
             "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_protocol = ?,
@@ -274,7 +283,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn.execute(
             "INSERT INTO ai_skill ( name, icon, logo, prompt, sort_index, disabled, metadata)
@@ -347,7 +360,11 @@ impl MainStore {
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
 
         self.conn.execute(
             "UPDATE ai_skill SET name = ?, icon = ?, logo = ?, prompt = ?, disabled = ?, metadata = ?

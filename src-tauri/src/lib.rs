@@ -32,6 +32,7 @@ use ai::interaction::chat_completion::ChatState;
 use commands::chat::*;
 use commands::clipboard::*;
 use commands::fs::*;
+use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
 use commands::os::*;
@@ -139,6 +140,15 @@ pub async fn run() -> Result<()> {
             detect_language,
             deep_search,
             stop_deep_search,
+            // mcp
+            list_mcp_servers,
+            add_mcp_server,
+            update_mcp_server,
+            delete_mcp_server,
+            enable_mcp_server,
+            disable_mcp_server,
+            restart_mcp_server,
+            get_mcp_server_tools,
             // message
             get_conversation_by_id,
             get_all_conversations,

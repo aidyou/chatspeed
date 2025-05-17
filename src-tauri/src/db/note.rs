@@ -95,13 +95,19 @@ impl MainStore {
             .optional()?;
 
         if exists.unwrap_or(false) {
-            return Err(StoreError::AlreadyExists(t!("note.already_exists").into()));
+            return Err(StoreError::AlreadyExists(
+                t!("chat.note_already_exists").into(),
+            ));
         }
 
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
-            .map_err(|e| StoreError::TauriError(e.to_string()))?;
+            .map_err(|e| {
+                StoreError::JsonError(
+                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                )
+            })?;
         let now = Utc::now().timestamp();
         let tx = self.conn.transaction()?;
 

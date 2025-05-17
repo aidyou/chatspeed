@@ -515,13 +515,12 @@ impl WorkflowExecutor {
         let mut in_degree_map = in_degree_map_ref.lock().await;
 
         if let Some(degree) = in_degree_map.get_mut(node_id) {
-            let old_degree = *degree;
+            let _old_degree = *degree;
             *degree = degree.saturating_sub(1);
-
             #[cfg(debug_assertions)]
             debug!(
                 "Updating node degree: {} from {} to {}",
-                node_id, old_degree, *degree
+                node_id, _old_degree, *degree
             );
 
             let mut ready_queue = self.ready_queue.lock().await;
@@ -1101,10 +1100,15 @@ impl WorkflowExecutor {
 
         // Validate state transition
         if !Self::valid_transition(&state, &new_state) {
-            return Err(WorkflowError::InvalidState(format!(
-                "{:?} -> {:?}",
-                *state, new_state
-            )));
+            // Use t! for localization
+            return Err(WorkflowError::InvalidState(
+                t!(
+                    "workflow.invalid_state_transition",
+                    current = format!("{:?}", *state),
+                    new = format!("{:?}", new_state)
+                )
+                .to_string(),
+            ));
         }
 
         // Update state
@@ -1112,7 +1116,9 @@ impl WorkflowExecutor {
 
         // Notify state change
         if let Err(_) = self.state_channel.tx.send(new_state) {
+            // This error is less likely to be user-facing, but still good to localize
             return Err(WorkflowError::Execution(
+                // Consider a more specific key like workflow.state_notification_send_failed
                 t!("workflow.state_notification_error").to_string(),
             ));
         }
@@ -1183,7 +1189,9 @@ impl WorkflowExecutor {
     ///   - The pause signal cannot be sent
     pub async fn pause(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.pause_channel.send(()).await {
+            // Consider a more specific key like workflow.pause_signal_send_failed
             return Err(WorkflowError::Execution(
+                // This message is already specific, but could be localized
                 t!("workflow.pause_notification_error").to_string(),
             ));
         }
@@ -1203,7 +1211,9 @@ impl WorkflowExecutor {
     ///   - The resume signal cannot be sent
     pub async fn resume(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.resume_channel.send(()).await {
+            // Consider a more specific key like workflow.resume_signal_send_failed
             return Err(WorkflowError::Execution(
+                // This message is already specific, but could be localized
                 t!("workflow.resume_notification_error").to_string(),
             ));
         }
@@ -1223,7 +1233,9 @@ impl WorkflowExecutor {
     ///   - The cancel signal cannot be sent
     pub async fn cancel(&mut self) -> WorkflowResult<()> {
         if let Err(_) = self.cancel_channel.send(()).await {
+            // Consider a more specific key like workflow.cancel_signal_send_failed
             return Err(WorkflowError::Execution(
+                // This message is already specific, but could be localized
                 t!("workflow.cancel_notification_error").to_string(),
             ));
         }

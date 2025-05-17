@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone)]
 pub enum WorkflowError {
     /// Cancelled error
-    #[error("{}", t!("workflow.cancelled", msg = .0))]
+    #[error("{0}")]
     Cancelled(String),
 
     /// Circular dependency error
@@ -13,15 +13,15 @@ pub enum WorkflowError {
     CircularDependency(String),
 
     /// Configuration error
-    #[error("{}", t!("workflow.config", msg = .0))]
+    #[error("{0}")]
     Config(String),
 
     /// Context error
-    #[error("{}", t!("workflow.context", msg = .0))]
+    #[error("{0}")]
     Context(String),
 
     /// Execution error
-    #[error("{}", t!("workflow.execution", msg = .0))]
+    #[error("{0}")]
     Execution(String),
 
     /// Function error
@@ -37,42 +37,47 @@ pub enum WorkflowError {
     FunctionAlreadyExists(String),
 
     /// Function parameter error
-    #[error("{}", t!("workflow.function_param_error", name = .0))]
+    #[error("{0}")]
     FunctionParamError(String),
 
+    #[error("{}", t!("workflow.mcp_server_not_found", name = .0))]
+    McpServerNotFound(String),
+
     /// Max retries exceeded
-    #[error("{}", t!("workflow.max_retries_exceeded", node = .0))]
+    #[error("{}", t!("workflow.max_retries_exceeded", item = .0))]
+    // Parameter name 'item' might be more generic
     MaxRetriesExceeded(String),
 
-    #[error("{}", t!("workflow.initialization", msg =.0))]
+    #[error("{0}")]
     Initialization(String),
 
     /// Invalid state error
-    #[error("{}", t!("workflow.invalid_state", reason = .0))]
+    #[error("{0}")]
     InvalidState(String),
 
     /// Invalid graph error
-    #[error("{}", t!("workflow.invalid_graph", reason = .0))]
+    #[error("{0}")]
     InvalidGraph(String),
 
     /// IO error
-    #[error("{}", t!("workflow.io", msg = .0))]
+    #[error("{0}")]
     Io(String),
 
     /// Serialization error
-    #[error("{}", t!("workflow.serialization", msg = .0))]
+    #[error("{0}")]
     Serialization(String),
 
     /// State change failed
-    #[error("{}", t!("workflow.state_change_failed", reason = .0))]
+    #[error("{0}")]
     StateChangeFailed(String),
 
     /// Store error
-    #[error("{}", t!("workflow.store", msg = .0))]
+    #[error("{0}")]
     Store(String),
 
     /// Timeout error
-    #[error("{}", t!("workflow.timeout", node = .0))]
+    #[error("{}", t!("workflow.timeout", operation = .0))]
+    // Parameter name 'operation' might be more generic
     Timeout(String),
 
     /// Validation error
@@ -80,15 +85,19 @@ pub enum WorkflowError {
     Validation(String),
 
     /// Other error
-    #[error("{}", t!("workflow.other", msg = .0))]
+    #[error("{0}")]
     Other(String),
 }
 
 impl WorkflowError {
-    /// 判断错误是否可以重试
+    /// Determines if the error is retriable
     pub fn is_retriable(&self) -> bool {
         match self {
-            Self::Function(_) | Self::Io(_) | Self::Timeout(_) => true,
+            // Consider which execution errors are truly retriable.
+            // Network-related or transient Execution errors might be.
+            // Errors from Function execution might depend on the function.
+            Self::Io(_) | Self::Timeout(_) | Self::Execution(_) => true,
+            Self::Function(details) => !details.contains("parameter error"), // Example: make parameter errors non-retriable
             _ => false,
         }
     }
@@ -96,26 +105,37 @@ impl WorkflowError {
 
 impl From<std::io::Error> for WorkflowError {
     fn from(err: std::io::Error) -> Self {
-        WorkflowError::Io(err.to_string())
+        // Construct the full message here
+        WorkflowError::Io(t!("workflow.io_error_details", details = err.to_string()).to_string())
     }
 }
 
 impl From<serde_json::Error> for WorkflowError {
     fn from(err: serde_json::Error) -> Self {
-        WorkflowError::Serialization(err.to_string())
+        // Construct the full message here
+        WorkflowError::Serialization(
+            t!(
+                "workflow.serialization_error_details",
+                details = err.to_string()
+            )
+            .to_string(),
+        )
     }
 }
 
+// This From<String> implementation can be too broad and might hide more specific errors.
+// It's often better to require more explicit error wrapping.
+// Changed to WorkflowError::Other to signify a less specific origin.
 impl From<String> for WorkflowError {
     fn from(err: String) -> Self {
-        WorkflowError::Execution(err)
+        WorkflowError::Other(err)
     }
 }
 
-// 实现特定类型的 From 特征，而不是使用泛型实现
-// 这样可以避免与标准库中的 impl<T> From<T> for T 冲突
+// Implement the From trait for a specific type instead of using a generic implementation
+// This avoids conflicts with the standard library's impl<T> From<T> for T
 impl From<Box<dyn std::error::Error + Send + Sync>> for WorkflowError {
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
-        WorkflowError::Other(format!("{:?}", err))
+        WorkflowError::Other(err.to_string()) // .to_string() is usually preferred over debug format
     }
 }

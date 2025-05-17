@@ -1,3 +1,4 @@
+use rust_i18n::t;
 use std::{
     net::{AddrParseError, SocketAddr},
     path::{Path, PathBuf},
@@ -152,10 +153,12 @@ fn find_available_port(start_port: u16, max_port: u16) -> Result<u16, String> {
             return Ok(port);
         }
     }
-    Err(format!(
-        "No available ports found in the range {}-{}",
-        start_port, max_port
-    ))
+    Err(t!(
+        "http.server_no_available_ports",
+        start_port = start_port,
+        max_port = max_port
+    )
+    .to_string())
 }
 
 /// Retrieves the application data directory based on the development environment.
@@ -175,11 +178,20 @@ fn get_app_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
 
     #[cfg(not(debug_assertions))]
     {
-        let app_local_data_dir = _app
-            .path()
-            .app_data_dir()
-            .expect("Failed to retrieve the application data directory");
-        std::fs::create_dir_all(&app_local_data_dir).map_err(|e| e.to_string())?;
+        let app_local_data_dir = _app.path().app_data_dir().or_else(|_| {
+            Err(t!(
+                "http.server_failed_to_get_app_data_dir",
+                error = "Option was None"
+            )
+            .to_string())
+        })?;
+        std::fs::create_dir_all(&app_local_data_dir).map_err(|e| {
+            t!(
+                "http.server_failed_to_get_app_data_dir",
+                error = e.to_string()
+            )
+            .to_string()
+        })?;
         Ok(app_local_data_dir)
     }
 }
@@ -262,9 +274,9 @@ async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::R
         Some(path) => path,
         None => {
             return Ok(warp::reply::with_status(
-                "Could not find downloads directory".to_string(),
+                t!("http.server_downloads_dir_not_found").to_string(),
                 StatusCode::INTERNAL_SERVER_ERROR,
-            ))
+            ));
         }
     };
 
@@ -273,7 +285,8 @@ async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::R
 
     // Write the bytes to file
     if let Err(e) = tokio::fs::write(&file_path, body).await {
-        let error_message = format!("Failed to save file: {}", e);
+        let error_message =
+            t!("http.server_failed_to_save_file", error = e.to_string()).to_string();
         return Ok(warp::reply::with_status(
             error_message,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -281,7 +294,7 @@ async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::R
     }
 
     Ok(warp::reply::with_status(
-        "File saved successfully".to_string(),
+        t!("http.server_file_saved_successfully").to_string(),
         StatusCode::OK,
     ))
 }

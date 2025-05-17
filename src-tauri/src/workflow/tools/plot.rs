@@ -6,7 +6,7 @@ use crate::{
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
     },
 };
 
@@ -30,11 +30,6 @@ impl FunctionDefinition for Plot {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "plot"
-    }
-
-    /// Returns the type of the function.
-    fn function_type(&self) -> FunctionType {
-        FunctionType::MCP
     }
 
     /// Returns the description of the function.
@@ -92,8 +87,10 @@ impl FunctionDefinition for Plot {
     async fn execute(&self, params: Value) -> FunctionResult {
         // Get the URL from the parameters
         let plot_type = params["plot_type"].as_str().ok_or_else(|| {
-            WorkflowError::FunctionParamError("plot_type must be a string".to_string())
-        })?;
+            WorkflowError::FunctionParamError(
+                t!("workflow.plot.plot_type_must_be_string").to_string(),
+            )
+        })?; // Added t!
         let title = params["title"].as_str().unwrap_or_default();
         let x_label = params["x_label"].as_str().unwrap_or_default();
         let y_label = params["y_label"].as_str().unwrap_or_default();
@@ -101,13 +98,14 @@ impl FunctionDefinition for Plot {
         // Check if the URL is empty
         if plot_type.is_empty() {
             return Err(WorkflowError::FunctionParamError(
-                t!("workflow.chp_function_must_not_be_empty").to_string(),
+                // Changed message
+                t!("workflow.plot.plot_type_must_not_be_empty").to_string(),
             ));
         }
 
         let data = params["data"].as_object().ok_or_else(|| {
-            WorkflowError::FunctionParamError("data must be an object".to_string())
-        })?;
+            WorkflowError::FunctionParamError(t!("workflow.plot.data_must_be_object").to_string())
+        })?; // Added t!
         if plot_type == "pie" {
             // verify values is present and not empty
             if data
@@ -116,7 +114,7 @@ impl FunctionDefinition for Plot {
                 .map_or(true, |arr| arr.is_empty())
             {
                 return Err(WorkflowError::FunctionParamError(
-                    "values must be a non-empty array for pie plot".to_string(),
+                    t!("workflow.plot.pie_values_must_be_non_empty_array").to_string(),
                 ));
             }
             // verify labels is present and not empty
@@ -126,7 +124,7 @@ impl FunctionDefinition for Plot {
                 .map_or(true, |arr| arr.is_empty())
             {
                 return Err(WorkflowError::FunctionParamError(
-                    "labels must be a non-empty array for pie plot".to_string(),
+                    t!("workflow.plot.pie_labels_must_be_non_empty_array").to_string(),
                 ));
             }
         } else if plot_type == "line" || plot_type == "bar" {
@@ -137,7 +135,7 @@ impl FunctionDefinition for Plot {
                 .map_or(true, |arr| arr.is_empty())
             {
                 return Err(WorkflowError::FunctionParamError(
-                    "x must be a non-empty array for line or bar plot".to_string(),
+                    t!("workflow.plot.line_bar_x_must_be_non_empty_array").to_string(),
                 ));
             }
             // verify y is present and not empty
@@ -147,7 +145,7 @@ impl FunctionDefinition for Plot {
                 .map_or(true, |arr| arr.is_empty())
             {
                 return Err(WorkflowError::FunctionParamError(
-                    "y must be a non-empty array for line or bar plot".to_string(),
+                    t!("workflow.plot.line_bar_y_must_be_non_empty_array").to_string(),
                 ));
             }
         }
@@ -173,11 +171,15 @@ impl FunctionDefinition for Plot {
                 None,
             )
             .await
-            .map_err(|e| WorkflowError::Execution(e.to_string()))?;
+            .map_err(|e_str| {
+                WorkflowError::Execution(
+                    t!("workflow.plot.chp_call_failed", details = e_str).to_string(),
+                )
+            })?; // Added t!
 
         if results.is_null() || results.get("url").is_none() {
             return Err(WorkflowError::Execution(
-                "Failed to generate plot".to_string(),
+                t!("workflow.plot.failed_to_generate_plot").to_string(), // Added t!
             ));
         }
 

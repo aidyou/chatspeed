@@ -1,5 +1,1132 @@
-<template></template>
+<template>
+  <div class="card">
+    <!-- 顶部标题和添加按钮 -->
+    <div class="title">
+      <span>{{ $t('settings.mcp.title') }}</span>
+      <el-tooltip :content="$t('settings.mcp.addServer')" placement="top">
+        <span class="icon" @click="showPresetMcpDialog">
+          <cs name="add" />
+        </span>
+      </el-tooltip>
+    </div>
 
-<script setup></script>
+    <!-- 服务器列表/空状态 -->
+    <div class="list">
+      <template v-if="mcpStore.servers.length > 0">
+        <div v-for="server in mcpStore.servers" :key="server.id" class="item">
+          <div class="server-left">
+            <div
+              v-if="server.status === 'running'"
+              class="expand-btn"
+              @click="toggleServerToolsExpansion(server)">
+              <cs :name="server.toolsExpanded ? 'caret-down' : 'caret-right'" />
+            </div>
+            <Avatar :text="server.name" :size="32" />
+            <div class="server-info">
+              <div class="server-name">{{ server.name }}</div>
+              <div class="server-status">
+                <span :class="['status-dot', getServerStatusClass(server.status)]"></span>
+                {{ getServerStatusText(server.status) }}
+              </div>
+            </div>
+          </div>
 
-<style lang="scss"></style>
+          <div class="value">
+            <el-tooltip
+              :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <el-switch
+                :disabled="server.loading"
+                :model-value="!server.disabled"
+                @update:model-value="toggleServerStatus(server)" />
+            </el-tooltip>
+
+            <el-tooltip
+              :content="$t('settings.mcp.restart')"
+              placement="top"
+              :hide-after="0"
+              transition="none"
+              v-if="server.status === 'running'">
+              <span class="icon" @click="restartMcpServer(server)">
+                <cs name="restart" size="16px" color="secondary" />
+              </span>
+            </el-tooltip>
+
+            <el-tooltip
+              :content="$t('settings.mcp.editServer')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <span class="icon" @click="openEditDialog(server)">
+                <cs name="edit" size="16px" color="secondary" />
+              </span>
+            </el-tooltip>
+            <el-tooltip
+              :content="$t('settings.mcp.deleteServer')"
+              placement="top"
+              :hide-after="0"
+              transition="none">
+              <span class="icon" @click="handleDeleteServerConfirmation(server)">
+                <cs name="trash" size="16px" color="secondary" />
+              </span>
+            </el-tooltip>
+          </div>
+          <!-- 展开的工具列表 -->
+          <div
+            v-if="server.uiState?.toolsExpanded && server.status === 'running'"
+            class="tools-list">
+            <div v-if="server.uiState?.loadingTools" class="tool-loading">
+              {{ $t('common.loading') }}...
+            </div>
+            <ul v-if="mcpStore.serverTools[server.id] && mcpStore.serverTools[server.id].length">
+              <li
+                v-for="tool in mcpStore.serverTools[server.id]"
+                :key="tool.name"
+                class="tool-item">
+                <strong>{{ tool.name }}</strong> - {{ tool.description }}
+              </li>
+            </ul>
+            <div v-else-if="!server.uiState?.loadingTools && mcpStore.serverTools[server.id]">
+              {{ $t('settings.mcp.noTools') }}
+            </div>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div class="empty-state">
+          <p>
+            {{ $t('settings.mcp.noServersFound') }}
+            <!-- Assuming a key like noServersFound -->
+            <button @click="showPresetMcpDialog">
+              <cs name="add" />{{ $t('settings.mcp.addNow') }}
+            </button>
+          </p>
+        </div>
+      </template>
+    </div>
+
+    <!-- 添加/编辑对话框 -->
+    <el-dialog
+      v-model="dialogVisible"
+      width="600px"
+      align-center
+      @closed="resetForm"
+      class="model-edit-dialog"
+      :show-close="false"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false">
+      <div class="form-container">
+        <el-tabs v-model="activeTabName">
+          <!-- Ensure activeTabName is used here if defined in script -->
+          <el-tab-pane :label="$t('settings.mcp.form.tabForm')" name="formEditor">
+            <el-form
+              :model="currentServerForm"
+              label-width="150px"
+              ref="serverFormRef"
+              style="padding-top: 20px">
+              <el-form-item
+                :label="$t('settings.mcp.form.name')"
+                prop="name"
+                :rules="[{ required: true, message: $t('settings.mcp.validation.nameRequired') }]">
+                <el-input v-model="currentServerForm.name" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mcp.form.description')" prop="description">
+                <el-input v-model="currentServerForm.description" type="textarea" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mcp.form.disabled')" prop="disabled">
+                <el-switch v-model="currentServerForm.disabled" />
+              </el-form-item>
+
+              <el-form-item
+                :label="$t('settings.mcp.form.type')"
+                prop="config.type"
+                :rules="[{ required: true, message: $t('settings.mcp.validation.typeRequired') }]">
+                <el-radio-group v-model="currentServerForm.config.type">
+                  <el-radio value="stdio">Stdio</el-radio>
+                  <el-radio value="sse">SSE</el-radio>
+                </el-radio-group>
+              </el-form-item>
+
+              <template v-if="currentServerForm.config.type === 'stdio'">
+                <el-form-item
+                  :label="$t('settings.mcp.form.command')"
+                  prop="config.command"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.commandRequired')
+                    }
+                  ]">
+                  <el-input v-model="currentServerForm.config.command" />
+                </el-form-item>
+                <el-form-item
+                  :label="$t('settings.mcp.form.args')"
+                  prop="config.argsString"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.argsRequired')
+                    }
+                  ]">
+                  <el-input
+                    v-model="currentServerForm.config.argsString"
+                    type="textarea"
+                    :rows="1"
+                    :autosize="{ minRows: 1, maxRows: 2 }"
+                    :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
+                </el-form-item>
+              </template>
+
+              <template v-if="currentServerForm.config.type === 'sse'">
+                <el-form-item
+                  :label="$t('settings.mcp.form.url')"
+                  prop="config.url"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.urlRequired')
+                    }
+                  ]">
+                  <el-input v-model="currentServerForm.config.url" />
+                </el-form-item>
+                <el-form-item
+                  :label="$t('settings.mcp.form.bearerToken')"
+                  prop="config.bearer_token">
+                  <el-input v-model="currentServerForm.config.bearer_token" />
+                </el-form-item>
+                <el-form-item :label="$t('settings.general.proxyServer')" prop="config.proxy">
+                  <el-input v-model="currentServerForm.config.proxy" />
+                </el-form-item>
+              </template>
+              <el-form-item :label="$t('settings.mcp.form.env')" prop="config.envString">
+                <el-input
+                  v-model="currentServerForm.config.envString"
+                  type="textarea"
+                  :placeholder="$t('settings.mcp.form.envPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mcp.form.timeout')" prop="config.timeout">
+                <el-input
+                  v-model="currentServerForm.config.timeout"
+                  type="number"
+                  :placeholder="$t('settings.mcp.form.timeoutPlaceholder')" />
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+
+          <el-tab-pane :label="$t('settings.mcp.form.tabJson')" name="jsonEditor">
+            <textarea v-model="jsonConfigString" class="json-editor"></textarea>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
+          <el-button type="primary" @click="handleSubmit" :loading="formLoading">
+            {{ $t('common.confirm') }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- Preset MCPs Dialog -->
+    <el-dialog
+      v-model="presetMcpsVisible"
+      :title="$t('settings.mcp.presetTitle')"
+      width="600px"
+      align-center
+      class="preset-mcps-dialog">
+      <div class="preset-mcps-container">
+        <div class="search-bar">
+          <el-row :gutter="10">
+            <el-col :span="16">
+              <el-input
+                v-model="presetSearchQuery"
+                :placeholder="$t('common.search')"
+                clearable
+                class="search-input" />
+            </el-col>
+            <el-col :span="8">
+              <el-button
+                type="primary"
+                plain
+                @click="handleManualAddFromPresetDialog"
+                style="width: 100%">
+                <cs name="add" /> {{ $t('settings.mcp.addManually') }}
+              </el-button>
+            </el-col>
+          </el-row>
+        </div>
+
+        <div class="preset-mcps-list" v-loading="loadingPresets">
+          <el-card
+            v-for="preset in filteredPresetMcps"
+            :key="preset.name"
+            class="preset-mcp-card"
+            shadow="hover">
+            <div class="mcp-item">
+              <Avatar :text="preset.name" :size="40" class="mcp-logo" />
+              <div class="mcp-details">
+                <h3>{{ preset.name }}</h3>
+                <p>{{ preset.description }}</p>
+              </div>
+              <el-button
+                type="success"
+                @click="importPresetMcp(preset)"
+                :disabled="isPresetAdded(preset.name)">
+                {{
+                  isPresetAdded(preset.name)
+                    ? $t('settings.mcp.added')
+                    : $t('settings.mcp.addFromPreset')
+                }}
+              </el-button>
+            </div>
+          </el-card>
+          <div v-if="!loadingPresets && filteredPresetMcps.length === 0" class="empty-state">
+            {{ $t('settings.mcp.noPresetsFound') }}
+          </div>
+        </div>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, watch, reactive } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useMcpStore } from '@/stores/mcp'
+// import { openUrl } from '@tauri-apps/plugin-opener'; // Not used
+import { ElMessageBox, ElTooltip } from 'element-plus'
+
+import { showMessage } from '@/libs/util'
+import Avatar from '@/components/common/avatar.vue'
+
+const { t } = useI18n()
+const mcpStore = useMcpStore()
+
+const serverFormRef = ref(null)
+const activeTabName = ref('formEditor') // Changed from activeTab to activeTabName
+
+// 对话框状态
+const dialogVisible = ref(false)
+const formLoading = ref(false)
+const isEditMode = ref(false)
+
+const initialServerFormState = () => ({
+  id: null,
+  name: '',
+  description: '',
+  disabled: false,
+  disabled_toolsString: '',
+  config: {
+    name: '',
+    type: 'stdio',
+    url: null,
+    bearer_token: null,
+    proxy: null,
+    command: null,
+    args: [],
+    argsString: '',
+    env: [],
+    envString: '',
+    disabled_tools: [],
+    disabled_toolsString: '',
+    timeout: null
+  }
+})
+
+const currentServerForm = reactive(initialServerFormState())
+const jsonConfigString = ref('')
+
+const presetMcpsVisible = ref(false)
+const presetMcps = ref([])
+const presetSearchQuery = ref('')
+const loadingPresets = ref(false)
+
+const serverToOperateOn = ref(null) // For delete or other confirmations
+
+// =================================================
+// Coumputed Properties
+// =================================================
+watch(
+  currentServerForm,
+  newForm => {
+    if (activeTabName.value === 'formEditor') {
+      // Changed from activeTab
+      try {
+        const payload = preparePayloadFromForm(newForm)
+        jsonConfigString.value = JSON.stringify(payload, null, 2)
+      } catch (e) {
+        console.warn('Error generating JSON from form for preview:', e)
+      }
+    }
+  },
+  { deep: true }
+)
+
+watch(jsonConfigString, newJson => {
+  if (activeTabName.value === 'jsonEditor') {
+    // Changed from activeTab
+    try {
+      const parsedPayload = JSON.parse(newJson)
+      if (
+        parsedPayload &&
+        parsedPayload.mcpServers &&
+        typeof parsedPayload.mcpServers === 'object'
+      ) {
+        const serverNames = Object.keys(parsedPayload.mcpServers)
+        if (serverNames.length > 0) {
+          const serverNameFromFile = serverNames[0] // Assume the first key is the server name
+          const serverConfigFromFile = parsedPayload.mcpServers[serverNameFromFile]
+
+          if (serverConfigFromFile && typeof serverConfigFromFile.type === 'string') {
+            // Update currentServerForm.name
+            currentServerForm.name = serverNameFromFile
+            // Note: description, disabled, and top-level disabled_tools are not in jsonConfigString,
+            // so they retain their values from the form editor or defaults.
+
+            // Update currentServerForm.config
+            currentServerForm.config.name = serverNameFromFile // Config name usually matches server name
+            currentServerForm.config.type = serverConfigFromFile.type
+
+            if (serverConfigFromFile.type === 'stdio') {
+              currentServerForm.config.command = serverConfigFromFile.command || null
+              currentServerForm.config.args = serverConfigFromFile.args || []
+              currentServerForm.config.argsString = arrayToString(currentServerForm.config.args)
+              // Clear SSE specific fields
+              currentServerForm.config.url = null
+              currentServerForm.config.bearer_token = null
+              currentServerForm.config.proxy = null
+            } else if (serverConfigFromFile.type === 'sse') {
+              currentServerForm.config.url = serverConfigFromFile.url || null
+              currentServerForm.config.bearer_token = serverConfigFromFile.bearer_token || null
+              currentServerForm.config.proxy = serverConfigFromFile.proxy || null
+              // Clear stdio specific fields
+              currentServerForm.config.command = null
+              currentServerForm.config.args = []
+              currentServerForm.config.argsString = ''
+            }
+
+            currentServerForm.config.env = serverConfigFromFile.env || []
+            currentServerForm.config.envString = arrayToEnvString(currentServerForm.config.env)
+
+            currentServerForm.config.disabled_tools = serverConfigFromFile.disabled_tools || []
+            currentServerForm.config.disabled_toolsString = arrayToString(
+              currentServerForm.config.disabled_tools
+            )
+          }
+        }
+      }
+    } catch (e) {}
+  }
+})
+
+// =================================================
+// Form and Dialog Logic
+// =================================================
+const resetForm = () => {
+  Object.assign(currentServerForm, initialServerFormState())
+  jsonConfigString.value = JSON.stringify(initialServerFormState(), null, 2)
+  if (serverFormRef.value) {
+    serverFormRef.value.resetFields()
+  }
+  activeTabName.value = 'formEditor' // Changed from activeTab
+}
+
+const prepareFormForDisplay = serverData => {
+  const form = JSON.parse(JSON.stringify(serverData)) // Deep clone
+  form.config.argsString = arrayToString(form.config.args)
+  form.config.envString = arrayToEnvString(form.config.env)
+  form.disabled_toolsString = arrayToString(form.disabled_tools)
+  form.config.disabled_toolsString = arrayToString(form.config.disabled_tools)
+  return form
+}
+
+const preparePayloadFromForm = form => {
+  const serverNameKey = (form.name || '').trim()
+  if (!serverNameKey) {
+    return { mcpServers: {} }
+  }
+
+  const serverConfigData = {}
+
+  serverConfigData.type = form.config.type
+
+  if (form.config.type === 'stdio') {
+    serverConfigData.command = (form.config.command || '').trim()
+    serverConfigData.args = parseStringToArray(form.config.argsString || '')
+  } else if (form.config.type === 'sse') {
+    serverConfigData.url = (form.config.url || '').trim()
+    if (form.config.bearer_token && form.config.bearer_token.trim()) {
+      serverConfigData.bearer_token = form.config.bearer_token.trim()
+    }
+    if (form.config.proxy && form.config.proxy.trim()) {
+      serverConfigData.proxy = form.config.proxy.trim()
+    }
+  }
+
+  const envArray = parseEnvString(form.config.envString || '')
+  if (envArray.length > 0) {
+    serverConfigData.env = envArray
+  }
+
+  // disabled_tools from the config part of the form
+  const configDisabledTools = parseStringToArray(form.config.disabled_toolsString || '')
+  if (configDisabledTools.length > 0) {
+    serverConfigData.disabled_tools = configDisabledTools
+  }
+  serverConfigData.timeout = form.config.timeout || null
+  return { mcpServers: { [serverNameKey]: serverConfigData } }
+}
+
+const openServerFormDialog = (initialData = null) => {
+  resetForm()
+  isEditMode.value = false
+  let unwatchConfigName = null
+
+  if (initialData) {
+    const serverDataForForm = {
+      id: null,
+      name: initialData.name,
+      description: initialData.description,
+      disabled: initialData.disabled || false,
+      disabled_tools: initialData.disabled_tools || [],
+      config: {
+        name: initialData.config?.name || initialData.name, // Default config.name to server.name
+        type: initialData.config?.type || 'stdio',
+        url: initialData.config?.url || null,
+        bearer_token: initialData.config?.bearer_token || null,
+        proxy: initialData.config?.proxy || null,
+        command: initialData.config?.command || null,
+        args: initialData.config?.args || [],
+        env: initialData.config?.env || [],
+        disabled_tools: initialData.config?.disabled_tools || [],
+        timeout: initialData.config?.timeout || null
+      }
+    }
+    Object.assign(currentServerForm, prepareFormForDisplay(serverDataForForm))
+  } else {
+    // Auto-fill config.name from server.name for new entries when adding manually
+    unwatchConfigName = watch(
+      () => currentServerForm.name,
+      newName => {
+        if (!currentServerForm.config.name) {
+          currentServerForm.config.name = newName
+        }
+      }
+    )
+  }
+
+  jsonConfigString.value = JSON.stringify(preparePayloadFromForm(currentServerForm), null, 2)
+  dialogVisible.value = true
+
+  if (unwatchConfigName) {
+    // Stop watching when dialog closes
+    const stopDialogWatch = watch(dialogVisible, isVisible => {
+      if (!isVisible) {
+        unwatchConfigName()
+        stopDialogWatch() // also stop this watcher
+      }
+    })
+  }
+}
+
+const openEditDialog = server => {
+  resetForm()
+  isEditMode.value = true
+  const formData = prepareFormForDisplay(server)
+  Object.assign(currentServerForm, formData)
+  jsonConfigString.value = JSON.stringify(preparePayloadFromForm(formData), null, 2)
+  dialogVisible.value = true
+}
+
+const handleSubmit = async () => {
+  if (!serverFormRef.value) {
+    // Changed from activeTab
+    showMessage(t('settings.mcp.form.error'), 'error')
+    return
+  }
+  serverFormRef.value.validate(async valid => {
+    if (!valid) {
+      console.log('Form validation failed')
+      showMessage(t('settings.mcp.form.validationFailed'), 'error') // Pass 'error' as type
+      return false
+    }
+  })
+
+  formLoading.value = true
+
+  const payload = preparePayloadFromForm(currentServerForm)
+  const formData = {
+    name: currentServerForm.name,
+    description: currentServerForm.description,
+    config: {
+      name: currentServerForm.name,
+      ...payload['mcpServers'][currentServerForm.name]
+    },
+    disabled: currentServerForm.disabled
+  }
+  if (isEditMode.value && currentServerForm.id > 0) {
+    formData.id = currentServerForm.id
+    // add org disabled_tools
+    formData.config.disabled_tools = currentServerForm.config.disabled_tools
+  }
+
+  try {
+    await mcpStore.saveMcpServer(formData)
+    dialogVisible.value = false
+    const langKey = isEditMode.value ? 'settings.mcp.updateSuccess' : 'settings.mcp.addSuccess'
+    showMessage(t(langKey), 'success')
+  } catch (e) {
+    let langKey = isEditMode.value ? 'settings.mcp.updateFailed' : 'settings.mcp.addFailed'
+    showMessage(t(langKey, { error: e }), 'error')
+  } finally {
+    formLoading.value = false
+  }
+}
+
+// =================================================
+// Server List Actions
+// =================================================
+const handleDeleteServerConfirmation = server => {
+  serverToOperateOn.value = server
+  ElMessageBox.confirm(
+    t('settings.mcp.confirmDelete', { name: server.name || '' }),
+    t('settings.mcp.deleteConfirmTitle'),
+    {
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning'
+    }
+  )
+    .then(() => {
+      executeDeleteServer()
+    })
+    .catch(() => {
+      /* User canceled */ serverToOperateOn.value = null
+    })
+}
+
+const executeDeleteServer = async () => {
+  if (!serverToOperateOn.value) return
+  try {
+    await mcpStore.deleteMcpServer(serverToOperateOn.value.id)
+    showMessage(t('settings.mcp.deleteSuccess'), 'success')
+    serverToOperateOn.value = null
+  } catch (e) {
+    showMessage(t('settings.mcp.operationFailed', { error: e.message || String(e) }), 'error') // Pass 'error' as type
+  }
+}
+
+const toggleServerStatus = async server => {
+  server.loading = true
+  const originalDisabled = server.disabled
+
+  try {
+    if (server.disabled) {
+      await mcpStore.enableMcpServer(server.id)
+      server.disabled = false
+      showMessage(t('settings.mcp.enableSuccess', { name: server.name }), 'success')
+    } else {
+      await mcpStore.disableMcpServer(server.id)
+      server.disabled = true
+      showMessage(t('settings.mcp.disableSuccess', { name: server.name }), 'success')
+    }
+  } catch (e) {
+    server.disabled = originalDisabled
+    const langKey = originalDisabled ? 'settings.mcp.enableFailed' : 'settings.mcp.disableFailed'
+    showMessage(t(langKey, { error: e.message || String(e), name: server.name }), 'error')
+  } finally {
+    server.loading = false
+  }
+}
+
+const restartMcpServer = async server => {
+  if (server.loading) return
+  server.loading = true
+  try {
+    await mcpStore.restartMcpServer(server.id)
+    showMessage(t('settings.mcp.restartSuccess', { name: server.name }), 'success')
+  } catch (e) {
+    showMessage(
+      t('settings.mcp.restartFailed', {
+        error: e.message || String(e),
+        name: server.name
+      }),
+      'error'
+    )
+  } finally {
+    server.loading = false
+  }
+}
+
+const toggleServerToolsExpansion = async server => {
+  // Initialize uiState if it doesn't exist
+  if (!server.uiState) {
+    server.uiState = reactive({ toolsExpanded: false, loadingTools: false })
+  }
+  server.uiState.toolsExpanded = !server.uiState.toolsExpanded
+  if (server.uiState.toolsExpanded && !mcpStore.serverTools[server.id]) {
+    // Fetch only if not already fetched
+    server.uiState.loadingTools = true
+    try {
+      await mcpStore.fetchMcpServerTools(server.id)
+    } catch (e) {
+      showMessage(t('settings.mcp.fetchToolsFailed', { error: e.message || String(e) }), 'error') // Pass 'error' as type
+      server.uiState.toolsExpanded = false // Collapse on error
+    } finally {
+      server.uiState.loadingTools = false
+    }
+  }
+}
+
+const getServerStatusClass = status => {
+  // For status-dot class
+  return status || 'stopped'
+}
+
+const getServerStatusText = status => {
+  if (!status) return t('settings.mcp.statusUnknown')
+  // Attempt to find a specific status translation, fallback to status itself or unknown
+  const key = `settings.mcp.status${status.charAt(0).toUpperCase() + status.slice(1)}`
+  // Check if translation exists, otherwise return status or unknown
+  // This requires a robust way to check i18n key existence or a default value in $t
+  // For simplicity, we'll assume keys exist or $t handles fallbacks.
+  // A more robust way: if (i18n.global.te(key)) return t(key); else return status;
+  return t(key, status) // Pass status as interpolation if key is generic like settings.mcp.statusValue
+}
+
+const getServerStatusType = status => {
+  // For El-Tag type in Element Plus (if you use it)
+  // This function seems unused in the current template for el-tag type, but kept for potential use
+  switch (status) {
+    case 'running':
+      return 'success'
+    case 'stopped':
+      return 'info'
+    case 'error':
+      return 'danger'
+    default:
+      return 'warning'
+  }
+}
+
+// =================================================
+// Preset MCPs Logic
+// =================================================
+const loadPresetMcps = async () => {
+  if (presetMcps.value.length > 0 && !loadingPresets.value) return // Already loaded
+  loadingPresets.value = true
+  try {
+    const response = await fetch('/presetMcp.json') // Assumes presetMcp.json is in public folder
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    const data = await response.json()
+    presetMcps.value = data.map(p => ({
+      ...p,
+      searchName: (p.name + p.description).toLowerCase()
+    }))
+  } catch (error) {
+    console.error('Failed to load preset MCPs:', error)
+    showMessage(t('settings.mcp.loadPresetError'), 'error')
+    presetMcps.value = [] // Clear on error
+  } finally {
+    loadingPresets.value = false
+  }
+}
+
+const showPresetMcpDialog = async () => {
+  presetSearchQuery.value = '' // Reset search
+  await loadPresetMcps() // Ensure presets are loaded
+  presetMcpsVisible.value = true
+}
+
+const filteredPresetMcps = computed(() => {
+  if (!presetSearchQuery.value) return presetMcps.value
+  const search = presetSearchQuery.value.toLowerCase()
+  return presetMcps.value.filter(preset => preset.searchName.includes(search))
+})
+
+const isPresetAdded = presetName => {
+  return mcpStore.servers.some(server => server.name === presetName)
+}
+
+const importPresetMcp = preset => {
+  presetMcpsVisible.value = false
+
+  const mcpSpecificConfig = preset.config?.mcpServers?.[preset.name]
+  if (!mcpSpecificConfig) {
+    showMessage(
+      t('settings.mcp.operationFailed', {
+        error: `Preset configuration for '${preset.name}' is malformed.`
+      }),
+      'error'
+    )
+    openServerFormDialog() // Open empty form as fallback
+    return
+  }
+
+  const serverData = {
+    name: preset.name,
+    description: preset.description || '',
+    config: {
+      // This is McpServerConfig
+      name: preset.name, // McpServerConfig's name, defaults to server name
+      type: mcpSpecificConfig.type || 'stdio', // Default to stdio if not specified
+      command: mcpSpecificConfig.command,
+      args: mcpSpecificConfig.args || [],
+      env: mcpSpecificConfig.env || [], // Assuming env might be in preset
+      // Add other fields from mcpSpecificConfig if they exist (url, bearer_token, proxy, disabled_tools for config)
+      ...(mcpSpecificConfig.url && { url: mcpSpecificConfig.url }),
+      ...(mcpSpecificConfig.bearer_token && {
+        bearer_token: mcpSpecificConfig.bearer_token
+      }),
+      ...(mcpSpecificConfig.proxy && { proxy: mcpSpecificConfig.proxy }),
+      ...(mcpSpecificConfig.disabled_tools && {
+        disabled_tools: mcpSpecificConfig.disabled_tools
+      })
+    }
+    // disabled_tools for the McpServer itself can also be added if defined in preset root
+  }
+  openServerFormDialog(serverData)
+}
+
+const handleManualAddFromPresetDialog = () => {
+  presetMcpsVisible.value = false
+  openServerFormDialog() // Open a blank form for manual addition
+}
+
+// =================================================
+// Utility Functions
+// =================================================
+const parseStringToArray = str => {
+  if (!str || typeof str !== 'string') return []
+  return str
+    .split(',')
+    .map(s => trimQuotes(s.trim()))
+    .filter(s => s)
+}
+
+const arrayToString = arr => (arr || []).join(',')
+
+const parseEnvString = str => {
+  if (!str || typeof str !== 'string') return []
+  return str
+    .split('\n')
+    .map(line => {
+      const parts = line.split(':')
+      if (parts.length >= 2) {
+        return [trimQuotes(parts[0].trim()), trimQuotes(parts.slice(1).join(':').trim())]
+      }
+      return null
+    })
+    .filter(pair => pair && pair[0])
+}
+
+const arrayToEnvString = arr => {
+  if (!arr || !Array.isArray(arr)) return ''
+  return arr.map(pair => `${pair[0]}: ${pair[1]}`).join('\n')
+}
+
+const trimQuotes = str => {
+  if (str.startsWith('"')) {
+    str = str.substring(1).trim()
+  }
+  if (str.endsWith(',')) {
+    str = str.substring(0, str.length - 1).trim()
+  }
+  return str.replace(/^['"]|['"]$/g, '').trim()
+}
+</script>
+
+<style lang="scss" scoped>
+.card {
+  .list {
+    .item {
+      .server-left {
+        display: flex;
+        align-items: center;
+        flex-grow: 1; // Allow left side to take available space
+
+        // Expand button for tools list
+        .expand-btn {
+          margin-right: 10px;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 0; // Remove default button padding
+
+          i.icon-arrow {
+            // Make sure you have this icon class
+            transition: transform 0.2s ease;
+            font-size: 12px; // Example size
+            &.expanded {
+              transform: rotate(90deg);
+            }
+          }
+        }
+
+        .server-info {
+          // This is part of the label
+          margin-left: 10px;
+
+          .server-name {
+            font-weight: bold;
+          }
+
+          .server-status {
+            font-size: 12px;
+            color: #666; // Use your theme's secondary text color
+
+            .status-dot {
+              display: inline-block;
+              width: 8px;
+              height: 8px;
+              border-radius: 50%;
+              margin-right: 5px;
+
+              &.running {
+                background: green;
+              }
+              &.stopped {
+                background: gray;
+              }
+              &.error {
+                background: red;
+              }
+              &.unknown {
+                background: orange;
+              }
+            }
+          }
+        }
+      }
+
+      .value {
+        // Actions part
+        display: flex;
+        align-items: center; // Align buttons vertically
+        margin-left: 10px; // Space from left content
+
+        button {
+          // Start/Stop button
+          margin-left: 8px; // Space between action buttons
+          padding: 5px 10px;
+          border: 1px solid #ddd; // Example border
+          border-radius: 4px;
+          cursor: pointer;
+          background-color: #f9f9f9; // Light background
+
+          &:hover {
+            background-color: #f0f0f0;
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+        }
+
+        .icon {
+          // Edit/Delete icons
+          margin-left: 8px; // Space between icons and button
+        }
+      }
+
+      .tools-list {
+        width: 100%; // Take full width when expanded
+        margin-top: 10px;
+        padding-left: 40px; // Indent under the server info (adjust as needed)
+        border-top: 1px dashed #eee; // Separator
+        padding-top: 10px;
+
+        .tool-item {
+          padding: 5px 0;
+          font-size: 13px;
+          color: #555; // Use your theme's text color
+        }
+        .tool-loading {
+          font-style: italic;
+          color: #888;
+        }
+      }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 0;
+
+      button {
+        background: none;
+        border: none;
+        color: var(--cs-color-primary);
+        cursor: pointer;
+        padding: 0;
+        margin-left: 5px;
+        font-size: var(--cs-font-size);
+      }
+    }
+  }
+
+  // Styles for icons within .title and .value
+  .icon {
+    cursor: pointer;
+    padding: 5px; // Add some clickable area
+    display: flex; // Center icon if needed
+    align-items: center;
+    justify-content: center;
+    // Add hover effect if desired
+  }
+
+  // Styles for your custom Dialog's form container
+  // These are from your original file, assuming they target elements within your custom Dialog/Tabs/Tab
+  .form-container {
+    // If using El-Form, it might have its own padding.
+    // If your custom Tabs/Tab add padding, adjust this.
+    // padding: 20px; // Add padding if the dialog content area doesn't have it
+
+    .form-group {
+      // This class was in your original HTML, but El-Form uses el-form-item
+      margin-bottom: 15px;
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      input[type="text"], // Target specific inputs if not using el-input
+      input[type="url"],
+      textarea,
+      select {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd; // Theme border
+        border-radius: 4px;
+        box-sizing: border-box; // Important for width: 100%
+      }
+      textarea {
+        min-height: 80px;
+      }
+      input[type='checkbox'] {
+        width: auto; // Checkboxes shouldn't be 100% width
+        margin-right: 5px;
+      }
+    }
+
+    .json-editor {
+      width: 100%;
+      min-height: 300px;
+      font-family: monospace;
+      padding: 10px;
+      border: 1px solid #ddd; // Theme border
+      border-radius: 4px;
+      box-sizing: border-box;
+      margin-top: 10px; // Space if it's directly after a tab title
+    }
+  }
+
+  // Styles for preset list (if you re-implement it)
+  .preset-list {
+    .preset-item {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+
+      .preset-info {
+        flex-grow: 1;
+        margin-left: 10px;
+        .preset-title {
+          font-weight: bold;
+        }
+        .preset-desc {
+          font-size: 12px;
+          color: #666;
+        }
+      }
+      .add-preset-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 5px;
+        i {
+          font-size: 16px;
+        }
+      }
+    }
+  }
+}
+
+.el-overlay {
+  .model-edit-dialog {
+    .el-dialog__header {
+      display: none;
+    }
+    .el-tabs__nav-wrap:after {
+      background-color: var(--cs-border-color);
+    }
+  }
+}
+
+.preset-mcps-dialog {
+  :deep(.el-dialog__body) {
+    padding: 0;
+  }
+
+  .preset-mcps-container {
+    display: flex;
+    flex-direction: column;
+    height: 70vh; // Or a fixed height like 500px
+
+    .search-bar {
+      padding: var(--cs-space-sm) var(--cs-space) 0;
+      background: var(--el-bg-color); // Match theme
+      .search-input {
+        margin-bottom: var(--cs-space-sm);
+      }
+    }
+
+    .preset-mcps-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 var(--cs-space) var(--cs-space-sm);
+      .empty-state {
+        text-align: center;
+        padding: 40px 0;
+        color: var(--el-text-color-placeholder);
+      }
+    }
+  }
+
+  .preset-mcp-card {
+    margin-bottom: var(--cs-space-sm);
+    .mcp-item {
+      display: flex;
+      align-items: center;
+      gap: var(--cs-space);
+
+      .mcp-logo {
+        // Style for Avatar if needed, or remove if Avatar handles it
+        flex-shrink: 0;
+      }
+
+      .mcp-details {
+        flex: 1;
+        min-width: 0; // For text ellipsis
+
+        h3 {
+          margin: 0 0 5px 0;
+          font-size: 16px;
+          line-height: 1.2;
+        }
+        p {
+          margin: 0;
+          font-size: 13px;
+          color: var(--el-text-color-secondary);
+        }
+      }
+    }
+  }
+}
+</style>

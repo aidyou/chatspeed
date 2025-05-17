@@ -12,7 +12,7 @@ use crate::{
     db::AiModel,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
     },
 };
 
@@ -47,11 +47,6 @@ impl FunctionDefinition for ChatCompletion {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "chat_completion"
-    }
-
-    /// Returns the type of the function.
-    fn function_type(&self) -> FunctionType {
-        FunctionType::Http
     }
 
     /// Returns a brief description of the function.
@@ -192,7 +187,12 @@ impl FunctionDefinition for ChatCompletion {
             tools,
             model.metadata,
         )
-        .await?;
+        .await
+        .map_err(|e_str| {
+            WorkflowError::Execution(
+                t!("workflow.chat_completion_failed", details = e_str).to_string(),
+            )
+        })?;
 
         if result.content.is_empty() {
             return Err(WorkflowError::Execution(

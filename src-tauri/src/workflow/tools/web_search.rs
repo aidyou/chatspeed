@@ -6,7 +6,7 @@ use crate::{
     http::chp::{Chp, SearchProvider},
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
     },
 };
 
@@ -66,11 +66,6 @@ impl FunctionDefinition for Search {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "web_search"
-    }
-
-    /// Returns the type of the function.
-    fn function_type(&self) -> FunctionType {
-        FunctionType::MCP
     }
 
     /// Returns a brief description of the function.
@@ -178,7 +173,17 @@ impl FunctionDefinition for Search {
                     t!("workflow.provider_must_be_string").to_string(),
                 )
             })?
-            .try_into()?;
+            .try_into()
+            .map_err(|e_str| {
+                WorkflowError::FunctionParamError(
+                    t!(
+                        "workflow.invalid_search_provider",
+                        provider_name = params["provider"].as_str().unwrap_or("unknown"),
+                        details = e_str
+                    )
+                    .to_string(),
+                )
+            })?;
 
         let kw = Self::extract_keywords(&params)?;
 
@@ -196,7 +201,7 @@ impl FunctionDefinition for Search {
         let crawler = Chp::new(self.chp_server.clone(), None);
         let results = crawler
             .web_search(
-                provider,
+                provider.clone(),
                 &[&kw],
                 Some(page),
                 Some(number),
@@ -204,7 +209,17 @@ impl FunctionDefinition for Search {
                 resolve_baidu_links,
             )
             .await
-            .map_err(|e| WorkflowError::Execution(e.to_string()))?;
+            .map_err(|e_str| {
+                WorkflowError::Execution(
+                    t!(
+                        "workflow.web_search_failed",
+                        provider = provider.to_string(),
+                        keyword = kw,
+                        details = e_str
+                    )
+                    .to_string(),
+                )
+            })?;
         Ok(json!(results))
     }
 }

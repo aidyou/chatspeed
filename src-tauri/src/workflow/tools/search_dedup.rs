@@ -7,7 +7,7 @@ use crate::{
     libs::dedup::dedup_and_rank_results,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
     },
 };
 
@@ -23,10 +23,6 @@ impl SearchDedup {
 impl FunctionDefinition for SearchDedup {
     fn name(&self) -> &str {
         "search_dedup"
-    }
-
-    fn function_type(&self) -> FunctionType {
-        FunctionType::Native
     }
 
     fn description(&self) -> &str {

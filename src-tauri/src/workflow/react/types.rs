@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
@@ -116,13 +117,17 @@ impl Plan {
                 let name = step
                     .get("name")
                     .and_then(|n| n.as_str())
-                    .ok_or_else(|| format!("步骤 {} 名称解析失败", index))?
+                    .ok_or_else(|| {
+                        t!("workflow.react.plan_step_name_parse_failed", index = index).to_string()
+                    })?
                     .to_string();
 
                 let goal = step
                     .get("goal")
                     .and_then(|g| g.as_str())
-                    .ok_or_else(|| format!("步骤 {} 目标解析失败", index))?
+                    .ok_or_else(|| {
+                        t!("workflow.react.plan_step_goal_parse_failed", index = index).to_string()
+                    })?
                     .to_string();
 
                 self.steps.push(Step::new(name, goal, index));
@@ -131,7 +136,8 @@ impl Plan {
             self.updated_at = Utc::now();
             Ok(())
         } else {
-            Err("计划JSON中没有steps数组".to_string())
+            // Suggestion: Use t! for localization
+            Err(t!("workflow.react.plan_json_missing_steps_array").to_string())
         }
     }
 

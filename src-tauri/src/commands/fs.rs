@@ -3,6 +3,8 @@ use std::path::Path;
 use crate::libs::fs::save_thumbnail_image;
 use crate::HTTP_SERVER;
 use crate::HTTP_SERVER_TMP_DIR;
+use rust_i18n::t;
+use std::borrow::Cow;
 
 /// Read and process an image file
 ///
@@ -27,13 +29,14 @@ pub async fn image_preview(
         preview_width,
         preview_height,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| t!("command.fs.image_preview_failed", error = e.to_string()).to_string())?;
 
     // Get the file name from the saved path
     let file_name = save_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("unknown.png")
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| t!("command.fs.unknown_filename")) // t! returns Cow<'_, str>
         .to_string();
 
     let mut http_server = HTTP_SERVER.read().clone();

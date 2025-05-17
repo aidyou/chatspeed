@@ -290,7 +290,7 @@ pub fn quit_window(app: tauri::AppHandle) -> Result<(), String> {
     for (_, window) in app.webview_windows() {
         window
             .close()
-            .map_err(|e| format!("Failed to close window: {}", e))?;
+            .map_err(|e| t!("command.window.failed_to_close", error = e.to_string()).to_string())?;
     }
     std::process::exit(0);
 }

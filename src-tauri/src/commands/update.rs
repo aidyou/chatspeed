@@ -20,10 +20,18 @@ pub enum Error {
 impl From<UpdateError> for Error {
     fn from(err: UpdateError) -> Self {
         match err {
-            UpdateError::VersionCheckError(msg)
-            | UpdateError::ConfigError(msg)
-            | UpdateError::CheckError(msg) => Error::CheckFailed(msg),
-            UpdateError::DownloadError(msg) => Error::InstallFailed(msg),
+            UpdateError::VersionCheckError(msg) => Error::CheckFailed(
+                t!("updater.version_check_error_detail", error = msg).to_string(),
+            ),
+            UpdateError::ConfigError(msg) => {
+                Error::CheckFailed(t!("updater.config_error_detail", error = msg).to_string())
+            }
+            UpdateError::CheckError(msg) => {
+                Error::CheckFailed(t!("updater.check_error_detail", error = msg).to_string())
+            }
+            UpdateError::DownloadError(msg) => {
+                Error::InstallFailed(t!("updater.download_error_detail", error = msg).to_string())
+            }
             UpdateError::VersionMismatch => {
                 Error::InstallFailed(t!("updater.version_mismatch").into())
             }

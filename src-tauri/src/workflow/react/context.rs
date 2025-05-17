@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use crate::workflow::{
@@ -20,7 +22,7 @@ pub struct ReactContext {
     /// Current plan being executed
     pub current_plan: Option<Plan>,
     /// Function manager
-    pub function_manager: FunctionManager,
+    pub function_manager: Arc<FunctionManager>,
     /// Maximum retries
     pub max_retries: u32,
     /// Step execution history
@@ -40,7 +42,7 @@ impl ReactContext {
     ///
     /// # Returns
     /// A new ReactContext
-    pub fn new(function_manager: FunctionManager, max_retries: u32) -> Self {
+    pub fn new(function_manager: Arc<FunctionManager>, max_retries: u32) -> Self {
         Self {
             messages: Vec::new(),
             current_plan: None,
@@ -301,9 +303,10 @@ impl ReactContext {
             "Step Record: \n{}",
             serde_json::to_string_pretty(&record).unwrap_or_default()
         );
-        // 将结构体序列化为 JSON 值
-        if let Ok(record_json) = serde_json::to_value(record) {
+        if let Ok(record_json) = serde_json::to_value(&record) {
             self.step_history.push(record_json);
+        } else {
+            log::error!("Failed to serialize step record: {:?}", record); // Log serialization error
         }
         self
     }

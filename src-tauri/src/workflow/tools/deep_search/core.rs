@@ -25,7 +25,7 @@ use crate::{
     http::chp::{Chp, SearchProvider, SearchResult},
     libs::{dedup::dedup_and_rank_results, util::format_json_str},
     workflow::{
-        function_manager::{FunctionDefinition, FunctionResult, FunctionType},
+        function_manager::{FunctionDefinition, FunctionResult},
         tools::ModelName,
     },
 };
@@ -749,8 +749,13 @@ impl DeepSearch {
         // Parse result into query list
         let queries = format_json_str(&chat_result.content);
 
-        let result: Vec<SearchResult> =
-            serde_json::from_str(&queries).map_err(|e| e.to_string())?;
+        let result: Vec<SearchResult> = serde_json::from_str(&queries).map_err(|e| {
+            t!(
+                "workflow.deep_search.failed_to_parse_related_results",
+                error = e.to_string()
+            )
+            .to_string()
+        })?; // Added t!
 
         #[cfg(debug_assertions)]
         {
@@ -1147,10 +1152,6 @@ impl FunctionDefinition for DeepSearch {
         "deep_search"
     }
 
-    fn function_type(&self) -> FunctionType {
-        FunctionType::Native
-    }
-
     fn description(&self) -> &str {
         "Execute a deep search for a given topic: \n1. Generate search queries \n2. Search 3. \nRank results \n4. Crawl results \n5. Summarize results"
     }
@@ -1226,6 +1227,8 @@ impl FunctionDefinition for DeepSearch {
         todo!()
     }
 }
+
+#[cfg(test)]
 mod test {
     use std::sync::Arc;
 
