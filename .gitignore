@@ -54,3 +54,6 @@ src-tauri/src/plugins
 
 # temp copy files
 * copy.*
+
+.windsurf
+.roo
