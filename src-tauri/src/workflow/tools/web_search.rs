@@ -6,7 +6,7 @@ use crate::{
     http::chp::{Chp, SearchProvider},
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
     },
 };
 
@@ -62,7 +62,7 @@ impl Search {
 }
 
 #[async_trait]
-impl FunctionDefinition for Search {
+impl ToolDefinition for Search {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "web_search"
@@ -74,7 +74,7 @@ impl FunctionDefinition for Search {
     }
 
     /// Returns the function calling spec.
-    fn function_calling_spec(&self) -> Value {
+    fn tool_calling_spec(&self) -> Value {
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -165,7 +165,7 @@ impl FunctionDefinition for Search {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn execute(&self, params: Value) -> FunctionResult {
+    async fn call(&self, params: Value) -> ToolResult {
         let provider: SearchProvider = params["provider"]
             .as_str()
             .ok_or_else(|| {
@@ -241,7 +241,7 @@ mod tests {
                     "page": 1,
                     "time_period": "week"
             });
-            let result = search.execute(params).await;
+            let result = search.call(params).await;
             println!("{:?}", result);
             assert!(result.is_ok());
         }
@@ -256,7 +256,7 @@ mod tests {
             "number": 10,
             "page": 1
         });
-        let result = search.execute(params).await;
+        let result = search.call(params).await;
         println!("{:?}", result);
         assert!(!result.is_ok());
     }

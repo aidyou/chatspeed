@@ -53,7 +53,7 @@ use crate::db::MainStore;
 use crate::http::chp::{Chp, SearchProvider};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::workflow::tools::{DeepSearch, ModelName};
-use crate::workflow::FunctionManager;
+use crate::workflow::ToolManager;
 
 use chrono::Local;
 use rust_i18n::t;
@@ -558,19 +558,17 @@ pub async fn deep_search(
         .insert(chat_id.to_string(), stop_flag);
 
     // Get the model configured for the deep search
-    let reasoning_model =
-        FunctionManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref()).map_err(
-            |e| {
-                t!(
-                    "workflow.failed_to_get_model",
-                    model_type = ModelName::Reasoning.as_ref(),
-                    error = e.to_string()
-                )
-                .to_string()
-            },
-        )?;
+    let reasoning_model = ToolManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref())
+        .map_err(|e| {
+            t!(
+                "workflow.failed_to_get_model",
+                model_type = ModelName::Reasoning.as_ref(),
+                error = e.to_string()
+            )
+            .to_string()
+        })?;
     ds.add_model(ModelName::Reasoning, reasoning_model).await;
-    let general_model = FunctionManager::get_model(main_store.inner(), ModelName::General.as_ref())
+    let general_model = ToolManager::get_model(main_store.inner(), ModelName::General.as_ref())
         .map_err(|e| {
             t!(
                 "workflow.failed_to_get_model",

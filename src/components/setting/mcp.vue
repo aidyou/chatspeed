@@ -13,70 +13,73 @@
     <!-- 服务器列表/空状态 -->
     <div class="list">
       <template v-if="mcpStore.servers.length > 0">
-        <div v-for="server in mcpStore.servers" :key="server.id" class="item">
-          <div class="server-left">
-            <div
-              v-if="server.status === 'running'"
-              class="expand-btn"
-              @click="toggleServerToolsExpansion(server)">
-              <cs :name="server.toolsExpanded ? 'caret-down' : 'caret-right'" />
-            </div>
-            <Avatar :text="server.name" :size="32" />
-            <div class="server-info">
-              <div class="server-name">{{ server.name }}</div>
-              <div class="server-status">
-                <span :class="['status-dot', getServerStatusClass(server.status)]"></span>
-                {{ getServerStatusText(server.status) }}
+        <div v-for="server in mcpStore.servers" :key="server.id" class="item-wrapper">
+          <div class="item">
+            <div class="server-left">
+              <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
+                <cs
+                  :class="server.status"
+                  :name="server.uiState?.expanded ? 'caret-down' : 'caret-right'" />
+              </div>
+              <Avatar :text="server.name" :size="32" />
+              <div class="server-info">
+                <div class="server-name">{{ server.name }}</div>
+                <div class="server-status">
+                  <span :class="['status-dot', getServerStatusClass(server.status)]"></span>
+                  {{ getServerStatusText(server.status) }}
+                </div>
               </div>
             </div>
+
+            <div class="value">
+              <el-tooltip
+                :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
+                placement="top"
+                :hide-after="0"
+                transition="none">
+                <el-switch
+                  :disabled="server.loading"
+                  :model-value="!server.disabled"
+                  @update:model-value="toggleServerStatus(server)" />
+              </el-tooltip>
+
+              <el-tooltip
+                :content="$t('settings.mcp.restart')"
+                placement="top"
+                :hide-after="0"
+                transition="none"
+                :disabled="server.disabled">
+                <span
+                  class="icon"
+                  :class="{ disabled: server.disabled }"
+                  @click="restartMcpServer(server)">
+                  <cs name="restart" size="16px" color="secondary" />
+                </span>
+              </el-tooltip>
+
+              <el-tooltip
+                :content="$t('settings.mcp.editServer')"
+                placement="top"
+                :hide-after="0"
+                transition="none">
+                <span class="icon" @click="openEditDialog(server)">
+                  <cs name="edit" size="16px" color="secondary" />
+                </span>
+              </el-tooltip>
+              <el-tooltip
+                :content="$t('settings.mcp.deleteServer')"
+                placement="top"
+                :hide-after="0"
+                transition="none">
+                <span class="icon" @click="handleDeleteServerConfirmation(server)">
+                  <cs name="trash" size="16px" color="secondary" />
+                </span>
+              </el-tooltip>
+            </div>
           </div>
 
-          <div class="value">
-            <el-tooltip
-              :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
-              placement="top"
-              :hide-after="0"
-              transition="none">
-              <el-switch
-                :disabled="server.loading"
-                :model-value="!server.disabled"
-                @update:model-value="toggleServerStatus(server)" />
-            </el-tooltip>
-
-            <el-tooltip
-              :content="$t('settings.mcp.restart')"
-              placement="top"
-              :hide-after="0"
-              transition="none"
-              v-if="server.status === 'running'">
-              <span class="icon" @click="restartMcpServer(server)">
-                <cs name="restart" size="16px" color="secondary" />
-              </span>
-            </el-tooltip>
-
-            <el-tooltip
-              :content="$t('settings.mcp.editServer')"
-              placement="top"
-              :hide-after="0"
-              transition="none">
-              <span class="icon" @click="openEditDialog(server)">
-                <cs name="edit" size="16px" color="secondary" />
-              </span>
-            </el-tooltip>
-            <el-tooltip
-              :content="$t('settings.mcp.deleteServer')"
-              placement="top"
-              :hide-after="0"
-              transition="none">
-              <span class="icon" @click="handleDeleteServerConfirmation(server)">
-                <cs name="trash" size="16px" color="secondary" />
-              </span>
-            </el-tooltip>
-          </div>
-          <!-- 展开的工具列表 -->
-          <div
-            v-if="server.uiState?.toolsExpanded && server.status === 'running'"
-            class="tools-list">
+          <!-- expandable tools list -->
+          <div v-if="server.uiState?.expanded && server.status === 'running'" class="tools-list">
             <div v-if="server.uiState?.loadingTools" class="tool-loading">
               {{ $t('common.loading') }}...
             </div>
@@ -85,7 +88,16 @@
                 v-for="tool in mcpStore.serverTools[server.id]"
                 :key="tool.name"
                 class="tool-item">
-                <strong>{{ tool.name }}</strong> - {{ tool.description }}
+                <div class="tool-info">
+                  <div class="tool-name">{{ tool.name }}</div>
+                  <div class="tool-description">{{ tool.description }}</div>
+                </div>
+                <div class="tool-actions">
+                  <el-switch
+                    size="small"
+                    :model-value="!(server?.config?.disabled_tools || []).includes(tool.name)"
+                    @update:model-value="toggleDisableTool(server.id, tool)" />
+                </div>
               </li>
             </ul>
             <div v-else-if="!server.uiState?.loadingTools && mcpStore.serverTools[server.id]">
@@ -643,7 +655,7 @@ const toggleServerStatus = async server => {
 }
 
 const restartMcpServer = async server => {
-  if (server.loading) return
+  if (server.loading || server.disabled) return
   server.loading = true
   try {
     await mcpStore.restartMcpServer(server.id)
@@ -662,19 +674,22 @@ const restartMcpServer = async server => {
 }
 
 const toggleServerToolsExpansion = async server => {
+  if (server.status !== 'running') {
+    return
+  }
   // Initialize uiState if it doesn't exist
   if (!server.uiState) {
-    server.uiState = reactive({ toolsExpanded: false, loadingTools: false })
+    server.uiState = reactive({ expanded: false, loadingTools: false })
   }
-  server.uiState.toolsExpanded = !server.uiState.toolsExpanded
-  if (server.uiState.toolsExpanded && !mcpStore.serverTools[server.id]) {
+  server.uiState.expanded = !server.uiState.expanded
+  if (server.uiState.expanded && !mcpStore.serverTools[server.id]) {
     // Fetch only if not already fetched
     server.uiState.loadingTools = true
     try {
       await mcpStore.fetchMcpServerTools(server.id)
     } catch (e) {
       showMessage(t('settings.mcp.fetchToolsFailed', { error: e.message || String(e) }), 'error') // Pass 'error' as type
-      server.uiState.toolsExpanded = false // Collapse on error
+      server.uiState.expanded = false // Collapse on error
     } finally {
       server.uiState.loadingTools = false
     }
@@ -683,13 +698,18 @@ const toggleServerToolsExpansion = async server => {
 
 const getServerStatusClass = status => {
   // For status-dot class
+  if (typeof status === Object && status.hasOwnProperty('error')) return 'error'
   return status || 'stopped'
 }
 
 const getServerStatusText = status => {
   if (!status) return t('settings.mcp.statusUnknown')
+  const text =
+    typeof status === Object && status.hasOwnProperty('error')
+      ? 'Error'
+      : status.charAt(0).toUpperCase() + status.slice(1)
   // Attempt to find a specific status translation, fallback to status itself or unknown
-  const key = `settings.mcp.status${status.charAt(0).toUpperCase() + status.slice(1)}`
+  const key = `settings.mcp.status${text}`
   // Check if translation exists, otherwise return status or unknown
   // This requires a robust way to check i18n key existence or a default value in $t
   // For simplicity, we'll assume keys exist or $t handles fallbacks.
@@ -697,18 +717,11 @@ const getServerStatusText = status => {
   return t(key, status) // Pass status as interpolation if key is generic like settings.mcp.statusValue
 }
 
-const getServerStatusType = status => {
-  // For El-Tag type in Element Plus (if you use it)
-  // This function seems unused in the current template for el-tag type, but kept for potential use
-  switch (status) {
-    case 'running':
-      return 'success'
-    case 'stopped':
-      return 'info'
-    case 'error':
-      return 'danger'
-    default:
-      return 'warning'
+const toggleDisableTool = (serverId, tool) => {
+  try {
+    mcpStore.toggleDisableTool(serverId, tool)
+  } catch (e) {
+    showMessage(t('settings.mcp.operationFailed', { error: e.message || String(e) }), 'error')
   }
 }
 
@@ -844,112 +857,112 @@ const trimQuotes = str => {
 <style lang="scss" scoped>
 .card {
   .list {
-    .item {
-      .server-left {
-        display: flex;
-        align-items: center;
-        flex-grow: 1; // Allow left side to take available space
-
-        // Expand button for tools list
-        .expand-btn {
-          margin-right: 10px;
-          background: none;
-          border: none;
-          cursor: pointer;
-          padding: 0; // Remove default button padding
-
-          i.icon-arrow {
-            // Make sure you have this icon class
-            transition: transform 0.2s ease;
-            font-size: 12px; // Example size
-            &.expanded {
-              transform: rotate(90deg);
-            }
-          }
-        }
-
-        .server-info {
-          // This is part of the label
-          margin-left: 10px;
-
-          .server-name {
-            font-weight: bold;
-          }
-
-          .server-status {
-            font-size: 12px;
-            color: #666; // Use your theme's secondary text color
-
-            .status-dot {
-              display: inline-block;
-              width: 8px;
-              height: 8px;
-              border-radius: 50%;
-              margin-right: 5px;
-
-              &.running {
-                background: green;
-              }
-              &.stopped {
-                background: gray;
-              }
-              &.error {
-                background: red;
-              }
-              &.unknown {
-                background: orange;
-              }
-            }
-          }
-        }
+    .item-wrapper {
+      border-bottom: 1px solid var(--cs-border-color);
+      &:last-child {
+        border: none;
       }
 
-      .value {
-        // Actions part
-        display: flex;
-        align-items: center; // Align buttons vertically
-        margin-left: 10px; // Space from left content
+      .item {
+        border-bottom: none;
+        .server-left {
+          display: flex;
+          align-items: center;
+          flex-grow: 1;
 
-        button {
-          // Start/Stop button
-          margin-left: 8px; // Space between action buttons
-          padding: 5px 10px;
-          border: 1px solid #ddd; // Example border
-          border-radius: 4px;
-          cursor: pointer;
-          background-color: #f9f9f9; // Light background
+          .expand-btn {
+            margin-right: 10px;
+            background: none;
+            border: none;
+            padding: 0;
 
-          &:hover {
-            background-color: #f0f0f0;
+            .cs {
+              color: var(--cs-text-color-tertiary);
+              cursor: default;
+
+              &.running {
+                cursor: pointer;
+                color: var(--cs-text-color-primary);
+              }
+            }
           }
 
-          &:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+          .server-info {
+            margin-left: 10px;
+
+            .server-name {
+              font-weight: bold;
+            }
+
+            .server-status {
+              font-size: 12px;
+              color: #666;
+
+              .status-dot {
+                display: inline-block;
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                margin-right: 5px;
+
+                &.running {
+                  background: green;
+                }
+                &.stopped {
+                  background: gray;
+                }
+                &.error {
+                  background: red;
+                }
+                &.unknown {
+                  background: orange;
+                }
+              }
+            }
           }
         }
 
-        .icon {
-          // Edit/Delete icons
-          margin-left: 8px; // Space between icons and button
+        .value {
+          display: flex;
+          align-items: center;
+          margin-left: 10px;
+
+          .icon.disabled {
+            cursor: not-allowed;
+            background-color: rgba(0, 0, 0, 0);
+          }
         }
       }
 
       .tools-list {
-        width: 100%; // Take full width when expanded
-        margin-top: 10px;
-        padding-left: 40px; // Indent under the server info (adjust as needed)
-        border-top: 1px dashed #eee; // Separator
-        padding-top: 10px;
+        list-style: none;
+
+        ul {
+          margin: var(--cs-space-sm) var(--cs-space);
+          padding: 0;
+        }
 
         .tool-item {
-          padding: 5px 0;
-          font-size: 13px;
-          color: #555; // Use your theme's text color
-        }
-        .tool-loading {
-          font-style: italic;
-          color: #888;
+          display: flex;
+          flex-direction: row;
+          justify-content: space-between;
+          margin-top: var(--cs-space-sm);
+          padding-top: var(--cs-space-sm);
+          border-top: 1px dotted var(--cs-border-color);
+
+          .tool-info {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.5;
+
+            .tool-name {
+              font-weight: bold;
+              font-size: var(--cs-font-size-md);
+            }
+            .tool-description {
+              font-size: var(--cs-font-size-sm);
+            }
+          }
         }
       }
     }

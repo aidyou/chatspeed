@@ -121,6 +121,8 @@ const switchSetting = id => {
           height: 50px;
           line-height: unset;
           margin-right: 1px;
+          padding-left: var(--cs-space);
+          padding-right: var(--cs-space);
           transition: none;
           border-radius: var(--cs-border-radius);
 

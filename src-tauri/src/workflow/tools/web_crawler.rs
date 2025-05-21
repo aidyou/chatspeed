@@ -6,7 +6,7 @@ use crate::{
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
     },
 };
 
@@ -26,7 +26,7 @@ impl Crawler {
 }
 
 #[async_trait]
-impl FunctionDefinition for Crawler {
+impl ToolDefinition for Crawler {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "web_crawler"
@@ -44,7 +44,7 @@ impl FunctionDefinition for Crawler {
     ///
     /// # Returns
     /// * `Value` - The function specification in JSON format.
-    fn function_calling_spec(&self) -> Value {
+    fn tool_calling_spec(&self) -> Value {
         json!({
            "name": self.name(),
            "description": self.description(),
@@ -83,7 +83,7 @@ impl FunctionDefinition for Crawler {
     ///
     /// # Returns
     /// * `FunctionResult` - The result of the function execution.
-    async fn execute(&self, params: Value) -> FunctionResult {
+    async fn call(&self, params: Value) -> ToolResult {
         // Get the URL from the parameters
         let url = params["url"].as_str().ok_or_else(|| {
             WorkflowError::FunctionParamError(t!("workflow.url_must_be_string").to_string())
@@ -137,7 +137,7 @@ mod tests {
             "https://hznews.hangzhou.com.cn/shehui/content/2025-03/04/content_8872051.htm",
         ];
         for url in urls {
-            let result = search.execute(json!({"url": url})).await;
+            let result = search.call(json!({"url": url})).await;
             println!("{:?}", result);
             assert!(result.is_ok());
         }
@@ -149,7 +149,7 @@ mod tests {
         let params = json!({
             "url": "google.com",
         });
-        let result = search.execute(params).await;
+        let result = search.call(params).await;
         assert!(!result.is_ok());
     }
 }

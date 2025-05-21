@@ -154,10 +154,17 @@ onMounted(async () => {
   }
 
   listener.value = await listen('sync_state', event => {
+    // Global event handler
+    if (event?.payload?.event === 'mcp_status_changed') {
+      mcpStore.updateServerStatus(event.payload.name, event.payload.status)
+    }
+
+    // Ignore events from current windows
     if (event.payload.label === getCurrentWebviewWindow().label) {
       return
     }
-    if (event.payload.label === 'mcp') {
+    console.log('sync_state', event)
+    if (event.payload.type === 'mcp') {
       mcpStore.fetchMcpServers()
     } else if (event.payload.type === 'model') {
       modelStore.updateModelStore()
@@ -168,40 +175,7 @@ onMounted(async () => {
     }
   })
 
-  window.addEventListener('keydown', handleShortcut)
-
-  // 监听权限请求
-  await listen('accessibility-permission-required', () => {
-    ElMessageBox.confirm(
-      'This app needs accessibility permission to monitor text selection. Would you like to open System Settings?',
-      'Permission Required',
-      {
-        confirmButtonText: 'Open Settings',
-        cancelButtonText: 'Cancel',
-        type: 'warning'
-      }
-    )
-      .then(() => {
-        // 调用后端打开系统设置
-        invoke('open_accessibility_settings').catch(err => {
-          ElMessage.error(`Failed to open settings: ${err}`)
-        })
-      })
-      .catch(() => {
-        ElMessage.info('You can grant permission later in System Settings')
-      })
-  })
-
-  // 监听权限错误
-  await listen('accessibility-error', event => {
-    ElMessage.error({
-      message: `Accessibility error: ${event.payload}`,
-      duration: 0,
-      showClose: true
-    })
-  })
-
-  // 监听设置错误
+  // listen for setup error
   await listen('setup-error', event => {
     ElMessage.error({
       message: `Setup error: ${event.payload}`,
@@ -210,14 +184,46 @@ onMounted(async () => {
     })
   })
 
+  window.addEventListener('keydown', handleShortcut)
+
+  // 监听权限请求
+  // await listen('accessibility-permission-required', () => {
+  //   ElMessageBox.confirm(
+  //     'This app needs accessibility permission to monitor text selection. Would you like to open System Settings?',
+  //     'Permission Required',
+  //     {
+  //       confirmButtonText: 'Open Settings',
+  //       cancelButtonText: 'Cancel',
+  //       type: 'warning'
+  //     }
+  //   )
+  //     .then(() => {
+  //       // 调用后端打开系统设置
+  //       invoke('open_accessibility_settings').catch(err => {
+  //         ElMessage.error(`Failed to open settings: ${err}`)
+  //       })
+  //     })
+  //     .catch(() => {
+  //       ElMessage.info('You can grant permission later in System Settings')
+  //     })
+  // })
+
+  // 监听权限错误
+  // await listen('accessibility-error', event => {
+  //   ElMessage.error({
+  //     message: `Accessibility error: ${event.payload}`,
+  //     duration: 0,
+  //     showClose: true
+  //   })
+  // })
   // 监听监控错误
-  await listen('text-monitor-error', event => {
-    ElMessage.error({
-      message: `Monitor error: ${event.payload}`,
-      duration: 0,
-      showClose: true
-    })
-  })
+  // await listen('text-monitor-error', event => {
+  //   ElMessage.error({
+  //     message: `Monitor error: ${event.payload}`,
+  //     duration: 0,
+  //     showClose: true
+  //   })
+  // })
 })
 
 onUnmounted(() => {

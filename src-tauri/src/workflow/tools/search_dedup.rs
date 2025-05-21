@@ -7,7 +7,7 @@ use crate::{
     libs::dedup::dedup_and_rank_results,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
     },
 };
 
@@ -20,7 +20,7 @@ impl SearchDedup {
 }
 
 #[async_trait]
-impl FunctionDefinition for SearchDedup {
+impl ToolDefinition for SearchDedup {
     fn name(&self) -> &str {
         "search_dedup"
     }
@@ -29,7 +29,7 @@ impl FunctionDefinition for SearchDedup {
         "Deduplicate and rank search results based on URL and semantic similarity"
     }
 
-    fn function_calling_spec(&self) -> serde_json::Value {
+    fn tool_calling_spec(&self) -> serde_json::Value {
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -69,7 +69,7 @@ impl FunctionDefinition for SearchDedup {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the deduplicated and ranked search results.
-    async fn execute(&self, params: Value) -> FunctionResult {
+    async fn call(&self, params: Value) -> ToolResult {
         let results: Vec<SearchResult> = serde_json::from_value(params["results"].clone())?;
         let query = params["query"]
             .as_str()
@@ -122,7 +122,7 @@ mod tests {
             "query": "Rust programming language"
         });
 
-        let result = tool.execute(params).await;
+        let result = tool.call(params).await;
         log::debug!("Deduplicated results: {:#?}", result);
 
         assert!(result.is_ok());
@@ -134,7 +134,7 @@ mod tests {
             "query": ""
         });
 
-        let result = tool.execute(params).await;
+        let result = tool.call(params).await;
         assert!(result.is_err());
 
         // 测试空结果
@@ -143,7 +143,7 @@ mod tests {
             "query": "Rust"
         });
 
-        let result = tool.execute(params).await;
+        let result = tool.call(params).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_array().unwrap().len(), 0);
 
@@ -153,7 +153,7 @@ mod tests {
             "query": "Rust"
         });
 
-        let result = tool.execute(params).await;
+        let result = tool.call(params).await;
         assert!(result.is_err());
     }
 }

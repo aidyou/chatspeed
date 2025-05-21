@@ -104,7 +104,7 @@ pub async fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new()))))
+        // .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new())))) // move chat state register to setup scope
         // Initialize the shell plugin
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
@@ -149,6 +149,7 @@ pub async fn run() -> Result<()> {
             disable_mcp_server,
             restart_mcp_server,
             get_mcp_server_tools,
+            update_mcp_tool_status,
             // message
             get_conversation_by_id,
             get_all_conversations,
@@ -392,6 +393,25 @@ pub async fn run() -> Result<()> {
                 // app.manage(monitor);
                 // start_text_monitor(app.handle().clone(), None)?;
             }
+
+            // Setup ChatState and manage it
+            let app_handle_for_chat_state = app.handle().clone();
+            let chat_state = Arc::new(ChatState::new_with_apphandle(
+                Arc::new(WindowChannels::new()),
+                Some(app_handle_for_chat_state),
+            ));
+            let tm = chat_state.tool_manager.clone();
+            let chat_state_clone = chat_state.clone();
+            let main_store_clone = main_store.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = tm
+                    .register_available_tools(chat_state_clone, main_store_clone)
+                    .await
+                    .map_err(|e| {
+                        log::error!("Failed to register available tools: {}", e);
+                    });
+            });
+            app.manage(chat_state.clone());
 
             // Read and set the main window size from the configuration
             if let Some(main_window) = app.get_webview_window("main") {

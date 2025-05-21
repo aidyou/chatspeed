@@ -34,18 +34,15 @@ use rmcp::{service::RunningService, transport::TokioChildProcess, RoleClient, Se
 use rust_i18n::t;
 use tokio::{process::Command, sync::RwLock};
 
+use super::core::McpClientCore;
 use super::{
-    types::McpStatus, McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
+    types::{McpClientInternal, McpStatus, StatusChangeCallback},
+    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
 };
 
 /// A client implementation for MCP (Model Context Protocol) using Stdio transport
 pub struct StdioClient {
-    /// Configuration for the MCP server
-    config: McpServerConfig,
-    /// Running service instance
-    client: Arc<RwLock<Option<RunningService<RoleClient, ()>>>>,
-
-    status: RwLock<McpStatus>,
+    core: McpClientCore,
 }
 
 impl StdioClient {
@@ -81,10 +78,20 @@ impl StdioClient {
             ));
         }
         Ok(StdioClient {
-            config,
-            client: Arc::new(RwLock::new(None)),
-            status: RwLock::new(McpStatus::Stopped),
+            // Pass the validated config to McpClientCore
+            core: McpClientCore::new(config),
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl McpClientInternal for StdioClient {
+    async fn set_status(&self, status: McpStatus) {
+        self.core.set_status(status).await;
+    }
+
+    async fn notify_status_change(&self, name: String, status: McpStatus) {
+        self.core.notify_status_change(name, status).await;
     }
 }
 
@@ -99,16 +106,22 @@ impl McpClient for StdioClient {
     /// on success, or an error.
     async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
         let cmd_str = self
-            .config
+            .core // Access core
+            .get_config()
+            .await // Await the config
             .command
             .as_ref()
-            .ok_or(McpClientError::ConfigError(
-                t!("mcp.client.stdio_command_cant_be_empty").to_string(),
-            ))?;
+            .cloned() // Clone the Option<String>
+            .ok_or_else(|| {
+                McpClientError::ConfigError(
+                    // Use ok_or_else for lazy evaluation
+                    t!("mcp.client.stdio_command_cant_be_empty").to_string(),
+                )
+            })?;
         let mut cmd = Command::new(cmd_str.clone());
 
-        let args = self
-            .config
+        let cfg = self.core.get_config().await;
+        let args = cfg
             .args
             .as_ref()
             .ok_or_else(|| {
@@ -121,7 +134,7 @@ impl McpClient for StdioClient {
             });
         cmd.args(args);
 
-        if let Some(env) = &self.config.env {
+        if let Some(env) = self.core.get_config().await.env {
             cmd.envs(env.iter().filter_map(|(k, v)| {
                 let k = k.trim();
                 let v = v.trim();
@@ -158,24 +171,34 @@ impl McpClient for StdioClient {
     }
 
     fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>> {
-        self.client.clone()
+        self.core.get_client_instance_arc()
     }
 
-    fn name(&self) -> String {
-        self.config.name.clone()
+    async fn name(&self) -> String {
+        self.core.get_name().await
     }
 
-    fn config(&self) -> McpServerConfig {
-        self.config.clone()
+    async fn config(&self) -> McpServerConfig {
+        self.core.get_config().await
+    }
+
+    async fn update_disabled_tools(
+        &self,
+        tool_name: &str,
+        is_disabled: bool,
+    ) -> McpClientResult<()> {
+        self.core
+            .update_disabled_tools(tool_name, is_disabled)
+            .await;
+        Ok(())
     }
 
     async fn status(&self) -> McpStatus {
-        self.status.read().await.clone()
+        self.core.get_status().await
     }
 
-    async fn set_status(&self, status: McpStatus) {
-        let mut s = self.status.write().await;
-        *s = status;
+    async fn on_status_change(&self, callback: StatusChangeCallback) {
+        self.core.set_on_status_change_callback(callback).await;
     }
 }
 

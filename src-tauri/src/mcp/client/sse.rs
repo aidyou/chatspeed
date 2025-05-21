@@ -50,23 +50,18 @@ use rmcp::{
 use rust_i18n::t;
 use tokio::sync::RwLock;
 
+use super::core::McpClientCore;
 use super::{
-    types::McpStatus, McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
+    types::{McpClientInternal, McpStatus, StatusChangeCallback},
+    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
 };
 
-/// SSE client for MCP protocol communication
-///
 /// Handles connection lifecycle and provides methods for:
 /// - Establishing SSE connections
 /// - Managing automatic reconnections
 /// - Executing remote tool calls
 pub struct SseClient {
-    /// Configuration for the MCP server
-    config: McpServerConfig,
-    /// Running service instance wrapped in thread-safe reference counting
-    client: Arc<RwLock<Option<RunningService<RoleClient, ()>>>>,
-
-    status: RwLock<McpStatus>,
+    core: McpClientCore,
 }
 
 impl SseClient {
@@ -101,9 +96,7 @@ impl SseClient {
         }
 
         Ok(SseClient {
-            config,
-            client: Arc::new(RwLock::new(None)),
-            status: RwLock::new(McpStatus::Stopped),
+            core: McpClientCore::new(config),
         })
     }
 
@@ -119,11 +112,11 @@ impl SseClient {
     /// Returns `McpClientError::ConfigError` if:
     /// - Bearer token format is invalid
     /// - Proxy configuration is invalid
-    pub fn build_http_client(&self) -> McpClientResult<reqwest::Client> {
+    async fn build_http_client_async(&self) -> McpClientResult<reqwest::Client> {
+        // Renamed and made async
         let mut client_builder = Client::builder().timeout(Duration::from_secs(30));
-
-        // Add headers
-        if let Some(token) = self.config.bearer_token.as_ref() {
+        let current_config = self.core.get_config().await;
+        if let Some(token) = current_config.bearer_token.as_ref() {
             if !token.trim().is_empty() {
                 let mut headers = header::HeaderMap::new();
                 headers.insert(
@@ -137,7 +130,7 @@ impl SseClient {
         }
 
         // Set proxy
-        if let Some(proxy) = self.config.proxy.as_ref() {
+        if let Some(proxy) = current_config.proxy.as_ref() {
             if !proxy.trim().is_empty() {
                 let proxy = reqwest::Proxy::all(proxy)
                     .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
@@ -149,6 +142,17 @@ impl SseClient {
             .build()
             .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
         Ok(http_client)
+    }
+}
+
+#[async_trait::async_trait]
+impl McpClientInternal for SseClient {
+    async fn set_status(&self, status: McpStatus) {
+        self.core.set_status(status).await;
+    }
+
+    async fn notify_status_change(&self, name: String, status: McpStatus) {
+        self.core.notify_status_change(name, status).await;
     }
 }
 
@@ -166,7 +170,8 @@ impl McpClient for SseClient {
     /// - Connection establishment fails
     /// - Transport initialization fails
     async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
-        let url_str = self.config.url.as_deref().filter(|s| !s.is_empty());
+        let config = self.core.get_config().await; // Use the async getter
+        let url_str = config.url.as_deref().filter(|s| !s.is_empty());
 
         let url = match url_str {
             Some(u) => u,
@@ -176,7 +181,7 @@ impl McpClient for SseClient {
             }
         };
 
-        let http_client = self.build_http_client()?;
+        let http_client = self.build_http_client_async().await?; // Call the async version
 
         let transport_result = SseTransport::start_with_client(url, http_client).await;
         let mut transport = match transport_result {
@@ -224,25 +229,35 @@ impl McpClient for SseClient {
     /// # Returns
     /// Thread-safe reference to the running service
     fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>> {
-        self.client.clone()
+        self.core.get_client_instance_arc()
     }
 
     /// Returns the client type identifier
-    fn name(&self) -> String {
-        self.config.name.clone()
+    async fn name(&self) -> String {
+        self.core.get_name().await
     }
 
-    fn config(&self) -> McpServerConfig {
-        self.config.clone()
+    async fn config(&self) -> McpServerConfig {
+        self.core.get_config().await
+    }
+
+    async fn update_disabled_tools(
+        &self,
+        tool_name: &str,
+        is_disabled: bool,
+    ) -> McpClientResult<()> {
+        self.core
+            .update_disabled_tools(tool_name, is_disabled)
+            .await;
+        Ok(())
     }
 
     async fn status(&self) -> McpStatus {
-        self.status.read().await.clone()
+        self.core.get_status().await
     }
 
-    async fn set_status(&self, status: McpStatus) {
-        let mut s = self.status.write().await;
-        *s = status;
+    async fn on_status_change(&self, callback: StatusChangeCallback) {
+        self.core.set_on_status_change_callback(callback).await;
     }
 }
 

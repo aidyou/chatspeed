@@ -11,7 +11,6 @@ use crate::{
     libs::util::format_json_str,
     workflow::{
         error::WorkflowError,
-        function_manager::FunctionManager,
         react::{
             context::ReactContext,
             planning::PlanManager,
@@ -20,6 +19,7 @@ use crate::{
             },
             types::{FunctionCall, Plan, PlanStatus, StepError, StepResult, StepStatus},
         },
+        tool_manager::ToolManager,
         tools::ModelName,
     },
 };
@@ -52,10 +52,10 @@ impl ReactExecutor {
         max_retries: u32,
     ) -> Result<Self, WorkflowError> {
         // Initialize function manager
-        let function_manager = Arc::new(FunctionManager::new());
+        let function_manager = Arc::new(ToolManager::new());
         function_manager
             .clone()
-            .register_workflow_tools(chat_state.clone(), main_store.clone())
+            .register_available_tools(chat_state.clone(), main_store.clone())
             .await?;
 
         // Create context
@@ -72,7 +72,7 @@ impl ReactExecutor {
                 .collect();
         let tool_spec = context
             .function_manager
-            .get_function_calling_spec(Some(exclude))
+            .get_tool_calling_spec(Some(exclude))
             .await?;
 
         Ok(Self {
@@ -773,7 +773,7 @@ impl ReactExecutor {
             let function_result = match self
                 .context
                 .function_manager
-                .execute_function(function_call.name.as_str(), arguments.clone())
+                .tool_call(function_call.name.as_str(), arguments.clone())
                 .await
             {
                 Ok(result) => {
@@ -980,10 +980,10 @@ impl ReactExecutor {
                                     let dedup_tool = self
                                         .context
                                         .function_manager
-                                        .get_function("search_dedup")
+                                        .get_tool("search_dedup")
                                         .await?;
                                     let result = dedup_tool
-                                        .execute(json!({"results": result["result"].clone(), "query": kw}))
+                                        .call(json!({"results": result["result"].clone(), "query": kw}))
                                         .await?;
 
                                     // Add function result message
@@ -1216,7 +1216,7 @@ impl ReactExecutor {
         let function = self
             .context
             .function_manager
-            .get_function("chat_completion")
+            .get_tool("chat_completion")
             .await?;
 
         let temperature = {
@@ -1233,7 +1233,7 @@ impl ReactExecutor {
         params.insert("top_p".to_string(), json!(0.9));
 
         // Execute function
-        function.execute(Value::Object(params)).await
+        function.call(Value::Object(params)).await
     }
 
     /// Generate a plan based on user request, retry up to 3 times
@@ -1597,11 +1597,11 @@ mod tests {
         let ws = exe
             .context
             .function_manager
-            .get_function("web_search")
+            .get_tool("web_search")
             .await
             .unwrap();
         let result = ws
-            .execute(json!({"provider":"google","kw": ["五粮液股票"]}))
+            .call(json!({"provider":"google","kw": ["五粮液股票"]}))
             .await;
         println!("Result: {:#?}", result);
         assert!(result.is_ok());
@@ -1623,11 +1623,11 @@ mod tests {
         let ws = exe
             .context
             .function_manager
-            .get_function("web_crawler")
+            .get_tool("web_crawler")
             .await
             .unwrap();
         let result = ws
-            .execute(json!({"url":"https://guba.eastmoney.com/list,000858,1370734419.html"}))
+            .call(json!({"url":"https://guba.eastmoney.com/list,000858,1370734419.html"}))
             .await;
         println!("Result: {:#?}", result);
         assert!(result.is_ok());

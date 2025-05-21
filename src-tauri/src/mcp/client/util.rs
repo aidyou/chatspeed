@@ -21,6 +21,7 @@ pub fn get_tools(list_tools_result: &ListToolsResult) -> Vec<MCPToolDeclaration>
             input_schema: Value::Object(
                 Arc::try_unwrap(tool.input_schema.clone()).unwrap_or_else(|arc| (*arc).clone()),
             ),
+            disabled: false,
         });
     }
     tools

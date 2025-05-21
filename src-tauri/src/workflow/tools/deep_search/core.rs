@@ -25,7 +25,7 @@ use crate::{
     http::chp::{Chp, SearchProvider, SearchResult},
     libs::{dedup::dedup_and_rank_results, util::format_json_str},
     workflow::{
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
         tools::ModelName,
     },
 };
@@ -1147,7 +1147,7 @@ impl DeepSearch {
 }
 
 #[async_trait]
-impl FunctionDefinition for DeepSearch {
+impl ToolDefinition for DeepSearch {
     fn name(&self) -> &str {
         "deep_search"
     }
@@ -1156,7 +1156,7 @@ impl FunctionDefinition for DeepSearch {
         "Execute a deep search for a given topic: \n1. Generate search queries \n2. Search 3. \nRank results \n4. Crawl results \n5. Summarize results"
     }
 
-    fn function_calling_spec(&self) -> serde_json::Value {
+    fn tool_calling_spec(&self) -> serde_json::Value {
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -1223,7 +1223,7 @@ impl FunctionDefinition for DeepSearch {
         })
     }
 
-    async fn execute(&self, _param: serde_json::Value) -> FunctionResult {
+    async fn call(&self, _param: serde_json::Value) -> ToolResult {
         todo!()
     }
 }
@@ -1235,7 +1235,7 @@ mod test {
     use crate::{
         ai::traits::chat::ChatResponse,
         http::chp::SearchProvider,
-        workflow::{function_manager, tools::ModelName},
+        workflow::{tool_manager, tools::ModelName},
     };
 
     async fn setup_search_tool() -> crate::workflow::tools::DeepSearch {
@@ -1263,17 +1263,13 @@ mod test {
         );
         ds.add_model(
             crate::workflow::tools::ModelName::Reasoning,
-            function_manager::FunctionManager::get_model(&main_store, ModelName::General.as_ref())
-                .unwrap(),
+            tool_manager::ToolManager::get_model(&main_store, ModelName::General.as_ref()).unwrap(),
         )
         .await;
         ds.add_model(
             crate::workflow::tools::ModelName::Reasoning,
-            function_manager::FunctionManager::get_model(
-                &main_store,
-                ModelName::Reasoning.as_ref(),
-            )
-            .unwrap(),
+            tool_manager::ToolManager::get_model(&main_store, ModelName::Reasoning.as_ref())
+                .unwrap(),
         )
         .await;
 

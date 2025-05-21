@@ -3,13 +3,14 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
-use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::{broadcast, Mutex};
 
 use crate::ai::error::AiError;
 use crate::ai::interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL};
 use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType, Usage};
 use crate::http::chp::SearchResult;
-use crate::workflow::FunctionManager;
+use crate::workflow::ToolManager;
 use crate::{
     ai::{
         chat::{anthropic::AnthropicChat, gemini::GeminiChat, openai::OpenAIChat},
@@ -137,9 +138,10 @@ pub struct ChatState {
     // 新增深度搜索状态跟踪
     // New depth search state tracking
     pub active_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    // channels for sending and receiving events
     pub channels: Arc<WindowChannels>,
-    // function manager
-    pub function_manager: Arc<FunctionManager>,
+    // tool manager
+    pub tool_manager: Arc<ToolManager>,
 }
 
 impl ChatState {
@@ -148,6 +150,23 @@ impl ChatState {
     /// # Returns
     /// A new instance of `ChatState` containing initialized chat interfaces.
     pub fn new(channels: Arc<WindowChannels>) -> Self {
+        Self::new_with_apphandle(channels, None)
+    }
+
+    /// Creates a new instance of ChatState, initializing the available chat interfaces.
+    /// Optionally takes an AppHandle for emitting events.
+    ///
+    /// # Arguments
+    /// - `channels`: Arc to WindowChannels.
+    /// - `app_handle_option`: Optional AppHandle for emitting events.
+    /// - `main_store`: Arc to MainStore.
+    ///
+    /// # Returns
+    /// A new instance of `ChatState` containing initialized chat interfaces.
+    pub fn new_with_apphandle(
+        channels: Arc<WindowChannels>,
+        app_handle_option: Option<AppHandle>,
+    ) -> Self {
         let chats = init_chats! {
             ChatProtocol::OpenAI,
             ChatProtocol::Ollama,
@@ -156,14 +175,48 @@ impl ChatState {
             ChatProtocol::Gemini
         };
 
-        let function_manager = FunctionManager::new();
-        // TODO register functions here
+        let tool_manager = Arc::new(ToolManager::new());
+
+        if let Some(app_handle) = app_handle_option {
+            let mut mcp_status_receiver = tool_manager.subscribe_mcp_status_events();
+            let app_handle_clone_for_spawn = app_handle.clone();
+            tokio::spawn(async move {
+                loop {
+                    match mcp_status_receiver.recv().await {
+                        Ok((server_name, status)) => {
+                            log::info!(
+                                "MCP Server '{}' status changed to: {:?}",
+                                server_name,
+                                status
+                            );
+                            if let Err(e) = app_handle_clone_for_spawn.emit(
+                                "sync_state",
+                                json!({
+                                    "event": "mcp_status_changed",
+                                    "name": server_name,
+                                    "status": status,
+                                }),
+                            ) {
+                                log::error!("Failed to emit mcp_server_status_update event: {}", e);
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("MCP status event listener lagged by {} messages.", n);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            log::info!("MCP status event channel closed.");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         Self {
             chats: Arc::new(Mutex::new(chats)),
             active_searches: Arc::new(Mutex::new(HashMap::new())),
             channels,
-            function_manager: Arc::new(function_manager),
+            tool_manager,
         }
     }
 }

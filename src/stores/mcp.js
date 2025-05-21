@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+
+import { sendSyncState } from '@/libs/sync.js'
 
 /**
  * @typedef {Object} McpServerConfigEnv
@@ -38,6 +41,8 @@ import { invoke } from '@tauri-apps/api/core';
  * @property {Object} input_schema - JSON schema for the tool's input
  */
 
+const label = getCurrentWebviewWindow().label
+
 export const useMcpStore = defineStore('mcp', () => {
   /** @type {import('vue').Ref<McpServer[]>} */
   const servers = ref([]);
@@ -61,9 +66,21 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const fetchedServers = await invoke('list_mcp_servers');
-      servers.value = fetchedServers.map(s => ({ ...s, enabled: !s.disabled, expanded: false, loading: false }));
-
-      console.log(servers.value)
+      servers.value = fetchedServers.map(server => {
+        // Ensure server.config exists and disabled_tools is an array
+        const config = server.config || {}; // Defensive, though McpServer type implies config exists
+        const disabled_tools = Array.isArray(config.disabled_tools)
+          ? config.disabled_tools
+          : []; // Default to empty array if null or not an array
+        return {
+          ...server,
+          config: {
+            ...config, // Spread original config properties
+            disabled_tools: disabled_tools,
+          },
+        };
+      });
+      console.debug(servers.value)
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -85,7 +102,9 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const newServer = await invoke('add_mcp_server', payload);
-      await fetchMcpServers(); // Refresh the list
+      servers.value.push(newServer);
+
+      sendSyncState('mcp', label)
       return newServer;
     } catch (err) {
       await _handleError(err);
@@ -109,7 +128,19 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const updatedServer = await invoke('update_mcp_server', payload);
-      await fetchMcpServers(); // Refresh the list
+      const index = servers.value.findIndex(s => s.id === payload.id);
+      if (index !== -1) {
+        servers.value[index] = updatedServer;
+      } else {
+        await fetchMcpServers();
+      }
+
+      sendSyncState('mcp', label)
+
+      // remove tools from serverTools when tool is disabled
+      if (payload.disabled) {
+        delete serverTools.value[payload.id];
+      }
       return updatedServer;
     } catch (err) {
       await _handleError(err);
@@ -145,7 +176,11 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('delete_mcp_server', { id });
-      await fetchMcpServers(); // Refresh the list
+      // remove tools from serverTools
+      delete serverTools.value[id];
+
+      sendSyncState('mcp', label)
+
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -162,7 +197,13 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('enable_mcp_server', { id });
-      await fetchMcpServers();
+
+      const index = servers.value.findIndex(s => s.id === id);
+      if (index !== -1) {
+        servers.value[index].disabled = false;
+      }
+
+      sendSyncState('mcp', label)
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -179,7 +220,13 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('disable_mcp_server', { id });
-      await fetchMcpServers();
+
+      const index = servers.value.findIndex(s => s.id === id);
+      if (index !== -1) {
+        servers.value[index].disabled = true;
+      }
+
+      sendSyncState('mcp', label)
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -192,7 +239,8 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('restart_mcp_server', { id });
-      await fetchMcpServers();
+
+      sendSyncState('mcp', label)
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -213,12 +261,72 @@ export const useMcpStore = defineStore('mcp', () => {
         ...serverTools.value,
         [serverId]: tools,
       };
+      console.log(serverTools.value)
     } catch (err) {
       await _handleError(err);
     } finally {
       loading.value = false;
     }
   };
+
+  /**
+   * Toggles the disabled status of a specific tool for a server by updating the server's configuration.
+   * This function modifies the server's `config.disabled_tools` array and calls the backend
+   * to persist the change. It does NOT directly modify the `serverTools` cache, which
+   * is assumed to store the full list of declared tools.
+   * @param {number} serverId - The ID of the MCP server.
+   * @param {MCPToolDeclaration} tool - The tool object whose disabled status is being toggled.
+   * @returns {Promise<void>} A promise that resolves when the server configuration is updated.
+   */
+  const toggleDisableTool = async (serverId, tool) => {
+    // Find the server in the servers list
+    const serverIndex = servers.value.findIndex(s => s.id === serverId);
+    if (serverIndex === -1) {
+      console.error(`Server with ID ${serverId} not found.`);
+      throw new Error(`Server with ID ${serverId} not found.`);
+    }
+
+    // serverToUpdate is a shallow copy. serverToUpdate.config refers to the same object in the store.
+    const serverToUpdate = { ...servers.value[serverIndex] };
+    // With the change in fetchMcpServers, serverToUpdate.config.disabled_tools is guaranteed to be an array.
+
+    try {
+      const toolName = tool.name;
+      const isDisabled = serverToUpdate.config.disabled_tools.includes(toolName);
+
+      if (isDisabled) {
+        // Tool is currently disabled, so enable it (remove from disabled_tools)
+        serverToUpdate.config.disabled_tools = serverToUpdate.config.disabled_tools.filter(name => name !== toolName);
+        console.debug(`Enabling tool "${toolName}" for server ID ${serverId}`);
+      } else {
+        // Tool is currently enabled, so disable it (add to disabled_tools)
+        serverToUpdate.config.disabled_tools.push(toolName);
+        console.debug(`Disabling tool "${toolName}" for server ID ${serverId}`);
+      }
+
+      // Call the backend to update the server configuration
+      // updateMcpServer will handle the invoke call and refresh the servers list.
+      const server = await invoke('update_mcp_tool_status', { id: serverId, toolName: toolName, disabled: !isDisabled });
+      if (server) {
+        // Update the servers list with the modified server object
+        // Ensure the backend response's disabled_tools is also an array.
+        const backendConfig = server.config || {};
+        const backendDisabledTools = Array.isArray(backendConfig.disabled_tools)
+          ? backendConfig.disabled_tools
+          : [];
+        servers.value[serverIndex] = {
+          ...server,
+          config: { ...backendConfig, disabled_tools: backendDisabledTools },
+        };
+      }
+
+      sendSyncState('mcp', label)
+      return server;
+    } catch (err) {
+      console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend:`, err);
+      throw err; // Re-throw the error
+    }
+  }
 
   fetchMcpServers();
 
@@ -236,5 +344,6 @@ export const useMcpStore = defineStore('mcp', () => {
     disableMcpServer,
     restartMcpServer,
     fetchMcpServerTools,
+    toggleDisableTool
   };
 });

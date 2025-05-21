@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ pub struct McpServerConfig {
 
     /// Disabled tools
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub disabled_tools: Option<Vec<String>>,
+    pub disabled_tools: Option<HashSet<String>>,
 
     /// Timeout in seconds for operations like list_tools
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,10 +143,10 @@ pub enum McpClientError {
 pub type McpClientResult<T> = Result<T, McpClientError>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum McpStatus {
-    #[serde(rename = "running")]
+    Starting,
     Running,
-    #[serde(rename = "stopped")]
     Stopped,
     #[serde(rename = "error")]
     Error(String),
@@ -155,6 +155,7 @@ pub enum McpStatus {
 impl Display for McpStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            &McpStatus::Starting => write!(f, "Starting"),
             McpStatus::Running => write!(f, "Running"),
             McpStatus::Stopped => write!(f, "Stopped"),
             McpStatus::Error(err) => write!(f, "Error: {}", err),
@@ -162,15 +163,39 @@ impl Display for McpStatus {
     }
 }
 
+/// Status change callback type
+/// This callback is invoked when the status of an MCP client changes.
+///
+/// # Arguments
+/// * `id` - The ID of the MCP server ID whose status has changed.
+/// * `status` - The new status of the MCP server.
+pub type StatusChangeCallback = Box<dyn Fn(String, McpStatus) -> () + Send + Sync>;
+
+#[async_trait::async_trait]
+pub(crate) trait McpClientInternal: Send + Sync {
+    /// Internal method to set MCP status
+    async fn set_status(&self, status: McpStatus);
+
+    /// Internal method to notify status change
+    async fn notify_status_change(&self, name: String, status: McpStatus);
+}
+
 /// Main trait containing methods for an MCP client.
 /// This trait is designed to be object-safe for use with `dyn McpClient`.
 #[async_trait::async_trait]
-pub trait McpClient: Send + Sync {
+pub trait McpClient: Send + Sync + McpClientInternal {
     /// Gets the name of the MCP client
-    fn name(&self) -> String;
+    async fn name(&self) -> String;
 
     /// Gets the MCP server configuration
-    fn config(&self) -> McpServerConfig;
+    async fn config(&self) -> McpServerConfig;
+
+    /// Updates the disabled status of a tool in the client's internal configuration.
+    async fn update_disabled_tools(
+        &self,
+        tool_name: &str,
+        is_disabled: bool,
+    ) -> McpClientResult<()>;
 
     /// Gets the running service instance
     /// Implementors should return a clone of their `Arc<RwLock<Option<RunningService<...>>>>`.
@@ -178,7 +203,8 @@ pub trait McpClient: Send + Sync {
 
     async fn status(&self) -> McpStatus;
 
-    async fn set_status(&self, status: McpStatus);
+    /// Set callback for status changes
+    async fn on_status_change(&self, callback: StatusChangeCallback);
 
     /// Performs the client-specific connection logic.
     /// This method should establish the connection and return the running service instance
@@ -236,7 +262,7 @@ pub trait McpClient: Send + Sync {
         let client_arc = self.client();
         let guard = client_arc.read().await; // Use read lock
         if let Some(service_instance) = guard.as_ref() {
-            let timeout_secs = self.config().timeout.unwrap_or(60);
+            let timeout_secs = self.config().await.timeout.unwrap_or(60);
             match timeout(
                 Duration::from_secs(timeout_secs),
                 service_instance.list_tools(Default::default()),
@@ -244,16 +270,20 @@ pub trait McpClient: Send + Sync {
             .await
             {
                 Ok(result) => {
-                    let tools = result.map_err(|e| McpClientError::StatusError(e.to_string()))?;
+                    let tools = result.map_err(|e| McpClientError::CallError(e.to_string()))?; // Changed StatusError to CallError for tool listing
                     Ok(get_tools(&tools))
                 }
                 Err(_) => Err(McpClientError::StatusError(
-                    t!("mcp.client.list_tools_timeout", name = self.config().name).to_string(),
+                    t!(
+                        "mcp.client.list_tools_timeout",
+                        name = self.config().await.name
+                    )
+                    .to_string(),
                 )),
             }
         } else {
             Err(McpClientError::StatusError(
-                t!("mcp.client.no_running", client = self.name()).to_string(),
+                t!("mcp.client.no_running", client = self.name().await).to_string(),
             ))
         }
     }
@@ -291,7 +321,7 @@ pub trait McpClient: Send + Sync {
             })
         } else {
             Err(McpClientError::StatusError(
-                t!("mcp.client.no_running", client = self.name()).to_string(),
+                t!("mcp.client.no_running", client = self.name().await).to_string(),
             ))
         }
     }

@@ -88,7 +88,7 @@ use tokio::{
 };
 
 use crate::workflow::error::WorkflowError;
-use crate::workflow::function_manager::FunctionManager;
+use crate::workflow::tool_manager::ToolManager;
 use crate::workflow::{
     dag::{
         config::{LoopConfig, NodeConfig, NodeType, ToolConfig},
@@ -97,7 +97,7 @@ use crate::workflow::{
         graph::WorkflowGraph,
         types::{WorkflowResult, WorkflowState},
     },
-    function_manager::FunctionDefinition,
+    tool_manager::ToolDefinition,
 };
 
 /// 工作流执行器，负责基于 DAG 的任务调度和执行
@@ -107,7 +107,7 @@ pub struct WorkflowExecutor {
     /// DAG 图构建器
     graph: Arc<WorkflowGraph>,
     /// 函数管理器
-    function_manager: Arc<FunctionManager>,
+    function_manager: Arc<ToolManager>,
     /// 最大并行任务数
     max_parallel: usize,
     /// 工作流状态
@@ -148,7 +148,7 @@ impl WorkflowExecutor {
     ///   - The context is not properly initialized
     pub fn create(
         context: Arc<Context>,
-        function_manager: Arc<FunctionManager>,
+        function_manager: Arc<ToolManager>,
         max_parallel: usize,
         graph: Arc<WorkflowGraph>,
     ) -> WorkflowResult<Self> {
@@ -615,7 +615,7 @@ impl WorkflowExecutor {
     async fn execute_task_node(
         &self,
         node: NodeConfig,
-        function_manager: Arc<FunctionManager>,
+        function_manager: Arc<ToolManager>,
     ) -> WorkflowResult<()> {
         match node.r#type {
             NodeType::Task(ToolConfig {
@@ -623,17 +623,14 @@ impl WorkflowExecutor {
                 param,
                 output,
             }) => {
-                let function = function_manager
-                    .get_function(&function)
-                    .await
-                    .map_err(|_| {
-                        WorkflowError::FunctionNotFound(
-                            t!("workflow.function_not_found", name = function).to_string(),
-                        )
-                    })?;
+                let function = function_manager.get_tool(&function).await.map_err(|_| {
+                    WorkflowError::FunctionNotFound(
+                        t!("workflow.function_not_found", name = function).to_string(),
+                    )
+                })?;
 
                 let params = self.context.resolve_params(param).await?;
-                let result = function.execute(params).await?;
+                let result = function.call(params).await?;
 
                 #[cfg(debug_assertions)]
                 {
@@ -682,7 +679,7 @@ impl WorkflowExecutor {
     async fn execute_loop_node(
         &self,
         node: NodeConfig,
-        function_manager: Arc<FunctionManager>,
+        function_manager: Arc<ToolManager>,
     ) -> WorkflowResult<()> {
         // Directly parse the LoopConfig from the node configuration
         match node.r#type {
@@ -767,7 +764,7 @@ impl WorkflowExecutor {
                         let function_name = &tool_def.function;
                         let function =
                             function_manager
-                                .get_function(function_name)
+                                .get_tool(function_name)
                                 .await
                                 .map_err(|_| {
                                     WorkflowError::FunctionNotFound(
@@ -833,12 +830,12 @@ impl WorkflowExecutor {
     async fn execute_function_with_retry(
         &self,
         node_id: &str,
-        function: Arc<dyn FunctionDefinition>,
+        function: Arc<dyn ToolDefinition>,
         param: Value,
     ) -> WorkflowResult<Value> {
         let params = self.context.resolve_params(param).await?;
         for i in 0..3 {
-            match function.execute(params.clone()).await {
+            match function.call(params.clone()).await {
                 Ok(result) => {
                     if Value::Null != result {
                         return Ok(result);

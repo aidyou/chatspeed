@@ -62,7 +62,7 @@ pub async fn list_mcp_servers(
     // Get the status of each MCP server and update the status field
     // This part involves async operations, so the lock on main_store must be released.
     if let Ok(status_map) = chat_state
-        .function_manager
+        .tool_manager
         .clone()
         .get_mcp_serves_status()
         .await
@@ -170,7 +170,7 @@ pub async fn add_mcp_server(
     // This is an async operation, so it must happen after the main_store lock is released.
     if !mcp_data.disabled {
         chat_state
-            .function_manager
+            .tool_manager
             .clone()
             .register_mcp_server(mcp_data.config.clone()) // Use the config from mcp_data
             .await
@@ -253,7 +253,7 @@ pub async fn update_mcp_server(
     // The original `config` (McpServerConfig is Clone) and `name` (&str with sufficient lifetime)
     // are used here. `disabled` is also a direct parameter.
     {
-        let fm = chat_state.function_manager.clone();
+        let fm = chat_state.tool_manager.clone();
         fm.unregister_mcp_server(name)
             .await
             .map_err(|e| e.to_string())?;
@@ -317,7 +317,7 @@ pub async fn delete_mcp_server(
 
     // Unregister the MCP server from function manager (async operation).
     chat_state
-        .function_manager
+        .tool_manager
         .clone()
         .unregister_mcp_server(&mcp_name)
         .await
@@ -381,7 +381,7 @@ pub async fn enable_mcp_server(
 
     // Start the MCP server using the function manager (async operation).
     chat_state
-        .function_manager
+        .tool_manager
         .clone()
         .start_mcp_server(mcp_config)
         .await
@@ -446,7 +446,7 @@ pub async fn disable_mcp_server(
 
     // Stop the MCP server using the function manager (async operation).
     chat_state
-        .function_manager
+        .tool_manager
         .clone()
         .stop_mcp_server(&mcp_name)
         .await
@@ -496,7 +496,7 @@ pub async fn restart_mcp_server(
         mcp.config.clone()
     };
 
-    let fm = chat_state.function_manager.clone();
+    let fm = chat_state.tool_manager.clone();
     fm.stop_mcp_server(mcp_config.name.as_str())
         .await
         .map_err(|e| e.to_string())?;
@@ -549,9 +549,52 @@ pub async fn get_mcp_server_tools(
 
     // Get tools from the MCP server using the function manager (async operation).
     chat_state
-        .function_manager
+        .tool_manager
         .clone()
         .get_mcp_server_tools(&mcp_name)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_mcp_tool_status(
+    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    id: i64,
+    tool_name: &str,
+    disabled: bool,
+) -> Result<Mcp, String> {
+    let mcp = {
+        let mut store_guard = main_store
+            .lock()
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let mut mcp = store_guard
+            .config
+            .get_mcp_by_id(id)
+            .map_err(|e| e.to_string())?;
+        if let Some(dt) = &mut mcp.config.disabled_tools {
+            if disabled {
+                dt.insert(tool_name.to_string());
+            } else {
+                dt.remove(tool_name);
+            }
+        }
+        mcp = store_guard
+            .update_mcp(
+                id,
+                &mcp.name,
+                &mcp.description,
+                mcp.config.clone(),
+                mcp.disabled,
+            )
+            .map_err(|e| e.to_string())?;
+        mcp
+    };
+
+    let tm = chat_state.tool_manager.clone();
+    tm.disable_mcp_tool(mcp.name.as_str(), tool_name, disabled)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(mcp)
 }

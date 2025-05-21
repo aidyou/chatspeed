@@ -6,7 +6,7 @@ use crate::{
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
     },
 };
 
@@ -26,7 +26,7 @@ impl Plot {
 }
 
 #[async_trait]
-impl FunctionDefinition for Plot {
+impl ToolDefinition for Plot {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "plot"
@@ -44,7 +44,7 @@ impl FunctionDefinition for Plot {
     ///
     /// # Returns
     /// * `Value` - The function specification in JSON format.
-    fn function_calling_spec(&self) -> Value {
+    fn tool_calling_spec(&self) -> Value {
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -84,7 +84,7 @@ impl FunctionDefinition for Plot {
     ///
     /// # Returns
     /// * `FunctionResult` - The result of the function execution.
-    async fn execute(&self, params: Value) -> FunctionResult {
+    async fn call(&self, params: Value) -> ToolResult {
         // Get the URL from the parameters
         let plot_type = params["plot_type"].as_str().ok_or_else(|| {
             WorkflowError::FunctionParamError(
@@ -197,7 +197,7 @@ mod tests {
     async fn test_plot() {
         let plot = Plot::new("http://127.0.0.1:12321".to_string());
         let result = plot
-            .execute(json!({
+            .call(json!({
                 "plot_type": "line",
                 "title": "Test Plot",
                 "x_label": "X Axis",

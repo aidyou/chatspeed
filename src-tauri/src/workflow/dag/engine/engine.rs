@@ -6,14 +6,14 @@ use crate::workflow::dag::executor::WorkflowExecutor;
 use crate::workflow::dag::graph::WorkflowGraph;
 use crate::workflow::dag::{context::Context, parser::WorkflowParser, types::WorkflowResult};
 use crate::workflow::error::WorkflowError;
-use crate::workflow::function_manager::FunctionManager;
+use crate::workflow::tool_manager::ToolManager;
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
     main_store: Arc<std::sync::Mutex<MainStore>>,
     chat_state: Arc<ChatState>,
     /// Function manager for handling function operations
-    function_manager: Arc<FunctionManager>,
+    function_manager: Arc<ToolManager>,
     /// Execution context
     pub(crate) context: Arc<Context>,
 }
@@ -24,10 +24,10 @@ impl WorkflowEngine {
         main_store: Arc<std::sync::Mutex<MainStore>>,
         chat_state: Arc<ChatState>,
     ) -> Result<Self, WorkflowError> {
-        let function_manager = Arc::new(FunctionManager::new());
+        let function_manager = Arc::new(ToolManager::new());
         function_manager
             .clone()
-            .register_workflow_tools(chat_state.clone(), main_store.clone())
+            .register_available_tools(chat_state.clone(), main_store.clone())
             .await?;
 
         Ok(Self {
@@ -64,7 +64,7 @@ impl WorkflowEngine {
     /// # Returns
     /// * `Result<String, WorkflowError>` - The calling spec of all registered functions
     pub async fn get_function_calling_spec(&self) -> Result<String, WorkflowError> {
-        self.function_manager.get_function_calling_spec(None).await
+        self.function_manager.get_tool_calling_spec(None).await
     }
 }
 

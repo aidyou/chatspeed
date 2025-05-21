@@ -12,7 +12,7 @@ use crate::{
     db::AiModel,
     workflow::{
         error::WorkflowError,
-        function_manager::{FunctionDefinition, FunctionResult},
+        tool_manager::{ToolDefinition, ToolResult},
     },
 };
 
@@ -43,7 +43,7 @@ impl ChatCompletion {
 }
 
 #[async_trait]
-impl FunctionDefinition for ChatCompletion {
+impl ToolDefinition for ChatCompletion {
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "chat_completion"
@@ -57,7 +57,7 @@ impl FunctionDefinition for ChatCompletion {
     /// Get the function calling specification
     ///
     /// Returns a JSON object containing the function calling specification
-    fn function_calling_spec(&self) -> serde_json::Value {
+    fn tool_calling_spec(&self) -> serde_json::Value {
         json!({
             "name": self.name(),
             "description": self.description(),
@@ -131,7 +131,7 @@ impl FunctionDefinition for ChatCompletion {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn execute(&self, params: Value) -> FunctionResult {
+    async fn call(&self, params: Value) -> ToolResult {
         let model_param = params["model_name"].as_str().ok_or_else(|| {
             WorkflowError::FunctionParamError(t!("workflow.model_name_must_be_string").to_string())
         })?;
@@ -236,11 +236,8 @@ mod tests {
             ]
         });
 
-        let result = crate::workflow::function_manager::FunctionDefinition::execute(
-            &chat_completion,
-            params,
-        )
-        .await;
+        let result =
+            crate::workflow::tool_manager::ToolDefinition::call(&chat_completion, params).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::workflow::{
-    function_manager::FunctionManager,
     react::types::{Message, Plan, StepState},
+    tool_manager::ToolManager,
 };
 
 use super::{
@@ -22,7 +22,7 @@ pub struct ReactContext {
     /// Current plan being executed
     pub current_plan: Option<Plan>,
     /// Function manager
-    pub function_manager: Arc<FunctionManager>,
+    pub function_manager: Arc<ToolManager>,
     /// Maximum retries
     pub max_retries: u32,
     /// Step execution history
@@ -42,7 +42,7 @@ impl ReactContext {
     ///
     /// # Returns
     /// A new ReactContext
-    pub fn new(function_manager: Arc<FunctionManager>, max_retries: u32) -> Self {
+    pub fn new(function_manager: Arc<ToolManager>, max_retries: u32) -> Self {
         Self {
             messages: Vec::new(),
             current_plan: None,
