@@ -3,6 +3,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
+    ai::traits::chat::MCPToolDeclaration,
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
@@ -44,36 +45,19 @@ impl ToolDefinition for Crawler {
     ///
     /// # Returns
     /// * `Value` - The function specification in JSON format.
-    fn tool_calling_spec(&self) -> Value {
-        json!({
-           "name": self.name(),
-           "description": self.description(),
-           "parameters": {
-               "type": "object",
-               "properties": {
-                   "url": {"type": "string", "description": "URL to fetch"},
-               },
-               "required": ["url"]
-           },
-           "responses": {
-               "type": "object",
-               "properties": {
-                   "title": {
-                       "type": "string",
-                       "description": "Page title"
-                   },
-                   "url": {
-                       "type": "string",
-                       "description": "Source URL"
-                   },
-                   "content": {
-                       "type": "string",
-                       "description": "Page content"
-                   }
-               },
-               "description": "Fetched web content"
-           }
-        })
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to fetch"},
+                },
+                "required": ["url"]
+            }),
+            disabled: false,
+        }
     }
 
     /// Executes the fetch function.

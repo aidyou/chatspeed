@@ -401,7 +401,7 @@
                   <cs
                     v-else
                     name="send"
-                    @click="sendMessage(null)"
+                    @click="dispatchChatCompletion(null)"
                     :class="{ disabled: !canSendMessage }" />
                 </div>
               </div>
@@ -644,6 +644,20 @@ const canCreateNewConversation = computed(
 const canSendMessage = computed(
   () => canChat.value && !isChatting.value && !isEmpty(inputMessage.value.trim())
 )
+
+/**
+ * Check if the current skill is a translation skill
+ */
+const isTranslation = computed(() => {
+  return selectedSkill.value?.metadata?.type === 'translation'
+})
+
+/**
+ * Check if the current skill has tools enabled
+ */
+const toolsEnabled = computed(() => {
+  return !isTranslation.value && selectedSkill.value?.metadata?.toolsEnabled
+})
 
 // listen AI response, update scroll
 watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
@@ -903,9 +917,9 @@ const selectConversation = id => {
 }
 
 /**
- * Send message to AI
+ * Dispatch chat completion event to the backend
  */
-const sendMessage = async (messageId = null) => {
+const dispatchChatCompletion = async (messageId = null) => {
   if (!canSendMessage.value && !messageId) {
     return
   }
@@ -963,6 +977,7 @@ const sendMessage = async (messageId = null) => {
       nextTick(() => {
         scrollToBottom()
       })
+
       try {
         await invoke('chat_completion', {
           apiProtocol: currentModel.value.apiProtocol,
@@ -979,8 +994,8 @@ const sendMessage = async (messageId = null) => {
             topK: currentModel.value.topK,
             label: windowLabel.value,
             proxyType: proxyType.value,
-            useContext: !selectedSkill.value,
-            model: currentModel.value.defaultModel
+            model: currentModel.value.defaultModel,
+            toolsEnabled: toolsEnabled.value
           }
         })
       } catch (error) {
@@ -1000,6 +1015,7 @@ const proxyType = computed(() => {
     ? 'none'
     : settingStore.settings.proxyType || 'bySetting'
 })
+
 /**
  * Create a new chat and focus on the input field
  */
@@ -1071,6 +1087,7 @@ const deepSearch = (messageId = null) => {
       console.error('error on addChatMessage:', error)
     })
 }
+
 /**
  * Automatically send message or deep search based on settings
  * @param {int} messageId
@@ -1079,9 +1096,10 @@ const sendMessageAuto = (messageId = null) => {
   if (deepSearchEnabled.value) {
     deepSearch(messageId)
   } else {
-    sendMessage(messageId)
+    dispatchChatCompletion(messageId)
   }
 }
+
 /**
  * Reset chat state
  */
@@ -1097,6 +1115,7 @@ const title = ref('')
 const titleGenerating = ref(false)
 const titleRetryCount = ref(0)
 const MAX_TITLE_RETRY = 3
+
 /**
  * Generate a title for the current conversation by AI
  */
@@ -1137,7 +1156,8 @@ const genTitleByAi = () => {
       action: 'gen_title',
       conversationId: chatStore.currentConversationId,
       label: windowLabel.value,
-      proxyType: proxyType.value
+      proxyType: proxyType.value,
+      toolsEnabled: toolsEnabled.value
     }
   }).catch(error => {
     titleGenerating.value = false
@@ -1409,14 +1429,14 @@ onMounted(async () => {
       chatErrorMessage.value = t('chat.errorOnGetCurrentConversationId', { error })
     })
 
-  // listen ai_chunk event
-  unlistenChunkResponse.value = await listen('ai_chunk', async event => {
+  // listen chat_stream event
+  unlistenChunkResponse.value = await listen('chat_stream', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.label !== windowLabel.value) {
       return
     }
     // console.log('payload', event?.payload)
-    // console.log('ai_chunk', event)
+    // console.log('chat_stream', event)
     const payload = event.payload
     if (payload?.metadata?.action === 'gen_title') {
       if (payload?.chatId === titleChatId.value) {
@@ -1426,7 +1446,7 @@ onMounted(async () => {
       if (payload?.chatId === lastChatId.value) {
         handleChatMessage(payload)
       } else {
-        console.log('ignore chatId', payload)
+        console.log('chatId not matched,', 'lastChatId:', lastChatId.value, ', payload:', payload)
       }
     }
   })
@@ -1477,7 +1497,7 @@ onBeforeUnmount(() => {
   }
   // unlisten send_message event
   unlistenSendMessage.value?.()
-  // unlisten ai_chunk event
+  // unlisten chat_stream event
   unlistenChunkResponse.value?.()
 
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)

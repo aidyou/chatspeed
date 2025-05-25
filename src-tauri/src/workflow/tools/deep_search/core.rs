@@ -19,7 +19,7 @@ use super::prompt::{
 use crate::{
     ai::{
         interaction::chat_completion::{complete_chat_async, complete_chat_blocking, ChatState},
-        traits::chat::{ChatCompletionResult, ChatResponse, MessageType},
+        traits::chat::{ChatCompletionResult, ChatResponse, MCPToolDeclaration, MessageType},
     },
     db::AiModel,
     http::chp::{Chp, SearchProvider, SearchResult},
@@ -1156,71 +1156,62 @@ impl ToolDefinition for DeepSearch {
         "Execute a deep search for a given topic: \n1. Generate search queries \n2. Search 3. \nRank results \n4. Crawl results \n5. Summarize results"
     }
 
-    fn tool_calling_spec(&self) -> serde_json::Value {
-        json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "model_name": {
-                        "type": "string",
-                        "enum": ["reasoning", "general"],
-                        "description": "Model type: 'reasoning' (planning/analysis) or 'general' (text processing)"
-                    },
-                    "chat_id": {
-                        "type": "string",
-                        "description": "Optional chat ID"
-                    },
-                    "messages": {
-                        "type": "array",
-                        "description": "Message list with role and content",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "role": {
-                                    "type": "string",
-                                    "enum": ["system", "user", "assistant", "function"],
-                                    "description": "Message sender role"
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "model_name": {
+                            "type": "string",
+                            "enum": ["reasoning", "general"],
+                            "description": "Model type: 'reasoning' (planning/analysis) or 'general' (text processing)"
+                        },
+                        "chat_id": {
+                            "type": "string",
+                            "description": "Optional chat ID"
+                        },
+                        "messages": {
+                            "type": "array",
+                            "description": "Message list with role and content",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "role": {
+                                        "type": "string",
+                                        "enum": ["system", "user", "assistant", "function"],
+                                        "description": "Message sender role"
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "Message text"
+                                    }
                                 },
-                                "content": {
-                                    "type": "string",
-                                    "description": "Message text"
-                                }
-                            },
-                            "required": ["role", "content"]
+                                "required": ["role", "content"]
+                            }
+                        },
+                        "max_tokens": {
+                            "type": "integer",
+                            "description": "Maximum tokens to generate"
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "description": "Sampling temperature"
+                        },
+                        "top_p": {
+                            "type": "number",
+                            "description": "Top-p sampling value"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Top-k sampling value"
                         }
                     },
-                    "max_tokens": {
-                        "type": "integer",
-                        "description": "Maximum tokens to generate"
-                    },
-                    "temperature": {
-                        "type": "number",
-                        "description": "Sampling temperature"
-                    },
-                    "top_p": {
-                        "type": "number",
-                        "description": "Top-p sampling value"
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Top-k sampling value"
-                    }
-                },
-                "required": ["model_name", "messages"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "Generated text response"
-                    }
-                },
-                "description": "Model generation result"
-            }
-        })
+                    "required": ["model_name", "messages"]
+            }),
+            disabled: false,
+        }
     }
 
     async fn call(&self, _param: serde_json::Value) -> ToolResult {

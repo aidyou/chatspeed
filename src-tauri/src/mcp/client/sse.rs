@@ -44,7 +44,9 @@ use std::{sync::Arc, time::Duration};
 use reqwest::{header, Client};
 use rmcp::{
     service::RunningService,
-    transport::{sse::SseTransportRetryCofnig, SseTransport},
+    transport::{
+        common::client_side_sse::FixedInterval, sse_client::SseClientConfig, SseClientTransport,
+    },
     RoleClient, ServiceExt as _,
 };
 use rust_i18n::t;
@@ -182,12 +184,20 @@ impl McpClient for SseClient {
         };
 
         let http_client = self.build_http_client_async().await?; // Call the async version
+        let retry_config = FixedInterval {
+            max_times: Some(10),
+            duration: Duration::from_secs(3),
+        };
+        let transport_config = SseClientConfig {
+            retry_policy: Arc::new(retry_config),
+            ..SseClientConfig::default()
+        };
+        let transport_result =
+            SseClientTransport::start_with_client(http_client, transport_config).await;
 
-        let transport_result = SseTransport::start_with_client(url, http_client).await;
-        let mut transport = match transport_result {
+        let transport = match transport_result {
             Ok(t) => t,
             Err(e) => {
-                // Optional: Wrap with t! for more context if desired
                 return Err(McpClientError::StartError(
                     t!(
                         "mcp.client.sse_transport_start_failed",
@@ -197,11 +207,6 @@ impl McpClient for SseClient {
                     .to_string(),
                 ));
             }
-        };
-
-        transport.retry_config = SseTransportRetryCofnig {
-            max_times: Some(10),
-            min_duration: Duration::from_secs(3),
         };
 
         let client_service_result = ().serve(transport).await;

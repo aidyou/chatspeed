@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "O parâmetro URL do cliente SSE não pode estar vazio."
     stdio_args_cant_be_empty: "O parâmetro args do cliente stdio não pode estar vazio."
     stdio_command_cant_be_empty: "O parâmetro command 'Comando de Inicialização' do cliente stdio não pode estar vazio."
+    stdio_command_not_found_no_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}). Certifique-se de que o comando está instalado e no PATH do seu sistema.'
+    stdio_command_not_found_with_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}).'
+    stdio_npx_not_found_help: "Isso geralmente significa que o Node.js não está instalado corretamente ou o comando 'npx' não está no PATH do seu sistema. Verifique a instalação do Node.js."
     stdio_process_creation_failed: "Falha ao criar o processo Stdio (comando: %{command}), motivo: %{error}"
     stdio_service_start_failed: "Falha ao iniciar o serviço Stdio (comando: %{command}), motivo: %{error}"
+    stdio_uvx_not_found_help: 'Isso pode significar que seu ambiente Python ou a ferramenta "%{command}" não está configurada corretamente ou não está no PATH do seu sistema. Verifique a configuração do Python e da ferramenta "%{command}".'
 
 network:
   client_build_error: "Falha ao construir o cliente HTTP: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "Solicitação falhou: %{error}"
   response_read_error: "Falha ao ler a resposta: %{error}"
   stream:
-    anthropic_api_error_format: "Erro da API Anthropic: %{message}"
-    anthropic_json_parse_error: "Falha ao analisar o fluxo JSON da Anthropic: %{error}"
+    claude_api_error_format: "Erro da API Claude: %{message}"
+    claude_json_parse_error: "Falha ao analisar o fluxo JSON da Claude: %{error}"
     gemini_parse_error: "Falha ao analisar a resposta do Gemini: %{error}"
     gemini_tool_arg_serialization_error: "Falha ao serializar os argumentos da chamada de ferramenta do Gemini: %{error}"
-    unknown_anthropic_error_no_details: "Erro desconhecido ao analisar o fluxo da Anthropic (sem detalhes)."
+    unknown_claude_error_no_details: "Erro desconhecido ao analisar o fluxo da Claude (sem detalhes)."
     unknown_openai_error: "Erro desconhecido ao analisar o fluxo da OpenAI."
 
 setting:

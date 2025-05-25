@@ -21,7 +21,7 @@
       <ul>
         <li>
           When you interact with AI models, your conversations are sent directly to the respective
-          AI model providers (e.g., OpenAI, Google, Anthropic).
+          AI model providers (e.g., OpenAI, Gemini, Claude).
         </li>
         <li>
           The handling of your data by these providers is subject to their respective privacy
@@ -74,7 +74,7 @@
       <ul>
         <li>
           当您与 AI 模型交互时，您的对话内容会直接发送给相应的 AI 模型提供商（如
-          OpenAI、Google、Anthropic 等）。
+          OpenAI、Google、Claude 等）。
         </li>
         <li>这些提供商对您数据的处理受其各自隐私政策的约束。</li>
         <li>我们不会拦截、存储或处理任何这些通信内容。</li>

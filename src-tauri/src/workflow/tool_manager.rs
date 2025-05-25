@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use rust_i18n::t;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -43,7 +43,7 @@ pub trait ToolDefinition: Send + Sync {
     ///
     /// # Returns
     /// * `Value` - The function specification in JSON format.
-    fn tool_calling_spec(&self) -> Value;
+    fn tool_calling_spec(&self) -> MCPToolDeclaration;
 
     /// Executes the function.
     ///
@@ -212,7 +212,22 @@ impl ToolManager {
             .ok_or_else(|| WorkflowError::FunctionNotFound(name.to_string()))
     }
 
-    /// Call a tool by its name.
+    /// Call a native tool by its name.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the function to execute.
+    /// * `params` - The parameters to pass to the function.
+    ///
+    /// # Returns
+    /// * `ToolResult` - The result of the function execution.
+    pub async fn native_tool_call(&self, name: &str, params: Value) -> ToolResult {
+        let tool = self.get_tool(name).await?;
+        tool.call(params).await
+    }
+
+    /// Call a native tool or mcp tool by its name.
+    /// if the tool name contains <MCP_TOOL_NAME_SPLIT>, it is a mcp tool, will call mcp_tool_call,
+    /// otherwise, call native_tool_call.
     ///
     /// # Arguments
     /// * `name` - The name of the function to execute.
@@ -221,8 +236,11 @@ impl ToolManager {
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
     pub async fn tool_call(&self, name: &str, params: Value) -> ToolResult {
-        let tool = self.get_tool(name).await?;
-        tool.call(params).await
+        if name.contains(MCP_TOOL_NAME_SPLIT) {
+            self.mcp_tool_call(name, params).await
+        } else {
+            self.native_tool_call(name, params).await
+        }
     }
 
     /// Gets the names of all registered tools.
@@ -245,7 +263,7 @@ impl ToolManager {
     pub async fn get_tool_calling_spec(
         &self,
         exclude: Option<HashSet<String>>,
-    ) -> Result<String, WorkflowError> {
+    ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
         let mut specs = Vec::new();
         let excluded: HashSet<String> = exclude.unwrap_or_default();
         for tool_names in self.get_registered_tools().await {
@@ -258,33 +276,19 @@ impl ToolManager {
         // Collect MCP tool specs *after* getting core function specs
         // This involves reading mcp_tools, which is fine after releasing the tools lock
         // The MCP tool will be remove after the MCP server is disabled. So we don't need to filter it here.
-        let mcp_tool_specs: Vec<Value> = {
+        let mcp_tool_specs: Vec<MCPToolDeclaration> = {
             let mcp_tools_guard = self.mcp_tools.read().await;
             mcp_tools_guard
                 .iter()
-                .flat_map(|(server_name, tools)| {
-                    tools.iter().filter(|td| !td.disabled).map(move |tool| {
-                        json!({
-                            "name": format!("{}{MCP_TOOL_NAME_SPLIT}{}", server_name, tool.name),
-                            "description": tool.description,
-                            "parameters": tool.get_input_schema()
-                        })
-                    })
+                .flat_map(|(_server_name, tools_vec)| {
+                    tools_vec.iter().filter(|td| !td.disabled).cloned()
                 })
                 .collect()
-        }; // mcp_tools_guard is released here
+        };
 
         specs.extend(mcp_tool_specs);
 
-        serde_json::to_string(&specs).map_err(|e| {
-            WorkflowError::Serialization(
-                t!(
-                    "workflow.serialization_error_details",
-                    details = e.to_string()
-                )
-                .to_string(),
-            )
-        })
+        Ok(specs)
     }
 
     /// Get an AI model by its type
@@ -486,7 +490,7 @@ impl ToolManager {
         tokio::spawn(async move {
             // Check status again within the task. Could add retries/timeout here if needed.
             let status = client_arc_for_task.status().await;
-            if status == McpStatus::Running {
+            if status == McpStatus::Connected || status == McpStatus::Running {
                 let tools_result = client_arc_for_task.list_tools().await;
                 match tools_result {
                     Ok(tools) => {

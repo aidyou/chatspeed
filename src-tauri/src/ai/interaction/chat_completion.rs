@@ -13,7 +13,7 @@ use crate::http::chp::SearchResult;
 use crate::workflow::ToolManager;
 use crate::{
     ai::{
-        chat::{anthropic::AnthropicChat, gemini::GeminiChat, openai::OpenAIChat},
+        chat::{claude::ClaudeChat, gemini::GeminiChat, openai::OpenAIChat},
         traits::{
             chat::{AiChatTrait, ChatResponse},
             stoppable::Stoppable,
@@ -40,12 +40,12 @@ use super::constants::{API_KEY_ROTATOR, BASE_URL};
 /// ```no_run
 /// let chats = init_chats! {
 ///     ChatProtocol::OpenAI,
-///     ChatProtocol::Anthropic,
+///     ChatProtocol::Claude,
 ///     ChatProtocol::Gemini
 /// };
 ///
 /// assert!(chats.contains_key(&ChatProtocol::OpenAI));
-/// assert!(chats.contains_key(&ChatProtocol::Anthropic));
+/// assert!(chats.contains_key(&ChatProtocol::Claude));
 /// assert!(chats.contains_key(&ChatProtocol::Gemini));
 /// ```
 macro_rules! init_chats {
@@ -98,7 +98,7 @@ macro_rules! get_or_create_chat {
             .entry($chat_id.clone())
             .or_insert_with(|| match $protocol {
                 ChatProtocol::OpenAI => AiChatEnum::OpenAI(OpenAIChat::new()),
-                ChatProtocol::Anthropic => AiChatEnum::Anthropic(AnthropicChat::new()),
+                ChatProtocol::Claude => AiChatEnum::Claude(ClaudeChat::new()),
                 ChatProtocol::Gemini => AiChatEnum::Gemini(GeminiChat::new()),
                 ChatProtocol::Ollama | ChatProtocol::HuggingFace => {
                     AiChatEnum::OpenAI(OpenAIChat::new())
@@ -114,7 +114,7 @@ macro_rules! get_or_create_chat {
 macro_rules! impl_chat_method {
     ($self:expr, $method:ident, $($arg:expr),*) => {
         match $self {
-            AiChatEnum::Anthropic(chat) => chat.$method($($arg),*).await,
+            AiChatEnum::Claude(chat) => chat.$method($($arg),*).await,
             AiChatEnum::Gemini(chat) => chat.$method($($arg),*).await,
             // AiChatEnum::HuggingFace(chat) => chat.$method($($arg),*).await,
             AiChatEnum::OpenAI(chat) => chat.$method($($arg),*).await,
@@ -125,7 +125,7 @@ macro_rules! impl_chat_method {
 /// Enum representing different types of AI chat interfaces.
 #[derive(Clone)]
 pub enum AiChatEnum {
-    Anthropic(AnthropicChat),
+    Claude(ClaudeChat),
     Gemini(GeminiChat),
     OpenAI(OpenAIChat),
 }
@@ -171,7 +171,7 @@ impl ChatState {
             ChatProtocol::OpenAI,
             ChatProtocol::Ollama,
             ChatProtocol::HuggingFace,
-            ChatProtocol::Anthropic,
+            ChatProtocol::Claude,
             ChatProtocol::Gemini
         };
 
@@ -192,7 +192,7 @@ impl ChatState {
                             if let Err(e) = app_handle_clone_for_spawn.emit(
                                 "sync_state",
                                 json!({
-                                    "event": "mcp_status_changed",
+                                    "type": "mcp_status_changed",
                                     "name": server_name,
                                     "status": status,
                                 }),
@@ -272,7 +272,7 @@ impl AiChatEnum {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ChatProtocol {
     OpenAI,
-    Anthropic,
+    Claude,
     Gemini,
     Ollama,
     HuggingFace,
@@ -285,7 +285,7 @@ impl Display for ChatProtocol {
             "{}",
             match self {
                 ChatProtocol::OpenAI => "openai",
-                ChatProtocol::Anthropic => "anthropic",
+                ChatProtocol::Claude => "claude",
                 ChatProtocol::Gemini => "gemini",
                 ChatProtocol::Ollama => "ollama",
                 ChatProtocol::HuggingFace => "huggingface",
@@ -300,7 +300,7 @@ impl FromStr for ChatProtocol {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "openai" => Ok(ChatProtocol::OpenAI),
-            "anthropic" => Ok(ChatProtocol::Anthropic),
+            "claude" => Ok(ChatProtocol::Claude),
             "gemini" => Ok(ChatProtocol::Gemini),
             "ollama" => Ok(ChatProtocol::Ollama),
             "huggingface" => Ok(ChatProtocol::HuggingFace),
@@ -324,13 +324,14 @@ impl TryFrom<String> for ChatProtocol {
 /// # Arguments
 /// * `state` - The chat state containing chat interfaces
 /// * `main_state` - The main application state
-/// * `api_protocol` - The API provider to use (e.g., "openai", "anthropic")
+/// * `api_protocol` - The API provider to use (e.g., "openai", "claude")
 /// * `api_url` - Optional API URL override
 /// * `model` - The model name to use, e.g., "deepseek-r1"
 /// * `api_key` - Optional API key override
 /// * `chat_id` - Unique identifier for this chat session
 /// * `messages` - Vector of chat messages
 /// * `metadata` - Optional additional parameters for the chat
+/// * `tools` - Optional tools to use for the chat
 /// * `callback` - Callback function to handle chat responses
 ///
 /// # Returns

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
@@ -48,6 +48,12 @@ export const useMcpStore = defineStore('mcp', () => {
   const servers = ref([]);
   /** @type {import('vue').Ref<Record<number, MCPToolDeclaration[]>>} */
   const serverTools = ref({});
+  /**
+   * ui status for mcp manager page
+   * @type {import('vue').Ref<Record<number, { expanded: boolean, loading: boolean }>>}
+  */
+  const serverUiStates = ref({});
+
   const loading = ref(false);
   const error = ref(null);
 
@@ -102,9 +108,9 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const newServer = await invoke('add_mcp_server', payload);
-      servers.value.push(newServer);
-
-      sendSyncState('mcp', label)
+      // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+      // For direct local update: handleSyncStateUpdate({ event: 'add', data: newServer });
+      sendSyncState('mcp', label, { event: 'add', data: newServer });
       return newServer;
     } catch (err) {
       await _handleError(err);
@@ -128,14 +134,10 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const updatedServer = await invoke('update_mcp_server', payload);
-      const index = servers.value.findIndex(s => s.id === payload.id);
-      if (index !== -1) {
-        servers.value[index] = updatedServer;
-      } else {
-        await fetchMcpServers();
-      }
+      // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+      // For direct local update: handleSyncStateUpdate({ event: 'update', data: updatedServer });
 
-      sendSyncState('mcp', label)
+      sendSyncState('mcp', label, { event: 'update', data: updatedServer });
 
       // remove tools from serverTools when tool is disabled
       if (payload.disabled) {
@@ -176,11 +178,9 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('delete_mcp_server', { id });
-      // remove tools from serverTools
-      delete serverTools.value[id];
-
-      sendSyncState('mcp', label)
-
+      // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+      // For direct local update: handleSyncStateUpdate({ event: 'delete', data: { id } });
+      sendSyncState('mcp', label, { event: 'delete', data: { id } });
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -197,13 +197,9 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('enable_mcp_server', { id });
-
-      const index = servers.value.findIndex(s => s.id === id);
-      if (index !== -1) {
-        servers.value[index].disabled = false;
-      }
-
-      sendSyncState('mcp', label)
+      // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+      // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: false } });
+      sendSyncState('mcp', label, { event: 'update', data: { id, disabled: false } });
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -220,13 +216,9 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invoke('disable_mcp_server', { id });
-
-      const index = servers.value.findIndex(s => s.id === id);
-      if (index !== -1) {
-        servers.value[index].disabled = true;
-      }
-
-      sendSyncState('mcp', label)
+      // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+      // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: true } });
+      sendSyncState('mcp', label, { event: 'update', data: { id, disabled: true } });
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -240,7 +232,8 @@ export const useMcpStore = defineStore('mcp', () => {
     try {
       await invoke('restart_mcp_server', { id });
 
-      sendSyncState('mcp', label)
+      // Restart might change status, but we don't get the new status back synchronously here.
+      // Rely on status updates pushed from backend or a periodic refresh if needed.
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -287,48 +280,179 @@ export const useMcpStore = defineStore('mcp', () => {
     }
 
     // serverToUpdate is a shallow copy. serverToUpdate.config refers to the same object in the store.
-    const serverToUpdate = { ...servers.value[serverIndex] };
     // With the change in fetchMcpServers, serverToUpdate.config.disabled_tools is guaranteed to be an array.
 
     try {
-      const toolName = tool.name;
-      const isDisabled = serverToUpdate.config.disabled_tools.includes(toolName);
-
-      if (isDisabled) {
-        // Tool is currently disabled, so enable it (remove from disabled_tools)
-        serverToUpdate.config.disabled_tools = serverToUpdate.config.disabled_tools.filter(name => name !== toolName);
-        console.debug(`Enabling tool "${toolName}" for server ID ${serverId}`);
-      } else {
-        // Tool is currently enabled, so disable it (add to disabled_tools)
-        serverToUpdate.config.disabled_tools.push(toolName);
-        console.debug(`Disabling tool "${toolName}" for server ID ${serverId}`);
+      const currentServerInStore = servers.value[serverIndex];
+      if (!currentServerInStore) {
+        throw new Error(`Server with ID ${serverId} disappeared unexpectedly.`);
       }
+
+      const toolName = tool.name;
+      // Determine the new desired state for the tool
+      const currentDisabledTools = currentServerInStore.config?.disabled_tools || [];
+      const isCurrentlyDisabled = currentDisabledTools.includes(toolName);
+      const newDisabledStateForTool = !isCurrentlyDisabled; // This is what we tell the backend
 
       // Call the backend to update the server configuration
-      // updateMcpServer will handle the invoke call and refresh the servers list.
-      const server = await invoke('update_mcp_tool_status', { id: serverId, toolName: toolName, disabled: !isDisabled });
-      if (server) {
-        // Update the servers list with the modified server object
-        // Ensure the backend response's disabled_tools is also an array.
-        const backendConfig = server.config || {};
+      // We expect this call to primarily affect the tool's status within the server's config.
+      const backendUpdateResult = await invoke('update_mcp_tool_status', { id: serverId, toolName: toolName, disabled: newDisabledStateForTool });
+
+      if (backendUpdateResult) {
+        // Preserve the existing server state (like 'status') and merge the backend update.
+        // backendUpdateResult might only contain partial data (e.g., just the updated config).
+        const newConfig = {
+          ...(currentServerInStore.config || {}), // Start with current config
+          ...(backendUpdateResult.config || {}),   // Overlay with response's config fields
+        };
+
+        // Ensure disabled_tools is correctly sourced from backendUpdateResult or inferred.
+        // The most reliable is if backendUpdateResult.config.disabled_tools is the new list.
+        const backendConfig = backendUpdateResult.config || {};
         const backendDisabledTools = Array.isArray(backendConfig.disabled_tools)
           ? backendConfig.disabled_tools
-          : [];
-        servers.value[serverIndex] = {
-          ...server,
-          config: { ...backendConfig, disabled_tools: backendDisabledTools },
-        };
+          // Fallback to current server's disabled_tools if not in backend response,
+          // or an empty array if that's also missing.
+          : (currentServerInStore.config?.disabled_tools || []);
+        newConfig.disabled_tools = backendDisabledTools;
+        // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
+        // For direct local update: handleSyncStateUpdate({ event: 'toggleToolStatus', data: { id: serverId, disabled_tools: newConfig.disabled_tools } });
+        // Send sync state only if the backend update was processed and local state updated
+        sendSyncState('mcp', label, { event: 'toggleToolStatus', data: { id: serverId, disabled_tools: newConfig.disabled_tools } });
       }
 
-      sendSyncState('mcp', label)
-      return server;
+      return servers.value[serverIndex]; // Return the updated server state from the store
     } catch (err) {
-      console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend:`, err);
+      console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend:`, err); // Use toolName for consistency
       throw err; // Re-throw the error
     }
   }
 
+  /**
+   * Updates the status of a specific MCP server.
+   * This is typically called by the sync state listener for 'mcp_status_changed' events.
+   * @param {string} serverName - The name of the server whose status is to be updated.
+   * @param {string | { error: string }} status - The new status of the server.
+   */
+  const updateServerStatus = (serverName, status) => {
+    const index = servers.value.findIndex(s => s.name === serverName);
+    if (index !== -1) {
+      // Create a new object to ensure reactivity update is picked up by Vue
+      servers.value.splice(index, 1, { ...servers.value[index], status: status });
+      console.debug(`MCP Store: Updated status for server "${serverName}" to`, status);
+    }
+  };
+
+
   fetchMcpServers();
+
+  // Helper to get or initialize UI state for a server, meant for internal store use or direct component use
+  const getOrInitServerUiState = (serverId) => {
+    if (!serverUiStates.value[serverId]) {
+      serverUiStates.value[serverId] = reactive({ expanded: false, loading: false });
+    }
+    return serverUiStates.value[serverId];
+  };
+
+  /**
+   * Handles synchronization state updates received from other windows.
+   * Performs targeted updates on the local state based on the event type.
+   * This method is intended to be called by the sync state listener in App.vue.
+   * @param {Object} metadata - The metadata payload from sendSyncState.
+   * @param {'add' | 'update' | 'delete' | 'toggleToolStatus'} metadata.event - The type of update event.
+   * @param {any} metadata.data - The data associated with the event (e.g., server object, ID, disabled_tools array).
+   */
+  const handleSyncStateUpdate = (metadata) => {
+    if (!metadata || !metadata.event) {
+      console.warn('Received invalid sync state metadata:', metadata);
+      return;
+    }
+
+    const { event, data } = metadata;
+
+    switch (event) {
+      case 'add': {
+        // Add new server if it doesn't exist
+        if (data && data.id && !servers.value.some(s => s.id === data.id)) {
+          // Ensure config and disabled_tools are correctly formatted before adding
+          const newServerData = {
+            ...data,
+            config: {
+              ...(data.config || {}),
+              disabled_tools: Array.isArray(data.config?.disabled_tools) ? data.config.disabled_tools : [],
+            },
+          };
+          servers.value.push(newServerData);
+          console.debug('MCP Store: Added server via sync', data.id);
+        }
+        break;
+      }
+      case 'update': {
+        // Update existing server by merging data
+        if (data && data.id) {
+          const index = servers.value.findIndex(s => s.id === data.id);
+          if (index !== -1) {
+            const currentServer = servers.value[index];
+            // Destructure data to separate status. Status is managed by updateServerStatus
+            // and should not be overwritten by general update events unless specifically intended.
+            const { status: incomingStatus, ...otherDataFromEvent } = data;
+
+            const updatedServer = {
+              ...currentServer,        // Preserve currentServer properties, including its up-to-date status
+              ...otherDataFromEvent,   // Apply other updates from the event data (excluding status from data)
+              config: {         // Carefully merge config
+                ...(currentServer.config || {}), // Start with current config
+                ...(data.config || {}),          // Overlay with incoming config fields
+              },
+            };
+            // Ensure disabled_tools in the merged config is correctly an array
+            updatedServer.config.disabled_tools = Array.isArray(data.config?.disabled_tools)
+              ? data.config.disabled_tools
+              : (Array.isArray(currentServer.config?.disabled_tools) ? currentServer.config.disabled_tools : []);
+
+            servers.value.splice(index, 1, updatedServer); // Replace item to trigger reactivity
+            console.debug('MCP Store: Updated server via sync', data.id);
+          }
+        }
+        break;
+      }
+      case 'delete': {
+        // Remove server by ID
+        if (data && data.id) {
+          servers.value = servers.value.filter(s => s.id !== data.id);
+          // Clean up associated states
+          delete serverTools.value[data.id];
+          delete serverUiStates.value[data.id];
+          console.debug('MCP Store: Deleted server via sync', data.id);
+        }
+        break;
+      }
+      case 'toggleToolStatus': {
+        // Update only disabled_tools for a server
+        if (data && data.id && Array.isArray(data.disabled_tools)) {
+          const index = servers.value.findIndex(s => s.id === data.id);
+          if (index !== -1) {
+            const currentServer = servers.value[index];
+            // Create a new object for the server with updated config to ensure reactivity
+            const updatedServer = {
+              ...currentServer,
+              config: {
+                ...(currentServer.config || {}), // Preserve other config fields
+                disabled_tools: data.disabled_tools,
+              },
+            };
+            servers.value.splice(index, 1, updatedServer); // Replace item
+            // Vue 3 reactivity should handle this direct modification.
+            console.debug('MCP Store: Toggled tool status via sync for server', data.id);
+          }
+        }
+        break;
+      }
+      default:
+        console.warn('MCP Store: Received unknown sync state event type:', event);
+        break;
+    }
+  };
 
   return {
     servers,
@@ -344,6 +468,10 @@ export const useMcpStore = defineStore('mcp', () => {
     disableMcpServer,
     restartMcpServer,
     fetchMcpServerTools,
-    toggleDisableTool
+    toggleDisableTool,
+    handleSyncStateUpdate,
+    serverUiStates,
+    getOrInitServerUiState,
+    updateServerStatus
   };
 });

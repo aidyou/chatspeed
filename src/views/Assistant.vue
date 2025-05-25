@@ -375,6 +375,13 @@ const isTranslation = computed(() => {
   return currentSkill.value?.metadata?.type === 'translation'
 })
 
+/**
+ * Check if the current skill has tools enabled
+ */
+const toolsEnabled = computed(() => {
+  return !isTranslation.value && currentSkill.value?.metadata?.toolsEnabled
+})
+
 const cicleIndex = ref(0)
 const cicle = ['◒', '◐', '◓', '◑', '☯']
 const currentAssistantMessageHtml = computed(() =>
@@ -462,13 +469,13 @@ onMounted(async () => {
     }
   }
 
-  // listen ai_chunk event
-  unlistenChunkResponse.value = await listen('ai_chunk', async event => {
+  // listen chat_stream event
+  unlistenChunkResponse.value = await listen('chat_stream', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.label !== settingStore.label) {
       return
     }
-    // console.log('ai_chunk', event)
+    // console.log('chat_stream', event)
     handleChatMessage(event.payload)
   })
 
@@ -544,9 +551,9 @@ const proxyType = computed(() => {
 })
 
 /**
- * Send message to AI
+ * Dispatch chat completion event to the backend
  */
-const sendMessage = async () => {
+const dispatchChatCompletion = async () => {
   if (!inputMessage.value?.trim() || !canChat.value) {
     return
   }
@@ -586,7 +593,6 @@ const sendMessage = async () => {
   try {
     await invoke('chat_completion', {
       apiProtocol: currentModelProvider.value.apiProtocol,
-      apiProtocol: currentModelProvider.value.apiProtocol,
       apiUrl: currentModelProvider.value.baseUrl,
       apiKey: currentModelProvider.value.apiKey,
       model: currentModelProvider.value.defaultModel,
@@ -600,7 +606,7 @@ const sendMessage = async () => {
         topK: currentModelProvider.value.topK,
         label: settingStore.label,
         proxyType: proxyType.value,
-        useContext: skillIndex.value == 0
+        toolsEnabled: toolsEnabled.value
       }
     })
   } catch (error) {
@@ -774,7 +780,7 @@ const onSubModelSelect = model => {
  */
 const onSkillItemClick = index => {
   skillIndex.value = index
-  sendMessage()
+  dispatchChatCompletion()
 }
 
 /**
@@ -883,7 +889,7 @@ const onKeyEnter = event => {
   }
   if (!composing.value && !compositionJustEnded.value) {
     event.preventDefault()
-    sendMessage()
+    dispatchChatCompletion()
   }
 }
 

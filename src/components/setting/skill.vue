@@ -69,6 +69,7 @@
     </div>
   </div>
 
+  <!-- add/edit skill dialog -->
   <el-dialog
     v-model="skillDialogVisible"
     width="560px"
@@ -122,6 +123,9 @@
                 :value="item.value" />
             </el-select>
           </el-form-item>
+          <el-form-item :label="$t('settings.skill.toolsEnabled')" prop="disabled">
+            <el-switch v-model="skillForm.toolsEnabled" />
+          </el-form-item>
           <el-form-item :label="$t('settings.skill.disabled')" prop="disabled">
             <el-switch v-model="skillForm.disabled" />
           </el-form-item>
@@ -155,7 +159,7 @@
     </template>
   </el-dialog>
 
-  <!-- 预设技能列表弹窗 -->
+  <!-- preset skills -->
   <el-dialog
     v-model="presetSkillsVisible"
     width="560px"
@@ -200,7 +204,7 @@ import { Sortable } from 'sortablejs-vue3'
 
 import avatar from '@/components/common/avatar.vue'
 import iconfonts from '@/components/icon/type.js'
-import { isEmpty, showMessage } from '@/libs/util'
+import { showMessage } from '@/libs/util'
 
 import { useSettingStore } from '@/stores/setting'
 import { useSkillStore } from '@/stores/skill'
@@ -216,7 +220,17 @@ const fileSelectorRef = ref(null)
 const skillDialogVisible = ref(false)
 const editId = ref(null)
 const fileSelect = ref('')
-
+const defaultFormData = {
+  icon: '',
+  logo: '',
+  name: '',
+  prompt: '',
+  description: '',
+  type: '',
+  useSystemRole: false,
+  disabled: false,
+  toolsEnabled: true
+}
 const skillTypes = [
   'chat',
   'coding',
@@ -241,16 +255,7 @@ const skillDropdown = computed(() =>
 )
 
 // Reactive object to hold the form data for the skill
-const skillForm = ref({
-  icon: '',
-  logo: '',
-  name: '',
-  prompt: '',
-  description: '',
-  type: '',
-  useSystemRole: false,
-  disabled: false
-})
+const skillForm = ref({ ...defaultFormData })
 
 // Validation rules for the skill form
 const skillRules = {
@@ -293,6 +298,23 @@ const iconFilter = query => {
 }
 
 /**
+ * Creates a new skill object from the skill data.
+ * @param skillData Object - The skill data to create a new skill from.
+ */
+const createFromSkillData = skillData => {
+  return {
+    icon: skillData.icon,
+    name: skillData.name,
+    prompt: skillData.prompt,
+    description: skillData.metadata?.description || '',
+    type: skillData.metadata?.type || '',
+    useSystemRole: skillData.metadata?.useSystemRole || false,
+    disabled: skillData.disabled,
+    toolsEnabled: skillData.metadata?.toolsEnabled || false
+  }
+}
+
+/**
  * Opens the skill dialog for editing or creating a new skill.
  * @param {string|null} id - The ID of the skill to edit, or null to create a new skill.
  */
@@ -309,28 +331,10 @@ const editSkill = async id => {
       return
     }
     editId.value = id
-    skillForm.value = {
-      icon: skillData.icon,
-      logo: skillData.logo,
-      name: skillData.name,
-      prompt: skillData.prompt,
-      description: skillData.metadata?.description || '',
-      type: skillData.metadata?.type || '',
-      useSystemRole: skillData.metadata?.useSystemRole || false,
-      disabled: skillData.disabled
-    }
+    skillForm.value = createFromSkillData(skillData)
   } else {
     editId.value = null
-    skillForm.value = {
-      icon: '',
-      logo: '',
-      name: '',
-      prompt: '',
-      description: '',
-      type: '',
-      useSystemRole: false,
-      disabled: false
-    }
+    skillForm.value = { ...defaultFormData }
   }
 
   skillDialogVisible.value = true
@@ -348,16 +352,7 @@ const copySkill = id => {
   }
   fileSelectorRef.value?.reset()
   editId.value = null
-  skillForm.value = {
-    icon: skillData.icon,
-    logo: skillData.logo,
-    name: skillData.name + '-Copy',
-    prompt: skillData.prompt,
-    description: skillData.metadata?.description || '',
-    type: skillData.metadata?.type || '',
-    useSystemRole: skillData.metadata?.useSystemRole || false,
-    disabled: skillData.disabled
-  }
+  skillForm.value = createFromSkillData(skillData)
   skillDialogVisible.value = true
 }
 
@@ -377,13 +372,10 @@ const updateSkill = () => {
         metadata: {
           description: skillForm.value.description || '',
           type: skillForm.value.type || '',
-          useSystemRole: skillForm.value.useSystemRole || false
+          useSystemRole: skillForm.value.useSystemRole || false,
+          toolsEnabled: skillForm.value.toolsEnabled || false
         }
       }
-      // if (isEmpty(formData.logo) && isEmpty(formData.icon)) {
-      //   showMessage(t('settings.skill.iconOrLogoRequired'), 'error')
-      //   return
-      // }
 
       skillStore
         .setSkill(formData)

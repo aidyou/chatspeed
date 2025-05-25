@@ -39,7 +39,7 @@ pub async fn chat_completion_with_search(
     api_key: Option<&str>,
     chat_id: String,
     mut messages: Vec<Value>,
-    mut metadata: Option<Value>,
+    metadata: Option<Value>,
 ) -> Result<(), String> {
     let content = messages
         .iter()
@@ -237,8 +237,6 @@ pub async fn chat_completion_with_search(
             }
         }
     }
-
-    super::chat::setup_chat_context(&main_state, &mut messages, &mut metadata);
 
     generate_final_answer(
         &chat_state,

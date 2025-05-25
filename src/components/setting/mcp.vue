@@ -19,7 +19,11 @@
               <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
                 <cs
                   :class="server.status"
-                  :name="server.uiState?.expanded ? 'caret-down' : 'caret-right'" />
+                  :name="
+                    mcpStore.getOrInitServerUiState(server.id).expanded
+                      ? 'caret-down'
+                      : 'caret-right'
+                  " />
               </div>
               <Avatar :text="server.name" :size="32" />
               <div class="server-info">
@@ -38,8 +42,9 @@
                 :hide-after="0"
                 transition="none">
                 <el-switch
-                  :disabled="server.loading"
+                  :disabled="mcpStore.getOrInitServerUiState(server.id).loading"
                   :model-value="!server.disabled"
+                  :loading="mcpStore.getOrInitServerUiState(server.id).loading"
                   @update:model-value="toggleServerStatus(server)" />
               </el-tooltip>
 
@@ -79,13 +84,17 @@
           </div>
 
           <!-- expandable tools list -->
-          <div v-if="server.uiState?.expanded && server.status === 'running'" class="tools-list">
-            <div v-if="server.uiState?.loadingTools" class="tool-loading">
+          <div
+            v-if="
+              mcpStore.getOrInitServerUiState(server.id).expanded && server.status === 'running'
+            "
+            class="tools-list">
+            <div v-if="mcpStore.getOrInitServerUiState(server.id).loading" class="tool-loading">
               {{ $t('common.loading') }}...
             </div>
             <ul v-if="mcpStore.serverTools[server.id] && mcpStore.serverTools[server.id].length">
               <li
-                v-for="tool in mcpStore.serverTools[server.id]"
+                v-for="tool in mcpStore.serverTools[server.id] || []"
                 :key="tool.name"
                 class="tool-item">
                 <div class="tool-info">
@@ -100,7 +109,11 @@
                 </div>
               </li>
             </ul>
-            <div v-else-if="!server.uiState?.loadingTools && mcpStore.serverTools[server.id]">
+            <div
+              v-else-if="
+                !mcpStore.getOrInitServerUiState(server.id).loading &&
+                mcpStore.serverTools[server.id]
+              ">
               {{ $t('settings.mcp.noTools') }}
             </div>
           </div>
@@ -632,7 +645,11 @@ const executeDeleteServer = async () => {
 }
 
 const toggleServerStatus = async server => {
-  server.loading = true
+  const uiState = mcpStore.getOrInitServerUiState(server.id)
+  if (uiState.loading) {
+    return
+  }
+  uiState.loading = true
   const originalDisabled = server.disabled
 
   try {
@@ -650,13 +667,14 @@ const toggleServerStatus = async server => {
     const langKey = originalDisabled ? 'settings.mcp.enableFailed' : 'settings.mcp.disableFailed'
     showMessage(t(langKey, { error: e.message || String(e), name: server.name }), 'error')
   } finally {
-    server.loading = false
+    uiState.loading = false
   }
 }
 
 const restartMcpServer = async server => {
-  if (server.loading || server.disabled) return
-  server.loading = true
+  const uiState = mcpStore.getOrInitServerUiState(server.id)
+  if (uiState.loading || server.disabled) return
+  uiState.loading = true
   try {
     await mcpStore.restartMcpServer(server.id)
     showMessage(t('settings.mcp.restartSuccess', { name: server.name }), 'success')
@@ -669,7 +687,7 @@ const restartMcpServer = async server => {
       'error'
     )
   } finally {
-    server.loading = false
+    uiState.loading = false
   }
 }
 
@@ -678,43 +696,48 @@ const toggleServerToolsExpansion = async server => {
     return
   }
   // Initialize uiState if it doesn't exist
-  if (!server.uiState) {
-    server.uiState = reactive({ expanded: false, loadingTools: false })
-  }
-  server.uiState.expanded = !server.uiState.expanded
-  if (server.uiState.expanded && !mcpStore.serverTools[server.id]) {
+  // Get UI state from store, it will be initialized if not present
+  const uiState = mcpStore.getOrInitServerUiState(server.id)
+
+  uiState.expanded = !uiState.expanded
+
+  if (uiState.expanded && !mcpStore.serverTools[server.id]) {
     // Fetch only if not already fetched
-    server.uiState.loadingTools = true
+    uiState.loading = true
     try {
       await mcpStore.fetchMcpServerTools(server.id)
     } catch (e) {
       showMessage(t('settings.mcp.fetchToolsFailed', { error: e.message || String(e) }), 'error') // Pass 'error' as type
-      server.uiState.expanded = false // Collapse on error
+      uiState.expanded = false // Collapse on error
     } finally {
-      server.uiState.loadingTools = false
+      uiState.loading = false
     }
   }
 }
 
 const getServerStatusClass = status => {
-  // For status-dot class
-  if (typeof status === Object && status.hasOwnProperty('error')) return 'error'
-  return status || 'stopped'
+  if (typeof status === 'object' && status !== null && status.hasOwnProperty('error')) {
+    return 'error'
+  }
+  if (typeof status === 'string') {
+    return status.toLowerCase()
+  }
+  return 'stopped'
 }
 
 const getServerStatusText = status => {
-  if (!status) return t('settings.mcp.statusUnknown')
-  const text =
-    typeof status === Object && status.hasOwnProperty('error')
-      ? 'Error'
-      : status.charAt(0).toUpperCase() + status.slice(1)
-  // Attempt to find a specific status translation, fallback to status itself or unknown
-  const key = `settings.mcp.status${text}`
-  // Check if translation exists, otherwise return status or unknown
-  // This requires a robust way to check i18n key existence or a default value in $t
-  // For simplicity, we'll assume keys exist or $t handles fallbacks.
-  // A more robust way: if (i18n.global.te(key)) return t(key); else return status;
-  return t(key, status) // Pass status as interpolation if key is generic like settings.mcp.statusValue
+  console.log('status text:', status)
+  if (typeof status === 'object' && status !== null && status.hasOwnProperty('error')) {
+    return t('settings.mcp.statusError', status)
+  }
+
+  if (typeof status === 'string' && status.length > 0) {
+    const capitalizedStatus = status.charAt(0).toUpperCase() + status.slice(1)
+    const i18nKey = `settings.mcp.status${capitalizedStatus}`
+    return t(i18nKey, capitalizedStatus)
+  }
+
+  return t('settings.mcp.statusUnknown', 'Unknown')
 }
 
 const toggleDisableTool = (serverId, tool) => {
@@ -871,7 +894,7 @@ const trimQuotes = str => {
           flex-grow: 1;
 
           .expand-btn {
-            margin-right: 10px;
+            margin-right: var(--cs-space-sm);
             background: none;
             border: none;
             padding: 0;
@@ -888,14 +911,14 @@ const trimQuotes = str => {
           }
 
           .server-info {
-            margin-left: 10px;
+            margin-left: var(--cs-space-sm);
 
             .server-name {
               font-weight: bold;
             }
 
             .server-status {
-              font-size: 12px;
+              font-size: var(--cs-font-size-xs);
               color: #666;
 
               .status-dot {
@@ -903,16 +926,19 @@ const trimQuotes = str => {
                 width: 8px;
                 height: 8px;
                 border-radius: 50%;
-                margin-right: 5px;
+                margin-right: var(--cs-space-xxs);
+                &.connected {
+                  background: rgba(0, 0, 255, 0.8);
+                }
 
                 &.running {
-                  background: green;
+                  background: rgba(0, 255, 0, 0.5);
                 }
                 &.stopped {
                   background: gray;
                 }
                 &.error {
-                  background: red;
+                  background: rgba(255, 0, 0, 0.5);
                 }
                 &.unknown {
                   background: orange;

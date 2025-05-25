@@ -57,11 +57,11 @@ impl ToolDefinition for ChatCompletion {
     /// Get the function calling specification
     ///
     /// Returns a JSON object containing the function calling specification
-    fn tool_calling_spec(&self) -> serde_json::Value {
-        json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "model_name": {
@@ -110,18 +110,9 @@ impl ToolDefinition for ChatCompletion {
                     }
                 },
                 "required": ["model_name", "messages"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "Generated text response"
-                    }
-                },
-                "description": "Model generation result"
-            }
-        })
+            }),
+            disabled: false,
+        }
     }
 
     /// Executes the function with the given parameters.

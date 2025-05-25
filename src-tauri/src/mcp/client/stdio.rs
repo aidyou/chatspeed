@@ -77,6 +77,13 @@ impl StdioClient {
                 t!("mcp.client.stdio_args_cant_be_empty").to_string(),
             ));
         }
+        #[cfg(debug_assertions)]
+        {
+            log::debug!(
+                "MCP original config: {}",
+                serde_json::to_string_pretty(&config).unwrap_or_default(),
+            );
+        }
         Ok(StdioClient {
             // Pass the validated config to McpClientCore
             core: McpClientCore::new(config),
@@ -105,10 +112,8 @@ impl McpClient for StdioClient {
     /// `McpClientResult<RunningService<RoleClient, ()>>` - The running service instance
     /// on success, or an error.
     async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
-        let cmd_str = self
-            .core // Access core
-            .get_config()
-            .await // Await the config
+        let config = self.core.get_config().await;
+        let cmd_str = config // Await the config
             .command
             .as_ref()
             .cloned() // Clone the Option<String>
@@ -120,8 +125,7 @@ impl McpClient for StdioClient {
             })?;
         let mut cmd = Command::new(cmd_str.clone());
 
-        let cfg = self.core.get_config().await;
-        let args = cfg
+        let args = config
             .args
             .as_ref()
             .ok_or_else(|| {
@@ -134,7 +138,7 @@ impl McpClient for StdioClient {
             });
         cmd.args(args);
 
-        if let Some(env) = self.core.get_config().await.env {
+        if let Some(env) = config.env {
             cmd.envs(env.iter().filter_map(|(k, v)| {
                 let k = k.trim();
                 let v = v.trim();
@@ -142,17 +146,45 @@ impl McpClient for StdioClient {
             }));
         }
 
-        let process = TokioChildProcess::new(&mut cmd).map_err(|e| {
-            // Optional: Wrap with t!
-            let detailed_error = e.to_string();
-            McpClientError::StartError(
-                t!(
-                    "mcp.client.stdio_process_creation_failed",
-                    command = cmd_str,
-                    error = detailed_error
+        let process = TokioChildProcess::new(cmd).map_err(|e| {
+            let original_error_message = e.to_string();
+            if e.kind() == std::io::ErrorKind::NotFound {
+                let specific_help = match cmd_str.as_str() {
+                    "npx" => t!("mcp.client.stdio_npx_not_found_help").to_string(),
+                    "uvx" | "uv" => {
+                        t!("mcp.client.stdio_uvx_not_found_help", command = cmd_str).to_string()
+                    }
+                    _ => "".to_string(),
+                };
+                let error_message = if !specific_help.is_empty() {
+                    format!(
+                        "{} {}",
+                        t!(
+                            "mcp.client.stdio_command_not_found_with_help",
+                            command = cmd_str,
+                            original_error = original_error_message
+                        ),
+                        specific_help
+                    )
+                } else {
+                    t!(
+                        "mcp.client.stdio_command_not_found_no_help",
+                        command = cmd_str,
+                        original_error = original_error_message
+                    )
+                    .to_string()
+                };
+                McpClientError::StartError(error_message)
+            } else {
+                McpClientError::StartError(
+                    t!(
+                        "mcp.client.stdio_process_creation_failed",
+                        command = cmd_str,
+                        error = original_error_message
+                    )
+                    .to_string(),
                 )
-                .to_string(),
-            )
+            }
         })?;
 
         ().serve(process).await.map_err(|e| {
@@ -204,6 +236,9 @@ impl McpClient for StdioClient {
 
 #[cfg(test)]
 mod test {
+    use rmcp::{transport::TokioChildProcess, ServiceExt};
+    use tokio::process::Command;
+
     use crate::mcp::client::{McpClient as _, McpClientError};
 
     #[tokio::test]
@@ -211,10 +246,7 @@ mod test {
         let config = crate::mcp::client::McpServerConfig {
             protocol_type: crate::mcp::client::McpProtocolType::Stdio,
             command: Some("npx".into()),
-            args: Some(vec![
-                "-y".into(),
-                "@modelcontextprotocol/server-puppeteer".into(),
-            ]),
+            args: Some(vec!["-y".into(), "tavily-mcp".into()]),
             ..Default::default()
         };
         let client = crate::mcp::client::stdio::StdioClient::new(config)
@@ -232,6 +264,41 @@ mod test {
         log::info!("{}", result);
 
         client.stop().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stdio_test_stdio_npx() -> Result<(), String> {
+        let mut cmd = Command::new("npx");
+        cmd.args(&["-y", "tavily-mcp"]);
+        let service =
+            ().serve(TokioChildProcess::new(cmd).map_err(|e| e.to_string())?)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        // or serve_client((), TokioChildProcess::new(cmd)?).await?;
+
+        // Initialize
+        let server_info = service.peer_info();
+        tracing::info!("Connected to server: {server_info:#?}");
+
+        // List tools
+        let tools = service
+            .list_tools(Default::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        tracing::info!("Available tools: {tools:#?}");
+
+        // Call tool 'git_status' with arguments = {"repo_path": "."}
+        // let tool_result = service
+        //     .call_tool(CallToolRequestParam {
+        //         name: "git_status".into(),
+        //         arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
+        //     })
+        //     .await?;
+        // tracing::info!("Tool result: {tool_result:#?}");
+        service.cancel().await.map_err(|e| e.to_string())?;
+
         Ok(())
     }
 }

@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "SSE client URL parameter cannot be empty."
     stdio_args_cant_be_empty: "Stdio client args parameter cannot be empty."
     stdio_command_cant_be_empty: "Stdio client 'Startup Command' (command) parameter cannot be empty."
+    stdio_command_not_found_no_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}). Please ensure the command is installed and in your system''s PATH environment variable.'
+    stdio_command_not_found_with_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}).'
+    stdio_npx_not_found_help: "This usually means Node.js is not installed correctly, or the 'npx' command is not in your system's PATH environment variable. Please check your Node.js installation."
     stdio_process_creation_failed: "Failed to create Stdio process (command: %{command}), reason: %{error}."
     stdio_service_start_failed: "Failed to start Stdio service (command: %{command}), reason: %{error}."
+    stdio_uvx_not_found_help: 'This might mean your Python environment or the "%{command}" tool is not set up correctly, or it''s not in your system''s PATH environment variable. Please check your Python and "%{command}" setup.'
 
 network:
   client_build_error: "Failed to build HTTP client: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "Request failed: %{error}"
   response_read_error: "Failed to read response: %{error}"
   stream:
-    anthropic_api_error_format: "Anthropic API error: %{message}."
-    anthropic_json_parse_error: "Failed to parse Anthropic JSON stream: %{error}."
+    claude_api_error_format: "Claude API error: %{message}."
+    claude_json_parse_error: "Failed to parse Claude JSON stream: %{error}."
     gemini_parse_error: "Failed to parse Gemini response: %{error}."
     gemini_tool_arg_serialization_error: "Failed to serialize Gemini tool call arguments: %{error}."
-    unknown_anthropic_error_no_details: "Unknown Anthropic stream parsing error (no details)."
+    unknown_claude_error_no_details: "Unknown Claude stream parsing error (no details)."
     unknown_openai_error: "Unknown OpenAI stream parsing error."
 
 setting:

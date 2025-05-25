@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "Le paramètre URL du client SSE ne peut pas être vide."
     stdio_args_cant_be_empty: "Le paramètre args du client stdio ne peut pas être vide."
     stdio_command_cant_be_empty: "Le paramètre command « Commande de démarrage » du client stdio ne peut pas être vide."
+    stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" introuvable (erreur d''origine : %{original_error}). Veuillez vous assurer que la commande est installée et présente dans la variable d''environnement PATH de votre système.'
+    stdio_command_not_found_with_help: 'Échec du démarrage du service MCP : commande "%{command}" introuvable (erreur d''origine : %{original_error}).'
+    stdio_npx_not_found_help: "Cela signifie généralement que Node.js n'est pas installé correctement ou que la commande 'npx' n'est pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre installation de Node.js."
     stdio_process_creation_failed: "Échec de la création du processus Stdio (commande : %{command}), raison : %{error}"
     stdio_service_start_failed: "Échec du démarrage du service Stdio (commande : %{command}), raison : %{error}"
+    stdio_uvx_not_found_help: 'Cela peut signifier que votre environnement Python ou l''outil "%{command}" n''est pas configuré correctement, ou qu''il n''est pas dans la variable d''environnement PATH de votre système. Veuillez vérifier votre configuration Python et "%{command}".'
 
 network:
   client_build_error: "Échec de la création du client HTTP : %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "La requête a échoué : %{error}"
   response_read_error: "Erreur de lecture de la réponse : %{error}"
   stream:
-    anthropic_api_error_format: "Erreur API Anthropic : %{message}"
-    anthropic_json_parse_error: "Échec de l'analyse du flux JSON Anthropic : %{error}"
+    claude_api_error_format: "Erreur API Claude : %{message}"
+    claude_json_parse_error: "Échec de l'analyse du flux JSON Claude : %{error}"
     gemini_parse_error: "Échec de l'analyse de la réponse Gemini : %{error}"
     gemini_tool_arg_serialization_error: "Échec de la sérialisation des arguments d'appel d'outil Gemini : %{error}"
-    unknown_anthropic_error_no_details: "Erreur inconnue d'analyse du flux Anthropic (aucun détail)."
+    unknown_claude_error_no_details: "Erreur inconnue d'analyse du flux Claude (aucun détail)."
     unknown_openai_error: "Erreur inconnue d'analyse du flux OpenAI."
 
 setting:

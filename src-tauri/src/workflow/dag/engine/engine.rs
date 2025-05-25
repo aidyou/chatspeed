@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::ai::interaction::chat_completion::ChatState;
+use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 use crate::workflow::dag::executor::WorkflowExecutor;
 use crate::workflow::dag::graph::WorkflowGraph;
@@ -63,7 +64,9 @@ impl WorkflowEngine {
     ///
     /// # Returns
     /// * `Result<String, WorkflowError>` - The calling spec of all registered functions
-    pub async fn get_function_calling_spec(&self) -> Result<String, WorkflowError> {
+    pub async fn get_function_calling_spec(
+        &self,
+    ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
         self.function_manager.get_tool_calling_spec(None).await
     }
 }
@@ -93,7 +96,10 @@ mod tests {
         .await?;
 
         let calling_spec = engine.get_function_calling_spec().await?;
-        log::debug!("Function calling spec: {}", calling_spec);
+        log::debug!(
+            "Function calling spec: {}",
+            serde_json::to_string_pretty(&calling_spec).unwrap_or_default()
+        );
         assert!(!calling_spec.is_empty());
         Ok(())
     }

@@ -112,8 +112,8 @@ impl ApiResponse {
 pub enum ErrorFormat {
     /// OpenAI format
     OpenAI,
-    /// Anthropic format
-    Anthropic,
+    /// Claude format
+    Claude,
     /// Google format
     Google,
     /// Custom format with user-provided parser
@@ -124,7 +124,7 @@ impl Clone for ErrorFormat {
     fn clone(&self) -> Self {
         match self {
             Self::OpenAI => Self::OpenAI,
-            Self::Anthropic => Self::Anthropic,
+            Self::Claude => Self::Claude,
             Self::Google => Self::Google,
             Self::Custom(_) => Self::Custom(Box::new(|_s| None)), // 提供一个默认的空解析器
         }
@@ -135,7 +135,7 @@ impl fmt::Debug for ErrorFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OpenAI => write!(f, "ErrorFormat::OpenAI"),
-            Self::Anthropic => write!(f, "ErrorFormat::Anthropic"),
+            Self::Claude => write!(f, "ErrorFormat::Claude"),
             Self::Google => write!(f, "ErrorFormat::Google"),
             Self::Custom(_) => write!(f, "ErrorFormat::Custom(<function>)"),
         }
@@ -154,7 +154,7 @@ impl ErrorFormat {
     /// Returns (error_type, error_message) if parsing succeeds
     pub fn parse_error(&self, error_text: &str) -> Option<(String, String)> {
         match self {
-            Self::OpenAI | Self::Anthropic => {
+            Self::OpenAI | Self::Claude => {
                 if let Ok(json) = serde_json::from_str::<Value>(error_text) {
                     if let Some(error) = json.get("error") {
                         return Some((
@@ -284,10 +284,10 @@ pub struct OpenAIUsage {
     pub completion_tokens: u64,
 }
 
-/// Anthropic stream event types
+/// Claude stream event types
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AnthropicEventType {
+pub enum ClaudeEventType {
     MessageStart,
     ContentBlockStart,
     ContentBlockDelta,
@@ -298,14 +298,14 @@ pub enum AnthropicEventType {
     Error,
 }
 
-/// Anthropic stream event
+/// Claude stream event
 #[derive(Debug, Deserialize)]
-pub struct AnthropicStreamEvent {
+pub struct ClaudeStreamEvent {
     #[serde(rename = "type")]
-    pub event_type: AnthropicEventType,
+    pub event_type: ClaudeEventType,
     /// Content block object (only available in content_block_start events)
     #[serde(default)]
-    pub content_block: Option<AnthropicContentBlock>,
+    pub content_block: Option<ClaudeContentBlock>,
     #[serde(default)]
     pub index: Option<u32>,
     #[serde(default)]
@@ -321,7 +321,7 @@ pub struct AnthropicStreamEvent {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct AnthropicContentBlock {
+pub struct ClaudeContentBlock {
     #[serde(rename = "type")]
     pub block_type: String, // "text" or "tool_use"
     #[serde(default)]

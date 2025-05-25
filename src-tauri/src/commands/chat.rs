@@ -24,8 +24,8 @@
 //!     ],
 //!     maxTokens: 100
 //! })
-//! window.addEventListener('ai_chunk', (event) => {
-//!   console.log('ai_chunk', event)
+//! window.addEventListener('chat_stream', (event) => {
+//!   console.log('chat_stream', event)
 //! })
 //! ```
 //!
@@ -46,8 +46,8 @@
 
 use super::chat_web_search::chat_completion_with_search;
 use crate::ai::interaction::chat_completion::{complete_chat_async, ChatProtocol, ChatState};
-use crate::ai::traits::chat::{ChatResponse, MessageType};
-use crate::commands::constants::{TIME_IND, URL_REGEX};
+use crate::ai::traits::chat::{ChatResponse, MessageType, ToolCallDeclaration};
+use crate::commands::constants::URL_REGEX;
 use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::db::MainStore;
 use crate::http::chp::{Chp, SearchProvider};
@@ -55,7 +55,6 @@ use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::workflow::tools::{DeepSearch, ModelName};
 use crate::workflow::ToolManager;
 
-use chrono::Local;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
@@ -87,6 +86,7 @@ pub fn setup_chat_proxy(
         }
 
         // 如果代理类型是"bySetting"，从配置中获取
+        // if proxy_type is "bySetting", get proxy type from config
         if proxy_type == "bySetting" {
             let config_store = main_state.lock().map_err(|e| {
                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
@@ -115,86 +115,6 @@ pub fn setup_chat_proxy(
         }
     }
     Ok(())
-}
-
-pub fn setup_chat_context(
-    main_state: &Arc<std::sync::Mutex<MainStore>>,
-    messages: &mut Vec<Value>,
-    metadata: &mut Option<Value>,
-) {
-    let mut use_context = true;
-    if let Some(md) = metadata.as_mut() {
-        // set to false if the frontend passed useContext = false
-        if let Some(uc) = md.get("useContext") {
-            use_context = uc.as_bool().unwrap_or(false);
-        }
-    }
-
-    // Add context to messages
-    if use_context {
-        let mut context = vec![];
-
-        let content = messages
-            .last()
-            .and_then(|m| m["content"].as_str())
-            .map(|s| s.to_string());
-
-        if let Some(content) = content {
-            if TIME_IND.iter().any(|&keyword| content.contains(keyword)) {
-                context.push(t!(
-                    "chat.context.time",
-                    time = Local::now().format("%Y-%m-%d %H:%M:%ST%Z").to_string()
-                ));
-            }
-        }
-
-        // 只在第一轮对话提供上下文信息
-        // Just add context to first message
-        if messages.len() == 1 {
-            if let Ok(config_store) = main_state
-                .lock()
-                .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
-            {
-                let location = config_store.get_config("location", String::new());
-                if !location.is_empty() {
-                    context.push(t!("chat.context.location", location = location));
-                }
-                let role = config_store.get_config("role", String::new());
-                if !role.is_empty() {
-                    context.push(t!("chat.context.role", role = role));
-                }
-                let language = config_store.get_config("primary_language", String::new());
-                if !language.is_empty() {
-                    // get available languages, map_err to avoid panic
-                    // if get_available_lang fails, it will not add language context
-                    // which is acceptable
-                    if let Ok(available_languages) = get_available_lang() {
-                        if available_languages.contains_key(&language) {
-                            context.push(t!(
-                                "chat.context.language",
-                                language = available_languages[&language]
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Update messages with context
-        if !context.is_empty() {
-            if let Some(last_message) = messages.last_mut() {
-                let new_content = t!(
-                    "chat.context.content",
-                    context = context.join(" "),
-                    content = last_message["content"].as_str().unwrap_or_default()
-                )
-                .to_string();
-                last_message["content"] = Value::String(new_content);
-            }
-            #[cfg(debug_assertions)]
-            log::debug!("Context added: {}", context.join(" "));
-        }
-    }
 }
 
 /// Tauri command to interact with the AI chat system.
@@ -234,8 +154,8 @@ pub fn setup_chat_context(
 ///     ],
 ///     maxTokens: 100
 /// })
-/// window.addEventListener('ai_chunk', (event) => {
-///   console.log('ai_chunk', event)
+/// window.addEventListener('chat_stream', (event) => {
+///   console.log('chat_stream', event)
 /// })
 /// ```
 #[tauri::command]
@@ -324,6 +244,8 @@ pub async fn chat_completion(
                             last_message["content"] = Value::String(new_content);
                         }
                     }
+
+                    // Send references to the chat
                     let _ = &tx
                         .try_send(ChatResponse::new_with_arc(
                             chat_id.clone(),
@@ -340,7 +262,21 @@ pub async fn chat_completion(
         }
     }
 
-    setup_chat_context(&main_state, &mut messages, &mut metadata);
+    let tools = if metadata
+        .as_ref()
+        .and_then(|md_val| md_val.get("toolsEnabled").and_then(Value::as_bool))
+        .unwrap_or(false)
+    {
+        Some(
+            chat_state
+                .tool_manager
+                .get_tool_calling_spec(None)
+                .await
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
 
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", messages.len());
@@ -358,7 +294,7 @@ pub async fn chat_completion(
         api_key,
         chat_id,
         messages,
-        None,
+        tools,
         metadata,
         callback,
     )
@@ -366,6 +302,30 @@ pub async fn chat_completion(
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+pub(crate) async fn tool_calling(
+    chat_state: Arc<ChatState>,
+    tool: ToolCallDeclaration,
+) -> Result<Value, String> {
+    let tm = chat_state.tool_manager.clone();
+    // tool.arguments is Option<String>
+    // We need to parse it into a Value.
+    // If it's None, or an empty string, or fails to parse, default to an empty JSON object.
+    let args = tool
+        .arguments
+        .as_ref()
+        .and_then(|s| {
+            if s.is_empty() {
+                Some(json!({}))
+            } else {
+                serde_json::from_str(s).ok()
+            }
+        })
+        .unwrap_or_else(|| json!({}));
+    tm.tool_call(&tool.name, args)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Use the crawler_url server interface to fetch information about the URLs contained in the content.

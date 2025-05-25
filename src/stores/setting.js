@@ -28,8 +28,6 @@ const defaultSettings = {
   websearchModel: { id: '', model: '' },
   searchEngine: [],
   searchResultCount: 20,
-  location: '',
-  role: '',
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
   noteWindowVisibleShortcut: 'ALT+N',

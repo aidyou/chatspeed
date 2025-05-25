@@ -83,7 +83,7 @@
         <!-- basic info -->
         <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.model.apiProtocol')" prop="apiProtocol">
-            <el-select v-model="modelForm.apiProtocol">
+            <el-select v-model="modelForm.apiProtocol" @change="onApiProtocolChange">
               <el-option v-for="(k, v) in apiProtocolOptions" :key="k" :label="v" :value="k" />
             </el-select>
           </el-form-item>
@@ -503,8 +503,8 @@ const baseUrlPlaceholder = computed(() => {
     return 'http://localhost:11434/v1'
   } else if (modelForm.value.apiProtocol === 'huggingface') {
     return 'https://router.huggingface.co/hf-inference/models'
-  } else if (modelForm.value.apiProtocol === 'anthropic') {
-    return 'https://api.anthropic.com'
+  } else if (modelForm.value.apiProtocol === 'claude') {
+    return 'https://api.anthropic.com/v1'
   } else if (modelForm.value.apiProtocol === 'gemini') {
     return 'https://generativelanguage.googleapis.com/v1beta/models'
   }
@@ -553,7 +553,7 @@ const createFromModel = srcModel => {
  */
 const editModel = async (id, model) => {
   formRef.value?.resetFields()
-  activeTab.value = 'basic' // 重置为基础信息标签页
+  activeTab.value = 'basic'
 
   if (id) {
     const modelData = modelStore.getModelProviderById(id)
@@ -572,9 +572,17 @@ const editModel = async (id, model) => {
     keys.forEach(key => {
       modelForm.value[key] = model[key]
     })
+    if (!modelForm.baseUrl) {
+      modelForm.value.baseUrl = baseUrlPlaceholder
+    }
+
+    console.log(modelForm.value)
   } else {
     editId.value = null
     modelForm.value = { ...defaultFormData }
+    if (!modelForm.baseUrl) {
+      modelForm.value.baseUrl = baseUrlPlaceholder
+    }
   }
   modelDialogVisible.value = true
 }
@@ -731,6 +739,15 @@ const onModelConfig = model => {
     modelConfigForm.value = { ...defaultModelConfig }
   }
   modelConfigDialogVisible.value = true
+}
+
+/**
+ * setup the provider base url
+ */
+const onApiProtocolChange = () => {
+  if (!editId.value) {
+    modelForm.value.baseUrl = baseUrlPlaceholder
+  }
 }
 
 /**

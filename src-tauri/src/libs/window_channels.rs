@@ -26,16 +26,16 @@ impl WindowChannels {
         }
     }
 
-    /// Emit an AI chunk message to the specified window
+    /// Emit an AI chat stream message to the specified window
     ///
     /// # Arguments
     /// * `window`: The Tauri window to send the message to
     /// * `chunk`: message to send
-    async fn emit_ai_chunk(
+    async fn emit_chat_stream(
         window: &tauri::Window,
         chunk: Arc<ChatResponse>,
     ) -> Result<(), tauri::Error> {
-        window.emit("ai_chunk", json!(&chunk)).map_err(|e| {
+        window.emit("chat_stream", json!(&chunk)).map_err(|e| {
             log::error!("Failed to serialize AI chunk: {}", e);
             e
         })
@@ -60,7 +60,7 @@ impl WindowChannels {
         }
 
         let first_msg = &batch[0];
-        Self::emit_ai_chunk(
+        Self::emit_chat_stream(
             window,
             Arc::new(ChatResponse {
                 chat_id: first_msg.chat_id.clone(),
@@ -126,7 +126,7 @@ impl WindowChannels {
                             }
 
                             // Send the error/done message
-                            if let Err(e) = Self::emit_ai_chunk(&window, chunk).await {
+                            if let Err(e) = Self::emit_chat_stream(&window, chunk).await {
                                 log::error!("Failed to emit AI chunk: {}", e);
                             }
                             continue;

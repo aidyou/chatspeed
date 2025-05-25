@@ -5,7 +5,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use super::{types::Step, MessageRole};
 use crate::{
-    ai::interaction::chat_completion::ChatState,
+    ai::{interaction::chat_completion::ChatState, traits::chat::MCPToolDeclaration},
     db::MainStore,
     http::chp::SearchResult,
     libs::util::format_json_str,
@@ -73,12 +73,15 @@ impl ReactExecutor {
         let tool_spec = context
             .function_manager
             .get_tool_calling_spec(Some(exclude))
-            .await?;
+            .await?
+            .iter()
+            .map(|td| td.to_standard())
+            .collect::<Vec<Value>>();
 
         Ok(Self {
             context,
             plan_manager,
-            tool_spec: Arc::new(tool_spec),
+            tool_spec: Arc::new(serde_json::to_string(&tool_spec).unwrap_or_default()),
             max_retries,
         })
     }

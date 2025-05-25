@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "URL-Parameter des SSE-Clients darf nicht leer sein"
     stdio_args_cant_be_empty: "Args-Parameter des Stdio-Clients dürfen nicht leer sein"
     stdio_command_cant_be_empty: "Command-Parameter „Startbefehl“ des Stdio-Clients darf nicht leer sein"
+    stdio_command_not_found_no_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}). Bitte stellen Sie sicher, dass der Befehl installiert und in der PATH-Umgebungsvariable Ihres Systems vorhanden ist.'
+    stdio_command_not_found_with_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}).'
+    stdio_npx_not_found_help: "Dies bedeutet normalerweise, dass Node.js nicht korrekt installiert ist oder der Befehl 'npx' nicht in der PATH-Umgebungsvariable Ihres Systems vorhanden ist. Bitte überprüfen Sie Ihre Node.js-Installation."
     stdio_process_creation_failed: "Erstellung des Stdio-Prozesses fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
     stdio_service_start_failed: "Start des Stdio-Dienstes fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
+    stdio_uvx_not_found_help: 'Dies könnte bedeuten, dass Ihre Python-Umgebung oder das Werkzeug "%{command}" nicht korrekt eingerichtet ist oder sich nicht in der PATH-Umgebungsvariable Ihres Systems befindet. Bitte überprüfen Sie Ihre Python- und "%{command}"-Einrichtung.'
 
 network:
   client_build_error: "Erstellung des HTTP-Clients fehlgeschlagen: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "Anfrage fehlgeschlagen: %{error}"
   response_read_error: "Lesen der Antwort fehlgeschlagen: %{error}"
   stream:
-    anthropic_api_error_format: "Anthropic API-Fehler: %{message}"
-    anthropic_json_parse_error: "Parsen des Anthropic JSON-Streams fehlgeschlagen: %{error}"
+    claude_api_error_format: "Claude API-Fehler: %{message}"
+    claude_json_parse_error: "Parsen des Claude JSON-Streams fehlgeschlagen: %{error}"
     gemini_parse_error: "Parsen der Gemini-Antwort fehlgeschlagen: %{error}"
     gemini_tool_arg_serialization_error: "Serialisierung der Gemini-Werkzeugaufrufparameter fehlgeschlagen: %{error}"
-    unknown_anthropic_error_no_details: "Unbekannter Fehler beim Parsen des Anthropic-Streams (keine Details)"
+    unknown_claude_error_no_details: "Unbekannter Fehler beim Parsen des Claude-Streams (keine Details)"
     unknown_openai_error: "Unbekannter Fehler beim Parsen des OpenAI-Streams"
 
 setting:

@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "El parámetro URL del cliente SSE no puede estar vacío."
     stdio_args_cant_be_empty: "El parámetro args del cliente stdio no puede estar vacío."
     stdio_command_cant_be_empty: "El parámetro 'Comando de inicio' (command) del cliente stdio no puede estar vacío."
+    stdio_command_not_found_no_help: 'No se pudo iniciar el servicio MCP: comando "%{command}" no encontrado (error original: %{original_error}). Asegúrese de que el comando esté instalado y en la variable de entorno PATH de su sistema.'
+    stdio_command_not_found_with_help: 'No se pudo iniciar el servicio MCP: comando "%{command}" no encontrado (error original: %{original_error}).'
+    stdio_npx_not_found_help: "Esto generalmente significa que Node.js no está instalado correctamente o que el comando 'npx' no está en la variable de entorno PATH de su sistema. Verifique su instalación de Node.js."
     stdio_process_creation_failed: "Error al crear el proceso Stdio (comando: %{command}), motivo: %{error}."
     stdio_service_start_failed: "Error al iniciar el servicio Stdio (comando: %{command}), motivo: %{error}."
+    stdio_uvx_not_found_help: 'Esto podría significar que su entorno Python o la herramienta "%{command}" no están configurados correctamente, o no se encuentran en la variable de entorno PATH de su sistema. Verifique la configuración de Python y de "%{command}".'
 
 network:
   client_build_error: "Error al crear el cliente HTTP: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "La solicitud falló: %{error}"
   response_read_error: "Error al leer la respuesta: %{error}"
   stream:
-    anthropic_api_error_format: "Error de API de Anthropic: %{message}."
-    anthropic_json_parse_error: "Error al analizar el flujo JSON de Anthropic: %{error}."
+    claude_api_error_format: "Error de API de Claude: %{message}."
+    claude_json_parse_error: "Error al analizar el flujo JSON de Claude: %{error}."
     gemini_parse_error: "Error al analizar la respuesta de Gemini: %{error}."
     gemini_tool_arg_serialization_error: "Error al serializar los argumentos de la llamada a herramienta de Gemini: %{error}."
-    unknown_anthropic_error_no_details: "Error desconocido al analizar el flujo de Anthropic (sin detalles)."
+    unknown_claude_error_no_details: "Error desconocido al analizar el flujo de Claude (sin detalles)."
     unknown_openai_error: "Error desconocido al analizar el flujo de OpenAI."
 
 setting:

@@ -142,34 +142,6 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
-            {{ $t('settings.general.location') }}
-            <small class="tooltip">{{ $t('settings.general.locationTip') }}</small>
-          </div>
-        </div>
-        <div class="value" style="width: 45%">
-          <el-input
-            v-model="settings.location"
-            @input="onLocationChange"
-            :placeholder="$t('settings.general.locationPlaceholder')" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.role') }}
-            <small class="tooltip">{{ $t('settings.general.roleTip') }}</small>
-          </div>
-        </div>
-        <div class="value" style="width: 45%">
-          <el-input
-            v-model="settings.role"
-            @input="onRoleChange"
-            :placeholder="$t('settings.general.rolePlaceholder')" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
             {{ $t('settings.general.historyMessages') }}
             <small class="tooltip">{{ $t('settings.general.historyMessagesTooltip') }}</small>
           </div>
@@ -805,14 +777,6 @@ const clearShortcut = shortcutKey => {
 // =================================================
 // chat settings
 // =================================================
-
-const onLocationChange = value => {
-  setSetting('location', value || '')
-}
-
-const onRoleChange = value => {
-  setSetting('role', value || '')
-}
 
 /**
  * Handles the change of history messages

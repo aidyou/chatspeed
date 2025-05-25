@@ -145,7 +145,7 @@ pub type McpClientResult<T> = Result<T, McpClientError>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum McpStatus {
-    Starting,
+    Connected,
     Running,
     Stopped,
     #[serde(rename = "error")]
@@ -155,7 +155,7 @@ pub enum McpStatus {
 impl Display for McpStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            &McpStatus::Starting => write!(f, "Starting"),
+            &McpStatus::Connected => write!(f, "Connected"),
             McpStatus::Running => write!(f, "Running"),
             McpStatus::Stopped => write!(f, "Stopped"),
             McpStatus::Error(err) => write!(f, "Error: {}", err),
@@ -219,7 +219,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
         match self.perform_connect().await {
             Ok(running_service) => {
                 *self.client().write().await = Some(running_service);
-                self.set_status(McpStatus::Running).await;
+                self.set_status(McpStatus::Connected).await;
                 Ok(())
             }
             Err(e) => {
@@ -271,15 +271,23 @@ pub trait McpClient: Send + Sync + McpClientInternal {
             {
                 Ok(result) => {
                     let tools = result.map_err(|e| McpClientError::CallError(e.to_string()))?; // Changed StatusError to CallError for tool listing
+
+                    // set status to running
+                    self.set_status(McpStatus::Running).await;
+
                     Ok(get_tools(&tools))
                 }
-                Err(_) => Err(McpClientError::StatusError(
-                    t!(
-                        "mcp.client.list_tools_timeout",
-                        name = self.config().await.name
-                    )
-                    .to_string(),
-                )),
+                Err(_) => {
+                    let err = McpClientError::StatusError(
+                        t!(
+                            "mcp.client.list_tools_timeout",
+                            name = self.config().await.name
+                        )
+                        .to_string(),
+                    );
+                    self.set_status(McpStatus::Error(err.to_string())).await;
+                    Err(err)
+                }
             }
         } else {
             Err(McpClientError::StatusError(

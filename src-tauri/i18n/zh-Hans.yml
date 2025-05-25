@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "sse客户端的url参数不能为空"
     stdio_args_cant_be_empty: "stdio客户端的args参数不能为空"
     stdio_command_cant_be_empty: "stdio客户端的「启动命令」参数command不能为空"
+    stdio_command_not_found_no_help: "无法启动 MCP 服务：命令 “%{command}” 未找到 (原始错误: %{original_error})。请确保该命令已安装并在系统的 PATH 环境变量中。"
+    stdio_command_not_found_with_help: "无法启动 MCP 服务：命令 “%{command}” 未找到 (原始错误: %{original_error})。"
+    stdio_npx_not_found_help: "这通常意味着 Node.js 没有被正确安装，或者 'npx' 命令不在系统的 PATH 环境变量中。请检查您的 Node.js 安装。"
     stdio_process_creation_failed: "创建 Stdio 进程失败 (命令: %{command})，原因: %{error}"
     stdio_service_start_failed: "启动 Stdio 服务失败 (命令: %{command})，原因: %{error}"
+    stdio_uvx_not_found_help: "这可能意味着您的 Python 环境或 “%{command}” 工具没有正确设置，或者它不在系统的 PATH 环境变量中。请检查您的 Python 和 “%{command}” 设置。"
 
 network:
   client_build_error: "创建HTTP客户端失败: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "请求失败: %{error}"
   response_read_error: "读取响应失败: %{error}"
   stream:
-    anthropic_api_error_format: "Anthropic API 错误: %{message}"
-    anthropic_json_parse_error: "解析 Anthropic JSON 流失败: %{error}"
+    claude_api_error_format: "Claude API 错误: %{message}"
+    claude_json_parse_error: "解析 Claude JSON 流失败: %{error}"
     gemini_parse_error: "解析 Gemini 响应失败: %{error}"
     gemini_tool_arg_serialization_error: "序列化 Gemini 工具调用参数失败: %{error}"
-    unknown_anthropic_error_no_details: "Anthropic 流解析未知错误 (无详情)"
+    unknown_claude_error_no_details: "Claude 流解析未知错误 (无详情)"
     unknown_openai_error: "OpenAI 流解析未知错误"
 
 setting:

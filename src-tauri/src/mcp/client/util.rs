@@ -17,7 +17,7 @@ pub fn get_tools(list_tools_result: &ListToolsResult) -> Vec<MCPToolDeclaration>
     for tool in list_tools_result.tools.iter() {
         tools.push(MCPToolDeclaration {
             name: tool.name.to_string(),
-            description: tool.description.to_string(),
+            description: tool.description.clone().unwrap_or_default().to_string(),
             input_schema: Value::Object(
                 Arc::try_unwrap(tool.input_schema.clone()).unwrap_or_else(|arc| (*arc).clone()),
             ),

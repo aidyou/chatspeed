@@ -3,6 +3,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
+    ai::traits::chat::MCPToolDeclaration,
     http::chp::SearchResult,
     libs::dedup::dedup_and_rank_results,
     workflow::{
@@ -29,11 +30,11 @@ impl ToolDefinition for SearchDedup {
         "Deduplicate and rank search results based on URL and semantic similarity"
     }
 
-    fn tool_calling_spec(&self) -> serde_json::Value {
-        json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "results": {
@@ -46,18 +47,9 @@ impl ToolDefinition for SearchDedup {
                     }
                 },
                 "required": ["results", "query"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "results": {
-                        "type": "array",
-                        "description": "Deduplicated results"
-                    }
-                },
-                "description": "Processed search results"
-            }
-        })
+            }),
+            disabled: false,
+        }
     }
 
     /// Executes the search deduplication and ranking operation.

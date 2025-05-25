@@ -3,6 +3,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
+    ai::traits::chat::MCPToolDeclaration,
     http::chp::Chp,
     workflow::{
         error::WorkflowError,
@@ -44,11 +45,11 @@ impl ToolDefinition for Plot {
     ///
     /// # Returns
     /// * `Value` - The function specification in JSON format.
-    fn tool_calling_spec(&self) -> Value {
-        json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
                 "type": "object",
                 "properties": {
                     "plot_type": {"type": "string","enum": ["line","bar","pie"], "description": "Plot type"},
@@ -62,19 +63,10 @@ impl ToolDefinition for Plot {
                         "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels for pie"}
                     }}
                 },
-                "required": ["plot_type","data"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "Plot image URL"
-                    }
-                },
-                "description": "Generated plot result"
-            }
-        })
+                "required": ["plot_type","data"],
+            }),
+            disabled: false,
+        }
     }
 
     /// Executes the fetch function.

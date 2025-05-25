@@ -15,23 +15,23 @@ use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{get_proxy_type, init_extra_params, update_or_create_metadata};
 use crate::{ai::error::AiError, impl_stoppable};
 
-/// Represents the Anthropic chat implementation
+/// Represents the Claude chat implementation
 #[derive(Clone)]
-pub struct AnthropicChat {
+pub struct ClaudeChat {
     stop_flag: Arc<Mutex<bool>>,
     client: DefaultApiClient,
 }
 
-impl AnthropicChat {
-    /// Creates a new instance of AnthropicChat
+impl ClaudeChat {
+    /// Creates a new instance of ClaudeChat
     pub fn new() -> Self {
         Self {
             stop_flag: Arc::new(Mutex::new(false)),
-            client: DefaultApiClient::new(ErrorFormat::Anthropic),
+            client: DefaultApiClient::new(ErrorFormat::Claude),
         }
     }
 
-    /// Builds the request payload for Anthropic API
+    /// Builds the request payload for Claude API
     ///
     /// # Arguments
     /// * `model` - The model to use
@@ -39,7 +39,7 @@ impl AnthropicChat {
     /// * `params` - Generation parameters like temperature, top_k, etc.
     ///
     /// # Returns
-    /// A JSON payload formatted according to Anthropic API requirements
+    /// A JSON payload formatted according to Claude API requirements
     fn build_request_body(
         &self,
         model: &str,
@@ -91,12 +91,12 @@ impl AnthropicChat {
 
             if params.get("tool_choice").and_then(|tc| tc.as_str()) != Some("none") {
                 if let Some(tools_vec) = tools {
-                    let anthropic_tools = tools_vec
+                    let claude_tools = tools_vec
                         .into_iter()
-                        .map(|tool| tool.to_anthropic())
+                        .map(|tool| tool.to_claude())
                         .collect::<Vec<Value>>();
-                    if !anthropic_tools.is_empty() {
-                        obj.insert("tools".to_string(), json!(anthropic_tools));
+                    if !claude_tools.is_empty() {
+                        obj.insert("tools".to_string(), json!(claude_tools));
                     }
                 }
             }
@@ -105,7 +105,7 @@ impl AnthropicChat {
         #[cfg(debug_assertions)]
         {
             log::debug!(
-                "anthropic payload: {}",
+                "claude payload: {}",
                 serde_json::to_string_pretty(&payload).unwrap_or_default()
             )
         }
@@ -116,7 +116,7 @@ impl AnthropicChat {
     /// Processes streaming response
     ///
     /// # Arguments
-    /// * `response` - Raw streaming response from Anthropic API
+    /// * `response` - Raw streaming response from Claude API
     /// * `callback` - Function for sending updates to the client
     /// * `metadata_option` - Optional metadata to include in callbacks
     async fn handle_stream_response(
@@ -135,7 +135,7 @@ impl AnthropicChat {
 
         let processor = StreamProcessor::new();
         let mut event_receiver = processor
-            .process_stream(response, &StreamFormat::Anthropic)
+            .process_stream(response, &StreamFormat::Claude)
             .await;
 
         while let Some(event) = event_receiver.recv().await {
@@ -148,17 +148,14 @@ impl AnthropicChat {
                 Ok(raw_bytes_from_sse_processor) => {
                     let chunks = self
                         .client
-                        .process_stream_chunk(
-                            raw_bytes_from_sse_processor,
-                            &StreamFormat::Anthropic,
-                        )
+                        .process_stream_chunk(raw_bytes_from_sse_processor, &StreamFormat::Claude)
                         .await
                         .map_err(|e| {
                             let err = AiError::StreamProcessingFailed {
-                                provider: "Anthropic".to_string(),
+                                provider: "Claude".to_string(),
                                 details: e.to_string(),
                             };
-                            log::error!("Anthropic stream processing error: {}", err);
+                            log::error!("Claude stream processing error: {}", err);
                             callback(ChatResponse::new_with_arc(
                                 chat_id.clone(),
                                 err.to_string(),
@@ -276,7 +273,7 @@ impl AnthropicChat {
                                             details: e.to_string(),
                                         };
                                         log::error!(
-                                            "Anthropic tool call serialization error for tool {:?}: {}",
+                                            "Claude tool call serialization error for tool {:?}: {}",
                                             tcd.name, err
                                         );
                                         callback(ChatResponse::new_with_arc(
@@ -298,10 +295,10 @@ impl AnthropicChat {
                 }
                 Err(e) => {
                     let err = AiError::StreamProcessingFailed {
-                        provider: "Anthropic".to_string(),
+                        provider: "Claude".to_string(),
                         details: e.to_string(),
                     };
-                    log::error!("Anthropic stream event error: {}", err);
+                    log::error!("Claude stream event error: {}", err);
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
                         err.to_string(),
@@ -332,11 +329,11 @@ impl AnthropicChat {
     }
 }
 
-impl_stoppable!(AnthropicChat);
+impl_stoppable!(ClaudeChat);
 
 #[async_trait]
-impl AiChatTrait for AnthropicChat {
-    /// Implements chat functionality for Anthropic API
+impl AiChatTrait for ClaudeChat {
+    /// Implements chat functionality for Claude API
     ///
     /// # Arguments
     /// * `api_url` - Optional API endpoint URL
@@ -384,10 +381,10 @@ impl AiChatTrait for AnthropicChat {
             .await
             .map_err(|network_err| {
                 let err = AiError::ApiRequestFailed {
-                    provider: "Anthropic".to_string(),
+                    provider: "Claude".to_string(),
                     details: network_err.to_string(),
                 };
-                log::error!("Anthropic API request failed: {}", err);
+                log::error!("Claude API request failed: {}", err);
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
                     err.to_string(),
@@ -399,10 +396,10 @@ impl AiChatTrait for AnthropicChat {
 
         if response.is_error {
             let err = AiError::ApiRequestFailed {
-                provider: "Anthropic".to_string(),
+                provider: "Claude".to_string(),
                 details: response.content.clone(),
             };
-            log::error!("Anthropic API returned an error: {}", err);
+            log::error!("Claude API returned an error: {}", err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 err.to_string(),

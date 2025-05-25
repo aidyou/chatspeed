@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "Параметр URL клиента SSE не может быть пустым."
     stdio_args_cant_be_empty: "Параметр args клиента stdio не может быть пустым."
     stdio_command_cant_be_empty: "Параметр command «Команда запуска» клиента stdio не может быть пустым."
+    stdio_command_not_found_no_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}). Убедитесь, что команда установлена и находится в переменной окружения PATH вашей системы.'
+    stdio_command_not_found_with_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}).'
+    stdio_npx_not_found_help: "Обычно это означает, что Node.js установлен неправильно или команда 'npx' отсутствует в переменной окружения PATH вашей системы. Проверьте установку Node.js."
     stdio_process_creation_failed: "Не удалось создать процесс Stdio (команда: %{command}), причина: %{error}"
     stdio_service_start_failed: "Не удалось запустить службу Stdio (команда: %{command}), причина: %{error}"
+    stdio_uvx_not_found_help: 'Это может означать, что ваша среда Python или инструмент "%{command}" настроены неправильно или отсутствуют в переменной окружения PATH вашей системы. Проверьте настройку Python и инструмента "%{command}".'
 
 network:
   client_build_error: "Не удалось создать HTTP-клиент: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "Запрос не удался: %{error}"
   response_read_error: "Не удалось прочитать ответ: %{error}"
   stream:
-    anthropic_api_error_format: "Ошибка API Anthropic: %{message}"
-    anthropic_json_parse_error: "Не удалось разобрать поток JSON Anthropic: %{error}"
+    claude_api_error_format: "Ошибка API Claude: %{message}"
+    claude_json_parse_error: "Не удалось разобрать поток JSON Claude: %{error}"
     gemini_parse_error: "Не удалось разобрать ответ Gemini: %{error}"
     gemini_tool_arg_serialization_error: "Не удалось сериализовать аргументы вызова инструмента Gemini: %{error}"
-    unknown_anthropic_error_no_details: "Неизвестная ошибка разбора потока Anthropic (без подробностей)."
+    unknown_claude_error_no_details: "Неизвестная ошибка разбора потока Claude (без подробностей)."
     unknown_openai_error: "Неизвестная ошибка разбора потока OpenAI."
 
 setting:

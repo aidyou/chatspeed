@@ -159,14 +159,15 @@ pub struct ToolCallDeclaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub results: Option<serde_json::Value>,
+    pub results: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MCPToolDeclaration {
     pub name: String,
     pub description: String,
-    pub input_schema: serde_json::Value,
+    pub input_schema: Value,
     #[serde(default)]
     pub disabled: bool,
 }
@@ -261,11 +262,11 @@ impl MCPToolDeclaration {
         &self.input_schema
     }
 
-    /// Converts the tool declaration to Anthropic compatible format
+    /// Converts the tool declaration to Claude compatible format
     ///
     /// # Returns
     /// Returns the raw serialized tool declaration
-    pub fn to_anthropic(&self) -> Value {
+    pub fn to_claude(&self) -> Value {
         json!(self)
     }
 }

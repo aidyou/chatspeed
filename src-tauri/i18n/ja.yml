@@ -237,8 +237,12 @@ mcp:
     sse_url_cant_be_empty: "SSEクライアントのURLパラメータは空にできません"
     stdio_args_cant_be_empty: "stdioクライアントのargsパラメータは空にできません"
     stdio_command_cant_be_empty: "stdioクライアントの「起動コマンド」パラメータcommandは空にできません"
+    stdio_command_not_found_no_help: "MCPサービスの起動に失敗しました：コマンド「%{command}」が見つかりません (元のエラー: %{original_error})。コマンドがインストールされ、システムのPATH環境変数に含まれていることを確認してください。"
+    stdio_command_not_found_with_help: "MCPサービスの起動に失敗しました：コマンド「%{command}」が見つかりません (元のエラー: %{original_error})。"
+    stdio_npx_not_found_help: "これは通常、Node.jsが正しくインストールされていないか、「npx」コマンドがシステムのPATH環境変数に含まれていないことを意味します。Node.jsのインストールを確認してください。"
     stdio_process_creation_failed: "Stdioプロセスの作成に失敗しました (コマンド: %{command})、原因: %{error}"
     stdio_service_start_failed: "Stdioサービスの起動に失敗しました (コマンド: %{command})、原因: %{error}"
+    stdio_uvx_not_found_help: "これは、Python環境または「%{command}」ツールが正しく設定されていないか、システムのPATH環境変数に含まれていないことを意味する可能性があります。Pythonおよび「%{command}」の設定を確認してください。"
 
 network:
   client_build_error: "HTTPクライアントの作成に失敗しました: %{error}"
@@ -249,11 +253,11 @@ network:
   request_failed: "リクエストに失敗しました: %{error}"
   response_read_error: "レスポンスの読み取りに失敗しました: %{error}"
   stream:
-    anthropic_api_error_format: "Anthropic API エラー: %{message}"
-    anthropic_json_parse_error: "Anthropic JSON ストリームの解析に失敗しました: %{error}"
+    claude_api_error_format: "Claude API エラー: %{message}"
+    claude_json_parse_error: "Claude JSON ストリームの解析に失敗しました: %{error}"
     gemini_parse_error: "Gemini レスポンスの解析に失敗しました: %{error}"
     gemini_tool_arg_serialization_error: "Gemini ツール呼び出し引数のシリアライズに失敗しました: %{error}"
-    unknown_anthropic_error_no_details: "Anthropic ストリーム解析の不明なエラー (詳細なし)"
+    unknown_claude_error_no_details: "Claude ストリーム解析の不明なエラー (詳細なし)"
     unknown_openai_error: "OpenAI ストリーム解析の不明なエラー"
 
 setting:

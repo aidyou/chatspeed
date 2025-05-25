@@ -154,9 +154,16 @@ onMounted(async () => {
   }
 
   listener.value = await listen('sync_state', event => {
+    const eventType = event?.payload?.type || ''
+
     // Global event handler
-    if (event?.payload?.event === 'mcp_status_changed') {
+    if (eventType === 'mcp_status_changed') {
       mcpStore.updateServerStatus(event.payload.name, event.payload.status)
+    } else if (eventType === 'mcp') {
+      // Pass the metadata to the store's handler
+      if (event.payload?.metadata) {
+        mcpStore.handleSyncStateUpdate(event.payload.metadata)
+      }
     }
 
     // Ignore events from current windows
@@ -164,13 +171,11 @@ onMounted(async () => {
       return
     }
     console.log('sync_state', event)
-    if (event.payload.type === 'mcp') {
-      mcpStore.fetchMcpServers()
-    } else if (event.payload.type === 'model') {
+    if (eventType === 'model') {
       modelStore.updateModelStore()
-    } else if (event.payload.type === 'skill') {
+    } else if (eventType === 'skill') {
       skillStore.updateSkillStore()
-    } else if (event.payload.type === 'setting_changed') {
+    } else if (eventType === 'setting_changed') {
       settingStore.updateSettingStore(event.payload.setting)
     }
   })

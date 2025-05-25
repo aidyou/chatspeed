@@ -3,6 +3,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
+    ai::traits::chat::MCPToolDeclaration,
     http::chp::{Chp, SearchProvider},
     workflow::{
         error::WorkflowError,
@@ -74,88 +75,47 @@ impl ToolDefinition for Search {
     }
 
     /// Returns the function calling spec.
-    fn tool_calling_spec(&self) -> Value {
-        json!({
-            "name": self.name(),
-            "description": self.description(),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "provider": {
-                        "type": "string",
-                        "enum": ["google", "google_news", "baidu", "baidu_news", "bing"],
-                        "description": "Search provider"
-                    },
-                    "kw": {
-                        "type": "string",
-                        "description": "Search keyword"
-                    },
-                    "number": {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Results count"
-                    },
-                    "page": {
-                        "type": "integer",
-                        "default": 1,
-                        "description": "Page number"
-                    },
-                    "time_period": {
-                        "type": "string",
-                        "enum": ["day", "week", "month", "year"],
-                        "description": "Time range filter"
-                    },
-                    "resolve_baidu_links": {
-                        "type": "boolean",
-                        "default": true,
-                        "description": "Resolve Baidu links"
-                    }
-                },
-                "required": ["provider", "kw"]
-            },
-            "responses": {
-                "type": "object",
-                "properties": {
-                    "results": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": {
-                                    "type": "string",
-                                    "description": "Result title"
-                                },
-                                "url": {
-                                    "type": "string",
-                                    "description": "Result URL"
-                                },
-                                "summary": {
-                                    "type": "string",
-                                    "description": "Brief description",
-                                    "nullable": true
-                                },
-                                "sitename": {
-                                    "type": "string",
-                                    "description": "Site name",
-                                    "nullable": true
-                                },
-                                "publish_date": {
-                                    "type": "string",
-                                    "description": "Publication date",
-                                    "nullable": true
-                                }
-                            }
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "provider": {
+                            "type": "string",
+                            "enum": ["google", "google_news", "baidu", "baidu_news", "bing"],
+                            "description": "Search provider"
                         },
-                        "description": "Search results"
+                        "kw": {
+                            "type": "string",
+                            "description": "Search keyword"
+                        },
+                        "number": {
+                            "type": "integer",
+                            "default": 10,
+                            "description": "Results count"
+                        },
+                        "page": {
+                            "type": "integer",
+                            "default": 1,
+                            "description": "Page number"
+                        },
+                        "time_period": {
+                            "type": "string",
+                            "enum": ["day", "week", "month", "year"],
+                            "description": "Time range filter"
+                        },
+                        "resolve_baidu_links": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Resolve Baidu links"
+                        }
                     },
-                    "error": {
-                        "type": "string",
-                        "description": "Error message"
-                    }
-                },
-                "description": "Search operation result"
-            }
-        })
+                    "required": ["provider", "kw"]
+            }),
+            disabled: false,
+        }
     }
 
     /// Executes the function with the given parameters and context.

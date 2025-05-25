@@ -6,8 +6,7 @@ use std::fmt;
 use crate::ai::traits::chat::{MessageType, ToolCallDeclaration};
 
 use super::{
-    AnthropicEventType, AnthropicStreamEvent, GeminiFunctionCall, GeminiResponse,
-    OpenAIStreamResponse,
+    ClaudeEventType, ClaudeStreamEvent, GeminiFunctionCall, GeminiResponse, OpenAIStreamResponse,
 };
 
 /// Represents different types of stream response formats
@@ -29,9 +28,9 @@ pub enum StreamFormat {
     /// Custom format with user-provided parser
     #[allow(dead_code)]
     Custom(Box<dyn Fn(Bytes) -> Result<Option<String>, String> + Send + Sync>),
-    /// Anthropic format
+    /// Claude format
     /// {"completion":"Hello","usage":{"input_tokens":10,"output_tokens":10}}
-    Anthropic,
+    Claude,
 }
 
 impl fmt::Debug for StreamFormat {
@@ -42,7 +41,7 @@ impl fmt::Debug for StreamFormat {
             Self::StandardSSE => write!(f, "StreamFormat::StandardSSE"),
             Self::Custom(_) => write!(f, "StreamFormat::Custom(<custom_parser>)"),
             // Self::HuggingFace => write!(f, "StreamFormat::HuggingFace"),
-            Self::Anthropic => write!(f, "StreamFormat::Anthropic"),
+            Self::Claude => write!(f, "StreamFormat::Claude"),
         }
     }
 }
@@ -86,7 +85,7 @@ impl StreamParser {
             StreamFormat::OpenAI => Self::parse_openai(chunk),
             StreamFormat::Gemini => Self::parse_gemini(chunk),
             StreamFormat::StandardSSE => Self::parse_standard_sse(chunk),
-            StreamFormat::Anthropic => Self::parse_anthropic(chunk),
+            StreamFormat::Claude => Self::parse_claude(chunk),
             StreamFormat::Custom(parser) => parser(chunk).map(|content| {
                 vec![StreamChunk {
                     reasoning_content: None,
@@ -387,15 +386,15 @@ impl StreamParser {
         Ok(chunks)
     }
 
-    /// Parse Anthropic format with full event streaming support
-    fn parse_anthropic(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
+    /// Parse Claude format with full event streaming support
+    fn parse_claude(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut stream_chunks = Vec::new();
-        // log::debug!("anthropic raw event block: {}", chunk_str); // For debugging the whole event block
+        // log::debug!("claude raw event block: {}", chunk_str); // For debugging the whole event block
 
         // The StreamProcessor provides a full SSE message (event lines + data lines) as one `chunk`.
         // We need to parse the `data:` line which contains the JSON payload.
-        // Anthropic's `data:` payload itself contains a `type` field that indicates the event type.
+        // Claude's `data:` payload itself contains a `type` field that indicates the event type.
         let mut data_json_str: Option<String> = None;
 
         for line in chunk_str.lines() {
@@ -407,7 +406,7 @@ impl StreamParser {
 
         if data_json_str.is_none() {
             // This might happen for empty lines or malformed events, can be ignored or logged.
-            // log::warn!("Anthropic stream: No data field found in event block: {}", chunk_str);
+            // log::warn!("Claude stream: No data field found in event block: {}", chunk_str);
             return Ok(stream_chunks); // Return empty if no data
         }
 
@@ -416,15 +415,15 @@ impl StreamParser {
             return Ok(stream_chunks); // Return empty if data is empty
         }
 
-        match serde_json::from_str::<AnthropicStreamEvent>(&data_str) {
+        match serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
             Ok(event) => {
-                // log::debug!("Parsed Anthropic event: {:?}", event); // For detailed event logging
+                // log::debug!("Parsed Claude event: {:?}", event); // For detailed event logging
                 match event.event_type {
-                    AnthropicEventType::MessageStart => {
+                    ClaudeEventType::MessageStart => {
                         // Potentially extract input_tokens from event.message.usage if needed
-                        // log::debug!("Anthropic MessageStart: {:?}", event.message);
+                        // log::debug!("Claude MessageStart: {:?}", event.message);
                     }
-                    AnthropicEventType::ContentBlockStart => {
+                    ClaudeEventType::ContentBlockStart => {
                         if let (Some(index), Some(content_block)) =
                             (event.index, event.content_block)
                         {
@@ -447,7 +446,7 @@ impl StreamParser {
                             }
                         }
                     }
-                    AnthropicEventType::ContentBlockDelta => {
+                    ClaudeEventType::ContentBlockDelta => {
                         if let (Some(index), Some(delta_value)) = (event.index, event.delta) {
                             if let Some(delta_type) =
                                 delta_value.get("type").and_then(Value::as_str)
@@ -493,18 +492,18 @@ impl StreamParser {
                                         }
                                     }
                                     _ => {
-                                        // log::debug!("Unhandled Anthropic content_block_delta type: {}", delta_type);
+                                        // log::debug!("Unhandled Claude content_block_delta type: {}", delta_type);
                                     }
                                 }
                             }
                         }
                     }
-                    AnthropicEventType::ContentBlockStop => {
+                    ClaudeEventType::ContentBlockStop => {
                         // Signals end of a content block.
                         // Arguments/text already streamed.
-                        // log::debug!("Anthropic ContentBlockStop for index: {:?}", event.index);
+                        // log::debug!("Claude ContentBlockStop for index: {:?}", event.index);
                     }
-                    AnthropicEventType::MessageDelta => {
+                    ClaudeEventType::MessageDelta => {
                         let mut usage_chunk: Option<TokenUsage> = None;
                         let mut finish_reason_chunk: Option<String> = None;
 
@@ -545,7 +544,7 @@ impl StreamParser {
                             });
                         }
                     }
-                    AnthropicEventType::MessageStop => {
+                    ClaudeEventType::MessageStop => {
                         // Message stream finished.
                         // `event.message` might contain final `id`, `role`, `model`, `stop_reason`, `stop_sequence`, and `usage` (with both input_tokens and output_tokens).
                         // We can extract final usage here if needed.
@@ -578,10 +577,10 @@ impl StreamParser {
                             finish_reason: None, // Actual finish_reason (like "tool_use" or "end_turn") is in message.stop_reason or earlier message_delta
                         });
                     }
-                    AnthropicEventType::Ping => {
+                    ClaudeEventType::Ping => {
                         // Keep-alive, can be ignored.
                     }
-                    AnthropicEventType::Error => {
+                    ClaudeEventType::Error => {
                         if let Some(error_val) = event.error {
                             let error_type = error_val
                                 .get("type")
@@ -590,24 +589,24 @@ impl StreamParser {
                             let error_message = error_val
                                 .get("message")
                                 .and_then(Value::as_str)
-                                .unwrap_or("Unknown error from Anthropic");
+                                .unwrap_or("Unknown error from Claude");
                             log::error!(
-                                "Anthropic API Error - type: {}, message: {}", // Log in English
+                                "Claude API Error - type: {}, message: {}", // Log in English
                                 error_type,
                                 error_message
                             );
                             return Err(t!(
-                                "network.stream.anthropic_api_error_format",
+                                "network.stream.claude_api_error_format",
                                 message = error_message
                             )
                             .to_string());
                         } else {
                             log::error!(
-                                "Anthropic Error event with no error details in stream: {}", // Log in English
+                                "Claude Error event with no error details in stream: {}", // Log in English
                                 data_str
                             );
                             return Err(
-                                t!("network.stream.unknown_anthropic_error_no_details").to_string()
+                                t!("network.stream.unknown_claude_error_no_details").to_string()
                             );
                         }
                     }
@@ -616,9 +615,9 @@ impl StreamParser {
             Err(e) => {
                 // It's possible to receive non-JSON data or malformed JSON.
                 // Decide whether to error out or log and continue.
-                // For Anthropic, data should always be JSON.
+                // For Claude, data should always be JSON.
                 log::error!(
-                    "Failed to parse Anthropic event JSON: {}, error: {}",
+                    "Failed to parse Claude event JSON: {}, error: {}",
                     data_str,
                     e
                 );
