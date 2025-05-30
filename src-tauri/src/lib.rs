@@ -134,6 +134,7 @@ pub async fn run() -> Result<()> {
             read_clipboard,
             write_clipboard,
             // chat
+            list_models,
             chat_completion,
             stop_chat,
             sync_state,
@@ -396,10 +397,10 @@ pub async fn run() -> Result<()> {
 
             // Setup ChatState and manage it
             let app_handle_for_chat_state = app.handle().clone();
-            let chat_state = Arc::new(ChatState::new_with_apphandle(
+            let chat_state = ChatState::new_with_apphandle(
                 Arc::new(WindowChannels::new()),
                 Some(app_handle_for_chat_state),
-            ));
+            );
             let tm = chat_state.tool_manager.clone();
             let chat_state_clone = chat_state.clone();
             let main_store_clone = main_store.clone();

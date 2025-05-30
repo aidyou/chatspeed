@@ -164,12 +164,15 @@
                   <div class="item" v-for="model in models" :key="model.id">
                     <div class="label">
                       <span>{{ model.name || model.id }}</span>
-                      <el-icon v-if="model.reasoning" class="model-icon">
-                        <cs name="reasoning" />
-                      </el-icon>
-                      <el-icon v-if="model.functionCall" class="model-icon">
-                        <cs name="function" />
-                      </el-icon>
+                      <span v-if="model.reasoning" class="model-icon">
+                        <cs name="reasoning" color="var(--cs-color-primary)" />
+                      </span>
+                      <span v-if="model.functionCall" class="model-icon">
+                        <cs name="function" color="var(--cs-color-primary)" />
+                      </span>
+                      <span v-if="model?.imageInput" class="model-icon">
+                        <cs name="image-add" color="var(--cs-color-primary)" />
+                      </span>
                     </div>
                     <div class="value model-action">
                       <el-tooltip
@@ -202,6 +205,13 @@
               {{ $t('settings.model.noModels') }}
             </div>
             <div class="footer">
+              <el-button
+                type="success"
+                round
+                @click="onProviderModelImportShow()"
+                v-if="Object.keys(providerModelToShow).length > 0">
+                <cs name="import" />{{ $t('settings.model.import') }}
+              </el-button>
               <el-button type="success" round @click="onModelConfig()">
                 <cs name="add" />{{ $t('settings.model.add') }}
               </el-button>
@@ -322,6 +332,71 @@
     </template>
   </el-dialog>
 
+  <el-dialog
+    v-model="modelImportDialogVisible"
+    align-center
+    width="500px"
+    :title="$t('settings.model.modelConfig')"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-input
+      v-model="providerModelKeyword"
+      :placeholder="$t('settings.model.searchByIdOrName')"
+      clearable
+      style="margin-bottom: 15px" />
+    <div class="card card-col-list card-model-import">
+      <div v-if="Object.keys(providerModelToShow).length > 0" class="card-container">
+        <el-card
+          v-for="(providerModels, group) in providerModelToShow"
+          :key="group"
+          body-class="edit-card-body">
+          <template #header>
+            <span>{{ group }}</span>
+          </template>
+          <div class="list opacity">
+            <div class="item" v-for="model in providerModels" :key="model.id">
+              <div class="label">
+                <span>{{ model.name || model.id }}</span>
+                <span v-if="model.reasoning" class="model-icon">
+                  <cs name="reasoning" color="var(--cs-color-primary)" />
+                </span>
+                <span v-if="model.functionCall" class="model-icon">
+                  <cs name="function" color="var(--cs-color-primary)" />
+                </span>
+                <span v-if="model.imageInput" class="model-icon">
+                  <cs name="image-add" color="var(--cs-color-primary)" />
+                </span>
+              </div>
+              <div class="value model-action">
+                <el-tooltip
+                  v-if="!formModelIds.includes(model.id)"
+                  :content="$t('settings.model.add')"
+                  placement="top"
+                  :hide-after="0"
+                  transition="none">
+                  <cs
+                    :name="providerModelSelected[model.id] ? 'check-circle' : 'uncheck'"
+                    :active="providerModelSelected[model.id]"
+                    @click="onProviderModelSelected(model.id)" />
+                </el-tooltip>
+              </div>
+            </div>
+          </div>
+        </el-card>
+      </div>
+      <div v-else class="model-not-found">
+        {{ $t('settings.model.noModelsFound') }}
+      </div>
+    </div>
+    <template #footer>
+      <div class="dialog-footer">
+        <el-button @click="modelImportDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="onProviderModelSave">{{ $t('common.save') }}</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
   <!-- model config -->
   <el-dialog
     v-model="modelConfigDialogVisible"
@@ -350,6 +425,9 @@
       </el-form-item>
       <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
         <el-switch v-model="modelConfigForm.functionCall" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
+        <el-switch v-model="modelConfigForm.imageInput" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -430,7 +508,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 const { t } = useI18n()
@@ -506,7 +584,7 @@ const baseUrlPlaceholder = computed(() => {
   } else if (modelForm.value.apiProtocol === 'claude') {
     return 'https://api.anthropic.com/v1'
   } else if (modelForm.value.apiProtocol === 'gemini') {
-    return 'https://generativelanguage.googleapis.com/v1beta/models'
+    return 'https://generativelanguage.googleapis.com/v1beta'
   }
   return ''
 })
@@ -522,6 +600,10 @@ const modelRules = {
 // =================================================
 // model utils
 // =================================================
+const formModelIds = computed(() => {
+  return modelForm.value.models.map(model => model.id)
+})
+
 const createFromModel = srcModel => {
   return {
     apiProtocol: srcModel.apiProtocol,
@@ -581,7 +663,7 @@ const editModel = async (id, model) => {
     editId.value = null
     modelForm.value = { ...defaultFormData }
     if (!modelForm.baseUrl) {
-      modelForm.value.baseUrl = baseUrlPlaceholder
+      modelForm.value.baseUrl = baseUrlPlaceholder.value
     }
   }
   modelDialogVisible.value = true
@@ -707,7 +789,8 @@ const defaultModelConfig = {
   name: '',
   group: '',
   functionCall: false,
-  reasoning: false
+  reasoning: false,
+  imageInput: false
 }
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
@@ -790,6 +873,120 @@ const removeModelConfig = id => {
         modelForm.value.models.length > 0 ? modelForm.value.models[0].id : ''
     }
   }
+}
+
+// =================================================
+// model import
+// =================================================
+const modelImportDialogVisible = ref(false)
+const fetchedProviderModels = ref([])
+const providerModelSelected = ref({})
+const providerModelKeyword = ref('')
+watchEffect(async () => {
+  const protocol = modelForm.value.apiProtocol
+  const baseUrl = modelForm.value.baseUrl
+  const apiKey = modelForm.value.apiKey
+
+  let apiKeyIsOptional = false
+  if (protocol === 'ollama') {
+    apiKeyIsOptional = true
+  } else if (protocol === 'openai' && baseUrl && baseUrl.includes('text.pollinations.ai')) {
+    apiKeyIsOptional = true
+  }
+
+  const essentialParamsPresentAndDialogVisible = modelDialogVisible.value && protocol && baseUrl
+  const canFetch = essentialParamsPresentAndDialogVisible && (apiKey || apiKeyIsOptional)
+  fetchedProviderModels.value = []
+
+  if (canFetch) {
+    try {
+      fetchedProviderModels.value = (await modelStore.listModels(protocol, baseUrl, apiKey)) || []
+    } catch (error) {
+      fetchedProviderModels.value = []
+    }
+  }
+})
+
+const onProviderModelImportShow = () => {
+  modelImportDialogVisible.value = true
+  providerModelSelected.value = {}
+  providerModelKeyword.value = ''
+}
+/**
+ * Computed property to get the provider models to show in the dialog.
+ */
+const providerModelToShow = computed(() => {
+  // Ensure fetchedProviderModels.value is always an array before spreading
+  const baseModels = Array.isArray(fetchedProviderModels.value) ? fetchedProviderModels.value : []
+  let modelsToProcess = [...baseModels]
+
+  if (providerModelKeyword.value && providerModelKeyword.value.trim() !== '') {
+    const kw = providerModelKeyword.value.toLowerCase().trim()
+    modelsToProcess = modelsToProcess.filter(model => {
+      if (!model) return false // Skip null/undefined models in the array
+      // Safely access id and name, convert to string, then toLowerCase
+      const modelId = model.id ? String(model.id).toLowerCase() : ''
+      const modelName = model.name ? String(model.name).toLowerCase() : ''
+      return modelId.includes(kw) || modelName.includes(kw)
+    })
+  }
+
+  if (modelsToProcess.length === 0) {
+    return {}
+  }
+
+  // Group by family
+  const groupedModels = {}
+  modelsToProcess.forEach(model => {
+    if (model && typeof model === 'object') {
+      const family = model.family || t('settings.model.ungrouped')
+      if (!groupedModels[family]) {
+        groupedModels[family] = []
+      }
+      groupedModels[family].push(model)
+    } else {
+      // This should ideally not be reached if fetchedProviderModels and filtering are correct
+      console.warn('Skipping invalid model data during grouping:', model)
+    }
+  })
+  console.log('groupedModels', groupedModels)
+  return groupedModels
+})
+
+/**
+ * select the provider model to import
+ * @param id - The ID of the model to toggle.
+ */
+const onProviderModelSelected = id => {
+  if (providerModelSelected.value[id]) {
+    delete providerModelSelected.value[id]
+  } else {
+    providerModelSelected.value[id] = true
+  }
+}
+
+const onProviderModelSave = () => {
+  if (!fetchedProviderModels.value.length) return
+  const selectedModels = Object.keys(providerModelSelected.value)
+  if (!selectedModels.length) {
+    showMessage(t('settings.model.noModelSelected'), 'error')
+    return
+  }
+  const modelsToAdd = fetchedProviderModels.value
+    .filter(model => providerModelSelected.value[model.id])
+    .map(model => ({
+      id: model.id,
+      name: model.name,
+      group: model.family || t('settings.model.ungrouped'),
+      reasoning: model.reasoning || false,
+      functionCall: model.functionCall || false,
+      imageInput: model.imageInput || false
+    }))
+  console.log('modelsToAdd', modelsToAdd)
+  if (modelsToAdd.length) {
+    modelForm.value.models.push(...modelsToAdd)
+  }
+  modelImportDialogVisible.value = false
 }
 
 // =================================================
@@ -1010,7 +1207,7 @@ const importPresetModel = model => {
     }
   }
   &.card-col-list {
-    max-height: 450px;
+    max-height: 550px;
     overflow-y: auto;
     position: relative;
 
@@ -1021,13 +1218,23 @@ const importPresetModel = model => {
     }
 
     .footer {
-      margin-top: var(--cs-space-sm);
       position: sticky;
       bottom: 0;
       width: 100%;
+      justify-content: flex-start;
       box-sizing: border-box;
       background: var(--cs-bg-color-light);
-      padding: var(--cs-space-xs) 0;
+      padding: var(--cs-space-sm) 0 var(--cs-space-xs);
+    }
+
+    &.card-model-import {
+      max-height: 600px;
+
+      .model-not-found {
+        text-align: center;
+        padding: 20px;
+        color: var(--el-text-color-secondary);
+      }
     }
   }
 }

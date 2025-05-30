@@ -95,5 +95,6 @@ const style = computed(() => ({
   color: v-bind('textColor || "white"');
   font-weight: bold;
   user-select: none;
+  flex-shrink: 0;
 }
 </style>

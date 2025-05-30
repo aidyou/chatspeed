@@ -20,36 +20,33 @@ doctest    = false
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-anyhow = "1.0.97"
-arboard = "3.3"
-async-trait = "0.1.88"
-base64 = "0.22.1"
-bytes = "1.10.1"
-chrono = { version = "0.4.40", features = ["serde"] }
-dashmap = "6.1.0"
-dirs = "6.0"
-fern = "0.7.1"
-futures = { version = "0.3", features = ["std"] }
-futures-util = "0.3"
-global-hotkey = "0.6.4"
-humantime = "2.2.0"
-image = "0.25.6"
-jieba-rs = "0.7.2"
+anyhow           = "1.0.97"
+arboard          = "3.3"
+async-trait      = "0.1.88"
+base64           = "0.22.1"
+bytes            = "1.10.1"
+chrono           = { version = "0.4.40", features = ["serde"] }
+dashmap          = "6.1.0"
+dirs             = "6.0"
+fern             = "0.7.1"
+futures          = { version = "0.3", features = ["std"] }
+futures-util     = "0.3"
+global-hotkey    = "0.6.4"
+humantime        = "2.2.0"
+image            = "0.25.6"
+is_executable    = "1.0"
+jieba-rs         = "0.7.2"
 json_value_merge = "2.0.1"
-lazy_static = "1.4"
-locale_config = "0.3.0"
-log = "0.4.27"
-lru = "0.14.0"
-memchr = "2.7"
-parking_lot = "0.12"
-phf = "0.11.3"
-regex = "1.10.3"
-reqwest = { version = "0.12.15", features = [
-    "blocking",
-    "stream",
-    "multipart",
-    "cookies",
-] }
+lazy_static      = "1.4"
+locale_config    = "0.3.0"
+log              = "0.4.27"
+lru              = "0.14.0"
+memchr           = "2.7"
+parking_lot      = "0.12"
+phf              = "0.11.3"
+regex            = "1.10.3"
+
+reqwest = { version = "0.12.15", features = ["blocking", "stream", "multipart", "cookies"] }
 
 # NOTE: When using rmcp version 0.1.5, connecting to some npx-hosted MCP services
 # (e.g., tavily-mcp) could lead to a ZodError on the server side during request
@@ -94,8 +91,9 @@ uuid                         = { version = "1.16.0", features = ["v4"] }
 walkdir                      = "2.4.0"
 warp                         = "0.3.7"
 whatlang                     = "0.16.4"
+which                        = "7.0.3"
 xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
-zip                          = "3.0.0"
+zip                          = "4.0.0"
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
@@ -103,9 +101,7 @@ zip                          = "3.0.0"
 # v8                           = { version = "130.0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59.0", features = [
-    "Win32_UI_WindowsAndMessaging",
-] }
+windows-sys = { version = "0.59.0", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(unix)'.dependencies]
 # Linux/macOS 特定依赖

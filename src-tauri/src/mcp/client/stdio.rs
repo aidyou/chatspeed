@@ -37,6 +37,7 @@ use tokio::{process::Command, sync::RwLock};
 use super::core::McpClientCore;
 use super::{
     types::{McpClientInternal, McpStatus, StatusChangeCallback},
+    util::find_executable_in_common_paths,
     McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
 };
 
@@ -113,7 +114,7 @@ impl McpClient for StdioClient {
     /// on success, or an error.
     async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
         let config = self.core.get_config().await;
-        let cmd_str = config // Await the config
+        let original_cmd_str = config
             .command
             .as_ref()
             .cloned() // Clone the Option<String>
@@ -123,7 +124,16 @@ impl McpClient for StdioClient {
                     t!("mcp.client.stdio_command_cant_be_empty").to_string(),
                 )
             })?;
-        let mut cmd = Command::new(cmd_str.clone());
+
+        // Try to find the executable, fallback to original_cmd_str if not found by helper
+        let executable_to_run =
+            if let Some(abs_path) = find_executable_in_common_paths(&original_cmd_str).await {
+                abs_path.to_string_lossy().into_owned()
+            } else {
+                original_cmd_str.clone() // Fallback to original command string (relies on system PATH)
+            };
+
+        let mut cmd = Command::new(&executable_to_run);
 
         let args = config
             .args
@@ -148,29 +158,41 @@ impl McpClient for StdioClient {
 
         let process = TokioChildProcess::new(cmd).map_err(|e| {
             let original_error_message = e.to_string();
+            // Use original_cmd_str for user-facing messages about the command they configured
+            let display_command_name = &original_cmd_str;
+
             if e.kind() == std::io::ErrorKind::NotFound {
-                let specific_help = match cmd_str.as_str() {
+                let specific_help = match display_command_name.as_str() {
                     "npx" => t!("mcp.client.stdio_npx_not_found_help").to_string(),
-                    "uvx" | "uv" => {
-                        t!("mcp.client.stdio_uvx_not_found_help", command = cmd_str).to_string()
-                    }
+                    "uvx" | "uv" => t!(
+                        "mcp.client.stdio_uvx_not_found_help",
+                        command = display_command_name
+                    )
+                    .to_string(),
                     _ => "".to_string(),
                 };
+                log::error!(
+                    "Command '{}' (tried as '{}') not found: {}. OS error: {}",
+                    display_command_name,
+                    executable_to_run,
+                    e.kind(),
+                    original_error_message
+                );
                 let error_message = if !specific_help.is_empty() {
                     format!(
                         "{} {}",
                         t!(
                             "mcp.client.stdio_command_not_found_with_help",
-                            command = cmd_str,
-                            original_error = original_error_message
+                            command = original_cmd_str,
+                            original_error = original_error_message // Keep original OS error for context
                         ),
                         specific_help
                     )
                 } else {
                     t!(
                         "mcp.client.stdio_command_not_found_no_help",
-                        command = cmd_str,
-                        original_error = original_error_message
+                        command = original_cmd_str,
+                        original_error = original_error_message // Keep original OS error for context
                     )
                     .to_string()
                 };
@@ -179,8 +201,8 @@ impl McpClient for StdioClient {
                 McpClientError::StartError(
                     t!(
                         "mcp.client.stdio_process_creation_failed",
-                        command = cmd_str,
-                        error = original_error_message
+                        command = original_cmd_str,
+                        error = original_error_message // Keep original OS error for context
                     )
                     .to_string(),
                 )
@@ -194,7 +216,7 @@ impl McpClient for StdioClient {
             McpClientError::StartError(
                 t!(
                     "mcp.client.stdio_service_start_failed",
-                    command = cmd_str,
+                    command = original_cmd_str, // Report based on original configured command
                     error = detailed_error
                 )
                 .to_string(),

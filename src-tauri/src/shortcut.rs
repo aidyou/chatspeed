@@ -114,7 +114,7 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
                 let content = clipboard.get_text().unwrap_or_default();
                 if let Err(e) = app.emit(
                     "assistant-window-paste",
-                    json!({ "label": "assistant", "content": content }),
+                    json!({ "windowLabel": "assistant", "content": content }),
                 ) {
                     log::error!("Failed to emit assistant-window-paste event: {}", e);
                 }

@@ -153,15 +153,15 @@ export const useChatStore = defineStore('chat', () => {
    * Loads messages for a specific conversation from the database.
    * @param {number} conversationId - The ID of the conversation to load messages for.
    */
-  const loadMessages = async (conversationId, label) => {
+  const loadMessages = async (conversationId, windowLabel) => {
     if (isMessagesLoading) {
       return
     }
     isMessagesLoading = true
     messages.value.length = 0
     return new Promise((resolve, reject) => {
-      invoke('get_messages_for_conversation', { conversationId: conversationId, label: label }).then(() => {
-        console.log('loadMessages', label)
+      invoke('get_messages_for_conversation', { conversationId, windowLabel }).then(() => {
+        console.log('loadMessages', windowLabel)
         resolve()
       }).catch((error) => {
         console.error('Error loading messages:', error)

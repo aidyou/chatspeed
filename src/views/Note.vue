@@ -104,7 +104,6 @@ import markdown from '@/components/chat/markdown.vue'
 import { csStorageKey } from '@/config/config'
 import { formatTime } from '@/libs/util'
 import { useNoteStore } from '@/stores/note'
-import { parseMarkdown } from '@/libs/chat'
 import { csGetStorage, csSetStorage, showMessage } from '@/libs/util'
 
 const { t } = useI18n()
@@ -168,7 +167,7 @@ onMounted(async () => {
 
   // listen note_update event
   await listen('sync_state', event => {
-    if (event.payload.label === noteStore.label) {
+    if (event.payload.windowLabel === noteStore.windowLabel) {
       return
     }
     if (event.payload.type === 'note_update') {

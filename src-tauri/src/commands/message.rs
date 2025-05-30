@@ -222,9 +222,9 @@ pub fn get_messages_for_conversation(
     window: tauri::Window,
     state: State<Arc<Mutex<MainStore>>>,
     conversation_id: i64,
-    label: Option<String>,
+    window_label: Option<String>,
 ) -> Result<(), String> {
-    let label = label.unwrap_or(window.label().to_string());
+    let label = window_label.unwrap_or(window.label().to_string());
     let main_store = state
         .lock()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
@@ -350,9 +350,12 @@ pub fn update_message_metadata(
 /// - `label` - The label of the conversation
 /// - `message` - The message content
 #[tauri::command]
-pub fn send_message(app: tauri::AppHandle, label: &str, message: Value, done: bool) {
+pub fn send_message(app: tauri::AppHandle, window_label: &str, message: Value, done: bool) {
     let mut payload: HashMap<String, Value> = HashMap::new();
-    payload.insert("label".to_string(), Value::String(label.to_string()));
+    payload.insert(
+        "windowLabel".to_string(),
+        Value::String(window_label.to_string()),
+    );
     payload.insert("message".to_string(), message);
     payload.insert("done".to_string(), Value::Bool(done));
 

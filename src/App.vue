@@ -78,7 +78,7 @@ watch(
   newLang => {
     console.log('settings.interfaceLanguage changed', newLang)
     setI18nLanguage(newLang)
-    if (settingStore.label === 'main' && !updateTrayFlag.value) {
+    if (settingStore.windowLabel === 'main' && !updateTrayFlag.value) {
       updateTrayFlag.value = true
       settingStore
         .updateTray()
@@ -138,7 +138,7 @@ onMounted(async () => {
 
   setTheme()
 
-  if (settingStore.label === 'main' || settingStore.label === 'note') {
+  if (settingStore.windowLabel === 'main' || settingStore.windowLabel === 'note') {
     // Listen for update events
     await listen('update://available', ({ payload }) => {
       updateStore.handleUpdateAvailable(payload)
@@ -167,7 +167,7 @@ onMounted(async () => {
     }
 
     // Ignore events from current windows
-    if (event.payload.label === getCurrentWebviewWindow().label) {
+    if (event.payload.windowLabel === getCurrentWebviewWindow().label) {
       return
     }
     console.log('sync_state', event)
@@ -261,10 +261,10 @@ const handleShortcut = async event => {
     // command+w (macOS) or ctrl+w (Windows/Linux) to close window
     else if (event.code === 'KeyW') {
       const currentWindow = getCurrentWebviewWindow()
-      const label = currentWindow.label
+      const windowLabel = currentWindow.label
 
       // Only handle the close event of the current window
-      if (label === 'main' || label === 'settings' || label === 'note') {
+      if (windowLabel === 'main' || windowLabel === 'settings' || windowLabel === 'note') {
         // Check if the current window is indeed the active window
         const isFocused = await currentWindow.isFocused()
         if (isFocused) {

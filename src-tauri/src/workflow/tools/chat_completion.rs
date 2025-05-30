@@ -5,10 +5,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 
 use crate::{
-    ai::{
-        interaction::chat_completion::{complete_chat_blocking, ChatState},
-        traits::chat::MCPToolDeclaration,
-    },
+    ai::{interaction::chat_completion::complete_chat_blocking, traits::chat::MCPToolDeclaration},
     db::AiModel,
     workflow::{
         error::WorkflowError,
@@ -20,15 +17,13 @@ use super::ModelName;
 
 /// A function that sends an HTTP request.
 pub struct ChatCompletion {
-    chat_state: Arc<ChatState>,
     models: Arc<tokio::sync::RwLock<HashMap<ModelName, AiModel>>>,
 }
 
 impl ChatCompletion {
     /// Creates a new instance of the `ChatCompletion` function.
-    pub fn new(state: Arc<ChatState>) -> Self {
+    pub fn new() -> Self {
         Self {
-            chat_state: state,
             models: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
@@ -168,7 +163,6 @@ impl ToolDefinition for ChatCompletion {
             .and_then(|v| serde_json::from_value::<Vec<MCPToolDeclaration>>(v.clone()).ok());
 
         let result = complete_chat_blocking(
-            &self.chat_state,
             model.api_protocol.try_into()?,
             Some(model.base_url.as_str()),
             model.default_model,
@@ -206,12 +200,7 @@ mod tests {
             println!("{}: {}", key, value);
         }
 
-        let chat_state =
-            std::sync::Arc::new(crate::ai::interaction::chat_completion::ChatState::new(
-                std::sync::Arc::new(crate::libs::window_channels::WindowChannels::new()),
-            ));
-        let chat_completion =
-            crate::workflow::tools::chat_completion::ChatCompletion::new(chat_state);
+        let chat_completion = crate::workflow::tools::chat_completion::ChatCompletion::new();
 
         let params = serde_json::json!({
             "chat_protocol": "openai",

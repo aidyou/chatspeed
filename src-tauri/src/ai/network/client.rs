@@ -1,3 +1,5 @@
+use crate::libs::util::urlencode;
+
 use super::stream::{StreamFormat, StreamParser};
 use super::{types::*, StreamChunk};
 use async_trait::async_trait;
@@ -64,6 +66,22 @@ pub trait ApiClient: Send + Sync {
         endpoint: &str,
         body: Value,
         stream: bool,
+    ) -> Result<ApiResponse, String>;
+
+    /// Sends a GET request with the given configuration
+    ///
+    /// # Arguments
+    /// * `config` - The API configuration including URL, authentication, and proxy settings
+    /// * `endpoint` - The API endpoint to send the request to (can include query parameters)
+    /// * `param` - Optional query parameters as JSON
+    ///
+    /// # Returns
+    /// A Result containing either the ApiResponse or an error message
+    async fn get_request(
+        &self,
+        config: &ApiConfig,
+        endpoint: &str,
+        param: Option<Value>,
     ) -> Result<ApiResponse, String>;
 
     /// Process a streaming response chunk with specified format
@@ -319,5 +337,64 @@ impl ApiClient for DefaultApiClient {
         }
 
         self.process_response(response, stream).await
+    }
+
+    async fn get_request(
+        &self,
+        config: &ApiConfig,
+        endpoint: &str,
+        param: Option<Value>,
+    ) -> Result<ApiResponse, String> {
+        let client = self.create_client(&config.proxy_type).await?;
+        let headers = self.build_headers(config)?;
+
+        let mut url = if endpoint.is_empty() {
+            config.api_url.as_deref().unwrap_or_default().to_string()
+        } else {
+            let base_url = config
+                .api_url
+                .as_deref()
+                .unwrap_or_default()
+                .trim_end_matches('/');
+            // If endpoint itself is a full URL (e.g. presigned S3), use it directly.
+            // Otherwise, join with base_url.
+            if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                endpoint.to_string()
+            } else if !endpoint.starts_with('/') {
+                format!("{}/{}", base_url, endpoint)
+            } else {
+                format!("{}{}", base_url, endpoint)
+            }
+        };
+
+        // Add query parameters if present
+        if let Some(params) = param {
+            if let Some(query) = params.as_object() {
+                if !query.is_empty() {
+                    let mut qs = String::new();
+                    for (k, v) in query {
+                        let encoded_value = match v {
+                            Value::String(s) => urlencode(s),
+                            _ => urlencode(&v.to_string()),
+                        };
+                        qs.push_str(&format!("{}={}&", urlencode(k), encoded_value));
+                    }
+                    qs.pop(); // Remove trailing '&'
+                    let separator = if url.contains('?') { '&' } else { '?' };
+                    url.push_str(&format!("{}{}", separator, qs));
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        log::debug!("GET Request URL: {}", url);
+
+        let response = client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| t!("network.request_failed", error = e.to_string()).to_string())?;
+        self.process_response(response, false).await // GET requests are typically not streamed for list_models
     }
 }

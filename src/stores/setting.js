@@ -10,7 +10,7 @@ import { isEmpty, snakeToCamel, camelToSnake } from '@/libs/util'
 import { mapBrowserLangToStandard } from '@/i18n/langUtils'
 import i18n from '@/i18n'
 
-const label = getCurrentWebviewWindow().label
+const windowLabel = getCurrentWebviewWindow().label
 
 const defaultSettings = {
   httpServer: 'http://127.0.0.1:21914',
@@ -96,7 +96,7 @@ export const useSettingStore = defineStore('setting', () => {
             ...settings.value,
             [key]: value
           }
-          sendSyncState('setting_changed', label, { [key]: value })
+          sendSyncState('setting_changed', windowLabel, { [key]: value })
 
           resolve()
         })
@@ -176,7 +176,7 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   return {
-    label,
+    windowLabel,
     settings,
     setSetting,
     updateSettingStore,

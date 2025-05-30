@@ -93,7 +93,7 @@ export const useNoteStore = defineStore('note', () => {
   }
 
   return {
-    label,
+    windowLabel: label,
     tags,
     getTagList,
     addNote,

@@ -51,6 +51,7 @@ impl ApiConfig {
     ///     Some("https://api.example.com"),
     ///     Some("your-api-key"),
     ///     ProxyType::None
+    ///     Some(json!({ "Authorization": "Bearer your-token" }))
     /// );
     /// ```
     pub fn new(

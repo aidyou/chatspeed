@@ -379,7 +379,15 @@ const isTranslation = computed(() => {
  * Check if the current skill has tools enabled
  */
 const toolsEnabled = computed(() => {
-  return !isTranslation.value && currentSkill.value?.metadata?.toolsEnabled
+  if (!currentModelProvider.value?.functionCall) {
+    return false
+  }
+  // 1. If no skill is selected, tools can be enabled (global tools or default behavior)
+  if (!selectedSkill.value) {
+    return true // Or based on a global setting if you have one for non-skill scenarios
+  }
+  // 2. If a skill is selected, it must not be a translation skill AND its metadata must allow tools
+  return !isTranslation.value && !!selectedSkill.value.metadata?.toolsEnabled
 })
 
 const cicleIndex = ref(0)
@@ -472,7 +480,7 @@ onMounted(async () => {
   // listen chat_stream event
   unlistenChunkResponse.value = await listen('chat_stream', async event => {
     // we don't want to process messages from other windows
-    if (event.payload?.metadata?.label !== settingStore.label) {
+    if (event.payload?.metadata?.windowLabel !== settingStore.windowLabel) {
       return
     }
     // console.log('chat_stream', event)
@@ -481,7 +489,7 @@ onMounted(async () => {
 
   unlistenPasteResponse.value = await listen('assistant-window-paste', async event => {
     // we don't want to process messages from other windows
-    if (event.payload?.label !== settingStore.label) {
+    if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
     }
     if (event.payload?.content) {
@@ -604,7 +612,7 @@ const dispatchChatCompletion = async () => {
         temperature: currentModelProvider.value.temperature,
         topP: currentModelProvider.value.topP,
         topK: currentModelProvider.value.topK,
-        label: settingStore.label,
+        windowLabel: settingStore.windowLabel,
         proxyType: proxyType.value,
         toolsEnabled: toolsEnabled.value
       }
@@ -825,7 +833,7 @@ const onGoToChat = async () => {
         conversationId: chatStore.currentConversationId
       })
       // show main window
-      invoke('show_window', { label: 'main' })
+      invoke('show_window', { windowLabel: 'main' })
     } catch (error) {
       console.error('error on go to chat:', error)
       showMessage(t('chat.errorOnGoToChat', { error }), 'error', 3000)

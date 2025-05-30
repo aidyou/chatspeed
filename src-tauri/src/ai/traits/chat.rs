@@ -1,4 +1,7 @@
-use crate::{ai::error::AiError, http::chp::SearchResult};
+use crate::{
+    ai::{error::AiError, interaction::chat_completion::ChatProtocol},
+    http::chp::SearchResult,
+};
 
 use super::stoppable::Stoppable;
 use async_trait::async_trait;
@@ -20,6 +23,7 @@ pub enum MessageType {
     Log,
     Plan,
     ToolCall,
+    AssistantAction, // Assistant tool selection
 }
 
 impl Default for MessageType {
@@ -28,7 +32,6 @@ impl Default for MessageType {
     }
 }
 
-// 自定义反序列化实现
 impl<'de> Deserialize<'de> for MessageType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -36,7 +39,7 @@ impl<'de> Deserialize<'de> for MessageType {
     {
         let s = String::deserialize(deserializer)?;
         Ok(MessageType::from_str(&s).unwrap_or_else(|| {
-            warn!("Invalid message type: {}, defaulting to Content", s);
+            warn!("Invalid message type: '{}', defaulting to Text", s);
             MessageType::Text
         }))
     }
@@ -54,6 +57,7 @@ impl From<MessageType> for &str {
             MessageType::Log => "log",
             MessageType::Plan => "plan",
             MessageType::ToolCall => "tool_call",
+            MessageType::AssistantAction => "assistant_action",
         }
     }
 }
@@ -76,12 +80,23 @@ impl MessageType {
             "log" => Some(MessageType::Log),
             "plan" => Some(MessageType::Plan),
             "tool_call" => Some(MessageType::ToolCall),
+            "assistant_action" => Some(MessageType::AssistantAction),
             _ => {
-                warn!("Invalid message type: {}, returning None", value);
-                Some(MessageType::Text)
+                warn!(
+                    "Unrecognized message type: '{}', will be handled by deserializer default.",
+                    value
+                );
+                None
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FinishReason {
+    Complete,
+    ToolCalls,
+    Error,
 }
 
 /// ChatResponse represents a response for fontend.
@@ -92,6 +107,7 @@ pub struct ChatResponse {
     pub chunk: String,
     pub r#type: MessageType,
     pub metadata: Option<Value>,
+    pub finish_reason: Option<FinishReason>,
 }
 
 impl ChatResponse {
@@ -100,12 +116,14 @@ impl ChatResponse {
         chunk: String,
         r#type: MessageType,
         metadata: Option<Value>,
+        finish_reason: Option<FinishReason>,
     ) -> Arc<Self> {
         Arc::new(Self {
             chat_id,
             chunk,
             r#type,
             metadata,
+            finish_reason,
         })
     }
 }
@@ -119,7 +137,7 @@ pub struct Usage {
     pub completion_tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct ChatCompletionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +161,10 @@ pub struct ChatCompletionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(unused)]
     pub reference: Option<Vec<SearchResult>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(unused)]
+    pub tools: Option<Vec<ToolCallDeclaration>>,
 }
 
 // =================================================
@@ -152,7 +174,7 @@ pub struct ChatCompletionResult {
 /// ToolCallDeclaration represents a tool call declaration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallDeclaration {
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, default)]
     pub index: u32,
     pub id: String,
     pub name: String,
@@ -278,6 +300,56 @@ impl MCPToolDeclaration {
 // =================================================
 // Start of Chat trait
 // =================================================
+
+/// Generic struct containing model details
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDetails {
+    /// Unique identifier used for API calls
+    /// Examples: "gpt-4-turbo", "gemini-1.5-pro-latest", "claude-3-opus-20240229"
+    pub id: String,
+
+    /// User-friendly display name
+    /// Examples: "GPT-4 Turbo", "Gemini 1.5 Pro", "Claude 3 Opus"
+    pub name: String,
+
+    /// Model provider
+    pub protocol: ChatProtocol,
+
+    /// Maximum number of input tokens the model can handle
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+
+    /// Maximum number of output tokens the model can generate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+
+    /// Brief description of the model or its capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Timestamp or date string of model creation/last update (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>, // Alternatively use chrono::DateTime<chrono::Utc>
+
+    /// Model family or series (optional, e.g. "GPT-4", "Claude-3")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+
+    /// reasoning support, like deepseek-r1
+    pub reasoning: Option<bool>,
+
+    /// function calling support
+    pub function_call: Option<bool>,
+
+    /// image support, like claude series
+    pub image_input: Option<bool>,
+
+    /// Additional metadata for provider-specific information
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 #[async_trait]
 pub trait AiChatTrait: Send + Sync + Stoppable {
     /// Sends a chat request to the AI API and processes the response.
@@ -327,4 +399,26 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError>;
+
+    /// Lists available models from the AI API provider.
+    ///
+    /// # Arguments
+    /// - `api_url`: Optional URL of the AI API endpoint. If None, uses default endpoint.
+    /// - `api_key`: Optional API key for authentication. Required if API needs authentication.
+    /// - `extra_args`: Optional additional arguments for the request.
+    ///   May include provider-specific parameters like:
+    ///   - `organization`: Organization ID for some providers (e.g. OpenAI)
+    ///   - `project`: Project ID for some providers (e.g. Google AI)
+    ///   - Other provider-specific arguments
+    ///
+    /// # Returns
+    /// - `Result<Vec<String>, AiError>` containing:
+    ///   - On success: Vector of model IDs (e.g. ["gpt-4-turbo", "claude-3-opus"])
+    ///   - On failure: `AiError` with details about what went wrong
+    async fn list_models(
+        &self,
+        api_url: Option<&str>,
+        api_key: Option<&str>,
+        extra_args: Option<serde_json::Value>,
+    ) -> Result<Vec<ModelDetails>, AiError>;
 }

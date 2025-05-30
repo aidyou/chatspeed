@@ -45,8 +45,10 @@
 //! - Finally, add the new AI provider to the `init_chats!` macro.
 
 use super::chat_web_search::chat_completion_with_search;
-use crate::ai::interaction::chat_completion::{complete_chat_async, ChatProtocol, ChatState};
-use crate::ai::traits::chat::{ChatResponse, MessageType, ToolCallDeclaration};
+use crate::ai::interaction::chat_completion::{
+    list_models_async, start_new_chat_interaction, ChatProtocol, ChatState,
+};
+use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, ModelDetails};
 use crate::commands::constants::URL_REGEX;
 use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::db::MainStore;
@@ -92,7 +94,9 @@ pub fn setup_chat_proxy(
                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
             })?;
             proxy_type = config_store.get_config("proxy_type", "none".to_string());
-            md["proxyType"] = json!(proxy_type);
+            if let Some(md_obj) = md.as_object_mut() {
+                md_obj.insert("proxyType".to_string(), json!(proxy_type));
+            }
         }
         if proxy_type == "http" {
             let config_store = main_state.lock().map_err(|e| {
@@ -117,12 +121,25 @@ pub fn setup_chat_proxy(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn list_models(
+    main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    api_protocol: String,
+    api_url: Option<String>,
+    api_key: Option<String>,
+) -> Result<Vec<ModelDetails>, String> {
+    let mut metadata = Some(json!({"proxyType":"bySetting"}));
+    setup_chat_proxy(&main_state, &mut metadata)?;
+
+    list_models_async(api_protocol, api_url, api_key, metadata).await
+}
+
 /// Tauri command to interact with the AI chat system.
 /// This command handles sending messages to the AI and receiving responses.
 ///
 /// # Arguments
 /// - `window` - The Tauri window instance, automatically injected by Tauri
-/// - `state` - The state of the chat system, automatically injected by Tauri
+/// - `chat_state` - The state of the chat system, automatically injected by Tauri
 /// - `main_state` - The main application state, automatically injected by Tauri
 /// - `api_protocol` - The API provider to use for the chat.
 /// - `api_url` - The API URL to use for the chat.
@@ -130,56 +147,27 @@ pub fn setup_chat_proxy(
 /// - `api_key` - The API key to use for the chat.
 /// - `chat_id` - Unique identifier for this chat session
 /// - `messages` - The messages to send to the chat.
-/// - `tools` - Optional tools to use for the chat.
 /// - `network_enabled` - Whether to enable network search for URLs in the user message
-/// - `_deep_search_enabled` - Whether to enable deep search (currently unused)
 /// - `metadata` - Optional extra parameters for the chat.
 ///
 /// # Returns
-/// A `Result` containing the response string or an error message.
-///
-/// # Example
-/// ```js
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const result = await invoke('chat_completion', {
-///     apiProtocol: 'openai',
-///     apiUrl: 'https://api.openai.com/v1/chat/completions',
-///     model: 'gpt-3.5-turbo',
-///     apiKey: 'your-api-key',
-///     chatId: 'unique-chat-id',
-///     messages: [
-///         {role: 'system', content: 'your prompt here'},
-///         { role: 'user', content: 'Hello, how are you?' }
-///     ],
-///     maxTokens: 100
-/// })
-/// window.addEventListener('chat_stream', (event) => {
-///   console.log('chat_stream', event)
-/// })
-/// ```
+/// A `Result` containing () or an error message.
 #[tauri::command]
 pub async fn chat_completion(
-    window: tauri::Window, // The Tauri window instance, automatically injected by Tauri
-    chat_state: State<'_, Arc<ChatState>>, // The state of the chat system, automatically injected by Tauri
+    window: tauri::Window,
+    chat_state: State<'_, Arc<ChatState>>,
     main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
     api_protocol: String,
-    api_url: Option<&str>,
+    api_url: Option<String>, // Changed to Option<String> to match JS invoke
     model: String,
-    api_key: Option<&str>,
+    api_key: Option<String>, // Changed to Option<String>
     chat_id: String,
     mut messages: Vec<Value>,
-    // tools: Option<Vec<MCPToolDeclaration>>,
     network_enabled: Option<bool>,
-    mut metadata: Option<Value>,
+    mut metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
 ) -> Result<(), String> {
     #[cfg(debug_assertions)]
     log::debug!("Starting chat completion for protocol: {}", api_protocol);
-
-    let tx = chat_state
-        .channels
-        .get_or_create_channel(window.clone())
-        .await?;
 
     if messages.is_empty() {
         return Err(t!("chat.empty_messages").to_string());
@@ -193,6 +181,14 @@ pub async fn chat_completion(
 
     let protocol: ChatProtocol = api_protocol.try_into().map_err(|e: String| e.to_string())?;
 
+    // Ensure the channel for this window is created/retrieved.
+    // This is crucial for global_message_processor_loop to send UI updates.
+    let _window_sender = chat_state
+        .channels
+        .get_or_create_channel(window.clone())
+        .await
+        .map_err(|e| format!("Failed to get or create window channel: {}", e))?;
+
     setup_chat_proxy(&main_state, &mut metadata)
         .map_err(|e| t!("chat.failed_to_setup_proxy", error = e).to_string())?;
 
@@ -205,27 +201,35 @@ pub async fn chat_completion(
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
             .get_config(CFG_CHP_SERVER, String::new());
 
-        // 获取最后一条用户消息的内容
-        let content = messages
+        let content_to_search = messages
             .iter()
             .rev()
             .find(|m| m["role"] == "user")
             .and_then(|m| m["content"].as_str())
             .map(|s| s.to_string());
 
-        // 如果找到内容，则进行抓取
-        if let Some(content) = content {
-            // find url in content
+        if let Some(content) = content_to_search {
             let urls: Vec<String> = URL_REGEX
                 .find_iter(&content)
                 .map(|m| m.as_str().to_string())
                 .collect();
 
-            // if the content has no url, do search
             if urls.is_empty() {
+                // If no URLs, proceed to chat_completion_with_search
+                // Note: chat_completion_with_search might need similar adjustments
+                // to call start_new_chat_interaction eventually.
+                // For now, assuming it handles its own flow or will be refactored.
                 return chat_completion_with_search(
-                    window, chat_state, main_state, protocol, api_url, model, api_key, chat_id,
-                    messages, metadata,
+                    window,
+                    chat_state,
+                    main_state,
+                    protocol,
+                    api_url.as_deref(),
+                    model,
+                    api_key.as_deref(),
+                    chat_id,
+                    messages,
+                    metadata,
                 )
                 .await;
             }
@@ -234,26 +238,28 @@ pub async fn chat_completion(
                 Ok(crawled_contents) => {
                     if !crawled_contents.is_empty() {
                         if let Some(last_message) = messages.last_mut() {
-                            let new_content = t!(
-                                "chat.user_message_with_references",
-                                content = content,
-                                crawl_content = &crawled_contents
-                            )
-                            .to_string();
-                            dbg!(&new_content);
-                            last_message["content"] = Value::String(new_content);
+                            if last_message.get("role").and_then(Value::as_str) == Some("user") {
+                                let new_content = t!(
+                                    "chat.user_message_with_references",
+                                    content = content,
+                                    crawl_content = &crawled_contents
+                                )
+                                .to_string();
+                                if let Some(obj) = last_message.as_object_mut() {
+                                    obj.insert("content".to_string(), Value::String(new_content));
+                                }
+                            }
                         }
                     }
-
-                    // Send references to the chat
-                    let _ = &tx
-                        .try_send(ChatResponse::new_with_arc(
+                    if let Some(sender) = chat_state.channels.get_sender(&window.label()).await {
+                        let _ = sender.try_send(ChatResponse::new_with_arc(
                             chat_id.clone(),
                             crawled_contents,
                             MessageType::Reference,
                             metadata.clone(),
-                        ))
-                        .map_err(|e| e.to_string())?;
+                            None,
+                        ));
+                    }
                 }
                 Err(err) => {
                     log::error!("Failed to crawl content: {}", err);
@@ -262,11 +268,26 @@ pub async fn chat_completion(
         }
     }
 
-    let tools = if metadata
+    // Prepare final_metadata: ensure windowLabel is present.
+    // Frontend JS sends metadata with `windowLabel`.
+    let final_metadata = if let Some(mut md_val) = metadata {
+        if let Some(md_obj) = md_val.as_object_mut() {
+            // Ensure "windowLabel" (from JS) or "label" (fallback) or window.label() is present
+            if !md_obj.contains_key("windowLabel") && !md_obj.contains_key("label") {
+                md_obj.insert("windowLabel".to_string(), json!(window.label()));
+            }
+        }
+        Some(md_val)
+    } else {
+        Some(json!({"windowLabel": window.label()}))
+    };
+
+    let tools_enabled_in_metadata = final_metadata
         .as_ref()
         .and_then(|md_val| md_val.get("toolsEnabled").and_then(Value::as_bool))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
+    let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
         Some(
             chat_state
                 .tool_manager
@@ -281,51 +302,18 @@ pub async fn chat_completion(
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", messages.len());
 
-    let callback = move |chunk: Arc<ChatResponse>| {
-        let _ = tx.try_send(chunk);
-    };
-
-    // Execute the chat with the processed messages
-    complete_chat_async(
-        &chat_state,
+    start_new_chat_interaction(
+        chat_state.inner().clone(),
         protocol,
-        api_url,
+        api_url.as_deref(),
         model,
-        api_key,
+        api_key.as_deref(),
         chat_id,
         messages,
         tools,
-        metadata,
-        callback,
+        final_metadata,
     )
     .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-pub(crate) async fn tool_calling(
-    chat_state: Arc<ChatState>,
-    tool: ToolCallDeclaration,
-) -> Result<Value, String> {
-    let tm = chat_state.tool_manager.clone();
-    // tool.arguments is Option<String>
-    // We need to parse it into a Value.
-    // If it's None, or an empty string, or fails to parse, default to an empty JSON object.
-    let args = tool
-        .arguments
-        .as_ref()
-        .and_then(|s| {
-            if s.is_empty() {
-                Some(json!({}))
-            } else {
-                serde_json::from_str(s).ok()
-            }
-        })
-        .unwrap_or_else(|| json!({}));
-    tm.tool_call(&tool.name, args)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 /// Use the crawler_url server interface to fetch information about the URLs contained in the content.
@@ -365,7 +353,7 @@ pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Resul
         }
     }
     if crawled_contents.is_empty() {
-        return Ok("".to_string()); // Return empty string if no content crawled
+        return Ok("".to_string());
     }
 
     serde_json::to_string(&crawled_contents).map_err(|e| {
@@ -403,16 +391,29 @@ pub async fn stop_chat(
         .clone()
         .try_into()
         .map_err(|e: String| format!("Invalid API protocol: {}", e))?;
-    // Lock the chat state to access the chat interfaces.
     let mut chats = state.chats.lock().await;
 
+    // Find the specific chat instance
     if let Some(protocol_chats) = chats.get_mut(&protocol) {
-        if let Some(chat) = protocol_chats.remove(chat_id) {
-            chat.set_stop_flag(true).await; // Set the stop flag to true.
-            return Ok(()); // Return success.
+        if let Some(chat) = protocol_chats.get_mut(chat_id) {
+            // Use get_mut to avoid removing
+            chat.set_stop_flag(true).await;
+            // Remove the chat instance from the map
+            protocol_chats.remove(chat_id);
+
+            #[cfg(debug_assertions)]
+            {
+                log::debug!(
+                    "Removed chat instance for chat_id: {} on stop command under protocol: {}.",
+                    chat_id,
+                    protocol
+                );
+            }
+
+            return Ok(());
         }
     }
-    Err(t!("chat.chat_not_found").to_string()) // Handle chat not found case.
+    Err(t!("chat.chat_not_found").to_string())
 }
 
 /// Detects the language of a given text and returns the corresponding language code.
@@ -499,8 +500,9 @@ pub async fn deep_search(
         .collect::<Vec<SearchProvider>>();
 
     let tx = chat_state.channels.get_or_create_channel(window).await?;
+    let tx_clone = tx.clone();
     let callback = move |chunk: Arc<ChatResponse>| {
-        let _ = tx.try_send(chunk);
+        let _ = tx_clone.try_send(chunk);
     };
 
     let ds = DeepSearch::new(

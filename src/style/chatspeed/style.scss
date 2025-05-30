@@ -38,11 +38,12 @@
         box-sizing: border-box;
 
         .item {
-            height: 50px;
+            // min-height: 50px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             border-bottom: 1px solid var(--cs-border-color);
+            padding: var(--cs-space-sm) 0;
 
             &:last-child {
                 border-bottom: none;

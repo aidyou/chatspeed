@@ -449,6 +449,19 @@ pub async fn create_or_focus_setting_window(
             .set_focus()
             .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
     } else {
+        let mut max_height: f64 = 1024.0;
+        let mut height: f64 = 1024.0;
+        let width = 650.0;
+        if let Ok(Some(monitor)) = app_handle.primary_monitor() {
+            let logical_size = monitor.size().to_logical(monitor.scale_factor());
+            max_height = logical_size.height;
+            height = if logical_size.height < 1024.0 {
+                logical_size.height
+            } else {
+                1024.0
+            };
+        }
+
         let mut webview_window_builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
@@ -457,8 +470,9 @@ pub async fn create_or_focus_setting_window(
         .title("")
         .decorations(false)
         .maximizable(false)
-        .inner_size(650.0, 750.0)
-        .min_inner_size(650.0, 600.0)
+        .inner_size(width, height)
+        .min_inner_size(width, 600.0)
+        .max_inner_size(width, max_height)
         .center();
 
         #[cfg(target_os = "windows")]
@@ -469,18 +483,10 @@ pub async fn create_or_focus_setting_window(
         {
             webview_window_builder = webview_window_builder.transparent(true);
         }
+
         let webview_window = webview_window_builder
             .build()
             .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
-
-        if let Ok(Some(monitor)) = webview_window.current_monitor() {
-            webview_window
-                .set_max_size(Some(tauri::Size::Logical(LogicalSize {
-                    width: 650.0,
-                    height: monitor.size().height as f64,
-                })))
-                .map_err(|e| t!("main.failed_to_set_max_window_size", error = e))?;
-        }
 
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
@@ -852,16 +858,16 @@ pub fn get_screen_name(window: &Window) -> Option<String> {
         Ok(Some(monitor)) => {
             let name = monitor.name().map(|s| s.to_string());
 
-            #[cfg(debug_assertions)]
-            {
-                debug!(
-                    "Window '{}' is on monitor: {:?} (Position: {:?}, Size: {:?})",
-                    window.label(),
-                    name,
-                    monitor.position(),
-                    monitor.size()
-                );
-            }
+            // #[cfg(debug_assertions)]
+            // {
+            //     debug!(
+            //         "Window '{}' is on monitor: {:?} (Position: {:?}, Size: {:?})",
+            //         window.label(),
+            //         name,
+            //         monitor.position(),
+            //         monitor.size()
+            //     );
+            // }
 
             name
         }

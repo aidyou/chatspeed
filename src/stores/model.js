@@ -44,6 +44,7 @@ export const useModelStore = defineStore('modelProvider', () => {
   }
 
   let isModelLoading = false
+
   /**
    * Fetches all AI models from the backend and updates the state.
    * Uses Tauri's invoke method to call the backend command `get_all_ai_models`.
@@ -89,7 +90,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    * A reactive reference to store the default model configuration.
    * @type {import('vue').Ref<Object>}
    */
-  const defaultModelProvider = ref(csGetStorage(csStorageKey.defaultProvider, {}))
+  const defaultModelProvider = ref({})
 
   /**
    * Sets the default model configuration.
@@ -110,9 +111,10 @@ export const useModelStore = defineStore('modelProvider', () => {
   const initDefaultModel = () => {
     if (isEmpty(providers.value)) return;
 
-    if (!isEmpty(defaultModelProvider.value)) {
-      console.debug('load defaultModel from localstorage', defaultModelProvider.value)
+    defaultModelProvider.value = csGetStorage(csStorageKey.defaultProvider, {})
+    console.debug('load defaultModel from localstorage', defaultModelProvider.value)
 
+    if (!isEmpty(defaultModelProvider.value)) {
       // check if the default model is available
       const currentDefaultModel = getModelProviderById(defaultModelProvider.value.id)
       // current default model has existed, update and return
@@ -173,7 +175,7 @@ export const useModelStore = defineStore('modelProvider', () => {
 
           // Update default model
           if (formData.id === defaultModelProvider.value.id) {
-            setDefaultModelProvider(processModelLogo(modelData))
+            setDefaultModelProvider(modelData)
           }
 
           nextTick(() => {
@@ -234,6 +236,23 @@ export const useModelStore = defineStore('modelProvider', () => {
     })
   }
 
+  /**
+   * List all models
+   * @returns {Promise<Array>}
+   */
+  const listModels = (apiProtocol, apiUrl, apiKey) => {
+    return new Promise((resolve, reject) => {
+      invoke('list_models', { apiProtocol, apiUrl, apiKey })
+        .then((models) => {
+          resolve(models)
+        })
+        .catch(err => {
+          console.error('list_models error', err)
+          reject(err)
+        })
+    })
+  }
+
   // =================================================
   // Initialize the model store and export the functions
   // =================================================
@@ -251,6 +270,7 @@ export const useModelStore = defineStore('modelProvider', () => {
     setModelProviders,
     setDefaultModelProvider,
     deleteModelProvider,
-    updateModelProviderOrder
+    updateModelProviderOrder,
+    listModels
   };
 })

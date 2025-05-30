@@ -11,6 +11,14 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-image-add:before {
+  content: "\e653";
+}
+
+.cs-import:before {
+  content: "\e698";
+}
+
 .cs-restart:before {
   content: "\e652";
 }

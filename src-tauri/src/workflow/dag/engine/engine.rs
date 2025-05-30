@@ -91,7 +91,7 @@ mod tests {
             MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
         let engine = WorkflowEngine::new(
             Arc::new(std::sync::Mutex::new(main_store)),
-            Arc::new(ChatState::new(Arc::new(WindowChannels::new()))),
+            ChatState::new(Arc::new(WindowChannels::new())),
         )
         .await?;
 
@@ -111,7 +111,7 @@ mod tests {
         // 创建工作流引擎
         let engine = WorkflowEngine::new(
             Arc::new(std::sync::Mutex::new(main_store)),
-            Arc::new(ChatState::new(Arc::new(WindowChannels::new()))),
+            ChatState::new(Arc::new(WindowChannels::new())),
         )
         .await
         .map_err(|e| format!("Failed to create workflow engine: {}", e))?;
@@ -195,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_dag() -> Result<(), Box<dyn std::error::Error>> {
-        let chat_state = Arc::new(ChatState::new(Arc::new(WindowChannels::new())));
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()));
 
         // 2. 加载工作流配置
         let workflow_config = r#"[

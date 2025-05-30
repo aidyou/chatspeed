@@ -100,7 +100,7 @@ impl ToolManager {
         // Chat completion
         // =================================================
         // register chat completion tool
-        let chat_completion = ChatCompletion::new(chat_state.clone());
+        let chat_completion = ChatCompletion::new();
         // add reasoning and general models to chat completion tool
         let reasoning_model = Self::get_model(&main_store, ModelName::Reasoning.as_ref())?;
         chat_completion
@@ -280,8 +280,18 @@ impl ToolManager {
             let mcp_tools_guard = self.mcp_tools.read().await;
             mcp_tools_guard
                 .iter()
-                .flat_map(|(_server_name, tools_vec)| {
-                    tools_vec.iter().filter(|td| !td.disabled).cloned()
+                .flat_map(|(server_name, tools_vec)| {
+                    tools_vec
+                        .iter()
+                        .filter(|td| !td.disabled)
+                        .map(move |original_td| {
+                            let mut new_td = original_td.clone(); // Clone the original MCPToolDeclaration
+                            new_td.name = format!(
+                                "{}{}{}",
+                                &server_name, MCP_TOOL_NAME_SPLIT, original_td.name
+                            ); // Modify the name of the clone
+                            new_td // Return the modified clone
+                        })
                 })
                 .collect()
         };

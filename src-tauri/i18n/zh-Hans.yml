@@ -19,6 +19,8 @@ chat:
   error:
     api_request_failed: "与 %{provider} 服务接口请求失败: %{details}"
     deserialization_failed: "反序列化 '%{context}' 失败: %{details}"
+    InvalidInput: "无效的输入：%{details}"
+    response_parse_failed: "解析来自 %{provider} 的响应失败: %{details}"
     stream_processing_failed: "处理来自 %{provider} 的数据流时发生错误: %{details}"
     tool_call_serialization_failed: "工具调用序列化失败: %{details}"
     upstream_chat_error: "上游聊天服务发生错误: %{message}"
@@ -40,6 +42,7 @@ chat:
   invalid_api_provider: "无效的API提供者: %{provider}"
   invalid_search_model: "无效的搜索模型: %{model_name}"
   json_serialize_crawler_results_failed: "序列化爬取内容为JSON失败: %{error}"
+  api_key_is_require_for_list_models: "list_models API 调用须提供 API 密钥"
   no_valid_search_engine_config: "没有有效的搜索引擎配置"
   note_already_exists: "您已添加过该笔记"
   parse_response_failed: "解析响应失败: %{error}"

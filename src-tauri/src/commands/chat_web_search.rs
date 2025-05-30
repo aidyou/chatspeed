@@ -78,6 +78,7 @@ pub async fn chat_completion_with_search(
         .collect::<Vec<String>>();
 
     let mut content_clone = content.clone();
+    let chat_state_clone = chat_state.inner().clone();
 
     // 只在用户设置了搜索配置时才进行搜索
     // Only perform the search if the user has set up the search configuration
@@ -99,7 +100,6 @@ pub async fn chat_completion_with_search(
         // 步骤1：生成搜索主题和关键词
         let search_queries = if content.len() > 150 || messages.len() > 1 {
             generate_search_queries(
-                &chat_state,
                 protocol.clone(),
                 url.as_deref(),
                 model.clone(),
@@ -161,7 +161,6 @@ pub async fn chat_completion_with_search(
 
             // 步骤4：获取最相关的搜索结果
             if let Ok(ai_ranked_results) = filter_and_rank_search_results(
-                &chat_state,
                 protocol,
                 url.as_deref(),
                 model,
@@ -226,6 +225,7 @@ pub async fn chat_completion_with_search(
                             references_json,
                             MessageType::Reference,
                             metadata.clone(),
+                            None,
                         )) {
                             log::warn!("Failed to send reference information: {}", e);
                         }
@@ -239,7 +239,7 @@ pub async fn chat_completion_with_search(
     }
 
     generate_final_answer(
-        &chat_state,
+        chat_state_clone.clone(),
         api_protocol,
         api_url,
         model,
@@ -386,7 +386,7 @@ async fn send_step_message(
     msg: String,
     metadata: Option<Value>,
 ) -> Result<(), String> {
-    let chunk = ChatResponse::new_with_arc(chat_id, msg, MessageType::Step, metadata);
+    let chunk = ChatResponse::new_with_arc(chat_id, msg, MessageType::Step, metadata, None);
     if let Err(e) = tx.try_send(chunk) {
         return Err(e.to_string());
     }
@@ -409,7 +409,6 @@ async fn send_step_message(
 /// # Returns
 /// * `Result<Vec<String>, String>` - The result of the operation
 async fn generate_search_queries(
-    state: &ChatState,
     chat_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -431,7 +430,6 @@ async fn generate_search_queries(
     }
 
     let chat_reslut = chat_with_retry(
-        state,
         chat_protocol,
         api_url,
         model,
@@ -456,7 +454,6 @@ async fn generate_search_queries(
 }
 
 async fn filter_and_rank_search_results(
-    state: &ChatState,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -478,7 +475,6 @@ async fn filter_and_rank_search_results(
     );
 
     let chat_result = chat_with_retry(
-        state,
         api_protocol,
         api_url,
         model,
@@ -513,7 +509,6 @@ async fn filter_and_rank_search_results(
 /// * `Ok(ChatCompletionResult)` - The chat completion result
 /// * `Err(String)` - The error message
 async fn chat_with_retry(
-    state: &ChatState,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -525,7 +520,6 @@ async fn chat_with_retry(
 ) -> Result<ChatCompletionResult, String> {
     for i in 0..3 {
         match complete_chat_blocking(
-            state,
             api_protocol.clone(),
             api_url,
             model.clone(),
@@ -676,7 +670,7 @@ async fn crawl_data(crawler_url: String, results: &[SearchResult]) -> String {
 }
 
 async fn generate_final_answer(
-    chat_state: &ChatState,
+    chat_state: Arc<ChatState>,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,

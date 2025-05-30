@@ -125,7 +125,7 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String
     Ok(())
 }
 
-/// Show the window by label
+/// Show the window by windowLabel
 ///
 /// # Arguments
 /// - `app_handle` - Tauri application handle
@@ -137,8 +137,8 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<(), String
 /// await invoke('show_window');
 /// ```
 #[command]
-pub fn show_window(app_handle: tauri::AppHandle, label: &str) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window(label) {
+pub fn show_window(app_handle: tauri::AppHandle, window_label: &str) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window(window_label) {
         if !window
             .is_visible()
             .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
@@ -210,10 +210,18 @@ pub async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<(), S
 /// await invoke('sync_state', { syncType: 'model', label: 'model' });
 /// ```
 #[tauri::command]
-pub fn sync_state(app: tauri::AppHandle, sync_type: &str, label: &str, metadata: Option<Value>) {
+pub fn sync_state(
+    app: tauri::AppHandle,
+    sync_type: &str,
+    window_label: &str,
+    metadata: Option<Value>,
+) {
     let mut payload: HashMap<String, Value> = HashMap::new();
     payload.insert("type".to_string(), Value::String(sync_type.to_string()));
-    payload.insert("label".to_string(), Value::String(label.to_string()));
+    payload.insert(
+        "windowLabel".to_string(),
+        Value::String(window_label.to_string()),
+    );
     if let Some(metadata) = metadata {
         payload.insert("metadata".to_string(), metadata);
     }

@@ -19,7 +19,9 @@ use super::prompt::{
 use crate::{
     ai::{
         interaction::chat_completion::{complete_chat_async, complete_chat_blocking, ChatState},
-        traits::chat::{ChatCompletionResult, ChatResponse, MCPToolDeclaration, MessageType},
+        traits::chat::{
+            ChatCompletionResult, ChatResponse, FinishReason, MCPToolDeclaration, MessageType,
+        },
     },
     db::AiModel,
     http::chp::{Chp, SearchProvider, SearchResult},
@@ -377,7 +379,7 @@ impl DeepSearch {
                 progress_callback(response);
             };
             match complete_chat_async(
-                &self.chat_state.clone(),
+                self.chat_state.clone(),
                 model.api_protocol.clone().try_into()?,
                 Some(&model.base_url),
                 model.default_model.clone(),
@@ -1039,7 +1041,6 @@ impl DeepSearch {
         for i in 0..3 {
             let chat_id = uuid::Uuid::new_v4().to_string();
             match complete_chat_blocking(
-                &self.chat_state.clone(),
                 model.api_protocol.clone().try_into()?,
                 Some(model.base_url.as_str()),
                 model.default_model.clone(),
@@ -1142,6 +1143,7 @@ impl DeepSearch {
             chunk.to_string(),
             message_type,
             metadata,
+            None,
         ));
     }
 }
@@ -1246,7 +1248,7 @@ mod test {
         });
 
         let ds = crate::workflow::tools::DeepSearch::new(
-            std::sync::Arc::new(chat_state),
+            chat_state,
             None,
             "http://127.0.0.1:12321".to_string(),
             vec![SearchProvider::Google, SearchProvider::Bing],

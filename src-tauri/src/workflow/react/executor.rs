@@ -5,7 +5,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use super::{types::Step, MessageRole};
 use crate::{
-    ai::{interaction::chat_completion::ChatState, traits::chat::MCPToolDeclaration},
+    ai::interaction::chat_completion::ChatState,
     db::MainStore,
     http::chp::SearchResult,
     libs::util::format_json_str,
@@ -1571,9 +1571,8 @@ mod tests {
             .clone()
             .join("chatspeed.db");
         let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
-        let chat_state = Arc::new(ChatState::new(Arc::new(
-            crate::libs::window_channels::WindowChannels::new(),
-        )));
+        let chat_state =
+            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let mut exe = ReactExecutor::new(main_store, chat_state, 10)
             .await
             .unwrap();
@@ -1591,9 +1590,8 @@ mod tests {
             .clone()
             .join("chatspeed.db");
         let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
-        let chat_state = Arc::new(ChatState::new(Arc::new(
-            crate::libs::window_channels::WindowChannels::new(),
-        )));
+        let chat_state =
+            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let exe = ReactExecutor::new(main_store, chat_state, 10)
             .await
             .unwrap();
@@ -1617,9 +1615,8 @@ mod tests {
             .clone()
             .join("chatspeed.db");
         let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
-        let chat_state = Arc::new(ChatState::new(Arc::new(
-            crate::libs::window_channels::WindowChannels::new(),
-        )));
+        let chat_state =
+            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let exe = ReactExecutor::new(main_store, chat_state, 10)
             .await
             .unwrap();

@@ -26,6 +26,13 @@ impl WindowChannels {
         }
     }
 
+    /// Get the sender for a specific chat_id/window_label if it exists.
+    /// This does not create a new channel if one doesn't exist.
+    pub async fn get_sender(&self, window_label: &str) -> Option<mpsc::Sender<Arc<ChatResponse>>> {
+        let channels = self.channels.lock().await;
+        channels.get(window_label).cloned()
+    }
+
     /// Emit an AI chat stream message to the specified window
     ///
     /// # Arguments
@@ -67,6 +74,7 @@ impl WindowChannels {
                 chunk: combined,
                 metadata: first_msg.metadata.clone(),
                 r#type: first_msg.r#type.clone(),
+                finish_reason: first_msg.finish_reason.clone(),
             }),
         )
         .await

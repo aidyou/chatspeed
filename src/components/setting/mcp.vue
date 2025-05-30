@@ -28,9 +28,9 @@
               <Avatar :text="server.name" :size="32" />
               <div class="server-info">
                 <div class="server-name">{{ server.name }}</div>
-                <div class="server-status">
-                  <span :class="['status-dot', getServerStatusClass(server.status)]"></span>
-                  {{ getServerStatusText(server.status) }}
+                <div class="server-status" :class="getServerStatusClass(server.status)">
+                  <span class="status-dot"></span>
+                  <span class="status-text">{{ getServerStatusText(server.status) }}</span>
                 </div>
               </div>
             </div>
@@ -920,28 +920,57 @@ const trimQuotes = str => {
             .server-status {
               font-size: var(--cs-font-size-xs);
               color: #666;
+              display: flex;
+              align-items: center;
 
               .status-dot {
                 display: inline-block;
                 width: 8px;
                 height: 8px;
                 border-radius: 50%;
-                margin-right: var(--cs-space-xxs);
-                &.connected {
+                margin-right: var(--cs-space-xs);
+                flex-shrink: 0;
+              }
+
+              &.connected {
+                .status-dot {
                   background: rgba(0, 0, 255, 0.8);
                 }
+                .status-text {
+                  color: rgba(0, 0, 255, 0.8);
+                }
+              }
 
-                &.running {
+              &.running {
+                .status-dot {
                   background: rgba(0, 255, 0, 0.5);
                 }
-                &.stopped {
+                .status-text {
+                  color: rgba(0, 255, 0, 0.5);
+                }
+              }
+              &.stopped {
+                .status-dot {
                   background: gray;
                 }
-                &.error {
-                  background: rgba(255, 0, 0, 0.5);
+                .status-text {
+                  color: gray;
                 }
-                &.unknown {
+              }
+              &.error {
+                .status-dot {
+                  background: rgba(255, 0, 0, 0.8);
+                }
+                .status-text {
+                  color: rgba(255, 0, 0, 0.9);
+                }
+              }
+              &.unknown {
+                .status-dot {
                   background: orange;
+                }
+                .status-text {
+                  color: orange;
                 }
               }
             }

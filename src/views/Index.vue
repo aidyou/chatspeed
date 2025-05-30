@@ -481,7 +481,6 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
@@ -506,7 +505,6 @@ const { t } = useI18n()
 const unlistenChunkResponse = ref(null)
 const unlistenSendMessage = ref(null)
 
-const windowLabel = ref(getCurrentWebviewWindow().label || '')
 const chatStore = useChatStore()
 const modelStore = useModelStore()
 const noteStore = useNoteStore()
@@ -523,6 +521,9 @@ const editConversationTitle = ref('')
 // load model providers
 const modelProviders = computed(() => modelStore.getAvailableProviders)
 const currentModel = computed(() => modelStore.defaultModelProvider)
+const currentModelDetail = computed(() =>
+  currentModel.value?.models.find(m => m.id === currentModel.value.defaultModel)
+)
 const currentSubModels = computed(() =>
   modelStore.defaultModelProvider?.models?.reduce((groups, x) => {
     if (!x.group) {
@@ -656,7 +657,15 @@ const isTranslation = computed(() => {
  * Check if the current skill has tools enabled
  */
 const toolsEnabled = computed(() => {
-  return !isTranslation.value && selectedSkill.value?.metadata?.toolsEnabled
+  if (!currentModelDetail.value?.functionCall) {
+    return false
+  }
+  // 1. If no skill is selected, tools can be enabled (global tools or default behavior)
+  if (!selectedSkill.value) {
+    return true
+  }
+  // 2. If a skill is selected, it must not be a translation skill AND its metadata must allow tools
+  return !isTranslation.value && !!selectedSkill.value.metadata?.toolsEnabled
 })
 
 // listen AI response, update scroll
@@ -913,7 +922,7 @@ const selectConversation = id => {
   chatStore.setCurrentConversationId(id)
   messageReady.value = false
   resetPagination() // Reset pagination state
-  chatStore.loadMessages(id, windowLabel.value)
+  chatStore.loadMessages(id, settingStore.windowLabel)
 }
 
 /**
@@ -979,6 +988,7 @@ const dispatchChatCompletion = async (messageId = null) => {
       })
 
       try {
+        console.log('tool enabled:', toolsEnabled.value)
         await invoke('chat_completion', {
           apiProtocol: currentModel.value.apiProtocol,
           apiUrl: currentModel.value.baseUrl,
@@ -992,10 +1002,11 @@ const dispatchChatCompletion = async (messageId = null) => {
             temperature: currentModel.value.temperature,
             topP: currentModel.value.topP,
             topK: currentModel.value.topK,
-            label: windowLabel.value,
+            windowLabel: settingStore.windowLabel,
             proxyType: proxyType.value,
             model: currentModel.value.defaultModel,
-            toolsEnabled: toolsEnabled.value
+            toolsEnabled: toolsEnabled.value,
+            reasoning: currentModelDetail.value?.reasoning || false
           }
         })
       } catch (error) {
@@ -1072,7 +1083,7 @@ const deepSearch = (messageId = null) => {
           chatId: lastChatId.value,
           question: userMessage,
           metadata: {
-            label: windowLabel.value,
+            windowLabel: settingStore.windowLabel,
             model: currentModel.value.defaultModel
           }
         })
@@ -1155,7 +1166,7 @@ const genTitleByAi = () => {
       maxTokens: 50,
       action: 'gen_title',
       conversationId: chatStore.currentConversationId,
-      label: windowLabel.value,
+      windowLabel: settingStore.windowLabel,
       proxyType: proxyType.value,
       toolsEnabled: toolsEnabled.value
     }
@@ -1404,7 +1415,7 @@ onMounted(async () => {
 
   // listen send_message event
   unlistenSendMessage.value = await listen('chat_message', async event => {
-    if (event?.payload?.label === windowLabel.value) {
+    if (event?.payload?.windowLabel === settingStore.windowLabel) {
       if (event?.payload?.done) {
         messageReady.value = true
         loadMessagesForObserver()
@@ -1422,7 +1433,7 @@ onMounted(async () => {
     .then(() => {
       if (chatStore.currentConversationId > 0) {
         messageReady.value = false
-        chatStore.loadMessages(chatStore.currentConversationId, windowLabel.value)
+        chatStore.loadMessages(chatStore.currentConversationId, settingStore.windowLabel)
       }
     })
     .catch(error => {
@@ -1432,7 +1443,7 @@ onMounted(async () => {
   // listen chat_stream event
   unlistenChunkResponse.value = await listen('chat_stream', async event => {
     // we don't want to process messages from other windows
-    if (event.payload?.metadata?.label !== windowLabel.value) {
+    if (event.payload?.metadata?.windowLabel !== settingStore.windowLabel) {
       return
     }
     // console.log('payload', event?.payload)
@@ -1452,7 +1463,7 @@ onMounted(async () => {
   })
 
   await listen('sync_state', event => {
-    if (event.payload.label !== windowLabel.value) {
+    if (event.payload.windowLabel !== settingStore.windowLabel) {
       return
     }
     if (
@@ -1463,7 +1474,7 @@ onMounted(async () => {
       chatStore.setCurrentConversationId(event.payload.metadata.conversationId)
       chatStore.loadConversations()
       chatStore
-        .loadMessages(event.payload.metadata.conversationId, windowLabel.value)
+        .loadMessages(event.payload.metadata.conversationId, settingStore.windowLabel)
         .then(() => {
           genTitleByAi()
 
@@ -1587,7 +1598,7 @@ const onDeleteConversation = id => {
         if (oldCurrentConversationId == id) {
           if (chatStore.currentConversationId > 0) {
             messageReady.value = false
-            chatStore.loadMessages(chatStore.currentConversationId, windowLabel.value)
+            chatStore.loadMessages(chatStore.currentConversationId, settingStore.windowLabel)
           } else {
             newChat()
           }
