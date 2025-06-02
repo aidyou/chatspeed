@@ -199,8 +199,8 @@ impl OpenAIChat {
 
                                 // First, send the AssistantAction message with all requested tool calls
                                 let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
-                                    .values()
-                                    .map(|tcd| {
+                                    .iter()
+                                    .map(|(idx, tcd)| {
                                         // Convert ToolCallDeclaration to the format expected in the assistant's message
                                         // OpenAI's assistant message tool_calls usually look like:
                                         // { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
@@ -209,6 +209,7 @@ impl OpenAIChat {
                                         let arguments_str =
                                             tcd.arguments.as_deref().unwrap_or_default();
                                         json!({
+                                            "index": idx,
                                             "id": tcd.id,
                                             "type": "function", // Assuming all tools are functions for now
                                             "function": {

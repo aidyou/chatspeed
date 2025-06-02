@@ -19,9 +19,7 @@ use super::prompt::{
 use crate::{
     ai::{
         interaction::chat_completion::{complete_chat_async, complete_chat_blocking, ChatState},
-        traits::chat::{
-            ChatCompletionResult, ChatResponse, FinishReason, MCPToolDeclaration, MessageType,
-        },
+        traits::chat::{ChatCompletionResult, ChatResponse, MCPToolDeclaration, MessageType},
     },
     db::AiModel,
     http::chp::{Chp, SearchProvider, SearchResult},
@@ -379,7 +377,7 @@ impl DeepSearch {
                 progress_callback(response);
             };
             match complete_chat_async(
-                self.chat_state.clone(),
+                Some(self.chat_state.clone()),
                 model.api_protocol.clone().try_into()?,
                 Some(&model.base_url),
                 model.default_model.clone(),

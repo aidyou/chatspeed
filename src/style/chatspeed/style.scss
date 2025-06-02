@@ -64,9 +64,11 @@
             }
 
             .label {
-                .cs {
-                    margin-right: var(--cs-space-xs);
-                }
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                justify-content: flex-start;
+                gap: var(--cs-space-xs);
 
                 .label-text {
                     display: flex;
@@ -143,7 +145,7 @@
 
         .text {
             display: inline-flex;
-            gap: var(--cs-space-xxs);
+            gap: var(--cs-space-xs);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -211,16 +213,12 @@
             .name {
                 display: flex;
                 align-items: center;
-
-                .cs {
-                    margin-right: var(--cs-space-sm);
-                }
+                gap: var(--cs-space-sm);
 
                 .provider-logo {
                     width: 16px;
                     height: 16px;
                     border-radius: 16px;
-                    margin-right: var(--cs-space-sm);
                 }
 
             }

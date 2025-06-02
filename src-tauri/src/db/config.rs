@@ -500,7 +500,18 @@ impl MainStore {
     {
         self.config
             .get_setting(key)
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|v| {
+                serde_json::from_value(v.clone())
+                    .map_err(|e| {
+                        log::error!(
+                            "Failed to deserialize config for key '{}': {:?}, err: {}",
+                            key,
+                            v,
+                            e.to_string()
+                        )
+                    })
+                    .ok()
+            })
             .unwrap_or(default)
     }
 }

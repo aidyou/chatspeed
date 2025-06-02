@@ -13,7 +13,7 @@ import i18n from '@/i18n'
 const windowLabel = getCurrentWebviewWindow().label
 
 const defaultSettings = {
-  httpServer: 'http://127.0.0.1:21914',
+  httpServer: 'http://127.0.0.1:21912',
   interfaceLanguage: mapBrowserLangToStandard(navigator.language),
   primaryLanguage: mapBrowserLangToStandard(navigator.language),
   secondaryLanguage: 'en',
@@ -51,7 +51,45 @@ const defaultSettings = {
   workflowGeneralModel: {
     id: '',
     model: ''
-  }
+  },
+  // chat completion proxy settings
+  // This allows mapping a client-facing model alias (key) to one or more
+  // actual backend model configurations (value as an array).
+  // This enables features like load balancing or model fallback for a given alias.
+  //
+  // Example:
+  // "client-model-alias": [
+  //   { "id": 1, "model": "provider-specific-model-name-A" }, // Target model A from provider 1
+  //   { "id": 2, "model": "provider-specific-model-name-B" }  // Target model B from provider 2
+  // ]
+  //
+  // - The `key` (e.g., "client-model-alias") is the identifier the application uses
+  //   when requesting a chat completion through the proxy.
+  // - The `value` is an array, where each object specifies a target backend model:
+  //   - `id`: Refers to the ID of an AI model provider configuration
+  //           (e.g., an entry in your `ai_model` database table or store).
+  //           This provider configuration contains the API endpoint, key, etc.
+  //   - `model`: The specific model string (e.g., "gpt-4-turbo", "claude-3-opus")
+  //              to be used with the provider identified by `id`. This string should
+  //              correspond to a model supported by that provider.
+  chatCompletionProxy: {},
+  // Chat completion proxy authentication keys.
+  // This array stores a list of keys that can be used by clients
+  // to authenticate with the chat completion proxy service.
+  // Each key object has a token and a descriptive name.
+  //
+  // Example:
+  // [
+  //   { "token": "cs-secure-token-for-client-A", "name": "Client A Access Key" },
+  //   { "token": "cs-another-very-secret-token", "name": "Analytics Service Key" }
+  // ]
+  //
+  // - Each object in the array represents an authentication key:
+  //   - `token`: The actual secret string (API key or bearer token) that clients
+  //              must provide to use the proxy service.
+  //   - `name`: A human-readable name or description for the token,
+  //             useful for managing multiple keys (e.g., "WebApp Client Key", "Mobile App Key").
+  chatCompletionProxyKeys: []
 }
 
 /**

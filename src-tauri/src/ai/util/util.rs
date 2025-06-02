@@ -433,10 +433,10 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    // Claude models with strong reasoning (Opus auto-shows CoT, others need prompting)
-    if lower_model_id.contains("claude-3") || lower_model_id.contains("claude-4") {
-        // Includes: claude-3-opus (auto CoT), claude-4-opus/sonnet (extended thinking mode)
-        // Excludes: claude-instant (basic reasoning only)
+    if lower_model_id.contains("claude-opus-4")
+        || lower_model_id.contains("claude-sonnet-4")
+        || lower_model_id.contains("claude-3-7-sonnet")
+    {
         return true;
     }
 
@@ -477,9 +477,9 @@ pub fn is_image_input_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    // Anthropic Claude
-    // Claude 3 models support image input.
-    if lower_model_id.contains("claude-3") || lower_model_id.contains("claude-4") {
+    // All Claude models support image input, as version 3 and above natively support it,
+    // and version 2 models have been deprecated.
+    if lower_model_id.starts_with("claude-") {
         return true;
     }
 

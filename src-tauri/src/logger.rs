@@ -1,3 +1,5 @@
+use lazy_static::*;
+use regex::Regex;
 use rust_i18n::t;
 use std::fs::File;
 use tauri::Manager;
@@ -91,6 +93,38 @@ pub fn file_log_formatter(
     ))
 }
 
+lazy_static! {
+    /// Regex for sanitizing sensitive information in logs.
+    ///
+    /// This regex is defined as a compile-time constant and `unwrap()` is intentionally used for the following reasons:
+    /// 1. If the regex contains a syntax error, this represents a **coding bug** that should be caught during development or CI, not at runtime in production.
+    /// 2. Log sanitization is a security-critical feature. If the regex fails to compile, the safest response is to panic and stop execution rather than silently skip or output unsanitized logs.
+    /// 3. As this expression is never loaded from user input or configuration, runtime failure is never expected after passing compile and tests. Using `unwrap()` ensures any issue is quickly and explicitly detected.
+    ///
+    /// If you change this regex, ensure you have thorough tests to prevent breaking production log sanitization.
+     pub static ref SENSITIVE_REGEX: Regex = Regex::new(
+        &format!(
+            r#"(?ix) # Ignore case and allow comments/whitespace. Ensure < > are actual angle brackets.
+                (?P<key_str> # Capture the full key string (e.g., "api_key" or api_key)
+                    ["']? # Optional opening quote for the key
+                    (?:{keyword_alternatives}) # Non-capturing group for keyword list
+                    ["']? # Optional closing quote for the key
+                )
+                (?P<s1>\s*)(?P<sep>[:=])(?P<s2>\s*) # Separator and spaces
+                (?: # Value alternatives. We don't capture the whole value string into one group,
+                    # but rather check sub-groups to determine quoting for replacement.
+                    (?P<val_q_double_open>")(?P<val_double_quoted_content>(?:\\.|[^\\"])*?)(?P<val_q_double_close>") # Double quoted string
+                    |
+                    (?P<val_q_single_open>')(?P<val_single_quoted_content>(?:\\.|[^\\'])*?)(?P<val_q_single_close>') # Single quoted string
+                    |
+                    (?P<val_unquoted_content>[^"'\s,}}&]*) # Unquoted value
+                )
+            "#,
+            keyword_alternatives = "api_key|apikey|access_token|refresh_token|card_number|bank_account|client_secret|app_secret|proxyPassword|proxyUsername|user_id|sessionid|set-cookie|credit_card|password|passwd|secret|token|user|username|account|email|mail|mobile|phone|telephone|id_card|idnumber|session|cookie|device_token|authentication|credentials|auth|api|jwt|key|otp|pin|pwd|ssn|tk"
+        )
+    ).unwrap();
+}
+
 /// Replaces sensitive information in log messages with asterisks (`***`).
 ///
 /// This function scans the log message for sensitive keywords (e.g., `api_key`, `password`),
@@ -104,9 +138,9 @@ pub fn file_log_formatter(
 ///
 /// # Examples
 /// ```
-/// let message = "api_key=1234567890&password=secret123";
+/// let message = "api_key=1234567890&password=1234567890&secret=1234567890";
 /// let sanitized_message = replace_sensitive_info(message);
-/// assert_eq!(sanitized_message, "api_key=***&password=***");
+/// assert_eq!(sanitized_message, "api_key=***&password=***&secret=***");
 /// ```
 ///
 /// # Notes
@@ -114,30 +148,37 @@ pub fn file_log_formatter(
 /// - The replacement logic looks for the `=` sign after a keyword and replaces the value part with `***`.
 /// - If the value part ends with `&`, it replaces up to `&`; otherwise, it replaces to the end of the string.
 fn replace_sensitive_info(message: &str) -> String {
-    let sensitive_keywords = [
-        "api_key", "key", "password", "passwd", "secret", "token", "secret", "api",
-    ];
-    let mut sanitized_message = message.to_string();
+    SENSITIVE_REGEX
+        .replace_all(message, |caps: &regex::Captures| {
+            // Safely access capture groups.
+            // If the regex matched, these named groups should be present.
+            // Defaulting to empty string if a group is unexpectedly missing,
+            // though this would indicate an issue with the regex itself.
+            let key_str = caps.name("key_str").map_or("", |m| m.as_str());
+            let s1 = caps.name("s1").map_or("", |m| m.as_str());
+            let sep_char = caps.name("sep").map_or("", |m| m.as_str());
+            let s2 = caps.name("s2").map_or("", |m| m.as_str());
 
-    // replace sensitive keywords
-    for keyword in sensitive_keywords {
-        if let Some(start) = sanitized_message.find(keyword) {
-            // find the '=' symbol after the keyword
-            if let Some(equals_pos) = sanitized_message[start..].find('=') {
-                // start of the value
-                let value_start = start + equals_pos + 1;
-                // find the end of the value (next '&' or end of string)
-                let value_end = sanitized_message[value_start..]
-                    .find('&')
-                    .map(|pos| value_start + pos)
-                    .unwrap_or(sanitized_message.len());
-                // replace the value part with '***'
-                sanitized_message.replace_range(value_start..value_end, "***");
-            }
-        }
-    }
+            // Determine the replacement string for the value part based on original quoting
+            let value_replacement_str = if caps.name("val_q_double_open").is_some() {
+                // Value was double-quoted, e.g., "secret"
+                // The groups val_q_double_open, val_double_quoted_content, val_q_double_close
+                // would have matched the original quoted value. We replace the content.
+                "\"***\""
+            } else if caps.name("val_q_single_open").is_some() {
+                // Value was single-quoted, e.g., 'secret'
+                "'***'"
+            } else {
+                // Value was unquoted (the val_unquoted_content group matched)
+                "***"
+            };
 
-    sanitized_message
+            format!(
+                "{}{}{}{}{}",
+                key_str, s1, sep_char, s2, value_replacement_str
+            )
+        })
+        .to_string()
 }
 
 /// Sets up the application logger with console and file outputs
@@ -270,5 +311,22 @@ mod tests {
         let message = "api_key=1234567890&password=1234567890&secret=1234567890";
         let sanitized_message = crate::logger::replace_sensitive_info(message);
         assert_eq!(sanitized_message, "api_key=***&password=***&secret=***");
+
+        let logs = r#"
+        {
+            "chat_param": {
+                "api_key": "sk-2SAc-fB43a2-dCdB8F1",
+                "api_url": "https://abc.com/v1",
+                "proxyPassword": "a1232323232",
+                "proxyServer": "http://127.0.0.1:15154?passwd=<PASSWORD>",
+                "proxyUsername": "abcdefg",
+                },
+            },
+            "is_internal_tool_result": true,
+            "windowLabel": "main"
+        }"#;
+        let sanitized_message1 = crate::logger::replace_sensitive_info(logs);
+        print!("{}", sanitized_message1);
+        assert!(sanitized_message1.contains(r#""api_key": "***""#));
     }
 }

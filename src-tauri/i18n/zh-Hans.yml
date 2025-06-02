@@ -277,6 +277,7 @@ tray:
   mcp: "MCP"
   model: "模型"
   note: "智记"
+  proxy: "代理"
   quit: "退出"
   settings: "设置"
   skill: "技能"

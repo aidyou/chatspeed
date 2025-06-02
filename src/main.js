@@ -8,6 +8,7 @@ import i18n from './i18n'
 import '@/components/icon/chatspeed.css'
 import cs from '@/components/icon/index.vue'
 import logo from '@/components/icon/logo.vue'
+import avatar from '@/components/common/avatar.vue'
 
 import { registerDirective } from '@/libs/directive'
 
@@ -18,6 +19,7 @@ app.use(router)
 app.use(i18n)
 app.component('cs', cs)
 app.component('logo', logo)
+app.component('avatar', avatar)
 
 registerDirective(app)
 app.mount("#app");

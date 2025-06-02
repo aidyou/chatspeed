@@ -685,7 +685,7 @@ async fn generate_final_answer(
     };
 
     complete_chat_async(
-        chat_state,
+        None,
         api_protocol,
         api_url,
         model,

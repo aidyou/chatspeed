@@ -173,16 +173,102 @@ impl ClaudeChat {
                         });
                     }
                 }
-                // For other roles or non-tool assistant messages, format normally
-                let claude_parts = if let Some(text_content) = content_value.and_then(Value::as_str)
-                {
-                    vec![json!({"type": "text", "text": text_content})]
+                // For user/assistant messages (without tool calls), or other roles, format content.
+                // This needs to handle OpenAI's `image_url` and convert to Claude's `image` format.
+                let mut claude_parts: Vec<Value> = Vec::new();
+
+                if let Some(text_content) = content_value.and_then(Value::as_str) {
+                    claude_parts.push(json!({"type": "text", "text": text_content}));
                 } else if let Some(array_content) = content_value.and_then(Value::as_array) {
-                    // If content is already an array of parts (e.g. from previous Claude interaction)
-                    array_content.clone()
+                    for part_val in array_content {
+                        if let Some(part_obj) = part_val.as_object() {
+                            if let Some(part_type) = part_obj.get("type").and_then(Value::as_str) {
+                                match part_type {
+                                    "text" => {
+                                        // Ensure text content is not null, use empty string if it is.
+                                        let text = part_obj.get("text").and_then(Value::as_str).unwrap_or("");
+                                        if !text.is_empty(){
+                                            claude_parts.push(json!({"type": "text", "text": text}));
+                                        }
+                                    }
+                                    "image_url" => { // OpenAI specific, needs conversion
+                                        if let Some(image_url_details) = part_obj.get("image_url").and_then(Value::as_object) {
+                                            if let Some(url_str) = image_url_details.get("url").and_then(Value::as_str) {
+                                                if url_str.starts_with("data:") {
+                                                    // Expected format: "data:<media_type>;base64,<data>"
+                                                    let mut url_parts_iter = url_str.splitn(2, ',');
+                                                    let header_and_data_option = url_parts_iter.next().zip(url_parts_iter.next());
+
+                                                    if let Some((header_part, data_part)) = header_and_data_option {
+                                                        // header_part = "data:image/jpeg;base64"
+                                                        if let Some(media_type_and_encoding) = header_part.strip_prefix("data:") {
+                                                            // media_type_and_encoding = "image/jpeg;base64"
+                                                            let mut media_encoding_iter = media_type_and_encoding.splitn(2, ';');
+                                                            let media_and_enc_option = media_encoding_iter.next().zip(media_encoding_iter.next());
+
+                                                            if let Some((media_type, encoding)) = media_and_enc_option {
+                                                                if encoding.to_lowercase() == "base64" {
+                                                                    claude_parts.push(json!({
+                                                                        "type": "image",
+                                                                        "source": {
+                                                                            "type": "base64",
+                                                                            "media_type": media_type,
+                                                                            "data": data_part
+                                                                        }
+                                                                    }));
+                                                                    continue; // Successfully converted and added
+                                                                } else {
+                                                                    log::warn!("Unsupported encoding in data URL: '{}'. Expected 'base64'. Skipping image part. URL: {}", encoding, url_str);
+                                                                }
+                                                            } else {
+                                                                 log::warn!("Malformed data URL header: could not split media_type and encoding from '{}'. Skipping image part. URL: {}", media_type_and_encoding, url_str);
+                                                            }
+                                                        } else {
+                                                            log::warn!("Malformed data URL: 'data:' prefix found, but strip_prefix failed for '{}'. Skipping image part. URL: {}", header_part, url_str);
+                                                        }
+                                                    } else {
+                                                        log::warn!("Malformed data URL: could not split into header and data parts. Skipping image part. URL: {}", url_str);
+                                                    }
+                                                } else {
+                                                    log::warn!("Image URL is not a data URL. Claude requires base64 encoded images. URL: {}. Skipping image part.", url_str);
+                                                }
+                                            } else {
+                                                log::warn!("'image_url' object missing 'url' string. Skipping image part: {:?}", part_obj);
+                                            }
+                                        } else {
+                                             log::warn!("'image_url' type part missing 'image_url' object details. Skipping part: {:?}", part_obj);
+                                        }
+                                    }
+                                    "image" => { // Already in Claude's image format (or close enough)
+                                        claude_parts.push(part_val.clone());
+                                    }
+                                    _ => { // Unknown part type
+                                        log::warn!("Unknown content part type '{}' found. Passing through: {:?}", part_type, part_val);
+                                        claude_parts.push(part_val.clone());
+                                    }
+                                }
+                            } else { // Part in array is not an object or has no "type" field
+                                log::warn!("Content part in array is malformed (not an object or missing 'type'): {:?}. Passing through.", part_val);
+                                claude_parts.push(part_val.clone());
+                            }
+                        } else if let Some(s) = part_val.as_str() { // Part is a simple string in the array
+                             claude_parts.push(json!({"type": "text", "text": s}));
+                        } else { // Part in array is some other JSON type (number, boolean, null)
+                            log::warn!("Unsupported content part in array: {:?}. Skipping.", part_val);
+                        }
+                    }
                 } else {
-                    vec![json!({"type": "text", "text": ""})] // Default to empty text part
-                };
+                    // Content is not a string and not an array (e.g. null, or an object not representing parts).
+                    // Default to an empty text part, as Claude requires content for user/assistant messages.
+                    claude_parts.push(json!({"type": "text", "text": ""}));
+                }
+
+                // Claude API: "User and assistant messages must have a non-empty content array."
+                if claude_parts.is_empty() && (role == "user" || role == "assistant") {
+                    log::warn!("Content for role '{}' is empty after processing. Claude requires non-empty content. Defaulting to a single empty text part.", role);
+                    claude_parts.push(json!({"type": "text", "text": ""}));
+                }
+
                 json!({"role": role, "content": claude_parts })
             })
             .collect();
@@ -283,6 +369,7 @@ impl ClaudeChat {
         let mut accumulated_tool_calls: HashMap<u32, ToolCallDeclaration> = HashMap::new();
         let mut finish_reason = FinishReason::Complete;
 
+        let mut tool_calls_messages_sent = false; // Flag to track if tool call messages were successfully sent
         let processor = StreamProcessor::new();
         let mut event_receiver = processor
             .process_stream(response, &StreamFormat::Claude)
@@ -354,17 +441,26 @@ impl ClaudeChat {
                             }
                         }
 
-                        if let Some(content) = chunk.content {
-                            if !content.is_empty() {
-                                full_response.push_str(&content);
-
-                                callback(ChatResponse::new_with_arc(
-                                    chat_id.clone(),
-                                    content,
-                                    MessageType::Text,
-                                    metadata_option.clone(),
-                                    None,
-                                ));
+                        // Process content only if it's not part of a tool call argument accumulation
+                        // (tool call arguments are now exclusively in chunk.tool_calls)
+                        if chunk.tool_calls.is_none()
+                            || chunk
+                                .tool_calls
+                                .as_ref()
+                                .map_or(true, |tc| tc.iter().all(|p| p.arguments.is_none()))
+                        {
+                            if let Some(content) = chunk.content {
+                                if !content.is_empty() {
+                                    full_response.push_str(&content);
+                                    let msg_type = chunk.msg_type.unwrap_or(MessageType::Text);
+                                    callback(ChatResponse::new_with_arc(
+                                        chat_id.clone(),
+                                        content,
+                                        msg_type,
+                                        metadata_option.clone(),
+                                        None,
+                                    ));
+                                }
                             }
                         }
 
@@ -377,7 +473,11 @@ impl ClaudeChat {
                                         index: part.index,
                                         id: part.id.clone(),
                                         name: part.name.clone(),
-                                        arguments: Some(String::new()), // Initialize for accumulation
+                                        arguments: if part.arguments.is_some() {
+                                            Some(String::new())
+                                        } else {
+                                            None
+                                        }, // Initialize only if args are expected
                                         results: None,
                                     });
 
@@ -391,7 +491,8 @@ impl ClaudeChat {
                                 }
 
                                 // Append arguments if this part has them (e.g. from input_json_delta)
-                                if let Some(args_chunk) = part.arguments {
+                                if let Some(args_chunk) = &part.arguments {
+                                    // part.arguments now comes from stream.rs for deltas
                                     if !args_chunk.is_empty() {
                                         entry
                                             .arguments
@@ -403,9 +504,18 @@ impl ClaudeChat {
                         }
 
                         // Check for finish reason that signals tool call completion
-                        if chunk.finish_reason.as_deref() == Some("tool_use") {
-                            send_tool_calls_signal = true;
-                        }
+                        // Also, ensure that we are not already in a state where tool calls were signaled.
+                        // The `finish_reason` from the chunk can be "tool_use" or "tool_use_via_stop_sequence".
+                        match chunk.finish_reason.as_deref() {
+                            Some("tool_use") | Some("tool_use_via_stop_sequence") => {
+                                if !send_tool_calls_signal {
+                                    send_tool_calls_signal = true;
+                                    // Set the overall finish_reason for the session if this is the first tool call signal
+                                    finish_reason = FinishReason::ToolCalls;
+                                }
+                            }
+                            _ => {} // Other finish reasons are handled by the final Finished message
+                        };
 
                         // If a "tool_use" signal was received, send accumulated tool calls
                         // This block should execute once when the tool_use signal is received
@@ -414,8 +524,8 @@ impl ClaudeChat {
 
                             // First, send the AssistantAction message with all requested tool calls
                             let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
-                                .values()
-                                .map(|tcd| {
+                                .iter()
+                                .map(|(idx, tcd)| {
                                     // Convert ToolCallDeclaration to the format expected in the assistant's message
                                     // OpenAI's assistant message tool_calls usually look like:
                                     // { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
@@ -423,6 +533,7 @@ impl ClaudeChat {
                                     let arguments_str =
                                         tcd.arguments.as_deref().unwrap_or_default();
                                     json!({
+                                        "index": idx,
                                         "id": tcd.id, // Ensure this ID is meaningful and unique for matching later
                                         "type": "function", // Assuming all tools are functions for now
                                         "function": {
@@ -458,26 +569,30 @@ impl ClaudeChat {
                                 }
                             }
 
-                            // Then, send individual ToolCall messages for each tool
                             for tcd in accumulated_tool_calls.values() {
                                 match serde_json::to_string(tcd) {
                                     Ok(serialized_tcd) => {
                                         callback(ChatResponse::new_with_arc(
                                             chat_id.clone(),
-                                            serialized_tcd, // Send the raw data for tool call
+                                            serialized_tcd,
                                             MessageType::ToolCall,
                                             metadata_option.clone(),
-                                            None, // Individual ToolCall message doesn't need a finish reason
+                                            None,
                                         ));
+                                        #[cfg(debug_assertions)]
+                                        {
+                                            log::debug!(
+                                                "Claude Tool call: {}",
+                                                serde_json::to_string_pretty(tcd)
+                                                    .unwrap_or_default()
+                                            );
+                                        }
                                     }
                                     Err(e) => {
                                         let err = AiError::ToolCallSerializationFailed {
                                             details: e.to_string(),
                                         };
-                                        log::error!(
-                                            "Claude tool call serialization error for tool {:?}: {}",
-                                            tcd.name, err
-                                        );
+                                        log::error!("Claude tool call serialization error for tool {:?}: {}", tcd.name, err);
                                         callback(ChatResponse::new_with_arc(
                                             chat_id.clone(),
                                             err.to_string(),
@@ -488,12 +603,14 @@ impl ClaudeChat {
                                     }
                                 }
                             }
+
                             accumulated_tool_calls.clear(); // Clear after sending
                                                             // After sending AssistantAction and ToolCalls, the AI's turn is effectively paused.
                                                             // The `finish_reason` should remain `FinishReason::ToolCalls` so that the
                                                             // final `MessageType::Finished` message carries this correct reason.
                         }
                     }
+                    tool_calls_messages_sent = true; // Mark that tool call messages were sent
                 }
                 Err(e) => {
                     let err = AiError::StreamProcessingFailed {
@@ -512,23 +629,42 @@ impl ClaudeChat {
             }
         }
 
-        // Send final response with token usage
-        callback(ChatResponse::new_with_arc(
-            chat_id.clone(),
-            String::new(),
-            MessageType::Finished,
-            Some(update_or_create_metadata(
-                metadata_option,
-                TOKENS,
-                json!({
-                    TOKENS_TOTAL: token_usage.total_tokens,
-                    TOKENS_PROMPT: token_usage.prompt_tokens,
-                    TOKENS_COMPLETION: token_usage.completion_tokens,
-                    TOKENS_PER_SECOND: token_usage.tokens_per_second
-                }),
-            )),
-            Some(finish_reason),
-        ));
+        // After the stream processing loop finishes:
+        // Check the final state based on the determined finish_reason and whether tool call messages were sent.
+        if finish_reason != FinishReason::ToolCalls {
+            // This is a normal finish (Complete, Error, etc., but not ToolCalls)
+            // Send the final Finished message.
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                String::new(), // No new content for this final "Finished" marker
+                MessageType::Finished,
+                Some(update_or_create_metadata(
+                    metadata_option.clone(), // Clone metadata for this specific message
+                    TOKENS,
+                    json!({
+                        TOKENS_TOTAL: token_usage.total_tokens,
+                        TOKENS_PROMPT: token_usage.prompt_tokens,
+                        TOKENS_COMPLETION: token_usage.completion_tokens,
+                        TOKENS_PER_SECOND: token_usage.tokens_per_second
+                    }), // Ensure it's an Option<Map<String, Value>> if needed by update_or_create_metadata
+                )),
+                Some(finish_reason.clone()), // Pass the determined finish reason
+            ));
+        } else if !tool_calls_messages_sent {
+            // The finish_reason was ToolCalls, but the tool call messages (AssistantAction, ToolCall)
+            // were never successfully sent during the stream processing.
+            // This indicates an issue where the AI signaled tool use but the data was incomplete or missing.
+            log::warn!("Chat {}: AI signaled tool use but no tool call data was provided before stream ended. Marking as error.", chat_id);
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                "AI signaled tool use but did not provide tool call details.".to_string(),
+                MessageType::Error, // Send as an error to the global processor
+                metadata_option.clone(), // Pass original metadata
+                Some(FinishReason::Error), // Explicitly mark as error
+            ));
+        }
+
+        // The Ok result should represent the complete textual response from the assistant.
         Ok(format!(
             "<think>{}</think>{}",
             reasoning_content, full_response

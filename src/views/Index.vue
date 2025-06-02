@@ -28,7 +28,7 @@
                     :src="currentModel?.providerLogo"
                     v-if="currentModel?.providerLogo !== ''"
                     class="provider-logo-sm" />
-                  <logo :name="currentModel?.logo" size="14" v-else />
+                  <avatar :text="currentModel?.name" size="12px" v-else />
                   {{ currentModel?.name }}
                 </span>
                 <cs name="caret-down" />
@@ -46,7 +46,7 @@
                           :src="model.providerLogo"
                           v-if="model.providerLogo !== ''"
                           class="provider-logo" />
-                        <logo :name="model.logo" size="16" v-else />
+                        <avatar :text="model.name" size="16px" v-else />
                         {{ model.name }}
                       </div>
                     </div>
@@ -1239,7 +1239,7 @@ const handleTitleGenerated = payload => {
 const handleChatMessage = async payload => {
   let isDone = false
   chatState.value.isReasoning = payload?.type == 'reasoning'
-
+  console.log(payload)
   switch (payload?.type) {
     case 'step':
       currentAssistantMessage.value = payload?.chunk || ''

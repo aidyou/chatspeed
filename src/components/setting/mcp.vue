@@ -291,7 +291,7 @@
             class="preset-mcp-card"
             shadow="hover">
             <div class="mcp-item">
-              <Avatar :text="preset.name" :size="40" class="mcp-logo" />
+              <avatar :text="preset.name" :size="40" class="mcp-logo" />
               <div class="mcp-details">
                 <h3>{{ preset.name }}</h3>
                 <p>{{ preset.description }}</p>
@@ -325,7 +325,6 @@ import { useMcpStore } from '@/stores/mcp'
 import { ElMessageBox, ElTooltip } from 'element-plus'
 
 import { showMessage } from '@/libs/util'
-import Avatar from '@/components/common/avatar.vue'
 
 const { t } = useI18n()
 const mcpStore = useMcpStore()
@@ -919,7 +918,7 @@ const trimQuotes = str => {
 
             .server-status {
               font-size: var(--cs-font-size-xs);
-              color: #666;
+              color: var(--cs-text-color-primary);
               display: flex;
               align-items: center;
 
@@ -927,50 +926,50 @@ const trimQuotes = str => {
                 display: inline-block;
                 width: 8px;
                 height: 8px;
-                border-radius: 50%;
+                border-radius: 8px;
                 margin-right: var(--cs-space-xs);
                 flex-shrink: 0;
               }
 
               &.connected {
                 .status-dot {
-                  background: rgba(0, 0, 255, 0.8);
+                  background: var(--cs-info-color);
                 }
                 .status-text {
-                  color: rgba(0, 0, 255, 0.8);
+                  color: var(--cs-info-color);
                 }
               }
 
               &.running {
                 .status-dot {
-                  background: rgba(0, 255, 0, 0.5);
+                  background: var(--cs-success-color);
                 }
                 .status-text {
-                  color: rgba(0, 255, 0, 0.5);
+                  color: var(--cs-success-color);
                 }
               }
               &.stopped {
                 .status-dot {
-                  background: gray;
+                  background: var(--cs-text-color-secondary);
                 }
                 .status-text {
-                  color: gray;
+                  color: var(--cs-text-color-secondary);
                 }
               }
               &.error {
                 .status-dot {
-                  background: rgba(255, 0, 0, 0.8);
+                  background: var(--cs-error-color);
                 }
                 .status-text {
-                  color: rgba(255, 0, 0, 0.9);
+                  color: var(--cs-error-color);
                 }
               }
               &.unknown {
                 .status-dot {
-                  background: orange;
+                  background: var(--cs-warning-color);
                 }
                 .status-text {
-                  color: orange;
+                  color: var(--cs-warning-color);
                 }
               }
             }

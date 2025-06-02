@@ -23,7 +23,10 @@ use crate::{
     mcp::client::{McpProtocolType, McpServerConfig},
 };
 use rust_i18n::t;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 use tauri::State;
 
 /// Get all MCP servers
@@ -572,14 +575,15 @@ pub async fn update_mcp_tool_status(
             .config
             .get_mcp_by_id(id)
             .map_err(|e| e.to_string())?;
-        if let Some(dt) = &mut mcp.config.disabled_tools {
-            if disabled {
-                dt.insert(tool_name.to_string());
-            } else {
-                dt.remove(tool_name);
-            }
+
+        let disabled_tools = mcp.config.disabled_tools.get_or_insert_with(HashSet::new);
+        if disabled {
+            disabled_tools.insert(tool_name.to_string());
+        } else {
+            disabled_tools.remove(tool_name);
         }
-        mcp = store_guard
+
+        store_guard
             .update_mcp(
                 id,
                 &mcp.name,
@@ -587,12 +591,12 @@ pub async fn update_mcp_tool_status(
                 mcp.config.clone(),
                 mcp.disabled,
             )
-            .map_err(|e| e.to_string())?;
-        mcp
+            .map_err(|e| e.to_string())?
     };
 
-    let tm = chat_state.tool_manager.clone();
-    tm.disable_mcp_tool(mcp.name.as_str(), tool_name, disabled)
+    chat_state
+        .tool_manager
+        .disable_mcp_tool(mcp.name.as_str(), tool_name, disabled)
         .await
         .map_err(|e| e.to_string())?;
 

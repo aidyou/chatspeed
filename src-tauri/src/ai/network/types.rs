@@ -1,5 +1,5 @@
 use reqwest::Response;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 
@@ -192,21 +192,43 @@ impl ErrorFormat {
 }
 
 // =================================================
-// Response struct
+// ================== Response struct ==============
 // =================================================
-/// Gemini response struct
+
+// =================================================
+// Gemini response struct
+// =================================================
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiResponse {
     pub candidates: Option<Vec<Candidate>>,
     pub usage_metadata: Option<UsageMetadata>,
+    #[serde(default, rename = "promptFeedback")]
+    pub prompt_feedback: Option<PromptFeedback>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageMetadata {
     pub prompt_token_count: u64,
     pub total_token_count: u64,
+    #[serde(default)] // In case this field is not always present in all Gemini responses
+    pub candidates_token_count: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptFeedback {
+    #[serde(default)]
+    pub block_reason: Option<String>,
+    pub safety_ratings: Vec<SafetyRating>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SafetyRating {
+    pub category: String,
+    pub probability: String, // e.g., "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +241,8 @@ pub struct Candidate {
 #[derive(Debug, Deserialize)]
 pub struct Content {
     pub parts: Vec<Part>,
+    #[serde(default)] // Add default in case role is not always present
+    pub role: Option<String>, // Added field for role
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,14 +253,16 @@ pub struct Part {
     pub function_call: Option<GeminiFunctionCall>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionCall {
     pub name: String,
     pub args: Value, // Gemini args are typically a JSON object
 }
 
-/// OpenAI compatible response format
+// =================================================
+// OpenAI compatible response format
+// =================================================
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAIStreamResponse {
@@ -255,6 +281,7 @@ pub struct OpenAIStreamChoice {
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamDelta {
     pub content: Option<String>,
+    pub role: Option<String>,
     pub reasoning_content: Option<String>,
     #[serde(rename = "type")]
     pub msg_type: Option<String>,
@@ -266,8 +293,6 @@ pub struct OpenAIStreamDelta {
 pub struct ToolCall {
     pub index: u32,
     pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub call_type: Option<String>,
     pub function: ToolFunction,
 }
 
@@ -284,6 +309,10 @@ pub struct OpenAIUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
 }
+
+// =================================================
+// Claude stream event
+// =================================================
 
 /// Claude stream event types
 #[derive(Debug, Deserialize)]

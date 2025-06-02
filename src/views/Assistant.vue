@@ -226,7 +226,7 @@
                 :src="model.providerLogo"
                 v-if="model.providerLogo !== ''"
                 class="provider-logo" />
-              <logo :name="model.logo" size="16" v-else />
+              <avatar :text="model.name" size="16" v-else />
               <span>{{ model.name }}</span>
             </div>
             <div class="icon" v-if="currentModelProvider.id === model.id">
@@ -1260,7 +1260,7 @@ const onAddModel = () => {
       .name {
         display: flex;
         align-items: center;
-        gap: var(--cs-space-xxs);
+        gap: var(--cs-space-xs);
         max-width: calc(100% - 24px);
 
         span {
@@ -1273,7 +1273,7 @@ const onAddModel = () => {
         .provider-logo {
           width: 16px;
           height: 16px;
-          border-radius: var(--cs-border-radius);
+          border-radius: 16px;
         }
       }
 

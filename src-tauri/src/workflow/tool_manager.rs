@@ -8,20 +8,20 @@ use tokio::sync::{broadcast, RwLock};
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::commands::chat::setup_chat_proxy;
-use crate::constants::CFG_CHP_SERVER;
+// use crate::constants::CFG_CHP_SERVER;
 use crate::db::{AiModel, MainStore};
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, SseClient, StdioClient,
 };
 use crate::workflow::error::WorkflowError;
 
-use super::tools::Crawler;
-use super::tools::Plot;
-use super::tools::Search;
-use super::tools::SearchDedup;
-use super::tools::{ChatCompletion, ModelName};
+// use super::tools::Crawler;
+// use super::tools::Plot;
+// use super::tools::Search;
+// use super::tools::SearchDedup;
+// use super::tools::{ChatCompletion, ModelName};
 
-pub const MCP_TOOL_NAME_SPLIT: &str = "__M_C_P_S_P__";
+pub const MCP_TOOL_NAME_SPLIT: &str = "__SP__";
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
 
 /// The result type of a function call.
@@ -93,51 +93,51 @@ impl ToolManager {
     /// * `Result<(), WorkflowError>` - The result of the registration.
     pub async fn register_available_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
-        chat_state: Arc<ChatState>,
+        _chat_state: Arc<ChatState>,
         main_store: Arc<std::sync::Mutex<MainStore>>,
     ) -> Result<(), WorkflowError> {
         // =================================================
         // Chat completion
         // =================================================
         // register chat completion tool
-        let chat_completion = ChatCompletion::new();
-        // add reasoning and general models to chat completion tool
-        let reasoning_model = Self::get_model(&main_store, ModelName::Reasoning.as_ref())?;
-        chat_completion
-            .add_model(ModelName::Reasoning, reasoning_model)
-            .await;
-        let general_model = Self::get_model(&main_store, ModelName::General.as_ref())?;
-        chat_completion
-            .add_model(ModelName::General, general_model)
-            .await;
-        self.register_tool(Arc::new(chat_completion)).await?;
+        // let chat_completion = ChatCompletion::new();
+        // // add reasoning and general models to chat completion tool
+        // let reasoning_model = Self::get_model(&main_store, ModelName::Reasoning.as_ref())?;
+        // chat_completion
+        //     .add_model(ModelName::Reasoning, reasoning_model)
+        //     .await;
+        // let general_model = Self::get_model(&main_store, ModelName::General.as_ref())?;
+        // chat_completion
+        //     .add_model(ModelName::General, general_model)
+        //     .await;
+        // self.register_tool(Arc::new(chat_completion)).await?;
 
-        let chp_server = if let Ok(store) = &main_store.lock() {
-            store.get_config(CFG_CHP_SERVER, String::new())
-        } else {
-            String::new()
-        };
+        // let chp_server = if let Ok(store) = &main_store.lock() {
+        //     store.get_config(CFG_CHP_SERVER, String::new())
+        // } else {
+        //     String::new()
+        // };
 
         // =================================================
         // ReAct
         // =================================================
         // if ChatSpeedBot server is available, register search and fetch tools
-        if !chp_server.is_empty() {
-            // register search dedup tool
-            self.register_tool(Arc::new(SearchDedup::new())).await?;
+        // if !chp_server.is_empty() {
+        //     // register search dedup tool
+        //     self.register_tool(Arc::new(SearchDedup::new())).await?;
 
-            // register search tool
-            self.register_tool(Arc::new(Search::new(chp_server.clone())))
-                .await?;
+        //     // register search tool
+        //     self.register_tool(Arc::new(Search::new(chp_server.clone())))
+        //         .await?;
 
-            // register fetch tool
-            self.register_tool(Arc::new(Crawler::new(chp_server.clone())))
-                .await?;
+        //     // register fetch tool
+        //     self.register_tool(Arc::new(Crawler::new(chp_server.clone())))
+        //         .await?;
 
-            // register plot tool
-            self.register_tool(Arc::new(Plot::new(chp_server.clone())))
-                .await?;
-        }
+        //     // register plot tool
+        //     self.register_tool(Arc::new(Plot::new(chp_server.clone())))
+        //         .await?;
+        // }
 
         // =================================================
         // MCP Tools
@@ -181,20 +181,20 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<(), WorkflowError>` - The result of the registration.
-    pub async fn register_tool(
-        &self, // This can remain &self as it doesn't spawn long tasks
-        tool: Arc<dyn ToolDefinition>,
-    ) -> Result<(), WorkflowError> {
-        let name = tool.name().to_string();
-        let mut tools = self.tools.write().await;
+    // pub async fn register_tool(
+    //     &self, // This can remain &self as it doesn't spawn long tasks
+    //     tool: Arc<dyn ToolDefinition>,
+    // ) -> Result<(), WorkflowError> {
+    //     let name = tool.name().to_string();
+    //     let mut tools = self.tools.write().await;
 
-        if tools.contains_key(&name) {
-            return Err(WorkflowError::FunctionAlreadyExists(name));
-        }
+    //     if tools.contains_key(&name) {
+    //         return Err(WorkflowError::FunctionAlreadyExists(name));
+    //     }
 
-        tools.insert(name, tool);
-        Ok(())
-    }
+    //     tools.insert(name, tool);
+    //     Ok(())
+    // }
 
     /// Gets a tool by its name.
     ///

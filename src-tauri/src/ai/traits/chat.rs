@@ -8,22 +8,22 @@ use async_trait::async_trait;
 use log::warn;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
-use std::{default::Default, sync::Arc};
+use std::{default::Default, fmt::Display, sync::Arc};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageType {
+    AssistantAction, // Assistant tool selection
     Error,
     Finished,
+    Log,
+    Plan,
     Reasoning,
     Reference,
     Step,
     Text,
     Think,
-    Log,
-    Plan,
     ToolCall,
-    AssistantAction, // Assistant tool selection
 }
 
 impl Default for MessageType {
@@ -48,16 +48,16 @@ impl<'de> Deserialize<'de> for MessageType {
 impl From<MessageType> for &str {
     fn from(value: MessageType) -> Self {
         match value {
-            MessageType::Text => "text",
-            MessageType::Finished => "finished",
+            MessageType::AssistantAction => "assistant_action",
             MessageType::Error => "error",
+            MessageType::Finished => "finished",
+            MessageType::Log => "log",
+            MessageType::Plan => "plan",
             MessageType::Reasoning | MessageType::Think => "reasoning",
             MessageType::Reference => "reference",
             MessageType::Step => "step",
-            MessageType::Log => "log",
-            MessageType::Plan => "plan",
+            MessageType::Text => "text",
             MessageType::ToolCall => "tool_call",
-            MessageType::AssistantAction => "assistant_action",
         }
     }
 }
@@ -71,16 +71,16 @@ impl From<MessageType> for String {
 impl MessageType {
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
-            "finished" => Some(MessageType::Finished),
+            "assistant_action" => Some(MessageType::AssistantAction),
             "error" => Some(MessageType::Error),
+            "finished" => Some(MessageType::Finished),
+            "log" => Some(MessageType::Log),
+            "plan" => Some(MessageType::Plan),
             "reasoning" | "think" | "thinking" => Some(MessageType::Reasoning),
             "reference" => Some(MessageType::Reference),
             "step" => Some(MessageType::Step),
             "text" => Some(MessageType::Text),
-            "log" => Some(MessageType::Log),
-            "plan" => Some(MessageType::Plan),
             "tool_call" => Some(MessageType::ToolCall),
-            "assistant_action" => Some(MessageType::AssistantAction),
             _ => {
                 warn!(
                     "Unrecognized message type: '{}', will be handled by deserializer default.",
@@ -93,10 +93,25 @@ impl MessageType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum FinishReason {
-    Complete,
-    ToolCalls,
-    Error,
+    Stop,          // Corresponds to OpenAI "stop"
+    Length,        // Corresponds to OpenAI "length"
+    ToolCalls,     // Corresponds to OpenAI "tool_calls"
+    ContentFilter, // Corresponds to OpenAI "content_filter"
+    Complete,      // Generic completion, can be used if specific reason is not critical
+    Error,         // Internal error state (not directly related to OpenAI)
+}
+
+impl Display for FinishReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FinishReason::Length => write!(f, "length"),
+            FinishReason::ToolCalls => write!(f, "tool_calls"),
+            FinishReason::ContentFilter => write!(f, "content_filter"),
+            FinishReason::Stop | FinishReason::Complete | FinishReason::Error => write!(f, "stop"),
+        }
+    }
 }
 
 /// ChatResponse represents a response for fontend.
@@ -165,6 +180,10 @@ pub struct ChatCompletionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(unused)]
     pub tools: Option<Vec<ToolCallDeclaration>>,
+
+    /// finish_reason
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<FinishReason>,
 }
 
 // =================================================
@@ -185,12 +204,11 @@ pub struct ToolCallDeclaration {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MCPToolDeclaration {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub disabled: bool,
 }
 

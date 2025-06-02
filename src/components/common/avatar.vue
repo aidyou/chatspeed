@@ -71,13 +71,20 @@ const backgroundColor = computed(() => {
 })
 
 // Calculate styles
-const style = computed(() => ({
-  width: typeof props.size === 'number' ? `${props.size}px` : props.size,
-  height: typeof props.size === 'number' ? `${props.size}px` : props.size,
-  backgroundColor: props.bgColor || backgroundColor.value,
-  color: props.textColor || 'white',
-  fontSize: `calc(${typeof props.size === 'number' ? props.size : parseInt(props.size)}px * 0.5)`
-}))
+const style = computed(() => {
+  let sizeStr =
+    typeof props.size === 'number' || (typeof props.size === 'string' && /^\d+$/.test(props.size))
+      ? `${props.size}px`
+      : props.size
+  return {
+    width: sizeStr,
+    height: sizeStr,
+    borderRadius: sizeStr,
+    backgroundColor: props.bgColor || backgroundColor.value,
+    color: props.textColor || 'white',
+    fontSize: `calc(${typeof props.size === 'number' ? props.size : parseInt(props.size)}px * 0.5)`
+  }
+})
 </script>
 
 <template>
@@ -91,7 +98,6 @@ const style = computed(() => ({
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
   color: v-bind('textColor || "white"');
   font-weight: bold;
   user-select: none;

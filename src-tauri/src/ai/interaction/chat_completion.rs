@@ -554,8 +554,10 @@ pub async fn complete_chat_blocking(
     let mut usage = None;
     let mut final_metadata_from_stream = metadata_clone;
     let mut tools = Vec::new();
+    let mut finish_reason = Option::<FinishReason>::None;
 
     while let Some(chunk) = rx.recv().await {
+        finish_reason = chunk.finish_reason.clone();
         if chunk.chat_id == chat_id {
             if let Some(md) = &chunk.metadata {
                 final_metadata_from_stream = Some(md.clone());
@@ -640,6 +642,7 @@ pub async fn complete_chat_blocking(
         reference: Some(reference),
         usage,
         tools: Some(tools),
+        finish_reason,
     })
 }
 
@@ -661,10 +664,16 @@ pub async fn complete_chat_blocking(
 /// * `tools` - Optional tools to use for the chat
 /// * `callback` - Callback function to handle chat responses
 ///
+/// ## Behavior for `chat_state_arc`
+/// - If `Some(Arc<ChatState>)` is provided, the function uses the shared chat state,
+///   allowing access to chat history, tool management, and persistence of the chat interface instance.
+/// - If `None` is provided, a new, isolated `AiChatEnum` instance is created for this call.
+///   This is typically used for scenarios like proxying stream requests where a persistent chat state or tool calls are not required.
+///
 /// # Returns
 /// * `Result<(), String>` - Ok if the chat was started successfully, Err with error message otherwise
 pub async fn complete_chat_async(
-    chat_state_arc: Arc<ChatState>,
+    chat_state_arc: Option<Arc<ChatState>>,
     chat_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -685,9 +694,15 @@ pub async fn complete_chat_async(
     )
     .await;
 
-    let mut chats_guard = chat_state_arc.chats.lock().await;
-    let chat_interface = get_or_create_chat!(chats_guard, chat_protocol, chat_id.clone());
-    drop(chats_guard);
+    let chat_interface = if let Some(chat_state) = chat_state_arc {
+        let mut chats_guard = chat_state.chats.lock().await;
+        let obj = get_or_create_chat!(chats_guard, chat_protocol, chat_id.clone());
+        drop(chats_guard);
+
+        obj
+    } else {
+        create_chat!(chat_protocol)
+    };
 
     let _ = tokio::spawn(async move {
         // reset stop flag
@@ -808,7 +823,7 @@ pub async fn start_new_chat_interaction(
     // Asynchronously execute the chat completion.
     // The `internal_cb` will handle streaming responses to the global dispatcher.
     complete_chat_async(
-        chat_state_arc,
+        Some(chat_state_arc),
         chat_protocol,
         api_url,
         model,
@@ -1096,7 +1111,7 @@ async fn global_message_processor_loop(
                                 .map(Value::clone);
 
                             let _ = complete_chat_async(
-                                cc_chat_state_clone.clone(),
+                                Some(cc_chat_state_clone.clone()),
                                 protocol,
                                 api_url_from_meta.as_deref(),
                                 model,
@@ -1242,12 +1257,8 @@ async fn global_message_processor_loop(
                 }
 
                 let session_ended_naturally = match response_chunk.finish_reason {
-                    Some(FinishReason::Complete) => true,
-                    Some(FinishReason::Error) => true,
-                    Some(FinishReason::ToolCalls) => {
-                        log::info!("Chat {}: Received Finished with ToolCalls reason. Waiting for tool processing.", chat_id);
-                        false
-                    }
+                    Some(FinishReason::ToolCalls) => false,
+                    Some(_) => true,
                     None => {
                         // If no specific reason, check pending tools as a fallback
                         pending_tool_calls_map

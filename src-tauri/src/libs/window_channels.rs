@@ -111,12 +111,9 @@ impl WindowChannels {
                         // 2. Then send the error/done/step/reference message separately
                         //
                         // Note: Reference message is an array, so can't combine simply!!!
-                        if chunk.r#type == MessageType::Finished
-                            || chunk.r#type == MessageType::Error
-                            || chunk.r#type == MessageType::Step
-                            || chunk.r#type == MessageType::Reference
-                            || chunk.r#type == MessageType::Log
-                            || chunk.r#type == MessageType::Plan
+                        if chunk.r#type != MessageType::Text
+                            && chunk.r#type != MessageType::Reasoning
+                            && chunk.r#type != MessageType::Think
                         {
                             #[cfg(debug_assertions)]
                             log::debug!(

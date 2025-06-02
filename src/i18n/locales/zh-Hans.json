@@ -122,6 +122,7 @@
     "mcp": "MCP",
     "model": "AI引擎",
     "note": "智记",
+    "proxy": "代理",
     "quit": "退出",
     "setting": "设置",
     "skill": "技能"
@@ -353,6 +354,68 @@
       "stop": "终止标记",
       "stopPlaceholder": "设置模型生成文本时遇到即停止的标记。多个请用换行符分隔。"
     },
+    "proxy": {
+      "addNow": "立即添加",
+      "addProxy": "添加代理配置",
+      "addSuccess": "代理配置添加成功！",
+      "addTitle": "添加代理配置",
+      "baseUrlCopySuccess": "Base URL 复制成功！",
+      "baseUrlCopyFailed": "Base URL 复制失败",
+      "copyProxyAlias": "复制代理到剪贴板",
+      "copyBaseUrl": "点击复制 BaseUrl 到剪贴板",
+      "deleteConfirmText": "确定要删除代理配置 \"{alias}\" 吗？此操作无法撤销。",
+      "deleteConfirmTitle": "确认删除",
+      "deleteFailed": "删除代理配置失败：{error}",
+      "deleteProxy": "删除代理配置",
+      "deleteSuccess": "代理配置删除成功！",
+      "editProxy": "编辑代理配置",
+      "editTitle": "编辑代理配置",
+      "mapsToModels": "映射到 {count} 个模型",
+      "modelCopySuccess": "模型已复制到剪贴板！",
+      "modelCopyFailed": "模型复制失败",
+      "noProxiesFound": "未找到代理配置。",
+      "saveFailed": "保存代理配置失败：{error}",
+      "title": "代理服务器配置",
+      "updateSuccess": "代理配置更新成功！",
+      "form": {
+        "aliasName": "代理别名",
+        "aliasPlaceholder": "例如：my-custom-gpt",
+        "targetModelsTitle": "目标后端模型",
+        "searchModelsPlaceholder": "搜索供应商或模型...",
+        "noMatchingModels": "未找到匹配的供应商或模型。",
+        "selectAll": "全选",
+        "selectedCount": "已选目标数"
+      },
+      "validation": {
+        "aliasRequired": "代理别名不能为空。",
+        "aliasUnique": "代理别名已存在。",
+        "targetsRequired": "请至少选择一个目标模型。"
+      },
+      "proxyKey": {
+        "addKey": "添加密钥",
+        "addNow": "立即添加",
+        "addSuccess": "访问密钥添加成功！",
+        "addTitle": "添加访问密钥",
+        "copyFailed": "复制密钥Token失败：{error}",
+        "copyKey": "复制密钥Token",
+        "copySuccess": "密钥Token已复制到剪贴板！",
+        "deleteConfirmText": "确定要删除访问密钥 \"{name}\" 吗？",
+        "deleteConfirmTitle": "确认删除",
+        "deleteFailed": "删除访问密钥失败：{error}",
+        "deleteKey": "删除密钥",
+        "deleteSuccess": "访问密钥删除成功！",
+        "noKeysFound": "未找到访问密钥。",
+        "saveFailed": "保存访问密钥失败：{error}",
+        "title": "代理访问密钥",
+        "form": {
+          "name": "密钥名称",
+          "namePlaceholder": "例如：我的应用密钥"
+        },
+        "validation": {
+          "nameRequired": "密钥名称不能为空。"
+        }
+      }
+    },
     "skill": {
       "add": "添加技能",
       "addSuccess": "技能已添加",
@@ -411,6 +474,7 @@
       "general": "通用",
       "mcp": "MCP",
       "model": "AI引擎",
+      "proxy": "代理",
       "privacy": "隐私",
       "skill": "技能"
     }

@@ -2,7 +2,7 @@ use rust_i18n::t;
 use std::{
     net::{AddrParseError, SocketAddr},
     path::{Path, PathBuf},
-    sync::Once,
+    sync::{Arc, Mutex, Once},
 };
 use tauri::AppHandle;
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
@@ -18,6 +18,10 @@ use tokio::{
 use warp::{http::StatusCode, Filter};
 
 use crate::{
+    db::MainStore,
+    http::ccproxy::{self, errors::handle_proxy_rejection},
+};
+use crate::{
     HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
     HTTP_SERVER_UPLOAD_DIR, PLUGINS_DIR, SHARED_DATA_DIR, STORE_DIR,
 };
@@ -28,10 +32,14 @@ static INIT: Once = Once::new();
 ///
 /// # Arguments
 /// * `app` - Tauri application handle.
+/// * `main_store` - Shared main store for configuration and data.
 ///
 /// # Returns
 /// * `Result<(), String>` - Returns `Ok(())` on success, or an error message on failure.
-pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
+pub async fn start_http_server(
+    app: &AppHandle,
+    main_store: Arc<Mutex<MainStore>>,
+) -> Result<(), String> {
     // plugins dir
     let app_data_dir = get_app_data_dir(app)?;
     let plugins_dir = app_data_dir.join("plugins");
@@ -39,9 +47,6 @@ pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
     let shared_data_dir = app_data_dir.join("shared");
     std::fs::create_dir_all(&plugins_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&shared_data_dir).map_err(|e| e.to_string())?;
-
-    // Find an available port
-    let port = find_available_port(21914, 65535)?;
 
     // Get the server directory
     let server_dir = get_server_dir(app)?;
@@ -56,6 +61,13 @@ pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&theme_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+
+    // Create ccproxy routes
+    // The base path for these routes will be "/ccproxy"
+    // ccproxy_routes itself is a filter that handles its sub-paths and returns a Reply.
+    // We combine it with the "ccproxy" base path.
+    let ccproxy_base = warp::path("ccproxy");
+    let ccproxy_api_routes = ccproxy_base.and(ccproxy::router::ccproxy_routes(main_store.clone()));
 
     // Set up static theme service
     let static_theme = warp::path("theme").and(warp::fs::dir(theme_dir.clone()));
@@ -73,7 +85,13 @@ pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
         .and_then(handle_save_png);
 
     // define not found response
-    let not_found = warp::any().map(|| -> &'static str { "Not Found" });
+    // Ensure not_found filter also has Rejection as its error type to be compatible with .or()
+    let not_found = warp::any().and_then(|| async {
+        Result::<_, warp::reject::Rejection>::Ok(warp::reply::with_status(
+            "Not Found",
+            StatusCode::NOT_FOUND,
+        ))
+    });
 
     // define cors config
     let cors = warp::cors()
@@ -83,13 +101,20 @@ pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
         .build();
 
     // Combine all routes
+    // All branches of .or() should ideally have the same Error type (Rejection)
+    // before .recover() is applied.
     let serve = static_theme
         .or(static_upload)
         .or(static_tmp)
-        .or(save_png)
-        .or(not_found)
-        .with(cors);
+        .or(ccproxy_api_routes)
+        .or(save_png) // Ensure save_png is distinct or correctly ordered if it might conflict
+        .or(not_found) // not_found should usually be last in the .or chain before .recover
+        .recover(ccproxy::errors::handle_proxy_rejection)
+        .with(cors)
+        .recover(handle_proxy_rejection);
 
+    // Find an available port
+    let port = find_available_port(21912, 65535)?;
     let addr: SocketAddr = format!("127.0.0.1:{}", port)
         .parse()
         .map_err(|e: AddrParseError| e.to_string())?;

@@ -5,9 +5,7 @@ use std::fmt;
 
 use crate::ai::traits::chat::{MessageType, ToolCallDeclaration};
 
-use super::{
-    ClaudeEventType, ClaudeStreamEvent, GeminiFunctionCall, GeminiResponse, OpenAIStreamResponse,
-};
+use super::{ClaudeEventType, ClaudeStreamEvent, GeminiResponse, OpenAIStreamResponse};
 
 /// Represents different types of stream response formats
 pub enum StreamFormat {
@@ -19,15 +17,6 @@ pub enum StreamFormat {
     /// {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}]}
     Gemini,
 
-    /// Standard SSE format
-    /// event: message
-    /// data: Hello
-    #[allow(dead_code)]
-    StandardSSE,
-
-    /// Custom format with user-provided parser
-    #[allow(dead_code)]
-    Custom(Box<dyn Fn(Bytes) -> Result<Option<String>, String> + Send + Sync>),
     /// Claude format
     /// {"completion":"Hello","usage":{"input_tokens":10,"output_tokens":10}}
     Claude,
@@ -38,9 +27,6 @@ impl fmt::Debug for StreamFormat {
         match self {
             Self::OpenAI => write!(f, "StreamFormat::OpenAI"),
             Self::Gemini => write!(f, "StreamFormat::Gemini"),
-            Self::StandardSSE => write!(f, "StreamFormat::StandardSSE"),
-            Self::Custom(_) => write!(f, "StreamFormat::Custom(<custom_parser>)"),
-            // Self::HuggingFace => write!(f, "StreamFormat::HuggingFace"),
             Self::Claude => write!(f, "StreamFormat::Claude"),
         }
     }
@@ -59,8 +45,12 @@ pub struct TokenUsage {
 /// Stream chunk parsing result
 #[derive(Debug)]
 pub struct StreamChunk {
+    /// The role of the chunk.
+    #[allow(unused)]
+    pub role: Option<String>,
+    /// The reasoning content of the chunk.
     pub reasoning_content: Option<String>,
-    /// The content of the chunk
+    /// The content of the chunk.
     pub content: Option<String>,
     /// Token usage information
     pub usage: Option<TokenUsage>,
@@ -84,18 +74,7 @@ impl StreamParser {
         match format {
             StreamFormat::OpenAI => Self::parse_openai(chunk),
             StreamFormat::Gemini => Self::parse_gemini(chunk),
-            StreamFormat::StandardSSE => Self::parse_standard_sse(chunk),
             StreamFormat::Claude => Self::parse_claude(chunk),
-            StreamFormat::Custom(parser) => parser(chunk).map(|content| {
-                vec![StreamChunk {
-                    reasoning_content: None,
-                    content,
-                    usage: None,
-                    msg_type: None,
-                    tool_calls: None,
-                    finish_reason: None,
-                }]
-            }),
         }
     }
 
@@ -105,71 +84,123 @@ impl StreamParser {
         // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
-        // log::debug!("openai - {}", chunk_str);
 
         for line in chunk_str.lines() {
+            // log::debug!("openai stream line- {}", line);
             if line.starts_with("data:") {
                 let data = line["data:".len()..].trim();
                 if data == "[DONE]" {
                     chunks.push(StreamChunk {
+                        role: None,
                         reasoning_content: None,
                         content: None,
                         usage: None,
                         msg_type: Some(MessageType::Finished),
                         tool_calls: None,
-                        finish_reason: Some("[DONE]".to_string()),
+                        finish_reason: None, // [DONE] is a stream protocol signal, not a message finish_reason.
+                                             // The MessageType::Finished itself indicates the end.
                     });
                     continue;
                 }
-                match serde_json::from_str::<OpenAIStreamResponse>(data) {
-                    Ok(response) => {
-                        // handle all choices
-                        for choice in response.choices {
-                            let usage = response.usage.as_ref().map(|usage| TokenUsage {
-                                total_tokens: usage.total_tokens,
-                                prompt_tokens: usage.prompt_tokens,
-                                completion_tokens: usage.completion_tokens,
-                                tokens_per_second: 0.0,
-                            });
-
-                            let tool_calls = choice.delta.tool_calls.as_ref().map(|calls| {
-                                calls
-                                    .iter()
-                                    .map(|call| ToolCallDeclaration {
-                                        index: call.index,
-                                        id: call.id.clone().unwrap_or_default(),
-                                        name: call.function.name.clone().unwrap_or_default(),
-                                        arguments: call.function.arguments.clone(),
-                                        results: None,
-                                    })
-                                    .collect::<Vec<ToolCallDeclaration>>()
-                            });
-
-                            // Push a chunk for the delta content and usage
-                            chunks.push(StreamChunk {
-                                reasoning_content: choice.delta.reasoning_content,
-                                content: choice.delta.content,
-                                usage,
-                                msg_type: choice
-                                    .delta
-                                    .msg_type
-                                    .and_then(|t| MessageType::from_str(&t)),
-                                tool_calls: tool_calls,
-                                finish_reason: choice.finish_reason.clone(),
-                            });
+                if data.starts_with("{\"error\"") && data.contains("message") {
+                    let error = if let Ok(json) = serde_json::from_str::<Value>(data) {
+                        if let Some(error) = json.get("error") {
+                            serde_json::to_string_pretty(error).unwrap_or(error.to_string())
+                        } else {
+                            serde_json::to_string_pretty(&json).unwrap_or(json.to_string())
                         }
-                    }
-                    Err(e) => {
-                        if let Ok(json) = serde_json::from_str::<Value>(data) {
-                            if let Some(error) = json.get("error") {
-                                let emsg =
-                                    error["message"].as_str().map(String::from).unwrap_or_else(
-                                        || t!("network.stream.unknown_openai_error").to_string(),
-                                    );
-                                return Err(emsg);
+                    } else {
+                        data.to_string()
+                    };
+                    chunks.push(StreamChunk {
+                        role: None,
+                        reasoning_content: None,
+                        content: Some(error),
+                        usage: None,
+                        msg_type: Some(MessageType::Error),
+                        tool_calls: None,
+                        finish_reason: Some("stop".to_string()),
+                    });
+                    break;
+                } else {
+                    match serde_json::from_str::<OpenAIStreamResponse>(data) {
+                        Ok(response) => {
+                            for choice in response.choices {
+                                let usage = response.usage.as_ref().map(|usage| TokenUsage {
+                                    total_tokens: usage.total_tokens,
+                                    prompt_tokens: usage.prompt_tokens,
+                                    completion_tokens: usage.completion_tokens,
+                                    tokens_per_second: 0.0,
+                                });
+
+                                // `choice.delta` is OpenAIStreamDelta
+                                let delta = choice.delta;
+
+                                let tool_calls = delta.tool_calls.as_ref().map(|calls| {
+                                    calls
+                                        .iter()
+                                        .map(|call| ToolCallDeclaration {
+                                            index: call.index,
+                                            id: call.id.clone().unwrap_or_default(),
+                                            name: call.function.name.clone().unwrap_or_default(),
+                                            arguments: call.function.arguments.clone(),
+                                            results: None,
+                                        })
+                                        .collect::<Vec<ToolCallDeclaration>>()
+                                });
+
+                                let chunk_content: Option<String> = delta.content.clone();
+                                let mut chunk_msg_type: Option<MessageType> = None;
+
+                                // Check for role from the delta
+                                if let Some(internal_msg_type_str) = &delta.msg_type {
+                                    // Try to parse the internal_msg_type_str as MessageType
+                                    // There may be extended types like "reference", "think", etc.,
+                                    // so the message type must be parsed first,
+                                    chunk_msg_type = MessageType::from_str(internal_msg_type_str);
+                                } else if chunk_content.is_some() {
+                                    // If no role, but content is present, it's a Text chunk.
+                                    chunk_msg_type = Some(MessageType::Text);
+                                }
+
+                                chunks.push(StreamChunk {
+                                    role: delta.role.clone(),
+                                    reasoning_content: delta.reasoning_content,
+                                    content: chunk_content,
+                                    usage,
+                                    // If tool_calls are present, they take precedence for msg_type
+                                    msg_type: if tool_calls.is_some() {
+                                        Some(MessageType::ToolCall)
+                                    } else {
+                                        chunk_msg_type
+                                    },
+                                    tool_calls,
+                                    finish_reason: choice.finish_reason.clone(),
+                                });
                             }
                         }
-                        log::error!("Failed to parse OpenAI response: {}, error:{}", data, e);
+                        Err(e) => {
+                            let error = if let Ok(json) = serde_json::from_str::<Value>(data) {
+                                if let Some(error) = json.get("error") {
+                                    serde_json::to_string_pretty(error).unwrap_or(error.to_string())
+                                } else {
+                                    serde_json::to_string_pretty(&json).unwrap_or(json.to_string())
+                                }
+                            } else {
+                                data.to_string()
+                            };
+                            chunks.push(StreamChunk {
+                                role: None,
+                                reasoning_content: None,
+                                content: Some(error),
+                                usage: None,
+                                msg_type: Some(MessageType::Error),
+                                tool_calls: None,
+                                finish_reason: Some("stop".to_string()),
+                            });
+                            log::error!("Failed to parse OpenAI response: {}, error:{}", data, e);
+                            break;
+                        }
                     }
                 }
             }
@@ -180,10 +211,7 @@ impl StreamParser {
     /// Parse Google AI (Gemini) format
     fn parse_gemini(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
-        // Gemini stream format is "data: {json}\r\n"
-        // Non-stream format is just "{json}"
-        let mut chunks = Vec::new();
-        // log::debug!("gemini - {}", chunk_str);
+        let mut stream_chunks = Vec::new();
 
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
@@ -204,7 +232,17 @@ impl StreamParser {
                         if let Some(candidates) = gemini_response.candidates {
                             for candidate in candidates.into_iter() {
                                 let mut tool_calls_in_chunk: Vec<ToolCallDeclaration> = Vec::new();
-                                let mut text_content: Option<String> = None;
+                                let mut text_content_parts: Vec<String> = Vec::new(); // Collect text parts
+                                let mut candidate_role: Option<String> = None;
+
+                                // Gemini's `candidate.content.role` field.
+                                if let Some(role_str) = candidate.content.role {
+                                    candidate_role = Some(if role_str == "model" {
+                                        "assistant".to_string()
+                                    } else {
+                                        role_str
+                                    });
+                                }
 
                                 for (part_index, part) in
                                     candidate.content.parts.into_iter().enumerate()
@@ -231,34 +269,59 @@ impl StreamParser {
                                         });
                                     } else if let Some(text_val) = part.text {
                                         if !text_val.is_empty() {
-                                            // Accumulate text content from text parts
-                                            text_content =
-                                                Some(text_content.unwrap_or_default() + &text_val);
+                                            text_content_parts.push(text_val);
                                         }
                                     }
                                 }
 
-                                let msg_type = if text_content.is_some() {
-                                    Some(MessageType::Text)
-                                } else if !tool_calls_in_chunk.is_empty() {
-                                    Some(MessageType::ToolCall)
-                                } else {
+                                let combined_text_content = if text_content_parts.is_empty() {
                                     None
+                                } else {
+                                    Some(text_content_parts.join(""))
                                 };
-                                // Push a chunk for this candidate's content and tool calls
-                                chunks.push(StreamChunk {
-                                    reasoning_content: None, // Gemini doesn't have explicit reasoning_content in this format
-                                    content: text_content,
-                                    usage: usage.clone(),
-                                    msg_type,
-                                    tool_calls: if !tool_calls_in_chunk.is_empty() {
-                                        Some(tool_calls_in_chunk)
-                                    } else {
-                                        None
-                                    },
-                                    finish_reason: candidate.finish_reason.clone(),
-                                });
+
+                                // Emit text content chunk if present
+                                if let Some(text_str) = combined_text_content {
+                                    stream_chunks.push(StreamChunk {
+                                        role: candidate_role.clone(),
+                                        reasoning_content: None,
+                                        content: Some(text_str),
+                                        usage: usage.clone(),
+                                        msg_type: Some(MessageType::Text),
+                                        tool_calls: None,
+                                        finish_reason: None, // Text itself isn't a finish reason for the stream part
+                                    });
+                                }
+
+                                // Emit tool calls chunk if present
+                                if !tool_calls_in_chunk.is_empty() {
+                                    stream_chunks.push(StreamChunk {
+                                        role: candidate_role.clone(),
+                                        reasoning_content: None,
+                                        content: None, // Tool calls are primary here
+                                        usage: usage.clone(),
+                                        msg_type: Some(MessageType::ToolCall),
+                                        tool_calls: Some(tool_calls_in_chunk),
+                                        finish_reason: None, // Tool call itself isn't a finish reason for the stream part
+                                    });
+                                }
+
+                                // If there's a finish_reason for the candidate, emit a separate chunk for it
+                                // This is important for signaling the end of the candidate's contribution.
+                                if candidate.finish_reason.is_some() {
+                                    stream_chunks.push(StreamChunk {
+                                        role: candidate_role.clone(),
+                                        reasoning_content: None,
+                                        content: None,
+                                        usage: usage.clone(), // Usage can be associated with the finish
+                                        msg_type: Some(MessageType::Finished), // Or determine based on finish_reason
+                                        tool_calls: None,
+                                        finish_reason: candidate.finish_reason.clone(),
+                                    });
+                                }
                             }
+                        } else if gemini_response.prompt_feedback.is_some() {
+                            log::warn!("Gemini response without candidates, but with prompt_feedback: {:?}", gemini_response.prompt_feedback);
                         }
                     }
                     Err(e) => {
@@ -267,74 +330,89 @@ impl StreamParser {
                 }
             } else if !line.is_empty() {
                 // Handle non-stream response (full JSON object)
-                // Non-stream response
-                match serde_json::from_str::<Value>(&chunk_str) {
-                    Ok(json) => {
-                        // Extract content
-                        let content = json["candidates"][0]["content"]["parts"][0]["text"]
-                            .as_str()
-                            .map(String::from);
+                match serde_json::from_str::<GeminiResponse>(&chunk_str) {
+                    Ok(gemini_response) => {
+                        if let Some(candidates) = gemini_response.candidates {
+                            for candidate in candidates.into_iter() {
+                                let mut current_content: Option<String> = None;
+                                let mut current_role: Option<String> = None;
+                                if let Some(role_str) = candidate.content.role {
+                                    current_role = Some(if role_str == "model" {
+                                        "assistant".to_string()
+                                    } else {
+                                        role_str
+                                    });
+                                }
 
-                        // Extract tool calls from non-stream response
-                        let tool_calls: Option<Vec<ToolCallDeclaration>> = json["candidates"][0]
-                            ["content"]["parts"]
-                            .as_array()
-                            .map(|parts| {
-                                parts
-                                    .iter()
-                                    .filter_map(|part| {
-                                        part.get("functionCall")
-                                            .and_then(|func_call_val| {
-                                                serde_json::from_value::<GeminiFunctionCall>(
-                                                    func_call_val.clone(),
-                                                )
-                                                .ok()
-                                            })
-                                            .map(|func_call| {
-                                                // Serialize args Value to String
-                                                let args_string =
-                                                    serde_json::to_string(&func_call.args)
-                                                        .unwrap_or_default();
-                                                ToolCallDeclaration {
-                                                    index: 0,          // Non-stream doesn't have index per part, use 0 or generate
-                                                    id: String::new(), // Non-stream doesn't provide ID
-                                                    name: func_call.name,
-                                                    arguments: Some(args_string),
-                                                    results: None,
-                                                }
-                                            })
-                                    })
-                                    .collect()
-                            });
+                                let mut tool_calls_list: Vec<ToolCallDeclaration> = Vec::new();
+                                let mut text_parts_content = String::new();
 
-                        // Extract token usage
-                        let usage = if let Some(usage) = json.get("usageMetadata") {
-                            Some(TokenUsage {
-                                total_tokens: usage["totalTokenCount"].as_u64().unwrap_or_default(),
-                                prompt_tokens: usage["promptTokenCount"]
-                                    .as_u64()
-                                    .unwrap_or_default(),
-                                completion_tokens: usage["candidateTokenCount"]
-                                    .as_u64()
-                                    .unwrap_or_default(),
-                                tokens_per_second: 0.0,
-                            })
-                        } else {
-                            None
-                        };
+                                for (part_idx, part) in
+                                    candidate.content.parts.into_iter().enumerate()
+                                {
+                                    if let Some(func_call) = part.function_call {
+                                        let args_string = serde_json::to_string(&func_call.args)
+                                            .unwrap_or_default();
+                                        tool_calls_list.push(ToolCallDeclaration {
+                                            index: part_idx as u32,
+                                            id: String::new(),
+                                            name: func_call.name,
+                                            arguments: Some(args_string),
+                                            results: None,
+                                        });
+                                    } else if let Some(text_val) = part.text {
+                                        text_parts_content.push_str(&text_val);
+                                    }
+                                }
+                                if !text_parts_content.is_empty() {
+                                    current_content = Some(text_parts_content);
+                                }
 
-                        chunks.push(StreamChunk {
-                            reasoning_content: None,
-                            content,
-                            usage,
-                            msg_type: if tool_calls.is_some() {
-                                Some(MessageType::ToolCall)
-                            } else {
-                                Some(MessageType::Finished)
-                            }, // Determine message type based on content or tool calls
-                            tool_calls: None,
-                            finish_reason: None,
-                        });
+                                let usage_data =
+                                    gemini_response.usage_metadata.clone().map(|um| TokenUsage {
+                                        total_tokens: um.total_token_count,
+                                        prompt_tokens: um.prompt_token_count,
+                                        completion_tokens: um.candidates_token_count.unwrap_or(
+                                            um.total_token_count - um.prompt_token_count,
+                                        ),
+                                        tokens_per_second: 0.0,
+                                    });
+
+                                if let Some(content_str) = current_content {
+                                    stream_chunks.push(StreamChunk {
+                                        role: current_role.clone(),
+                                        reasoning_content: None,
+                                        content: Some(content_str),
+                                        usage: usage_data.clone(),
+                                        msg_type: Some(MessageType::Text),
+                                        tool_calls: None,
+                                        finish_reason: None,
+                                    });
+                                }
+                                if !tool_calls_list.is_empty() {
+                                    stream_chunks.push(StreamChunk {
+                                        role: current_role.clone(),
+                                        reasoning_content: None,
+                                        content: None,
+                                        usage: usage_data.clone(),
+                                        msg_type: Some(MessageType::ToolCall),
+                                        tool_calls: Some(tool_calls_list),
+                                        finish_reason: None,
+                                    });
+                                }
+                                if candidate.finish_reason.is_some() {
+                                    stream_chunks.push(StreamChunk {
+                                        role: current_role.clone(),
+                                        reasoning_content: None,
+                                        content: None,
+                                        usage: usage_data,
+                                        msg_type: Some(MessageType::Finished),
+                                        tool_calls: None,
+                                        finish_reason: candidate.finish_reason,
+                                    });
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         log::error!(
@@ -348,80 +426,66 @@ impl StreamParser {
                         );
                     }
                 }
+                break;
             }
         }
-
-        Ok(chunks)
-    }
-
-    /// Parse standard SSE format
-    fn parse_standard_sse(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
-        let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
-        let mut chunks = Vec::new();
-
-        for line in chunk_str.lines() {
-            if line.starts_with("event: done") {
-                chunks.push(StreamChunk {
-                    reasoning_content: None,
-                    content: None,
-                    usage: None,
-                    msg_type: Some(MessageType::Finished),
-                    tool_calls: None,
-                    finish_reason: None,
-                });
-                continue;
-            }
-            if line.starts_with("data:") {
-                let data = line["data:".len()..].trim();
-                chunks.push(StreamChunk {
-                    reasoning_content: None,
-                    content: Some(data.to_string()),
-                    usage: None,
-                    msg_type: None,
-                    tool_calls: None,
-                    finish_reason: None,
-                });
-            }
-        }
-        Ok(chunks)
+        Ok(stream_chunks)
     }
 
     /// Parse Claude format with full event streaming support
     fn parse_claude(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut stream_chunks = Vec::new();
-        // log::debug!("claude raw event block: {}", chunk_str); // For debugging the whole event block
-
-        // The StreamProcessor provides a full SSE message (event lines + data lines) as one `chunk`.
-        // We need to parse the `data:` line which contains the JSON payload.
-        // Claude's `data:` payload itself contains a `type` field that indicates the event type.
         let mut data_json_str: Option<String> = None;
+
+        log::debug!("claude chunk: {}", chunk_str);
 
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
                 data_json_str = Some(line["data:".len()..].trim().to_string());
-                break; // Assuming only one data line per event block from StreamProcessor
+                break;
             }
         }
 
         if data_json_str.is_none() {
-            // This might happen for empty lines or malformed events, can be ignored or logged.
-            // log::warn!("Claude stream: No data field found in event block: {}", chunk_str);
-            return Ok(stream_chunks); // Return empty if no data
+            return Ok(stream_chunks);
         }
 
         let data_str = data_json_str.unwrap();
         if data_str.is_empty() {
-            return Ok(stream_chunks); // Return empty if data is empty
+            return Ok(stream_chunks);
         }
 
         match serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
             Ok(event) => {
-                // log::debug!("Parsed Claude event: {:?}", event); // For detailed event logging
                 match event.event_type {
                     ClaudeEventType::MessageStart => {
-                        // Potentially extract input_tokens from event.message.usage if needed
-                        // log::debug!("Claude MessageStart: {:?}", event.message);
+                        if let Some(message_val) = event.message {
+                            let role_from_event = message_val
+                                .get("role")
+                                .and_then(Value::as_str)
+                                .map(|role_str| String::from(role_str));
+                            if let Some(usage_val) = message_val.get("usage") {
+                                if let Some(input_tokens) =
+                                    usage_val.get("input_tokens").and_then(Value::as_u64)
+                                {
+                                    stream_chunks.push(StreamChunk {
+                                        role: role_from_event,
+                                        reasoning_content: None,
+                                        content: None,
+                                        usage: Some(TokenUsage {
+                                            prompt_tokens: input_tokens,
+                                            completion_tokens: 0,
+                                            total_tokens: input_tokens,
+                                            tokens_per_second: 0.0,
+                                        }),
+                                        msg_type: None,
+                                        tool_calls: None,
+                                        finish_reason: None,
+                                    });
+                                }
+                            }
+                        }
                     }
                     ClaudeEventType::ContentBlockStart => {
                         if let (Some(index), Some(content_block)) =
@@ -432,10 +496,11 @@ impl StreamParser {
                                     index,
                                     id: content_block.id.unwrap_or_default(),
                                     name: content_block.name.unwrap_or_default(),
-                                    arguments: Some(String::new()), // Initialize for accumulation
+                                    arguments: Some(String::new()),
                                     results: None,
                                 };
                                 stream_chunks.push(StreamChunk {
+                                    role: Some("assistant".to_string()), // Assistant is initiating a tool use
                                     reasoning_content: None,
                                     content: None,
                                     usage: None,
@@ -447,7 +512,8 @@ impl StreamParser {
                         }
                     }
                     ClaudeEventType::ContentBlockDelta => {
-                        if let (Some(index), Some(delta_value)) = (event.index, event.delta) {
+                        if let (Some(_index), Some(delta_value)) = (event.index, event.delta) {
+                            // index might be useful for tool arg aggregation
                             if let Some(delta_type) =
                                 delta_value.get("type").and_then(Value::as_str)
                             {
@@ -458,6 +524,7 @@ impl StreamParser {
                                         {
                                             if !text.is_empty() {
                                                 stream_chunks.push(StreamChunk {
+                                                    role: Some("assistant".to_string()), // Assistant is providing text
                                                     reasoning_content: None,
                                                     content: Some(text.to_string()),
                                                     usage: None,
@@ -473,53 +540,48 @@ impl StreamParser {
                                             delta_value.get("partial_json").and_then(Value::as_str)
                                         {
                                             if !partial_json.is_empty() {
-                                                let tool_call_delta = ToolCallDeclaration {
-                                                    index,
-                                                    id: String::new(), // ID/Name are in ContentBlockStart
-                                                    name: String::new(),
+                                                // Create a ToolCallDeclaration part just for the arguments delta
+                                                // The `index` comes from the event.index
+                                                let tool_arg_delta = ToolCallDeclaration {
+                                                    index: event.index.unwrap_or(0), // Use the index from the event
+                                                    id: String::new(), // ID is not in delta, was in ContentBlockStart
+                                                    name: String::new(), // Name is not in delta, was in ContentBlockStart
                                                     arguments: Some(partial_json.to_string()),
                                                     results: None,
                                                 };
                                                 stream_chunks.push(StreamChunk {
+                                                    role: Some("assistant".to_string()), // Assistant is providing tool arguments
                                                     reasoning_content: None,
-                                                    content: None,
+                                                    content: None, // Do not put partial_json in content
                                                     usage: None,
-                                                    msg_type: Some(MessageType::ToolCall),
-                                                    tool_calls: Some(vec![tool_call_delta]),
+                                                    msg_type: None, // Not a standalone message type for UI
+                                                    tool_calls: Some(vec![tool_arg_delta]), // Pass the delta via tool_calls
                                                     finish_reason: None,
                                                 });
                                             }
                                         }
                                     }
-                                    _ => {
-                                        // log::debug!("Unhandled Claude content_block_delta type: {}", delta_type);
-                                    }
+                                    _ => {}
                                 }
                             }
                         }
                     }
-                    ClaudeEventType::ContentBlockStop => {
-                        // Signals end of a content block.
-                        // Arguments/text already streamed.
-                        // log::debug!("Claude ContentBlockStop for index: {:?}", event.index);
-                    }
+                    ClaudeEventType::ContentBlockStop => {}
                     ClaudeEventType::MessageDelta => {
-                        let mut usage_chunk: Option<TokenUsage> = None;
+                        let mut usage_chunk_opt: Option<TokenUsage> = None;
                         let mut finish_reason_chunk: Option<String> = None;
 
                         if let Some(usage_val) = event.usage {
-                            // MessageDelta typically only contains output_tokens
                             let output_tokens = usage_val
                                 .get("output_tokens")
                                 .and_then(Value::as_u64)
                                 .unwrap_or(0);
                             if output_tokens > 0 {
-                                // Only create usage if there are tokens
-                                usage_chunk = Some(TokenUsage {
-                                    total_tokens: output_tokens, // Will be summed up later with prompt_tokens
-                                    prompt_tokens: 0, // Prompt tokens are in message_start or message_stop
+                                usage_chunk_opt = Some(TokenUsage {
+                                    total_tokens: output_tokens,
+                                    prompt_tokens: 0,
                                     completion_tokens: output_tokens,
-                                    tokens_per_second: 0.0, // Calculated later
+                                    tokens_per_second: 0.0,
                                 });
                             }
                         }
@@ -528,28 +590,60 @@ impl StreamParser {
                             if let Some(stop_reason) =
                                 delta_value.get("stop_reason").and_then(Value::as_str)
                             {
-                                finish_reason_chunk = Some(stop_reason.to_string());
-                                // If stop_reason is "tool_use", this is the primary signal.
+                                let stop_sequence_val =
+                                    delta_value.get("stop_sequence").and_then(Value::as_str);
+                                // Check if this stop_reason indicates a tool_use via stop_sequence
+                                if stop_reason == "stop_sequence"
+                                    && stop_sequence_val.map_or(false, |s| {
+                                        s.contains("tool_calls") || s.contains("function_calls")
+                                    })
+                                {
+                                    // This indicates a tool call is expected or in progress.
+                                    // We will set the finish_reason, but the msg_type should not be Finished.
+                                    // The upstream logic will use this finish_reason to decide if it's a tool_use scenario.
+                                    log::debug!("Claude MessageDelta stop_sequence indicates tool_use. Reason: {}, Sequence: {:?}", stop_reason, stop_sequence_val);
+                                    finish_reason_chunk =
+                                        Some("tool_use_via_stop_sequence".to_string());
+                                // Special marker
+                                } else {
+                                    finish_reason_chunk = Some(stop_reason.to_string());
+                                }
                             }
                         }
 
-                        if usage_chunk.is_some() || finish_reason_chunk.is_some() {
+                        if usage_chunk_opt.is_some() || finish_reason_chunk.is_some() {
                             stream_chunks.push(StreamChunk {
+                                role: Some("assistant".to_string()), // Updates related to the assistant's message
                                 reasoning_content: None,
                                 content: None,
-                                usage: usage_chunk,
-                                msg_type: None, // This chunk is for metadata/signal
+                                usage: usage_chunk_opt,
+                                msg_type: if finish_reason_chunk.as_deref()
+                                    == Some("tool_use_via_stop_sequence")
+                                {
+                                    // If it's a tool_use indicator, don't mark as Finished.
+                                    // The actual tool_use content block will determine the MessageType::ToolCall.
+                                    None
+                                } else if finish_reason_chunk.is_some() {
+                                    Some(MessageType::Finished) // For other stop reasons like "end_turn"
+                                } else {
+                                    None
+                                },
                                 tool_calls: None,
                                 finish_reason: finish_reason_chunk,
                             });
                         }
                     }
                     ClaudeEventType::MessageStop => {
-                        // Message stream finished.
-                        // `event.message` might contain final `id`, `role`, `model`, `stop_reason`, `stop_sequence`, and `usage` (with both input_tokens and output_tokens).
-                        // We can extract final usage here if needed.
                         let mut final_usage: Option<TokenUsage> = None;
+                        let mut final_finish_reason: Option<String> = None;
+                        let mut role_from_event: Option<String> = None;
+
                         if let Some(message_val) = event.message {
+                            role_from_event = message_val
+                                .get("role")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+
                             if let Some(usage_val) = message_val.get("usage") {
                                 let input_tokens = usage_val
                                     .get("input_tokens")
@@ -563,23 +657,52 @@ impl StreamParser {
                                     total_tokens: input_tokens + output_tokens,
                                     prompt_tokens: input_tokens,
                                     completion_tokens: output_tokens,
-                                    tokens_per_second: 0.0, // Calculated later
+                                    tokens_per_second: 0.0,
                                 });
+                            }
+                            if let Some(stop_reason) =
+                                message_val.get("stop_reason").and_then(Value::as_str)
+                            {
+                                let stop_sequence_val =
+                                    message_val.get("stop_sequence").and_then(Value::as_str);
+                                if stop_reason == "stop_sequence"
+                                    && stop_sequence_val.map_or(false, |s| {
+                                        s.contains("tool_calls") || s.contains("function_calls")
+                                    })
+                                {
+                                    log::debug!("Claude MessageStop stop_sequence indicates tool_use. Reason: {}, Sequence: {:?}", stop_reason, stop_sequence_val);
+                                    final_finish_reason =
+                                        Some("tool_use_via_stop_sequence".to_string());
+                                // Special marker
+                                } else {
+                                    final_finish_reason = Some(stop_reason.to_string());
+                                }
                             }
                         }
 
+                        // If role_from_event is None (e.g. event.message was not present or lacked role),
+                        // default to "assistant" as MessageStop concludes the assistant's turn.
+                        let role_for_chunk =
+                            role_from_event.or_else(|| Some("assistant".to_string()));
+
                         stream_chunks.push(StreamChunk {
+                            role: role_for_chunk,
                             reasoning_content: None,
                             content: None,
                             usage: final_usage,
-                            msg_type: Some(MessageType::Finished),
+                            msg_type: if final_finish_reason.as_deref()
+                                == Some("tool_use_via_stop_sequence")
+                                || final_finish_reason.as_deref() == Some("tool_use")
+                            {
+                                None // Let the tool_call event itself define the message type, or upstream logic handles it.
+                            } else {
+                                Some(MessageType::Finished) // For "end_turn", etc.
+                            },
                             tool_calls: None,
-                            finish_reason: None, // Actual finish_reason (like "tool_use" or "end_turn") is in message.stop_reason or earlier message_delta
+                            finish_reason: final_finish_reason,
                         });
                     }
-                    ClaudeEventType::Ping => {
-                        // Keep-alive, can be ignored.
-                    }
+                    ClaudeEventType::Ping => {}
                     ClaudeEventType::Error => {
                         if let Some(error_val) = event.error {
                             let error_type = error_val
@@ -591,7 +714,7 @@ impl StreamParser {
                                 .and_then(Value::as_str)
                                 .unwrap_or("Unknown error from Claude");
                             log::error!(
-                                "Claude API Error - type: {}, message: {}", // Log in English
+                                "Claude API Error - type: {}, message: {}",
                                 error_type,
                                 error_message
                             );
@@ -602,7 +725,7 @@ impl StreamParser {
                             .to_string());
                         } else {
                             log::error!(
-                                "Claude Error event with no error details in stream: {}", // Log in English
+                                "Claude Error event with no error details in stream: {}",
                                 data_str
                             );
                             return Err(
@@ -613,9 +736,6 @@ impl StreamParser {
                 }
             }
             Err(e) => {
-                // It's possible to receive non-JSON data or malformed JSON.
-                // Decide whether to error out or log and continue.
-                // For Claude, data should always be JSON.
                 log::error!(
                     "Failed to parse Claude event JSON: {}, error: {}",
                     data_str,

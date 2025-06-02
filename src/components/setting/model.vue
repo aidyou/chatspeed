@@ -28,7 +28,7 @@
               v-if="element.providerLogo !== ''"
               :src="element.providerLogo"
               class="provider-logo" />
-            <logo :name="element.logo" color="primary" size="18px" v-else />
+            <avatar :text="element.name" color="primary" size="20px" v-else />
             {{ element.name }}
           </div>
           <div class="value">
@@ -357,7 +357,14 @@
           <div class="list opacity">
             <div class="item" v-for="model in providerModels" :key="model.id">
               <div class="label">
-                <span>{{ model.name || model.id }}</span>
+                <el-tooltip
+                  v-if="model.id"
+                  :content="model.id"
+                  placement="top"
+                  :hide-after="0"
+                  transition="none">
+                  <span>{{ model.name || model.id }}</span>
+                </el-tooltip>
                 <span v-if="model.reasoning" class="model-icon">
                   <cs name="reasoning" color="var(--cs-color-primary)" />
                 </span>
@@ -653,8 +660,9 @@ const editModel = async (id, model) => {
     const keys = ['name', 'logo', 'baseUrl', 'maxTokens', 'temperature', 'topP', 'topK']
     keys.forEach(key => {
       modelForm.value[key] = model[key]
+      console.log(key, model[key])
     })
-    if (!modelForm.baseUrl) {
+    if (!modelForm.value.baseUrl) {
       modelForm.value.baseUrl = baseUrlPlaceholder
     }
 
@@ -667,6 +675,12 @@ const editModel = async (id, model) => {
     }
   }
   modelDialogVisible.value = true
+
+  fetchedProviderModelsFromServer(
+    modelForm.value.apiProtocol,
+    modelForm.value.baseUrl,
+    modelForm.value.apiKey
+  )
 }
 
 /**
@@ -899,13 +913,17 @@ watchEffect(async () => {
   fetchedProviderModels.value = []
 
   if (canFetch) {
-    try {
-      fetchedProviderModels.value = (await modelStore.listModels(protocol, baseUrl, apiKey)) || []
-    } catch (error) {
-      fetchedProviderModels.value = []
-    }
+    fetchedProviderModelsFromServer(protocol, baseUrl, apiKey)
   }
 })
+
+const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey) => {
+  try {
+    fetchedProviderModels.value = (await modelStore.listModels(protocol, baseUrl, apiKey)) || []
+  } catch (error) {
+    fetchedProviderModels.value = []
+  }
+}
 
 const onProviderModelImportShow = () => {
   modelImportDialogVisible.value = true

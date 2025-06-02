@@ -33,7 +33,7 @@ const GEMINI_DEFAULT_API_BASE: &str = "https://generativelanguage.googleapis.com
 struct GeminiModel {
     name: String,         // e.g., "models/gemini-1.5-pro-latest"
     display_name: String, // e.g., "Gemini 1.5 Pro"
-    description: String,
+    description: Option<String>,
     #[serde(default)] // Make optional as not all models might have it explicitly
     input_token_limit: Option<u32>,
     #[serde(default)]
@@ -72,119 +72,274 @@ impl GeminiChat {
         tools: Option<Vec<MCPToolDeclaration>>,
         params: &Value,
     ) -> Value {
-        let mut gemini_contents = Vec::new(); // Renamed to avoid confusion with original messages
-        let mut system_instruction_val = None; // Renamed for clarity
+        let mut gemini_contents = Vec::new();
+        let mut system_instruction_val = None;
 
-        for message in messages {
-            let role = message["role"].as_str().unwrap_or_default();
-            let content_value = &message["content"]; // Keep as Value
-            let tool_calls_value = message.get("tool_calls"); // OpenAI specific field
+        for message_val in messages {
+            // Use get for safer access
+            let role = message_val
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let content_value = message_val.get("content"); // Option<&Value>
+            let tool_calls_value = message_val.get("tool_calls"); // Option<&Value>
 
-            // Handle different content types (string or array of parts) for the current message
-            let parts = if content_value.is_string() {
-                vec![json!({"text": content_value.as_str().unwrap_or_default()})]
-            } else if content_value.is_array() {
-                // Assuming the array structure is compatible or needs specific mapping
-                // For now, let's try to pass it as is if it's an array of parts.
-                // This might need adjustment based on actual content structure for Gemini.
-                content_value
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|part| {
-                        // A simple heuristic: if part is a string, wrap it. If object, assume it's a valid part.
-                        if part.is_string() {
-                            json!({"text": part.as_str().unwrap_or_default()})
-                        } else {
-                            part
-                        }
-                    })
-                    .collect()
-            } else {
-                // Default or error handling for unexpected content type
-                vec![json!({"text": ""})]
-            };
+            let mut processed_parts_for_this_message: Vec<Value> = Vec::new();
 
-            if role == "system" {
-                // If multiple system messages exist, the last one will be used.
-                // Gemini's systemInstruction is a single object.
-                system_instruction_val = Some(json!({
-                    "role": "user", // Gemini system prompts are passed as user role in systemInstruction
-                    "parts": parts
-                }));
-            } else if role == "assistant" && tool_calls_value.is_some() {
-                // This is an assistant message that previously requested tool calls (OpenAI format)
-                // Convert it to Gemini's functionCall format
-                if let Some(tool_calls_array) = tool_calls_value.and_then(Value::as_array) {
-                    let mut gemini_function_call_parts = Vec::new();
-                    if let Some(text_content) = content_value.as_str() {
-                        if !text_content.is_empty() {
-                            gemini_function_call_parts.push(json!({"text": text_content}));
-                        }
+            if let Some(cv) = content_value {
+                if let Some(text_content) = cv.as_str() {
+                    if !text_content.is_empty() {
+                        processed_parts_for_this_message.push(json!({"text": text_content}));
                     }
-                    for tool_call_obj in tool_calls_array {
-                        if let (Some(name), Some(args_str), Some(_id)) = (
-                            tool_call_obj
-                                .get("function")
-                                .and_then(|f| f.get("name"))
-                                .and_then(Value::as_str)
-                                .map(String::from), // Convert to String
-                            tool_call_obj
-                                .get("function")
-                                .and_then(|f| f.get("arguments"))
-                                .and_then(Value::as_str),
-                            tool_call_obj.get("id").and_then(Value::as_str), // We might not need the ID when sending back to Gemini this way
-                        ) {
-                            // Gemini expects args as an object, not a string. Attempt to parse.
-                            let args_obj: Value =
-                                serde_json::from_str(args_str).unwrap_or(json!({}));
-                            gemini_function_call_parts.push(json!({
-                                "functionCall": {
-                                    "name": name,
-                                    "args": args_obj // Ensure args_obj is a JSON object
+                } else if let Some(array_content) = cv.as_array() {
+                    for part_val in array_content {
+                        if let Some(part_obj) = part_val.as_object() {
+                            if let Some(part_type) = part_obj.get("type").and_then(Value::as_str) {
+                                match part_type {
+                                    "text" => {
+                                        let text = part_obj
+                                            .get("text")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("");
+                                        if !text.is_empty() {
+                                            processed_parts_for_this_message
+                                                .push(json!({"text": text}));
+                                        }
+                                    }
+                                    "image_url" => {
+                                        // OpenAI specific, convert to Gemini inlineData
+                                        if let Some(image_url_details) =
+                                            part_obj.get("image_url").and_then(Value::as_object)
+                                        {
+                                            if let Some(url_str) =
+                                                image_url_details.get("url").and_then(Value::as_str)
+                                            {
+                                                if url_str.starts_with("data:") {
+                                                    // Expected format: "data:<mime_type>;base64,<data>"
+                                                    let mut url_parts_iter = url_str.splitn(2, ',');
+                                                    if let (Some(header_part), Some(data_part)) = (
+                                                        url_parts_iter.next(),
+                                                        url_parts_iter.next(),
+                                                    ) {
+                                                        // header_part = "data:image/jpeg;base64"
+                                                        if let Some(media_type_and_encoding) =
+                                                            header_part.strip_prefix("data:")
+                                                        {
+                                                            // media_type_and_encoding = "image/jpeg;base64"
+                                                            let mut media_encoding_iter =
+                                                                media_type_and_encoding
+                                                                    .splitn(2, ';');
+                                                            if let (
+                                                                Some(mime_type),
+                                                                Some(encoding),
+                                                            ) = (
+                                                                media_encoding_iter.next(),
+                                                                media_encoding_iter.next(),
+                                                            ) {
+                                                                if encoding.to_lowercase()
+                                                                    == "base64"
+                                                                {
+                                                                    processed_parts_for_this_message.push(json!({
+                                                                        "inlineData": {
+                                                                            "mimeType": mime_type,
+                                                                            "data": data_part
+                                                                        }
+                                                                    }));
+                                                                } else {
+                                                                    log::warn!("Unsupported encoding in data URL for Gemini: '{}'. Expected 'base64'. Skipping image part. URL: {}", encoding, url_str);
+                                                                }
+                                                            } else {
+                                                                log::warn!("Malformed data URL header for Gemini: could not split mime_type and encoding from '{}'. Skipping image part. URL: {}", media_type_and_encoding, url_str);
+                                                            }
+                                                        } else {
+                                                            log::warn!("Malformed data URL for Gemini: 'data:' prefix found, but strip_prefix failed for '{}'. Skipping image part. URL: {}", header_part, url_str);
+                                                        }
+                                                    } else {
+                                                        log::warn!("Malformed data URL for Gemini: could not split into header and data parts. Skipping image part. URL: {}", url_str);
+                                                    }
+                                                } else {
+                                                    log::warn!("Image URL is not a data URL. Gemini requires base64 encoded images for inlineData. URL: {}. Skipping image part.", url_str);
+                                                }
+                                            } else {
+                                                log::warn!("'image_url' object missing 'url' string. Skipping image part: {:?}", part_obj);
+                                            }
+                                        } else {
+                                            log::warn!("'image_url' type part missing 'image_url' object details. Skipping part: {:?}", part_obj);
+                                        }
+                                    }
+                                    "inlineData" | "fileData" => {
+                                        // Already Gemini format
+                                        processed_parts_for_this_message.push(part_val.clone());
+                                    }
+                                    _ => {
+                                        log::warn!(
+                                            "Unknown structured content part type '{}' for Gemini. Skipping: {:?}",
+                                            part_type,
+                                            part_val
+                                        );
+                                    }
                                 }
-                            }));
+                            } else if let Some(text_str) = part_val.as_str() {
+                                // Simple string in parts array
+                                if !text_str.is_empty() {
+                                    processed_parts_for_this_message
+                                        .push(json!({"text": text_str}));
+                                }
+                            } else {
+                                log::warn!(
+                                    "Unsupported content part in array for Gemini: {:?}. Skipping.",
+                                    part_val
+                                );
+                            }
+                        } else if let Some(text_str) = part_val.as_str() {
+                            // Content is an array containing a simple string.
+                            if !text_str.is_empty() {
+                                processed_parts_for_this_message.push(json!({"text": text_str}));
+                            }
+                        } else {
+                            log::warn!(
+                                "Content part in array is not an object or string: {:?}. Skipping.",
+                                part_val
+                            );
                         }
                     }
-                    if !gemini_function_call_parts.is_empty() {
-                        gemini_contents.push(json!({
-                            "role": "model", // Assistant requests map to "model" role
-                            "parts": gemini_function_call_parts
-                        }));
+                } else if cv.is_object() {
+                    // Content is an object but not an array or string. This is unusual for OpenAI messages.
+                    // Log a warning, as this might indicate an unexpected format.
+                    log::warn!("Message content is an object but not an array of parts or a simple string. Attempting to treat as text: {:?}", cv);
+                    // Try to serialize it to a string and use as text, or default to empty.
+                    let text_representation = serde_json::to_string(cv).unwrap_or_default();
+                    if !text_representation.is_empty()
+                        && text_representation != "{}"
+                        && text_representation != "null"
+                    {
+                        processed_parts_for_this_message.push(json!({"text": text_representation}));
                     }
                 }
+                // If content_value was null or some other unhandled type, processed_parts_for_this_message remains empty.
+            }
+
+            // Gemini API requires the "parts" field in a Content object to be non-empty.
+            // This applies to user, model, and systemInstruction roles.
+            // However, for an assistant message that will contain tool_calls,
+            // it's okay for processed_parts_for_this_message (derived from original 'content' field)
+            // to be empty at this stage. The functionCall parts will be added later.
+            // If, after adding functionCall parts, the final list for an assistant message is still empty,
+            // a fallback will be applied in that specific block.
+            if processed_parts_for_this_message.is_empty() {
+                let is_assistant_expecting_tools =
+                    role == "assistant" && tool_calls_value.is_some();
+                if !is_assistant_expecting_tools {
+                    log::warn!(
+                        "Content for role '{}' (message content: {:?}) resulted in empty parts for Gemini. Defaulting to a single empty text part.",
+                        role, content_value
+                    );
+                    processed_parts_for_this_message.push(json!({"text": ""}));
+                }
+            }
+
+            if role == "system" {
+                system_instruction_val = Some(json!({
+                    "role": "user", // Gemini system prompts are passed as user role in systemInstruction
+                    "parts": processed_parts_for_this_message
+                }));
+            } else if role == "assistant" && tool_calls_value.is_some() {
+                let mut final_assistant_parts = processed_parts_for_this_message.clone(); // Start with text/image parts
+
+                if let Some(tool_calls_array) = tool_calls_value.and_then(Value::as_array) {
+                    for tool_call_obj in tool_calls_array {
+                        if let Some(name) = tool_call_obj
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(Value::as_str)
+                        {
+                            let arguments_value = tool_call_obj
+                                .get("function")
+                                .and_then(|f| f.get("arguments")); // Option<&Value>
+
+                            let args_obj: Value = arguments_value.map_or_else(
+                                || {
+                                    log::warn!("Tool call '{}' missing 'arguments'. Using empty object.", name);
+                                    json!({})
+                                },
+                                |val| {
+                                    if val.is_string() {
+                                        serde_json::from_str(val.as_str().unwrap_or("{}"))
+                                            .unwrap_or_else(|e| {
+                                            log::warn!(
+                                                "Failed to parse JSON string for tool arguments for '{}': {}. Value: '{}'. Using empty object.",
+                                                name, e, val.as_str().unwrap_or("")
+                                            );
+                                            json!({})
+                                        })
+                                    } else if val.is_object() {
+                                        val.clone()
+                                    } else {
+                                        log::warn!(
+                                            "Tool arguments for '{}' are neither a string nor an object: {:?}. Using empty object.",
+                                            name, val
+                                        );
+                                        json!({})
+                                    }
+                                },
+                            );
+                            final_assistant_parts.push(json!({
+                                "functionCall": {
+                                    "name": name,
+                                    "args": args_obj
+                                }
+                            }));
+                        } else {
+                            log::warn!(
+                                "Skipping malformed tool_call object in assistant message: {:?}",
+                                tool_call_obj
+                            );
+                        }
+                    }
+                }
+                if final_assistant_parts.is_empty() {
+                    log::warn!("Assistant message with tool_calls resulted in empty parts for Gemini. Original message: {:?}", message_val);
+                    final_assistant_parts.push(json!({"text": ""})); // Fallback
+                }
+                gemini_contents.push(json!({
+                    "role": "model",
+                    "parts": final_assistant_parts
+                }));
             } else if role == "tool" {
-                // This is a tool execution result (OpenAI format)
-                // Convert it to Gemini's functionResponse format
-                // Gemini's function response needs the name of the function that was called.
-                // The content of the tool message is the result.
                 if let (Some(name_val_str), Some(content_val)) = (
-                    message.get("name").and_then(Value::as_str), // "name" is the function name called
-                    message.get("content"),
+                    message_val.get("name").and_then(Value::as_str),
+                    message_val.get("content"), // Option<&Value>
                 ) {
+                    let tool_result_content: Value = if content_val.is_string() {
+                        // Attempt to parse the string as JSON. If it fails, use the string directly.
+                        serde_json::from_str(content_val.as_str().unwrap_or(""))
+                            .unwrap_or_else(|e| {
+                                log::debug!("Tool result content for '{}' is a string but not valid JSON. Passing as raw string. Error: {}, Value: '{}'", name_val_str, e, content_val.as_str().unwrap_or(""));
+                                content_val.clone() // Use the original string Value
+                            })
+                    } else {
+                        content_val.clone() // Already an object or other JSON type
+                    };
+
                     gemini_contents.push(json!({
-                        "role": "function", // Gemini uses "function" for tool/function responses
+                        "role": "function",
                         "parts": [{
                             "functionResponse": {
-                                "name": name_val_str, // This should be the name of the function that was called
-                                "response": { // The actual result from your function
-                                     // Gemini expects "content" inside "response" for the result.
-                                     // The structure of `content_val` might need to be adapted.
-                                     // For simplicity, assuming content_val is directly usable or a simple JSON.
-                                     // Gemini's "response" usually contains a "content" field which then holds the actual data.
-                                     // If content_val is already structured (e.g. json object), it might be okay.
-                                     // If it's a simple string, it might need to be wrapped, e.g., {"text": content_val} or {"result": content_val}
-                                    "content": content_val.clone() // Clone the value
+                                "name": name_val_str,
+                                "response": {
+                                    "content": tool_result_content // This should be a JSON value
                                 }
                             }
                         }]
                     }));
+                } else {
+                    log::warn!("Skipping malformed tool message: {:?}", message_val);
                 }
             } else {
+                // For "user" role, or "assistant" without tool_calls
                 gemini_contents.push(json!({
                     "role": if role == "assistant" { "model" } else { "user" },
-                    "parts": parts
+                    "parts": processed_parts_for_this_message
                 }));
             }
         }
@@ -193,16 +348,16 @@ impl GeminiChat {
             .get("response_format")
             .and_then(|rf| rf.get("type"))
             .and_then(|t| t.as_str())
-            .unwrap_or("text");
+            .unwrap_or("text"); // Default to "text"
 
         let response_mime_type = if response_format_type == "json_object" {
             "application/json"
         } else {
-            "text/plain"
+            "text/plain" // Default for "text" or any other type
         };
 
         let mut payload = json!({
-            "contents": gemini_contents, // Use the accumulated contents
+            "contents": gemini_contents,
             "generationConfig": {
                 "responseMimeType": response_mime_type
             }
@@ -210,29 +365,32 @@ impl GeminiChat {
 
         if let Some(obj) = payload.as_object_mut() {
             if let Some(instruction) = system_instruction_val {
-                obj.insert("systemInstruction".to_string(), instruction);
+                if instruction
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .map_or(false, |p| !p.is_empty())
+                {
+                    obj.insert("systemInstruction".to_string(), instruction);
+                } else {
+                    log::warn!("System instruction parts were empty, not adding to payload.");
+                }
             }
 
             if let Some(generation_config_value) = obj.get_mut("generationConfig") {
                 if let Some(generation_config_map) = generation_config_value.as_object_mut() {
-                    // Handle temperature if provided
                     if let Some(temperature_val) =
                         params.get("temperature").and_then(|v| v.as_f64())
                     {
-                        // Gemini's temperature typically ranges from 0.0 to 2.0.
-                        // We'll pass it if the user provides it.
-                        // Add validation if necessary, e.g. if temperature_val >= 0.0 && temperature_val <= 2.0
                         if temperature_val >= 0.0 && temperature_val <= 2.0 {
+                            // Gemini's typical range
                             generation_config_map
                                 .insert("temperature".to_string(), json!(temperature_val));
                         }
                     }
 
-                    // Handle maxOutputTokens (from params.max_tokens) if provided
                     if let Some(max_tokens_val) = params.get("max_tokens").and_then(|v| v.as_u64())
                     {
                         if max_tokens_val > 0 {
-                            // Ensure max_tokens is positive
                             generation_config_map
                                 .insert("maxOutputTokens".to_string(), json!(max_tokens_val));
                         }
@@ -240,12 +398,14 @@ impl GeminiChat {
 
                     if let Some(top_k) = params.get("top_k").and_then(|v| v.as_i64()) {
                         if top_k > 0 {
-                            generation_config_map.insert("topK".to_string(), json!(top_k.clone()));
+                            // Gemini's topK must be positive
+                            generation_config_map.insert("topK".to_string(), json!(top_k));
                         }
                     }
                     if let Some(top_p) = params.get("top_p").and_then(|v| v.as_f64()) {
                         if top_p > 0.0 && top_p <= 1.0 {
-                            generation_config_map.insert("topP".to_string(), json!(top_p.clone()));
+                            // Gemini's topP range
+                            generation_config_map.insert("topP".to_string(), json!(top_p));
                         }
                     }
 
@@ -254,7 +414,7 @@ impl GeminiChat {
                     {
                         if !stop_sequences.is_empty() {
                             generation_config_map
-                                .insert("stopSequences".to_string(), json!(stop_sequences.clone()));
+                                .insert("stopSequences".to_string(), json!(stop_sequences));
                         }
                     }
 
@@ -262,6 +422,7 @@ impl GeminiChat {
                         params.get("candidate_count").and_then(|v| v.as_u64())
                     {
                         if candidate_count > 0 {
+                            // Typically 1 for chat, but API might support more
                             generation_config_map
                                 .insert("candidateCount".to_string(), json!(candidate_count));
                         }
@@ -269,11 +430,11 @@ impl GeminiChat {
                 }
             }
 
-            if let Some(tools_vec) = tools {
-                if params.get("tool_choice").and_then(|tc| tc.as_str()) != Some("none") {
-                    let gemini_tools = tools_vec // Use the renamed variable
+            if params.get("tool_choice").and_then(|tc| tc.as_str()) != Some("none") {
+                if let Some(tools_vec) = tools {
+                    let gemini_tools = tools_vec
                         .into_iter()
-                        .map(|tool| tool.to_gemini())
+                        .map(|tool| tool.to_gemini()) // Assuming MCPToolDeclaration has to_gemini()
                         .collect::<Vec<Value>>();
                     if !gemini_tools.is_empty() {
                         obj.insert(
@@ -351,10 +512,11 @@ impl GeminiChat {
                         if let Some(content) = chunk.content.clone() {
                             if !content.is_empty() {
                                 full_response.push_str(&content);
+                                let msg_type = chunk.msg_type.unwrap_or(MessageType::Text);
                                 callback(ChatResponse::new_with_arc(
                                     chat_id.clone(),
                                     content,
-                                    MessageType::Text,
+                                    msg_type,
                                     metadata_option.clone(),
                                     None,
                                 ));
@@ -376,6 +538,7 @@ impl GeminiChat {
                             }
                         }
 
+                        // Gemini has not reasoning content, but we might get it in the future
                         if let Some(content) = chunk.reasoning_content {
                             if !content.is_empty() {
                                 reasoning_content.push_str(&content);
@@ -439,7 +602,12 @@ impl GeminiChat {
                         if let Some(reason_str) = current_chunk_finish_reason {
                             // If tools have been accumulated and we get any terminal finish reason,
                             // it means the model has finished its turn and expects tool calls.
-                            if !accumulated_tool_calls.is_empty() {
+                            if !accumulated_tool_calls.is_empty()
+                                && (reason_str == "STOP"
+                                    || reason_str == "MAX_TOKENS"
+                                    || reason_str == "TOOL_CODE"
+                                    || reason_str == "FUNCTION_CALL")
+                            {
                                 finish_reason = FinishReason::ToolCalls;
                             } else {
                                 // If no tools accumulated, map the finish reason normally
@@ -450,7 +618,7 @@ impl GeminiChat {
                                         // This case should ideally be caught by the `!accumulated_tool_calls.is_empty()` above
                                         // but if it somehow reaches here and tools *are* empty, it's an anomaly.
                                         log::warn!("Gemini finish_reason '{}' received but no tools were accumulated.", reason_str);
-                                        finish_reason = FinishReason::Complete;
+                                        finish_reason = FinishReason::Complete; // Or Error, depending on desired strictness
                                     }
                                     "SAFETY" | "RECITATION" | "OTHER" => {
                                         finish_reason = FinishReason::Error
@@ -469,89 +637,92 @@ impl GeminiChat {
                             && !accumulated_tool_calls.is_empty()
                         {
                             // This block should only execute once when all tool call parts are received and finish_reason is ToolCalls
-                            if !accumulated_tool_calls.is_empty() {
-                                // First, send the AssistantAction message with all requested tool calls
-                                let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
-                                    .values()
-                                    .map(|tcd| {
-                                        // Convert ToolCallDeclaration to the format expected in the assistant's message
-                                        // OpenAI's assistant message tool_calls usually look like:
-                                        // { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
-                                        // Our ToolCallDeclaration is already very close to this.
-                                        let arguments_str =
-                                            tcd.arguments.as_deref().unwrap_or_default();
-                                        json!({
-                                            "id": tcd.id,
-                                            "type": "function",
-                                            "function": {
-                                                "name": tcd.name,
-                                                "arguments": arguments_str
-                                            }
-                                        })
+
+                            // First, send the AssistantAction message with all requested tool calls
+                            let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
+                                .iter()
+                                .map(|(idx, tcd)| {
+                                    // Convert ToolCallDeclaration to the format expected in the assistant's message
+                                    // OpenAI's assistant message tool_calls usually look like:
+                                    // { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
+                                    // Our ToolCallDeclaration is already very close to this.
+                                    let arguments_str =
+                                        tcd.arguments.as_deref().unwrap_or_default();
+                                    json!({
+                                        "index": idx,
+                                        "id": tcd.id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": tcd.name,
+                                            "arguments": arguments_str
+                                        }
                                     })
-                                    .collect();
+                                })
+                                .collect();
 
-                                let assistant_action_message = json!({
-                                    "role": "assistant",
-                                    "content": if full_response.is_empty() { Value::Null } else { Value::String(full_response.clone()) },
-                                    "tool_calls": assistant_tool_requests
-                                });
+                            let assistant_action_message = json!({
+                                "role": "assistant",
+                                "content": if full_response.is_empty() { Value::Null } else { Value::String(full_response.clone()) },
+                                "tool_calls": assistant_tool_requests
+                            });
 
-                                match serde_json::to_string(&assistant_action_message) {
-                                    Ok(serialized_assistant_action) => {
+                            match serde_json::to_string(&assistant_action_message) {
+                                Ok(serialized_assistant_action) => {
+                                    callback(ChatResponse::new_with_arc(
+                                        chat_id.clone(),
+                                        serialized_assistant_action,
+                                        MessageType::AssistantAction,
+                                        metadata_option.clone(),
+                                        None, // Individual AssistantAction doesn't need a finish reason here, the final "Finished" message will carry it.
+                                    ));
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to serialize AssistantAction message: {}",
+                                        e
+                                    );
+                                    // Optionally send an error message via callback here
+                                }
+                            }
+
+                            for tcd in accumulated_tool_calls.values() {
+                                match serde_json::to_string(tcd) {
+                                    Ok(serialized_tcd) => {
                                         callback(ChatResponse::new_with_arc(
                                             chat_id.clone(),
-                                            serialized_assistant_action,
-                                            MessageType::AssistantAction,
+                                            serialized_tcd,
+                                            MessageType::ToolCall,
+                                            metadata_option.clone(),
+                                            None,
+                                        ));
+                                        #[cfg(debug_assertions)]
+                                        {
+                                            log::debug!(
+                                                "Gemini Tool call: {}",
+                                                serde_json::to_string_pretty(tcd)
+                                                    .unwrap_or_default()
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let err = AiError::ToolCallSerializationFailed {
+                                            details: e.to_string(),
+                                        };
+                                        log::error!("Gemini tool call serialization error for tool {:?}: {}", tcd.name, err);
+                                        callback(ChatResponse::new_with_arc(
+                                            chat_id.clone(),
+                                            err.to_string(),
+                                            MessageType::Error,
                                             metadata_option.clone(),
                                             None,
                                         ));
                                     }
-                                    Err(e) => {
-                                        log::error!(
-                                            "Failed to serialize AssistantAction message: {}",
-                                            e
-                                        );
-                                        // Optionally send an error message via callback here
-                                    }
                                 }
-
-                                for tcd in accumulated_tool_calls.values() {
-                                    match serde_json::to_string(tcd) {
-                                        Ok(serialized_tcd) => {
-                                            callback(ChatResponse::new_with_arc(
-                                                chat_id.clone(),
-                                                serialized_tcd,
-                                                MessageType::ToolCall,
-                                                metadata_option.clone(),
-                                                None,
-                                            ));
-                                            #[cfg(debug_assertions)]
-                                            {
-                                                log::debug!(
-                                                    "Gemini Tool call: {}",
-                                                    serde_json::to_string_pretty(tcd)
-                                                        .unwrap_or_default()
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let err = AiError::ToolCallSerializationFailed {
-                                                details: e.to_string(),
-                                            };
-                                            log::error!("Gemini tool call serialization error for tool {:?}: {}", tcd.name, err);
-                                            callback(ChatResponse::new_with_arc(
-                                                chat_id.clone(),
-                                                err.to_string(),
-                                                MessageType::Error,
-                                                metadata_option.clone(),
-                                                None,
-                                            ));
-                                        }
-                                    }
-                                }
-                                accumulated_tool_calls.clear();
                             }
+                            accumulated_tool_calls.clear(); // Clear after sending
+                                                            // The loop will continue, but subsequent chunks should not re-trigger this block
+                                                            // because accumulated_tool_calls is now empty.
+                                                            // The final "Finished" message will use the `finish_reason` (ToolCalls).
                         }
                     }
                 }
@@ -615,7 +786,7 @@ impl AiChatTrait for GeminiChat {
         // Changed return type
         let (params, metadata_option) = init_extra_params(extra_params.clone());
 
-        let default_url = format!("{GEMINI_DEFAULT_API_BASE}/models");
+        let default_url = format!("{GEMINI_DEFAULT_API_BASE}");
         let base_url = api_url.unwrap_or(&default_url);
         // Determine if streaming is requested from params, default to true if not specified
         let is_streaming = params
@@ -623,17 +794,24 @@ impl AiChatTrait for GeminiChat {
             .and_then(Value::as_bool)
             .unwrap_or(true);
 
+        let with_models = if model.starts_with("models/") {
+            ""
+        } else {
+            "models/"
+        };
         let query_url = if is_streaming {
             format!(
-                "{}/{}:streamGenerateContent?alt=sse&key={}",
+                "{}/{}{}:streamGenerateContent?alt=sse&key={}",
                 base_url,
+                with_models,
                 model,
                 api_key.unwrap_or("")
             )
         } else {
             format!(
-                "{}/{}:generateContent?key={}",
+                "{}/{}{}:generateContent?key={}",
                 base_url,
+                with_models,
                 model,
                 api_key.unwrap_or("")
             )
@@ -708,7 +886,7 @@ impl AiChatTrait for GeminiChat {
                 t!("api_key_is_require_for_list_models", provider = "Gemini").to_string(),
             ));
         }
-        let endpoint_with_key = format!("models?key={}", api_key.unwrap());
+        let endpoint_with_key = format!("/models?key={}", api_key.unwrap());
 
         // For Gemini, API key is in query param, so ApiConfig.api_key should be None
         // to prevent DefaultApiClient from adding a "Bearer" token.
@@ -725,7 +903,7 @@ impl AiChatTrait for GeminiChat {
             .await
             .map_err(|e| AiError::ApiRequestFailed {
                 provider: "Gemini".to_string(),
-                details: e,
+                details: e.to_string(), // Changed from e to e.to_string()
             })?;
 
         if response.is_error || response.content.is_empty() {
@@ -750,37 +928,25 @@ impl AiChatTrait for GeminiChat {
                     .contains(&"generateContent".to_string())
             })
             .map(|model| {
-                let family = if model.display_name.contains("Gemini 1.5") {
-                    Some("Gemini 1.5".to_string())
-                } else if model.display_name.contains("Gemini 1.0 Pro")
-                    || model.display_name.contains("Gemini Pro")
-                {
-                    Some("Gemini 1.0 Pro".to_string())
-                } else if model.display_name.contains("Embedding")
-                    || model.name.contains("embedding")
-                {
-                    Some("Embedding".to_string())
-                } else if model.display_name.contains("AQA") {
-                    // Attributed Question Answering
-                    Some("AQA".to_string())
-                } else {
-                    None
-                };
-
-                let id = model.name.to_lowercase();
+                let id_for_utils = model.name.to_lowercase();
 
                 ModelDetails {
-                    id: model.name.clone(), // e.g. "models/gemini-1.5-pro-latest"
+                    id: model
+                        .name
+                        .clone()
+                        .strip_prefix("models/")
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(), // e.g. "models/gemini-1.5-pro-latest"
                     name: model.display_name.clone(),
                     protocol: ChatProtocol::Gemini,
                     max_input_tokens: model.input_token_limit,
                     max_output_tokens: model.output_token_limit,
-                    description: Some(model.description),
+                    description: model.description,
                     last_updated: model.version.clone(), // Use version as a proxy for update info
-                    family: get_family_from_model_id(&id),
-                    function_call: Some(is_function_calling_supported(&id)),
-                    reasoning: Some(is_reasoning_supported(&id)),
-                    image_input: Some(is_image_input_supported(&id)),
+                    family: get_family_from_model_id(&id_for_utils),
+                    function_call: Some(is_function_call_supported(&id_for_utils)),
+                    reasoning: Some(is_reasoning_supported(&id_for_utils)),
+                    image_input: Some(is_image_input_supported(&id_for_utils)),
                     metadata: Some(json!({
                         "version": model.version,
                         "supported_generation_methods": model.supported_generation_methods,

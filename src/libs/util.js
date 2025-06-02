@@ -77,7 +77,8 @@ export function showMessage(message, type = 'info', duration = 0) {
   ElMessage({
     message: message,
     type: type,
-    duration: duration < 1 ? (type == 'error' || type == 'warn' ? 5000 : 3000) : duration
+    duration: duration < 1 ? (type == 'error' || type == 'warn' ? 5000 : 3000) : duration,
+    offset: 40
   })
 }
 

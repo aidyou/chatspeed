@@ -32,6 +32,11 @@
       <mcp />
     </el-main>
 
+    <!-- chat completion proxy -->
+    <el-main v-show="settingType === 'proxy'" class="main">
+      <proxy />
+    </el-main>
+
     <el-main v-show="settingType === 'privacy'" class="main">
       <privacy />
     </el-main>
@@ -51,6 +56,7 @@ import about from '@/components/setting/about.vue'
 import general from '@/components/setting/general.vue'
 import mcp from '@/components/setting/mcp.vue'
 import model from '@/components/setting/model.vue'
+import proxy from '@/components/setting/proxy.vue'
 import skill from '@/components/setting/skill.vue'
 import privacy from '@/components/setting/privacy.vue'
 import titlebar from '@/components/window/titlebar.vue'
@@ -66,6 +72,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.model'), icon: 'model', id: 'model' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
+  { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' }
 ])

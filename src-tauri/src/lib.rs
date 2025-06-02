@@ -416,13 +416,14 @@ pub async fn run() -> Result<()> {
 
             // Read and set the main window size from the configuration
             if let Some(main_window) = app.get_webview_window("main") {
-                restore_window_config(&main_window, &main_store);
+                restore_window_config(&main_window, &main_store.clone());
             }
 
             let handle = app.handle().clone();
+            let main_store_clone = main_store.clone();
             // Start the HTTP server using Tauri's asynchronous runtime
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_http_server(&handle).await {
+                if let Err(e) = start_http_server(&handle, main_store_clone).await {
                     error!("Failed to start HTTP server: {}", e);
                 }
             });

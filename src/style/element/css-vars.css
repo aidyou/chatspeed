@@ -36,6 +36,9 @@
     --cs-color-primary-lighter: rgba(var(--cs-color-primary-rgb), 0.3);
     --cs-error-color: rgb(245, 108, 108);
     --cs-error-bg-color: rgba(245, 108, 108, 0.1);
+    --cs-info-color: rgb(70, 162, 237);
+    --cs-success-color: rgb(65, 181, 85);
+    --cs-warning-color: rgb(255, 193, 7);
 
     /* override element-plus variables */
     --el-color-primary: var(--cs-color-primary);
