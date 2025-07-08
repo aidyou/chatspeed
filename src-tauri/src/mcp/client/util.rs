@@ -1,7 +1,5 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{env, path::PathBuf, sync::Arc};
+use tokio::process::Command as TokioCommand;
 
 use rmcp::model::ListToolsResult;
 use serde_json::Value;
@@ -30,151 +28,295 @@ pub fn get_tools(list_tools_result: &ListToolsResult) -> Vec<MCPToolDeclaration>
     tools
 }
 
-/// Tries to find an executable by checking common installation paths.
-/// Returns the absolute path to the executable if found.
+/// Attempts to find an executable by name using a multi-step cross-platform strategy.
+/// 1. Uses system-specific commands (`command -v` on Unix, `where` on Windows) for initial lookup.
+/// 2. Checks if the command name is an absolute or relative path to an existing file.
+/// 3. Searches the current process's PATH environment variable.
+/// 4. On Unix-like systems, falls back to searching via the user's login shell environment.
 pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathBuf> {
-    // 1. Check if command_name is already an absolute path and executable
-    let p = Path::new(command_name);
-    if p.is_absolute() && p.exists() && is_executable::is_executable(p) {
-        return Some(p.to_path_buf());
+    // Log the HOME environment variable, as it's crucial for login shells finding profiles.
+    match env::var("HOME") {
+        Ok(home) => log::debug!("Current HOME environment variable: {}", home),
+        Err(_) => log::warn!("HOME environment variable is not set."),
     }
 
-    // 2. Try `which` crate first (checks system PATH and common suffixes like .exe, .cmd on Windows)
-    if let Ok(path_from_which) = which::which(command_name) {
-        if path_from_which.exists() && is_executable::is_executable(&path_from_which) {
-            log::debug!(
-                "Found executable '{}' via `which` at: {}",
-                command_name,
-                path_from_which.display()
-            );
-            return Some(path_from_which);
-        }
-    }
+    log::debug!(
+        "Attempting to find executable for command: \"{}\"",
+        command_name
+    );
 
-    // 3. Define common paths to search
-    let mut search_directories: Vec<PathBuf> = Vec::new();
-
-    // Add paths from current PATH environment variable
-    if let Ok(sys_path) = std::env::var("PATH") {
-        for p_str in std::env::split_paths(&sys_path) {
-            search_directories.push(p_str);
-        }
-    }
-
-    #[cfg(windows)]
+    // Step 1: Direct command judgment using system utilities.
+    // This tries to resolve the command_name using the OS's standard lookup tools.
+    log::debug!("Step 1: Trying system utilities...");
+    #[cfg(target_family = "unix")]
     {
-        search_directories.push(PathBuf::from("C:\\Program Files\\nodejs"));
-        search_directories.push(PathBuf::from("C:\\Program Files (x86)\\nodejs"));
-        if let Some(appdata_local) = dirs::data_local_dir() {
-            search_directories.push(appdata_local.join("Programs\\nodejs")); // For user-specific MSI installs
-        }
-        // NVM for Windows: NVM_HOME usually points to AppData\Roaming\nvm
-        // Node versions are typically in NVM_HOME\<version>
-        if let Ok(nvm_home_str) = std::env::var("NVM_HOME") {
-            let nvm_home = PathBuf::from(nvm_home_str);
-            if nvm_home.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(nvm_home) {
-                    for entry in entries.flatten() {
-                        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                            search_directories.push(entry.path()); // e.g., C:\Users\user\AppData\Roaming\nvm\v18.0.0
-                        }
-                    }
-                }
-            }
-        }
-        // Scoop: C:\Users\<User>\scoop\shims
-        if let Some(home) = dirs::home_dir() {
-            search_directories.push(home.join("scoop").join("shims"));
-        }
-        // Chocolatey: C:\ProgramData\chocolatey\bin
-        if let Some(program_data) = dirs::data_dir().or_else(dirs::data_local_dir) {
-            // data_dir is C:\ProgramData
-            search_directories.push(program_data.join("chocolatey").join("bin"));
-        }
-    }
+        let cmd_to_exec = format!("command -v {}", command_name);
+        log::debug!("Step 1 (Unix): Executing sh -c \"{}\"", cmd_to_exec);
+        let mut cmd = TokioCommand::new("sh");
+        cmd.arg("-c").arg(&cmd_to_exec);
 
-    #[cfg(target_os = "macos")]
-    {
-        search_directories.push(PathBuf::from("/usr/local/bin"));
-        search_directories.push(PathBuf::from("/opt/homebrew/bin")); // For Apple Silicon Homebrew
-        if let Some(home_dir) = dirs::home_dir() {
-            // NVM
-            let nvm_base = home_dir.join(".nvm/versions/node");
-            if nvm_base.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(nvm_base) {
-                    for entry in entries.flatten() {
-                        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                            search_directories.push(entry.path().join("bin"));
-                        }
-                    }
-                }
-            }
-            // FNM, ASDF, Volta would have similar patterns under home_dir
-            search_directories.push(home_dir.join(".fnm"));
-            search_directories.push(home_dir.join(".asdf").join("shims"));
-            search_directories.push(home_dir.join(".volta").join("bin"));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        search_directories.push(PathBuf::from("/usr/bin"));
-        search_directories.push(PathBuf::from("/usr/local/bin"));
-        search_directories.push(PathBuf::from("/snap/bin"));
-        if let Some(home_dir) = dirs::home_dir() {
-            // NVM, FNM, ASDF, Volta similar to macOS
-            let nvm_base = home_dir.join(".nvm/versions/node");
-            if nvm_base.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(nvm_base) {
-                    for entry in entries.flatten() {
-                        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                            search_directories.push(entry.path().join("bin"));
-                        }
-                    }
-                }
-            }
-            search_directories.push(home_dir.join(".fnm"));
-            search_directories.push(home_dir.join(".asdf").join("shims"));
-            search_directories.push(home_dir.join(".volta").join("bin"));
-        }
-    }
-
-    // Deduplicate paths before searching
-    let mut unique_search_dirs = std::collections::HashSet::new();
-
-    for dir in search_directories.into_iter().filter(|d| d.is_dir()) {
-        if unique_search_dirs.insert(dir.clone()) {
-            let candidate = dir.join(command_name);
-            if candidate.exists() && is_executable::is_executable(&candidate) {
+        match cmd.output().await {
+            Ok(output) => {
                 log::debug!(
-                    "Found executable '{}' in common path: {}",
-                    command_name,
-                    candidate.display()
+                    "Step 1 (Unix) sh -c \"{}\" | Status: {:?}, STDOUT: \"{}\", STDERR: \"{}\"",
+                    cmd_to_exec,
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
                 );
+                if output.status.success() {
+                    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    // `command -v` for an external command should output its path.
+                    // We ensure it's a single, non-empty line and points to a file.
+                    if !path_str.is_empty() && !path_str.contains('\n') {
+                        let potential_path = PathBuf::from(&path_str);
+                        log::debug!(
+                            "Step 1 (Unix): Potential path from command -v: {}",
+                            potential_path.display()
+                        );
+                        if potential_path.is_file() {
+                            log::info!(
+                                "Step 1 (Unix): Found executable via sh -c \"command -v\": {}",
+                                potential_path.display()
+                            );
+                            return Some(potential_path);
+                        } else {
+                            log::debug!(
+                                "Step 1 (Unix): Path from command -v is not a file: {}",
+                                potential_path.display()
+                            );
+                        }
+                    } else {
+                        log::debug!("Step 1 (Unix): command -v output was empty or multi-line.");
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Step 1 (Unix): Failed to execute sh -c \"{}\": {}",
+                    cmd_to_exec,
+                    e
+                );
+            }
+        }
+    }
+
+    #[cfg(target_family = "windows")]
+    {
+        log::debug!("Step 1 (Windows): Executing where {}", command_name);
+        let mut cmd = TokioCommand::new("where");
+        cmd.arg(command_name);
+
+        match cmd.output().await {
+            Ok(output) => {
+                log::debug!(
+                    "Step 1 (Windows) where {} | Status: {:?}, STDOUT: \"{}\", STDERR: \"{}\"",
+                    command_name,
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                if output.status.success() {
+                    if let Some(first_path_str) =
+                        String::from_utf8_lossy(&output.stdout).lines().next()
+                    {
+                        let trimmed_path_str = first_path_str.trim();
+                        if !trimmed_path_str.is_empty() {
+                            let potential_path = PathBuf::from(trimmed_path_str);
+                            log::debug!(
+                                "Step 1 (Windows): Potential path from where: {}",
+                                potential_path.display()
+                            );
+                            if potential_path.is_file() {
+                                log::info!(
+                                    "Step 1 (Windows): Found executable via where: {}",
+                                    potential_path.display()
+                                );
+                                return Some(potential_path);
+                            } else {
+                                log::debug!(
+                                    "Step 1 (Windows): Path from where is not a file: {}",
+                                    potential_path.display()
+                                );
+                            }
+                        } else {
+                            log::debug!(
+                                "Step 1 (Windows): where output line was empty after trim."
+                            );
+                        }
+                    } else {
+                        log::debug!("Step 1 (Windows): where output was empty.");
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Step 1 (Windows): Failed to execute where {}: {}",
+                    command_name,
+                    e
+                );
+            }
+        }
+    }
+
+    // Step 2: Check if the command name is already a path to an existing file.
+    log::debug!(
+        "Step 2: Checking if \"{}\" is a direct file path...",
+        command_name
+    );
+    let path = PathBuf::from(command_name);
+    if path.is_file() {
+        log::info!(
+            "Step 2: Command \"{}\" is a direct path to an existing file: {}",
+            command_name,
+            path.display()
+        );
+        return Some(path);
+    } else {
+        log::debug!(
+            "Step 2: \"{}\" is not a direct file path or file does not exist.",
+            command_name
+        );
+    }
+
+    // Step 3: Search the current process's PATH environment variable.
+    log::debug!("Step 3: Searching current process's PATH...");
+    if let Some(paths_var) = env::var_os("PATH") {
+        log::debug!("Step 3: PATH environment variable: {:?}", paths_var);
+        for path_entry in env::split_paths(&paths_var) {
+            log::debug!("Step 3: Checking in PATH entry: {}", path_entry.display());
+            let candidate = path_entry.join(command_name);
+            if candidate.is_file() {
+                log::info!("Step 3: Found executable in PATH: {}", candidate.display());
                 return Some(candidate);
             }
 
-            // On Windows, also check for .cmd, .bat, .exe
-            #[cfg(windows)]
+            #[cfg(target_family = "windows")]
             {
-                for ext in ["cmd", "bat", "exe"].iter() {
-                    candidate = dir.join(format!("{}.{}", command_name, ext));
-                    if candidate.exists() && is_executable::is_executable(&candidate) {
-                        log::debug!(
-                            "Found executable '{}' (with .{}) in common path: {}",
-                            command_name,
-                            ext,
-                            candidate.display()
-                        );
-                        return Some(candidate);
-                    }
+                let candidate_exe = path_entry.join(format!("{}.exe", command_name));
+                if candidate_exe.is_file() {
+                    log::info!(
+                        "Step 3: Found executable with .exe in PATH: {}",
+                        candidate_exe.display()
+                    );
+                    return Some(candidate_exe);
                 }
             }
         }
+        log::debug!(
+            "Step 3: Command \"{}\" not found in any PATH entry.",
+            command_name
+        );
+    } else {
+        log::warn!("Step 3: PATH environment variable not found.");
+    }
+
+    // Step 4: On Unix-like systems, fall back to searching via the user's login shell.
+    log::debug!("Step 4: Trying Unix login shells...");
+    #[cfg(target_family = "unix")]
+    {
+        let shells = vec!["zsh", "bash", "fish", "ksh", "sh"];
+        for shell in shells {
+            // Modified command to also print the PATH inside the shell
+            // The single quotes here are for the shell command string construction, not Rust's log macro.
+            let command_to_run_in_shell = format!(
+                "echo \"Attempting to find '{}' with shell '{}'\"; echo \"SHELL_PATH_START\"; echo \"$PATH\"; echo \"SHELL_PATH_END\"; command -v {} 2>/dev/null",
+                command_name, shell, command_name
+            );
+            log::debug!(
+                "Step 4: Trying shell {} with: {} -l -c \"{}\"",
+                shell,
+                shell,
+                command_to_run_in_shell
+            );
+            let mut command = TokioCommand::new(shell);
+            command.arg("-l").arg("-c").arg(&command_to_run_in_shell);
+
+            match command.output().await {
+                Ok(output) => {
+                    log::debug!(
+                        "Step 4 Shell {} -l -c \"...\" | Status: {:?}, STDOUT: \"{}\", STDERR: \"{}\"",
+                        shell,
+                        output.status,
+                        String::from_utf8_lossy(&output.stdout).trim(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                    if output.status.success() {
+                        // Parse the output to extract the path from `command -v`
+                        // `command -v` output is expected to be the last non-empty line if successful
+                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                        let lines: Vec<&str> = stdout_str.trim().lines().collect();
+
+                        // Log the PATH reported by the shell
+                        if let Some(path_start_index) =
+                            lines.iter().position(|&l| l == "SHELL_PATH_START")
+                        {
+                            if let Some(path_end_index) =
+                                lines.iter().position(|&l| l == "SHELL_PATH_END")
+                            {
+                                if path_start_index < path_end_index
+                                    && path_end_index > path_start_index + 1
+                                {
+                                    // PATH might be multi-line if `echo "$PATH"` was complex, join with ':'
+                                    let shell_path =
+                                        lines[path_start_index + 1..path_end_index].join(":");
+                                    log::debug!(
+                                        "Step 4: PATH reported by shell {}: {}",
+                                        shell,
+                                        shell_path
+                                    );
+                                }
+                            }
+                        }
+
+                        if let Some(found_path_str) = lines.last() {
+                            if !found_path_str.is_empty()
+                                && !found_path_str.contains("SHELL_PATH_END")
+                                && !found_path_str.contains("SHELL_PATH_START")
+                            {
+                                // Ensure it's the command output
+                                let potential_path = PathBuf::from(found_path_str.trim());
+                                log::debug!(
+                                    "Step 4: Potential path from shell {} (command -v): {}",
+                                    shell,
+                                    potential_path.display()
+                                );
+                                if potential_path.is_file() {
+                                    log::info!(
+                                        "Step 4: Found executable via login shell {}: {}",
+                                        shell,
+                                        potential_path.display()
+                                    );
+                                    return Some(potential_path);
+                                } else {
+                                    log::debug!("Step 4: Path from shell {} (\"{}\") is not a file or not found by command -v.", shell, potential_path.display());
+                                }
+                            } else {
+                                log::debug!("Step 4: Login shell {} command -v output was empty or part of debug strings.", shell);
+                            }
+                        } else {
+                            log::debug!("Step 4: Login shell {} command -v output produced no usable lines.", shell);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Step 4: Failed to run login shell command {} -l -c \"{}\": {}",
+                        shell,
+                        command_to_run_in_shell,
+                        e
+                    );
+                }
+            }
+        }
+        log::debug!(
+            "Step 4: Command \"{}\" not found via any attempted login shells.",
+            command_name
+        );
     }
 
     log::warn!(
-        "Executable '{}' not found after checking `which` and common paths.",
+        "All steps failed to find executable for command: \"{}\"",
         command_name
     );
     None

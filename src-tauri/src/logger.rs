@@ -211,9 +211,9 @@ pub fn setup_logger(app: &tauri::App) {
 
     // File dispatcher - detailed format
     let file_dispatcher = fern::Dispatch::new()
-        .level(log::LevelFilter::Info)
+        .level(log::LevelFilter::Debug)
         .filter(|record| {
-            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Info
+            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Debug
         })
         .format(file_log_formatter)
         .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));

@@ -391,7 +391,7 @@ impl ToolManager {
         };
 
         if is_running {
-            log::info!("MCP server '{}' is already running.", config.name);
+            log::info!("MCP server {} is already running.", config.name);
             return Ok(());
         }
 
@@ -461,7 +461,7 @@ impl ToolManager {
             .on_status_change(Box::new(move |name, new_status| {
                 if let Err(e) = sender_for_callback.send((name.clone(), new_status.clone())) {
                     log::error!(
-                        "Failed to broadcast MCP status change for server '{}': {}",
+                        "Failed to broadcast MCP status change for server {}: {}",
                         name,
                         e
                     );
@@ -472,22 +472,16 @@ impl ToolManager {
         let name = client_arc.name().await;
         #[cfg(debug_assertions)]
         {
-            log::debug!("MCP server '{}' created successfully.", &name);
+            log::debug!("MCP server {} created successfully.", &name);
         }
 
         // 2. Start the client
         // This .await happens without holding FunctionManager's locks
-        client_arc.start().await.map_err(|e_mcp_start| {
-            WorkflowError::Initialization(
-                t!(
-                    "mcp.client.failed_to_start_server",
-                    server_name = &name,
-                    error = e_mcp_start.to_string()
-                )
-                .to_string(),
-            )
-        })?;
-        log::info!("MCP client '{}' started successfully.", &name);
+        client_arc
+            .start()
+            .await
+            .map_err(|e_mcp_start| WorkflowError::Initialization(e_mcp_start.to_string()))?;
+        log::info!("MCP client {} started successfully.", &name);
 
         // 3. Spawn a task to wait for status, list tools, and register
         // This allows the main registration flow to return quickly, while the tool discovery
@@ -506,7 +500,7 @@ impl ToolManager {
                     Ok(tools) => {
                         #[cfg(debug_assertions)]
                         {
-                            log::debug!("MCP server '{}' tools: {:?}", server_name_for_task, tools);
+                            log::debug!("MCP server {} tools: {:?}", server_name_for_task, tools);
                         }
 
                         // Get the set of disabled tool names from the config
@@ -533,17 +527,17 @@ impl ToolManager {
                             .await
                         {
                             log::error!(
-                                "Failed to register MCP server '{}' tools internally: {}",
+                                "Failed to register MCP server {} tools internally: {}",
                                 server_name_for_task,
                                 e
                             );
                         } else {
-                            log::info!("MCP server '{}' tools (with disabled flags) registered successfully.",server_name_for_task );
+                            log::info!("MCP server {} tools (with disabled flags) registered successfully.",server_name_for_task );
                         }
                     }
                     Err(e) => {
                         log::error!(
-                            "Failed to list tools for MCP server '{}': {}",
+                            "Failed to list tools for MCP server {}: {}",
                             server_name_for_task,
                             e
                         );
@@ -554,7 +548,7 @@ impl ToolManager {
                             .await
                         {
                             log::error!(
-                                "Failed to register MCP server '{}' (without tools due to list_tools error) internally: {}",
+                                "Failed to register MCP server {} (without tools due to list_tools error) internally: {}",
                                 server_name_for_task,
                                 e_inner
                             );
@@ -563,7 +557,7 @@ impl ToolManager {
                 }
             } else {
                 log::warn!(
-                    "MCP server '{}' is not running (status: {:?}) after start attempt. Skipping tool listing and registration.",
+                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing and registration.",
                     server_name_for_task,
                     status
                 );
@@ -602,13 +596,13 @@ impl ToolManager {
             // before the first one completes its async tool listing.
             // Depending on desired behavior, could log a warning and update, or return error.
             // For now, let's log and allow update (though client Arc should be the same).
-            log::warn!("MCP server '{}' is already in mcp_servers map during inner registration. Overwriting.", &name);
+            log::warn!("MCP server {} is already in mcp_servers map during inner registration. Overwriting.", &name);
         }
         servers.insert(name.clone(), client.clone()); // client.clone() is cheap (Arc clone)
 
         #[cfg(debug_assertions)]
         {
-            log::debug!("MCP server '{}' added/updated in mcp_servers.", &name);
+            log::debug!("MCP server {} added/updated in mcp_servers.", &name);
         }
 
         // Register MCP tools if available
@@ -622,7 +616,7 @@ impl ToolManager {
             #[cfg(debug_assertions)]
             {
                 log::debug!(
-                    "MCP tools for server '{}' registered (count: {}).",
+                    "MCP tools for server {} registered (count: {}).",
                     name,
                     tool_count
                 );
@@ -631,16 +625,13 @@ impl ToolManager {
             // tools_declarations was None, e.g. if list_tools failed.
             #[cfg(debug_assertions)]
             {
-                log::debug!("No tool declarations (Option was None) provided for MCP server '{}'. Not updating mcp_tools.", name);
+                log::debug!("No tool declarations (Option was None) provided for MCP server {}. Not updating mcp_tools.", name);
             }
         }
 
         #[cfg(debug_assertions)]
         {
-            log::debug!(
-                "MCP server '{}' inner registration process completed.",
-                name
-            );
+            log::debug!("MCP server {} inner registration process completed.", name);
         }
         Ok(())
     }
@@ -672,7 +663,7 @@ impl ToolManager {
             // Now call stop() on the Arc. FunctionManager's locks are released.
             // This .await happens without holding FunctionManager's locks.
             server_arc.stop().await.map_err(|e| {
-                log::error!("Failed to stop MCP server '{}': {}", name, e);
+                log::error!("Failed to stop MCP server {}: {}", name, e);
                 // Construct the full message here, as StateChangeFailed is now #[error("{0}")]
                 // McpClientError's Display impl is already clean.
                 WorkflowError::StateChangeFailed(
@@ -688,7 +679,7 @@ impl ToolManager {
             // Server was not found in the map, maybe it wasn't registered or already removed.
             // Log a warning but don't necessarily return an error, as the goal (unregistering the name) is achieved.
             log::warn!(
-                "Attempted to unregister MCP server '{}' but it was not found in the manager.",
+                "Attempted to unregister MCP server {} but it was not found in the manager.",
                 name
             );
         }
@@ -787,16 +778,16 @@ impl ToolManager {
             let mcp_servers_read_guard = self.mcp_servers.read().await;
             if let Some(server_client) = mcp_servers_read_guard.get(mcp_server_name) {
                 server_client.update_disabled_tools(mcp_tool_name, is_disabled).await
-                    .map_err(|e| WorkflowError::Config(format!("Failed to update McpClient internal config for tool '{}' on server '{}': {}", mcp_tool_name, mcp_server_name, e)))?;
+                    .map_err(|e| WorkflowError::Config(format!("Failed to update McpClient internal config for tool {} on server {}: {}", mcp_tool_name, mcp_server_name, e)))?;
                 log::debug!(
-                    "Internal McpClient config updated for tool '{}' on server '{}', disabled={}",
+                    "Internal McpClient config updated for tool {} on server {}, disabled={}",
                     mcp_tool_name,
                     mcp_server_name,
                     is_disabled
                 );
             } else {
                 // Log if server not found in mcp_servers, but proceed to update mcp_tools cache if possible.
-                log::warn!("Server '{}' not found in mcp_servers cache while trying to update its internal config for tool '{}'.", mcp_server_name, mcp_tool_name);
+                log::warn!("Server {} not found in mcp_servers cache while trying to update its internal config for tool {}.", mcp_server_name, mcp_tool_name);
             }
         }
 
@@ -807,7 +798,7 @@ impl ToolManager {
                 // set the disabled flag
                 tool_decl.disabled = is_disabled;
                 log::debug!(
-                    "In-memory mcp_tools cache updated: tool '{}' on server '{}' set to disabled={}",
+                    "In-memory mcp_tools cache updated: tool {} on server {} set to disabled={}",
                     mcp_tool_name,
                     mcp_server_name,
                     is_disabled
@@ -816,14 +807,14 @@ impl ToolManager {
             } else {
                 // tool not found in the list
                 Err(WorkflowError::FunctionNotFound(format!(
-                    "Tool '{}' not found on server '{}' in mcp_tools cache.",
+                    "Tool {} not found on server {} in mcp_tools cache.",
                     mcp_tool_name, mcp_server_name
                 )))
             }
         } else {
             // server not found in the cache
             Err(WorkflowError::McpServerNotFound(format!(
-                "Server '{}' not found in mcp_tools cache.",
+                "Server {} not found in mcp_tools cache.",
                 mcp_server_name
             )))
         }

@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "Ошибка конфигурации сервера MCP '%{server_name}': %{error}"
     config_mismatch: "Несоответствие конфигурации MCP, создаваемый клиент MCP %{client}, тип конфигурации: %{protocol_type}"
     failed_to_call_tool: "Не удалось вызвать инструмент MCP - %{server_name}::%{tool_name}(%{args}), ошибка: %{error}"
-    failed_to_start_server: "Ошибка сервера MCP, MCP: %{server_name}, ошибка: %{error}"
     invalid_tool_name: "Недопустимый формат имени инструмента MCP: %{name}"
     list_tools_timeout: "Время ожидания получения списка инструментов для %{name} истекло."
     no_running: "Клиент MCP не запущен, клиент: %{client}"

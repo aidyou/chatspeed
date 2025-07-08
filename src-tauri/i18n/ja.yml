@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "MCPサーバー '%{server_name}' の設定エラー: %{error}"
     config_mismatch: "MCP設定の不一致、作成中のMCPクライアント%{client}、設定タイプ：%{protocol_type}"
     failed_to_call_tool: "MCPツールの呼び出しに失敗しました - %{server_name}::%{tool_name}(%{args})、エラー: %{error}"
-    failed_to_start_server: "MCPサーバーの失敗、MCP: %{server_name}、エラー：%{error}"
     invalid_tool_name: "無効なMCPツール名形式: %{name}"
     list_tools_timeout: "%{name} のツールリスト取得がタイムアウトしました"
     no_running: "MCPクライアントが起動していません、クライアント：%{client}"

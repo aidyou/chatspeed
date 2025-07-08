@@ -600,7 +600,7 @@ impl AiChatTrait for OpenAIChat {
         }
 
         #[cfg(debug_assertions)]
-        log::debug!("OpenAI models response: {}", &response.content);
+        log::debug!("OpenAI list_models response: {}", &response.content);
 
         let models_response: OpenAIListModelsResponse = serde_json::from_str(&response.content)
             .map_err(|e| {

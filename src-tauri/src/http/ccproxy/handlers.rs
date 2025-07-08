@@ -380,7 +380,6 @@ async fn build_chat_completion_client(
 
 /// Handles the `/v1/chat/completions` proxy request.
 pub async fn handle_chat_completion_proxy(
-    _extra_param_from_filters: (),
     original_client_headers: HeaderMap, // Added to receive original headers
     mut client_request_payload: OpenAIChatCompletionRequest, // Renamed for clarity
     main_store_arc: Arc<Mutex<MainStore>>,

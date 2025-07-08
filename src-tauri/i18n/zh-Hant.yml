@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "MCP伺服器 '%{server_name}' 設定錯誤: %{error}"
     config_mismatch: "MCP設定不符，正在建立的MCP用戶端%{client}，設定類型：%{protocol_type}"
     failed_to_call_tool: "呼叫MCP工具失敗 - %{server_name}::%{tool_name}(%{args})，錯誤: %{error}"
-    failed_to_start_server: "MCP伺服器失敗，MCP: %{server_name}，錯誤：%{error}"
     invalid_tool_name: "無效的MCP工具名稱格式: %{name}"
     list_tools_timeout: "獲取 %{name} 工具清單逾時"
     no_running: "MCP用戶端未啟動，用戶端：%{client}"

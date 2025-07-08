@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "Erreur de configuration du serveur MCP '%{server_name}' : %{error}"
     config_mismatch: "Incompatibilité de configuration MCP, client MCP en cours de création %{client}, type de configuration : %{protocol_type}"
     failed_to_call_tool: "Échec de l'appel de l'outil MCP - %{server_name}::%{tool_name}(%{args}), erreur : %{error}"
-    failed_to_start_server: "Échec du serveur MCP, MCP : %{server_name}, erreur : %{error}"
     invalid_tool_name: "Format de nom d'outil MCP invalide : %{name}"
     list_tools_timeout: "Délai d'attente dépassé pour l'obtention de la liste d'outils de %{name}."
     no_running: "Client MCP non démarré, client : %{client}"

@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "Konfigurationsfehler für MCP-Server '%{server_name}': %{error}"
     config_mismatch: "MCP-Konfiguration stimmt nicht überein, erstellter MCP-Client %{client}, Konfigurationstyp: %{protocol_type}"
     failed_to_call_tool: "Aufruf des MCP-Werkzeugs fehlgeschlagen - %{server_name}::%{tool_name}(%{args}), Fehler: %{error}"
-    failed_to_start_server: "MCP-Server fehlgeschlagen, MCP: %{server_name}, Fehler: %{error}"
     invalid_tool_name: "Ungültiges MCP-Werkzeugnamenformat: %{name}"
     list_tools_timeout: "Timeout beim Abrufen der Werkzeugliste für %{name}"
     no_running: "MCP-Client nicht gestartet, Client: %{client}"

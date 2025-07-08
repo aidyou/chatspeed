@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::libs::util;
+
 use super::error::HttpError;
 
 /// HTTP request methods
@@ -224,6 +226,9 @@ pub struct HttpConfig {
     /// Maximum response body size in bytes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_body_size: Option<usize>,
+    /// Query string
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 impl std::fmt::Debug for HttpConfig {
@@ -231,6 +236,7 @@ impl std::fmt::Debug for HttpConfig {
         f.debug_struct("HttpConfig")
             .field("url", &self.url)
             .field("method", &self.method)
+            .field("query", &self.query)
             .field("headers", &self.headers)
             .field("body", &self.body)
             .field("upload_file", &self.upload_file)
@@ -271,6 +277,7 @@ impl Default for HttpConfig {
             url: String::new(),
             method: HttpMethod::Get,
             headers: HashMap::new(),
+            query: None,
             body: None,
             upload_file: None,
             download_path: None,
@@ -436,6 +443,11 @@ impl HttpConfig {
         self.proxy = Some(proxy.into());
         self
     }
+
+    pub fn query(mut self, query: serde_json::Value) -> Self {
+        self.query = Some(util::urlencodes(&query));
+        self
+    }
 }
 
 /// HTTP response
@@ -451,6 +463,12 @@ pub struct HttpResponse {
     pub error: Option<String>,
     /// Progress percentage (0-100)
     pub progress: Option<u8>,
+}
+
+impl HttpResponse {
+    pub fn is_success(&self) -> bool {
+        self.status >= 200 && self.status < 300
+    }
 }
 
 /// HTTP request wrapper
@@ -475,6 +493,16 @@ impl HttpRequest {
         if self.config.url.is_empty() {
             return Err(HttpError::Config(t!("http.missing_url").to_string()));
         }
+        let mut url = self.config.url.clone();
+
+        if let Some(q) = self.config.query.as_ref() {
+            if url.contains("?") {
+                url.push_str("&");
+            } else {
+                url.push_str("?");
+            }
+            url.push_str(&format!("{}", q));
+        }
 
         // Convert headers
         let headers = (&self.config.headers)
@@ -497,7 +525,7 @@ impl HttpRequest {
                     HttpMethod::Options => reqwest::Method::OPTIONS,
                     HttpMethod::Patch => reqwest::Method::PATCH,
                 },
-                &self.config.url,
+                &url,
             )
             .headers(headers);
 

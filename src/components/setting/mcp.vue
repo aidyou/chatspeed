@@ -318,13 +318,13 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, reactive } from 'vue'
+import { ref, computed, watch, reactive, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
 // import { openUrl } from '@tauri-apps/plugin-opener'; // Not used
 import { ElMessageBox, ElTooltip } from 'element-plus'
 
-import { showMessage } from '@/libs/util'
+import { showMessage, showMessageBox } from '@/libs/util'
 
 const { t } = useI18n()
 const mcpStore = useMcpStore()
@@ -450,12 +450,22 @@ watch(jsonConfigString, newJson => {
 // Form and Dialog Logic
 // =================================================
 const resetForm = () => {
+  // Set activeTabName to 'formEditor' first to prevent the jsonConfigString watcher
+  // from incorrectly updating currentServerForm if the tab was previously 'jsonEditor'.
+  activeTabName.value = 'formEditor' // Changed from activeTab
+
   Object.assign(currentServerForm, initialServerFormState())
-  jsonConfigString.value = JSON.stringify(initialServerFormState(), null, 2)
+
+  // Update jsonConfigString to be consistent with the reset form's payload structure.
+  // This ensures that if the user switches to the JSON tab, they see the correct empty/initial payload.
+  // The watcher for currentServerForm will also update jsonConfigString, but setting it
+  jsonConfigString.value = JSON.stringify(preparePayloadFromForm(currentServerForm), null, 2)
+
   if (serverFormRef.value) {
     serverFormRef.value.resetFields()
   }
-  activeTabName.value = 'formEditor' // Changed from activeTab
+  // Note: resetFields() might not be effective if called when the form is not yet visible/mounted.
+  // The main call to resetFields() for opening a new/edit dialog is now in openServerFormDialog using nextTick.
 }
 
 const prepareFormForDisplay = serverData => {
@@ -505,19 +515,28 @@ const preparePayloadFromForm = form => {
 }
 
 const openServerFormDialog = (initialData = null) => {
-  resetForm()
-  isEditMode.value = false
-  let unwatchConfigName = null
+  // 1. Clear previous validation states from the form if the ref exists.
+  // Do this early, before data model changes might trigger premature validation or display old messages.
+  if (serverFormRef.value) {
+    serverFormRef.value.clearValidate()
+  }
+
+  activeTabName.value = 'formEditor' // Default to form editor
+  // Watcher for name -> config.name sync will be handled specifically for add mode
 
   if (initialData) {
+    // Editing existing server or populating from a preset
+    isEditMode.value = !!initialData.id // True edit mode if initialData has an ID (i.e., existing server)
+
+    // Construct the data structure expected by the form
     const serverDataForForm = {
-      id: null,
-      name: initialData.name,
-      description: initialData.description,
+      id: initialData.id || null,
+      name: initialData.name || '',
+      description: initialData.description || '',
       disabled: initialData.disabled || false,
       disabled_tools: initialData.disabled_tools || [],
       config: {
-        name: initialData.config?.name || initialData.name, // Default config.name to server.name
+        name: initialData.config?.name || initialData.name || '',
         type: initialData.config?.type || 'stdio',
         url: initialData.config?.url || null,
         bearer_token: initialData.config?.bearer_token || null,
@@ -529,40 +548,55 @@ const openServerFormDialog = (initialData = null) => {
         timeout: initialData.config?.timeout || null
       }
     }
-    Object.assign(currentServerForm, prepareFormForDisplay(serverDataForForm))
+    const preparedData = prepareFormForDisplay(serverDataForForm)
+    Object.assign(currentServerForm, preparedData) // Populate reactive form data
+    jsonConfigString.value = JSON.stringify(preparePayloadFromForm(currentServerForm), null, 2)
+    dialogVisible.value = true // Show dialog after data is ready for editing
   } else {
-    // Auto-fill config.name from server.name for new entries when adding manually
-    unwatchConfigName = watch(
-      () => currentServerForm.name,
-      newName => {
-        if (!currentServerForm.config.name) {
-          currentServerForm.config.name = newName
+    // Manual Add mode
+    isEditMode.value = false
+
+    Object.assign(currentServerForm, initialServerFormState())
+    jsonConfigString.value = JSON.stringify(preparePayloadFromForm(currentServerForm), null, 2)
+
+    // Set dialog visible first, then in nextTick, reset data and clear validation.
+    // This ensures form elements are available when clearValidate is called.
+    dialogVisible.value = true
+
+    nextTick(() => {
+      // Crucially, clear any validation messages that might have appeared
+      // on initial render with empty data before user interaction.
+      if (serverFormRef.value) {
+        serverFormRef.value.clearValidate()
+      }
+
+      // Auto-fill config.name from server.name for new entries when adding manually.
+      // This watcher is specific to manual add mode.
+      const unwatchNameForConfigSync = watch(
+        () => currentServerForm.name,
+        newName => {
+          // Only fill if in manual add mode and config.name is still empty
+          if (!isEditMode.value && !currentServerForm.config.name) {
+            currentServerForm.config.name = newName
+          }
         }
-      }
-    )
-  }
+      )
 
-  jsonConfigString.value = JSON.stringify(preparePayloadFromForm(currentServerForm), null, 2)
-  dialogVisible.value = true
-
-  if (unwatchConfigName) {
-    // Stop watching when dialog closes
-    const stopDialogWatch = watch(dialogVisible, isVisible => {
-      if (!isVisible) {
-        unwatchConfigName()
-        stopDialogWatch() // also stop this watcher
-      }
+      // Watch for dialog visibility to stop the name sync watcher when dialog closes.
+      // This prevents the watcher from persisting across dialog openings.
+      const stopVisibilityWatcherForNameSync = watch(dialogVisible, isVisible => {
+        if (!isVisible) {
+          unwatchNameForConfigSync() // Stop the name to config.name watcher
+          stopVisibilityWatcherForNameSync() // Stop this visibility watcher itself
+        }
+      })
     })
   }
 }
 
 const openEditDialog = server => {
-  resetForm()
-  isEditMode.value = true
-  const formData = prepareFormForDisplay(server)
-  Object.assign(currentServerForm, formData)
-  jsonConfigString.value = JSON.stringify(preparePayloadFromForm(formData), null, 2)
-  dialogVisible.value = true
+  // No resetForm() here. openServerFormDialog handles its own state setup.
+  openServerFormDialog(server)
 }
 
 const handleSubmit = async () => {
@@ -664,7 +698,7 @@ const toggleServerStatus = async server => {
   } catch (e) {
     server.disabled = originalDisabled
     const langKey = originalDisabled ? 'settings.mcp.enableFailed' : 'settings.mcp.disableFailed'
-    showMessage(t(langKey, { error: e.message || String(e), name: server.name }), 'error')
+    showMessageBox(t(langKey, { error: e.message || String(e), name: server.name }), 'error')
   } finally {
     uiState.loading = false
   }

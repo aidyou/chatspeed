@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "MCP server '%{server_name}' configuration error: %{error}."
     config_mismatch: "MCP configuration mismatch. Creating MCP client %{client}, config type: %{protocol_type}."
     failed_to_call_tool: "Failed to call MCP tool - %{server_name}::%{tool_name}(%{args}), error: %{error}."
-    failed_to_start_server: "MCP server failed. MCP: %{server_name}, error: %{error}."
     invalid_tool_name: "Invalid MCP tool name format: %{name}."
     list_tools_timeout: "Timeout getting tool list for %{name}."
     no_running: "MCP client not running. Client: %{client}."

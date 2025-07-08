@@ -1,3 +1,4 @@
+use serde_json::Value;
 use url::form_urlencoded::byte_serialize;
 
 /// Formats a JSON string
@@ -39,4 +40,26 @@ pub fn format_json_str(jstr: &str) -> String {
 /// * `String` - The encoded string
 pub fn urlencode(s: &str) -> String {
     byte_serialize(s.as_bytes()).collect::<String>()
+}
+
+/// URL encode a JSON value
+///
+/// # Arguments
+/// * `s` - The JSON value to encode
+///
+/// # Returns
+/// * `String` - The encoded string
+pub fn urlencodes(s: &Value) -> String {
+    match s {
+        Value::String(s) => urlencode(s),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(arr) => arr.iter().map(urlencodes).collect::<Vec<_>>().join(","),
+        Value::Object(obj) => obj
+            .iter()
+            .map(|(k, v)| format!("{}={}", urlencode(k), urlencodes(v)))
+            .collect::<Vec<_>>()
+            .join("&"),
+        Value::Null => "".to_string(),
+    }
 }

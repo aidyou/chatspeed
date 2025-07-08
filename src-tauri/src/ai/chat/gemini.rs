@@ -913,6 +913,9 @@ impl AiChatTrait for GeminiChat {
             });
         }
 
+        #[cfg(debug_assertions)]
+        log::debug!("Gemini list_models response: {}", &response.content);
+
         let models_response: GeminiListModelsResponse = serde_json::from_str(&response.content)
             .map_err(|e| AiError::ResponseParseFailed {
                 provider: "Gemini".to_string(),

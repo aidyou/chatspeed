@@ -3,10 +3,12 @@ mod ai;
 mod commands;
 mod constants;
 mod db;
+mod environment;
 mod http;
 mod libs;
 mod logger;
 mod mcp;
+mod search;
 mod shortcut;
 mod test;
 mod tray;
@@ -346,6 +348,9 @@ pub async fn run() -> Result<()> {
         .setup(|app| {
             // Initialize the logger
             setup_logger(&app);
+
+            // Initialize environment
+            environment::init_environment();
 
             // Initialize the main store
             #[cfg(debug_assertions)]

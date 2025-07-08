@@ -1,4 +1,4 @@
-use warp::{http::StatusCode, Rejection, Reply};
+use warp::{filters::cors::CorsForbidden, http::StatusCode, Rejection, Reply};
 
 /// Custom error types for the ccproxy module.
 #[derive(Debug)]
@@ -29,14 +29,28 @@ impl warp::reject::Reject for ProxyAuthError {}
 pub async fn handle_proxy_rejection(
     err: Rejection,
 ) -> Result<impl Reply, std::convert::Infallible> {
-    let (code, error_type, message) = if err.is_not_found() {
+    let (code, error_type, message_string) = if err.is_not_found() {
         log::debug!(
             "handle_proxy_rejection: Received a 'not_found' rejection: {:?}",
             err
         );
-        (StatusCode::NOT_FOUND, "not_found", "Endpoint not found.")
+        (
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Endpoint not found.".to_string(),
+        )
+    } else if err.find::<CorsForbidden>().is_some() {
+        log::debug!(
+            "handle_proxy_rejection: Received 'CorsForbidden': {:?}",
+            err
+        );
+        (
+            StatusCode::FORBIDDEN, // More appropriate status for CORS rejections
+            "cors_error",
+            "Request blocked by CORS policy.".to_string(),
+        )
     } else if let Some(auth_error) = err.find::<ProxyAuthError>() {
-        match auth_error {
+        let (status, err_type_str, msg_str_slice) = match auth_error {
             ProxyAuthError::InvalidToken => (
                 StatusCode::UNAUTHORIZED,
                 "authentication_error",
@@ -83,21 +97,21 @@ pub async fn handle_proxy_rejection(
                 "store_error",
                 &*format!("Failed to access store: {}", e),
             ),
-        }
+        };
+        (status, err_type_str, msg_str_slice.to_string()) // Convert message to String
     } else {
-        log::warn!(
-            "handle_proxy_rejection: Unhandled rejection type: {:?}",
-            err
-        );
-        log::error!("Unhandled ccproxy rejection: {:?}", err);
+        log::warn!("handle_proxy_rejection: Unhandled rejection: {:?}", err);
+        // Consider making this log message more generic if the handler is truly global
+        log::error!("Unhandled rejection routed to error handler: {:?}", err);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_server_error",
-            "An unexpected error occurred.",
+            "An unexpected error occurred.".to_string(),
         )
     };
 
-    let error_response = serde_json::json!({ "error": { "message": message, "type": error_type, }});
+    let error_response =
+        serde_json::json!({ "error": { "message": message_string, "type": error_type, }});
     Ok(warp::reply::with_status(
         warp::reply::json(&error_response),
         code,

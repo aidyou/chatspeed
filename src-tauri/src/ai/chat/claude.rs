@@ -823,6 +823,9 @@ impl AiChatTrait for ClaudeChat {
             return Err(err);
         }
 
+        #[cfg(debug_assertions)]
+        log::debug!("Claude list_models response: {}", &response.content);
+
         let api_response: ClaudeListModelsResponse = from_str(&response.content).map_err(|e| {
             let err = AiError::ResponseParseFailed {
                 provider: "Claude".to_string(),

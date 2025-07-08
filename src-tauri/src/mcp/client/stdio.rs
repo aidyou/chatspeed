@@ -128,11 +128,23 @@ impl McpClient for StdioClient {
         // Try to find the executable, fallback to original_cmd_str if not found by helper
         let executable_to_run =
             if let Some(abs_path) = find_executable_in_common_paths(&original_cmd_str).await {
+                log::info!(
+                    "Found executable for command {}: {}",
+                    original_cmd_str,
+                    abs_path.display()
+                );
+
                 abs_path.to_string_lossy().into_owned()
             } else {
+                log::info!(
+                    "Can't find executable for command {}, falling back to original command string",
+                    original_cmd_str
+                );
+
                 original_cmd_str.clone() // Fallback to original command string (relies on system PATH)
             };
 
+        log::info!("Starting StdioClient with command: {}", executable_to_run);
         let mut cmd = Command::new(&executable_to_run);
 
         let args = config
@@ -172,7 +184,7 @@ impl McpClient for StdioClient {
                     _ => "".to_string(),
                 };
                 log::error!(
-                    "Command '{}' (tried as '{}') not found: {}. OS error: {}",
+                    "Command {} (tried as {}) not found: {}. OS error: {}",
                     display_command_name,
                     executable_to_run,
                     e.kind(),

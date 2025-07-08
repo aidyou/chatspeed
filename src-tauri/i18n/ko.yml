@@ -228,7 +228,6 @@ mcp:
     config_error_for_server: "MCP 서버 '%{server_name}' 구성 오류: %{error}"
     config_mismatch: "MCP 구성 불일치, 생성 중인 MCP 클라이언트 %{client}, 구성 유형: %{protocol_type}"
     failed_to_call_tool: "MCP 도구 호출 실패 - %{server_name}::%{tool_name}(%{args}), 오류: %{error}"
-    failed_to_start_server: "MCP 서버 실패, MCP: %{server_name}, 오류: %{error}"
     invalid_tool_name: "잘못된 MCP 도구 이름 형식: %{name}"
     list_tools_timeout: "%{name} 도구 목록 가져오기 시간 초과"
     no_running: "MCP 클라이언트가 실행 중이 아닙니다, 클라이언트: %{client}"

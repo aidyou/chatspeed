@@ -790,8 +790,7 @@ dependencies = [
  "walkdir",
  "warp",
  "whatlang",
- "which",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "xxhash-rust",
  "zip 4.0.0",
 ]
@@ -1400,12 +1399,6 @@ dependencies = [
  "quote",
  "syn 2.0.101",
 ]
-
-[[package]]
-name = "env_home"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
 name = "equivalent"
@@ -4813,7 +4806,7 @@ checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 [[package]]
 name = "rmcp"
 version = "0.1.5"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835#d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835"
+source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=a66f66ae345a0fafde1e2ee496ec137d77aef82a#a66f66ae345a0fafde1e2ee496ec137d77aef82a"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4839,7 +4832,7 @@ dependencies = [
 [[package]]
 name = "rmcp-macros"
 version = "0.1.5"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835#d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835"
+source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=a66f66ae345a0fafde1e2ee496ec137d77aef82a#a66f66ae345a0fafde1e2ee496ec137d77aef82a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5508,9 +5501,9 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "sse-stream"
-version = "0.1.4"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0baa01c3efebe4050c7bb999ae87d5b17256b7f71391389e5fc08cdcd98ad550"
+checksum = "3f649a9f9e91db2ed32f3724516eac2bc09fab77fc33be8f670f5619b9dc6c3f"
 dependencies = [
  "bytes",
  "futures-util",
@@ -7043,18 +7036,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "which"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
-dependencies = [
- "either",
- "env_home",
- "rustix 1.0.7",
- "winsafe",
-]
-
-[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7192,7 +7173,7 @@ checksum = "4286ad90ddb45071efd1a66dfa43eb02dd0dfbae1545ad6cc3c51cf34d7e8ba3"
 dependencies = [
  "windows-result",
  "windows-strings 0.3.1",
- "windows-targets 0.53.0",
+ "windows-targets 0.53.2",
 ]
 
 [[package]]
@@ -7259,6 +7240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-sys"
+version = "0.60.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
+dependencies = [
+ "windows-targets 0.53.2",
+]
+
+[[package]]
 name = "windows-targets"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7306,9 +7296,9 @@ dependencies = [
 
 [[package]]
 name = "windows-targets"
-version = "0.53.0"
+version = "0.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e4c7e8ceaaf9cb7d7507c974735728ab453b67ef8f18febdd7c11fe59dca8b"
+checksum = "c66f69fcc9ce11da9966ddb31a40968cad001c5bedeb5c2b82ede4253ab48aef"
 dependencies = [
  "windows_aarch64_gnullvm 0.53.0",
  "windows_aarch64_msvc 0.53.0",
@@ -7554,12 +7544,6 @@ dependencies = [
  "cfg-if",
  "windows-sys 0.48.0",
 ]
-
-[[package]]
-name = "winsafe"
-version = "0.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen-rt"

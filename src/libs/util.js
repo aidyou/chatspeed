@@ -81,6 +81,25 @@ export function showMessage(message, type = 'info', duration = 0) {
     offset: 40
   })
 }
+/**
+ * show message box
+ * @param {string} message - The message to display.
+ * @param {string} type - The type of message to display.
+ * @param {string} duration - The duration of the message.
+ */
+export function showMessageBox(message, type = 'info', duration = 5000) {
+  let title = type.charAt(0).toUpperCase() + type.slice(1);
+  if (type === 'primary') {
+    title = 'Info'
+  }
+  ElNotification({
+    title,
+    message,
+    type,
+    duration,
+    offset: 40
+  })
+}
 
 /**
  * Writes data to the browser's local storage with type information.

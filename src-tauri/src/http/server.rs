@@ -15,7 +15,7 @@ use tokio::{
     task,
     time::{self, Duration},
 };
-use warp::{http::StatusCode, Filter};
+use warp::{http::StatusCode, reply::Response as WarpResponse, Filter, Rejection};
 
 use crate::{
     db::MainStore,
@@ -84,14 +84,10 @@ pub async fn start_http_server(
         .and(warp::body::bytes())
         .and_then(handle_save_png);
 
-    // define not found response
-    // Ensure not_found filter also has Rejection as its error type to be compatible with .or()
-    let not_found = warp::any().and_then(|| async {
-        Result::<_, warp::reject::Rejection>::Ok(warp::reply::with_status(
-            "Not Found",
-            StatusCode::NOT_FOUND,
-        ))
-    });
+    // Define a filter that rejects with warp::reject::notFound()
+    // This allows the .recover() mechanism to handle 404 errors.
+    let handle_not_found_errors = warp::any()
+        .and_then(|| async { Err::<WarpResponse, Rejection>(warp::reject::not_found()) });
 
     // define cors config
     let cors = warp::cors()
@@ -108,10 +104,9 @@ pub async fn start_http_server(
         .or(static_tmp)
         .or(ccproxy_api_routes)
         .or(save_png) // Ensure save_png is distinct or correctly ordered if it might conflict
-        .or(not_found) // not_found should usually be last in the .or chain before .recover
-        .recover(ccproxy::errors::handle_proxy_rejection)
+        .or(handle_not_found_errors) // Use the rejecting not_found handler
         .with(cors)
-        .recover(handle_proxy_rejection);
+        .recover(handle_proxy_rejection); // This single recover handles rejections from routes and CORS.
 
     // Find an available port
     let port = find_available_port(21912, 65535)?;

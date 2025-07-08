@@ -9,6 +9,7 @@ const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g;
 const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g;
 const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g;
 const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g;
+const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g;
 const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/; // just deal the first think tag
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g;
 // const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
@@ -267,6 +268,10 @@ export const parseMarkdown = (content, reference) => {
   })
   // format refs [[1]] -> [^1]
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_2_REGEX, (_match, number) => {
+    return `[^${number.trim()}]`
+  })
+  // format refs [citation:1] -> [^1]
+  content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
     return `[^${number.trim()}]`
   })
 

@@ -1,6 +1,16 @@
+use std::sync::{Arc, Mutex};
+
 use tauri::Manager;
 
-use crate::commands::window::quit_window;
+use crate::{
+    commands::window::quit_window,
+    constants::{
+        CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+        DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT,
+    },
+    db::MainStore,
+};
 
 /// Create system tray menu
 ///
@@ -11,12 +21,34 @@ use crate::commands::window::quit_window;
 /// # Returns
 /// - `Result<(), String>`: A result indicating the success or failure of the operation
 pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<(), String> {
+    let main_store = app.state::<Arc<Mutex<MainStore>>>();
+    let mut main_window_visible_shortcut = DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string();
+    let mut assistant_window_visible_shortcut =
+        DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string();
+    let mut note_window_visible_shortcut = DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string();
+    // Get shortcut config
+    if let Ok(c) = main_store.lock() {
+        // Main window shortcut
+        main_window_visible_shortcut = c.get_config(
+            CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+            DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        assistant_window_visible_shortcut = c.get_config(
+            CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+            DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        note_window_visible_shortcut = c.get_config(
+            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
+            DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+    }
+
     let main_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
         "main",
         &rust_i18n::t!("tray.chat"),
         true,
-        None::<&str>,
+        Some(main_window_visible_shortcut),
     )
     .map_err(|e| e.to_string())?;
 
@@ -25,7 +57,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "assistant",
         &rust_i18n::t!("tray.assistant"),
         true,
-        None::<&str>,
+        Some(assistant_window_visible_shortcut),
     )
     .map_err(|e| e.to_string())?;
 
@@ -34,7 +66,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "note",
         &rust_i18n::t!("tray.note"),
         true,
-        None::<&str>,
+        Some(note_window_visible_shortcut),
     )
     .map_err(|e| e.to_string())?;
 
@@ -43,7 +75,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "settings",
         &rust_i18n::t!("tray.settings"),
         true,
-        None::<&str>,
+        Some("CmdOrCtrl+,"),
     )
     .map_err(|e| e.to_string())?;
 
@@ -92,7 +124,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "quit",
         &rust_i18n::t!("tray.quit"),
         true,
-        None::<&str>,
+        Some("CmdOrCtrl+Q"),
     )
     .map_err(|e| e.to_string())?;
 

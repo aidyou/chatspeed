@@ -42,8 +42,8 @@ pub fn ccproxy_routes(
         .map(|| log::debug!("Matched /v1/chat/completions"))
         .and(warp::post())
         .and(auth_filter.clone()) // Reuse auth_filter, ensure it's Clone
+        .untuple_one()
         .and(headers_cloned()) // Extract original client headers
-        // .untuple_one()
         .and(warp::body::json::<OpenAIChatCompletionRequest>())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(handle_chat_completion_proxy)

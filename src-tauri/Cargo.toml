@@ -47,12 +47,7 @@ parking_lot      = "0.12"
 phf              = "0.11.3"
 regex            = "1.10.3"
 
-reqwest = { version = "0.12.15", features = [
-    "blocking",
-    "stream",
-    "multipart",
-    "cookies",
-] }
+reqwest = { version = "0.12.15", features = ["blocking", "stream", "multipart", "cookies"] }
 
 # NOTE: When using rmcp version 0.1.5, connecting to some npx-hosted MCP services
 # (e.g., tavily-mcp) could lead to a ZodError on the server side during request
@@ -60,7 +55,7 @@ reqwest = { version = "0.12.15", features = [
 # This issue was resolved by updating rmcp to a specific Git commit from its main branch
 # (e.g., rev = "d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835" or later),
 # which presumably fixed the request serialization incompatibilities.
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835", features = [
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "a66f66ae345a0fafde1e2ee496ec137d77aef82a", features = [
     "client",
     "reqwest",
     "transport-sse-client",
@@ -98,7 +93,6 @@ uuid                         = { version = "1.16.0", features = ["v4"] }
 walkdir                      = "2.4.0"
 warp                         = "0.3.7"
 whatlang                     = "0.16.4"
-which                        = "7.0.3"
 xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
 zip                          = "4.0.0"
 
@@ -108,9 +102,7 @@ zip                          = "4.0.0"
 # v8                           = { version = "130.0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59.0", features = [
-    "Win32_UI_WindowsAndMessaging",
-] }
+windows-sys = { version = "0.60.2", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(unix)'.dependencies]
 # Linux/macOS 特定依赖
