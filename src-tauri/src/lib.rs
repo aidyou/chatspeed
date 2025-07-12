@@ -24,6 +24,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
 use tauri::async_runtime::{spawn, JoinHandle};
@@ -90,6 +91,8 @@ static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
 // Define a static variable outside the run function to store the timer handle
 static HIDE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
+static MOVE_TIMER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub async fn run() -> Result<()> {
     // let system_locale = libs::lang::get_system_locale();
@@ -347,6 +350,26 @@ pub async fn run() -> Result<()> {
                             }
                         }
                     }
+                } else if window.label() == "assistant" {
+                    constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
+                    // record the last move time
+                    *LAST_MOVE.lock().unwrap() = Some(Instant::now());
+
+                    // cancel the previous timer
+                    if let Some(handle) = MOVE_TIMER.lock().unwrap().take() {
+                        handle.abort();
+                    }
+
+                    // start a new timer, considering the move finished after 500ms
+                    *MOVE_TIMER.lock().unwrap() = Some(spawn(async move {
+                        log::debug!("assistant window move stop");
+                        sleep(Duration::from_millis(500)).await;
+                        // Check if there are any new move events
+                        let last = LAST_MOVE.lock().unwrap();
+                        if last.map_or(false, |t| t.elapsed() >= Duration::from_millis(500)) {
+                            constants::ON_MOUSE_EVENT.store(false, Ordering::Relaxed);
+                        }
+                    }));
                 }
             }
             _ => {}
