@@ -41,21 +41,15 @@ json_value_merge = "2.0.1"
 lazy_static      = "1.4"
 locale_config    = "0.3.0"
 log              = "0.4.27"
-lru              = "0.14.0"
+lru              = "0.16.0"
 memchr           = "2.7"
 parking_lot      = "0.12"
-phf              = "0.11.3"
+phf              = { version = "0.12.1", features = ["macros"] }
 regex            = "1.10.3"
 
 reqwest = { version = "0.12.15", features = ["blocking", "stream", "multipart", "cookies"] }
 
-# NOTE: When using rmcp version 0.1.5, connecting to some npx-hosted MCP services
-# (e.g., tavily-mcp) could lead to a ZodError on the server side during request
-# deserialization (often related to `params` being `null` or `id` field issues).
-# This issue was resolved by updating rmcp to a specific Git commit from its main branch
-# (e.g., rev = "d0bbb22850cb7fb4d3fb3299f4e5bb6ed0ae7835" or later),
-# which presumably fixed the request serialization incompatibilities.
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "a66f66ae345a0fafde1e2ee496ec137d77aef82a", features = [
+rmcp = { version = "0.2.1", features = [
     "client",
     "reqwest",
     "transport-sse-client",
@@ -63,7 +57,7 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "a6
     "tower",
 ] }
 
-rusqlite                     = { version = "0.36.0", features = ["bundled", "backup"] }
+rusqlite                     = { version = "0.37.0", features = ["bundled", "backup"] }
 rust-i18n                    = "3.1.3"
 scraper                      = "0.23.1"
 seahash                      = "4.1.0"

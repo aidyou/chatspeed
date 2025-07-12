@@ -113,7 +113,7 @@
       "frameworks": [],
       "minimumSystemVersion": "10.13",
       "exceptionDomain": "",
-      "signingIdentity": "-",
+      "signingIdentity": null,
       "entitlements": null,
       "providerShortName": null
     },

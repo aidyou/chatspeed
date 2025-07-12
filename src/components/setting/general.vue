@@ -146,11 +146,11 @@
             <small class="tooltip">{{ $t('settings.general.historyMessagesTooltip') }}</small>
           </div>
         </div>
-        <div class="value" style="width: 120px">
+        <div class="value" style="width: 200px">
           <el-slider
             v-model="settings.historyMessages"
             :min="0"
-            :max="10"
+            :max="50"
             @change="onHistoryMessagesChange" />
         </div>
       </div>
