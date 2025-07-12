@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -9,15 +10,17 @@ use serde::Deserialize;
 use serde::Serialize;
 use tauri::Listener;
 use tauri::LogicalSize;
-use tauri::Manager;
 use tauri::PhysicalPosition;
 use tauri::PhysicalSize;
 use tauri::WebviewWindow;
 use tauri::WebviewWindowBuilder;
 use tauri::Window;
+use tauri::{AppHandle, Manager};
 
+use crate::constants::ASSISTANT_ALWAYS_ON_TOP;
 use crate::constants::CFG_WINDOW_POSITION;
 use crate::constants::CFG_WINDOW_SIZE;
+use crate::constants::MAIN_WINDOW_ALWAYS_ON_TOP;
 use crate::db::MainStore;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -296,54 +299,97 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Toggles the visibility of the main window.
-///
-/// If the main window exists, it will be shown or hidden based on its current state.
-/// If it does not exist, a new main window will be created with specified configurations.
-pub fn toggle_main_window(app: &tauri::AppHandle) {
-    let window_label = "main";
-    if let Some(window) = app.get_webview_window(window_label) {
-        if let Ok(is_visible) = window.is_visible() {
-            if is_visible {
-                // if let Err(e) = window.hide() {
-                //     warn!("Failed to hide main window: {}", e);
-                // }
-                if let Err(e) = window.set_focus() {
-                    warn!("Failed to set focus to main window: {}", e);
-                }
-            } else {
-                // 先检查窗口是否最小化
-                if let Ok(is_minimized) = window.is_minimized() {
-                    if is_minimized {
-                        // 如果窗口最小化，先恢复窗口
-                        if let Err(e) = window.unminimize() {
-                            warn!("Failed to unminimize main window: {}", e);
-                        } else {
-                            // 等待瞬间确保窗口已恢复
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                        }
-                    }
-                }
+/// Helper to get the user's always-on-top preference for a given window label.
+fn get_user_always_on_top_preference(label: &str) -> bool {
+    match label {
+        "main" => MAIN_WINDOW_ALWAYS_ON_TOP.load(Ordering::Relaxed),
+        "assistant" => ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed),
+        _ => false,
+    }
+}
 
-                // 最后设置焦点
-                if window.is_visible().unwrap_or(false) {
-                    if let Err(e) = window.set_focus() {
-                        warn!("Failed to set focus to main window: {}", e);
-                    }
-                }
-                // if let Err(e) = window.show() {
-                //     warn!("Failed to show main window: {}", e);
-                // }
-            }
-        } else {
-            warn!("Failed to determine visibility of main window");
-            // 如果无法确定可见性，尝试显示窗口
-            if let Err(e) = window.show() {
-                warn!("Failed to show main window: {}", e);
-            } else if let Err(e) = window.set_focus() {
-                warn!("Failed to set focus to main window: {}", e);
+/// A robust helper function to bring any window to the front.
+///
+/// It handles minimized, hidden, and background states, and is designed to work
+/// reliably on Linux (Ubuntu) by temporarily setting the window to be always-on-top.
+/// It respects the user's existing "pin" setting to avoid conflicts.
+pub fn show_and_focus_window(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        log::debug!("Attempting to show and focus window: {}", label);
+
+        // 1. Unminimize if it's minimized.
+        if let Ok(true) = window.is_minimized() {
+            log::debug!("Window '{}' is minimized, unminimizing.", label);
+            if let Err(e) = window.unminimize() {
+                log::warn!("Failed to unminimize window '{}': {}", label, e);
             }
         }
+
+        // 2. Show the window if it's not visible.
+        if let Ok(false) = window.is_visible() {
+            log::debug!("Window '{}' is not visible, showing.", label);
+            if let Err(e) = window.show() {
+                log::warn!("Failed to show window '{}': {}", label, e);
+            }
+        }
+
+        // 3. Forcefully bring to front, respecting the user's "always on top" setting.
+        let user_wants_on_top = get_user_always_on_top_preference(label);
+
+        log::debug!(
+            "Forcing window '{}' to front. User 'always_on_top' preference is: {}",
+            label,
+            user_wants_on_top
+        );
+
+        // Use the "always_on_top" trick to grab focus, which is effective on Linux.
+        if let Err(e) = window.set_always_on_top(true) {
+            log::warn!(
+                "Failed to set always_on_top(true) for window '{}': {}",
+                label,
+                e
+            );
+        }
+        if let Err(e) = window.set_focus() {
+            log::warn!("Failed to set focus on window '{}': {}", label, e);
+        }
+
+        // 4. Restore the original "always on top" state immediately.
+        if !user_wants_on_top {
+            // If the user did NOT have the window pinned, turn off always_on_top after the trick.
+            if let Err(e) = window.set_always_on_top(false) {
+                log::warn!(
+                    "Failed to restore always_on_top(false) for window '{}': {}",
+                    label,
+                    e
+                );
+            }
+        }
+        // If user_wants_on_top is true, we simply leave it on top, which is the correct state.
+    } else {
+        log::warn!("Could not get a handle to window with label: {}", label);
+    }
+}
+
+/// Toggles the visibility of the main window using the robust helper function.
+pub fn toggle_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        match (window.is_visible(), window.is_focused()) {
+            (Ok(true), Ok(true)) => {
+                // If the window is visible and has focus, hide it.
+                log::debug!("Main window is visible and focused, hiding it.");
+                if let Err(e) = window.hide() {
+                    log::warn!("Failed to hide main window: {}", e);
+                }
+            }
+            _ => {
+                // In all other cases (hidden, minimized, or in the background),
+                // use the robust helper to bring it to the front.
+                show_and_focus_window(app, "main");
+            }
+        }
+    } else {
+        log::warn!("Could not get a handle to the main window for toggling.");
     }
 }
 

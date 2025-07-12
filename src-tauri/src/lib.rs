@@ -259,7 +259,7 @@ pub async fn run() -> Result<()> {
                         api.prevent_close();
                         // 检查窗口是否有效，然后再尝试最小化
                         if window.is_visible().unwrap_or(false) {
-                            if let Err(e) = window.minimize() {
+                            if let Err(e) = window.hide() {
                                 warn!("Failed to minimize window '{}': {}", window.label(), e);
                             } else {
                                 log::debug!("Window '{}' minimized", window.label());
