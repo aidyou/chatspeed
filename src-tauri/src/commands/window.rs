@@ -302,3 +302,11 @@ pub fn quit_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     std::process::exit(0);
 }
+
+#[command]
+pub fn set_mouse_event_state(window_label: &str, state: bool) -> Result<(), String> {
+    if window_label == "assistant" {
+        crate::constants::ON_MOUSE_EVENT.store(state, Ordering::Relaxed);
+    }
+    Ok(())
+}

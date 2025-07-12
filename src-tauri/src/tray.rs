@@ -193,17 +193,18 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
     let menu_id = event.id().as_ref().to_string();
     match menu_id.as_str() {
         "main" | "assistant" => {
-            if let Some(window) = app.get_webview_window(&menu_id) {
-                if let Ok(is_visible) = window.is_visible() {
-                    if !is_visible {
-                        if let Err(e) = window.show() {
-                            log::error!("Failed to show {:?} window: {}", menu_id, e);
-                        }
-                    }
-                }
-                if let Err(e) = window.set_focus() {
-                    log::error!("Failed to focus {:?} window: {}", menu_id, e);
-                }
+            if let Some(_) = app.get_webview_window(&menu_id) {
+                crate::window::show_and_focus_window(&app, &menu_id);
+                // if let Ok(is_visible) = window.is_visible() {
+                //     if !is_visible {
+                //         if let Err(e) = window.show() {
+                //             log::error!("Failed to show {:?} window: {}", menu_id, e);
+                //         }
+                //     }
+                // }
+                // if let Err(e) = window.set_focus() {
+                //     log::error!("Failed to focus {:?} window: {}", menu_id, e);
+                // }
             }
         }
         "note" => {

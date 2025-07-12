@@ -1,6 +1,10 @@
 <template>
   <div class="app-container" :class="[windowType, windowStore.os]">
-    <div class="titlebar" data-tauri-drag-region></div>
+    <div
+      class="titlebar"
+      data-tauri-drag-region
+      @mouseup="useWindowStore.setMouseEventState(false)"
+      @mousedown="useWindowStore.setMouseEventState(true)"></div>
     <router-view></router-view>
 
     <!-- Update management dialogs -->
@@ -37,7 +41,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { listen } from '@tauri-apps/api/event'
 
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'

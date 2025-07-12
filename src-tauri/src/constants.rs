@@ -47,6 +47,8 @@ pub const DEFAULT_THUMBNAIL_HEIGHT: u32 = 200;
 pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // main window always on top status
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
+// on mouse event status
+pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
 
 // The following static variables are used to store the paths of the http server and related directories
 // They are initialized after the http server is initialized,

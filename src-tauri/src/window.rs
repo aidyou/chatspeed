@@ -229,76 +229,6 @@ pub async fn fix_window_visual(
     Ok(())
 }
 
-/// Toggles the visibility of the assistant window.
-///
-/// If the assistant window exists, it will be shown or hidden based on its current state.
-/// If it does not exist, a new assistant window will be created with specified configurations.
-///
-/// # Arguments
-/// - `app`: A reference to the Tauri application handle.
-///
-/// # Example
-/// ```no_run
-/// use tauri::App;
-/// toggle_assistant_window(&app);
-/// ```
-pub fn toggle_assistant_window(app: &tauri::AppHandle) {
-    let window_label = "assistant";
-    if let Some(window) = app.get_webview_window(window_label) {
-        if let Ok(scale_factor) = window.scale_factor() {
-            if let Err(e) = window.set_min_size(Some(tauri::Size::Physical(PhysicalSize {
-                width: (400.0 * scale_factor) as u32,
-                height: (400.0 * scale_factor) as u32,
-            }))) {
-                warn!("Failed to set minimum size for assistant window: {}", e);
-            }
-        }
-
-        // 先检查窗口是否有效
-        if window.is_visible().unwrap_or(true) {
-            // 如果已经可见，只需要设置焦点
-            if let Err(e) = window.set_focus() {
-                warn!("Failed to set focus to assistant window: {}", e);
-            }
-        } else {
-            // 如果不可见，先显示窗口
-            if let Err(e) = window.show() {
-                warn!("Failed to show assistant window: {}", e);
-            } else {
-                // 显示成功后再设置焦点
-                if let Err(e) = window.set_focus() {
-                    warn!("Failed to set focus to assistant window: {}", e);
-                }
-            }
-        }
-    } else {
-        match WebviewWindowBuilder::new(
-            app,
-            window_label,
-            tauri::WebviewUrl::App(format!("/{}", window_label).into()),
-        )
-        .decorations(false)
-        .transparent(true)
-        .skip_taskbar(true)
-        .min_inner_size(400.0, 500.0)
-        .center()
-        .build()
-        {
-            Ok(window) => {
-                let window_clone = window.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = fix_window_visual(&window_clone, None).await {
-                        error!("Failed to fix window visual: {}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                error!("Create assistant window error: {}", e);
-            }
-        }
-    }
-}
-
 /// Helper to get the user's always-on-top preference for a given window label.
 fn get_user_always_on_top_preference(label: &str) -> bool {
     match label {
@@ -371,6 +301,51 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
     }
 }
 
+/// Toggles the visibility of the assistant window.
+///
+/// If the assistant window exists, it will be shown or hidden based on its current state.
+/// If it does not exist, a new assistant window will be created with specified configurations.
+///
+/// # Arguments
+/// - `app`: A reference to the Tauri application handle.
+///
+/// # Example
+/// ```no_run
+/// use tauri::App;
+/// toggle_assistant_window(&app);
+/// ```
+pub fn toggle_assistant_window(app: &tauri::AppHandle) {
+    let window_label = "assistant";
+    if let Some(_) = app.get_webview_window(window_label) {
+        show_and_focus_window(app, window_label);
+    } else {
+        match WebviewWindowBuilder::new(
+            app,
+            window_label,
+            tauri::WebviewUrl::App(format!("/{}", window_label).into()),
+        )
+        .decorations(false)
+        .transparent(true)
+        .skip_taskbar(true)
+        .min_inner_size(400.0, 500.0)
+        .center()
+        .build()
+        {
+            Ok(window) => {
+                let window_clone = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = fix_window_visual(&window_clone, None).await {
+                        error!("Failed to fix window visual: {}", e);
+                    }
+                });
+            }
+            Err(e) => {
+                error!("Create assistant window error: {}", e);
+            }
+        }
+    }
+}
+
 /// Toggles the visibility of the main window using the robust helper function.
 pub fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -405,18 +380,8 @@ pub fn toggle_main_window(app: &tauri::AppHandle) {
 pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let label = "note";
 
-    if let Some(window) = app_handle.get_webview_window(label) {
-        if !window
-            .is_visible()
-            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
-        {
-            window
-                .show()
-                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        }
-        window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
+    if let Some(_) = app_handle.get_webview_window(label) {
+        show_and_focus_window(&app_handle, label);
     } else {
         let mut webview_window_builder =
             WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::App("/note".into()))
@@ -474,26 +439,8 @@ pub async fn create_or_focus_setting_window(
     setting_type: Option<&str>,
 ) -> Result<(), String> {
     let label = "settings";
-    if let Some(window) = app_handle.get_webview_window(label) {
-        if let Some(setting_type) = setting_type {
-            window
-                .eval(&format!(
-                    "window.location.href = '/settings/{}';console.log('/settings/{}')",
-                    setting_type, setting_type
-                ))
-                .map_err(|e| t!("main.failed_to_navigate_to_settings", error = e))?;
-        }
-        if !window
-            .is_visible()
-            .map_err(|e| t!("main.failed_to_check_window_visibility", error = e))?
-        {
-            window
-                .show()
-                .map_err(|e| t!("main.failed_to_show_window", error = e))?;
-        }
-        window
-            .set_focus()
-            .map_err(|e| t!("main.failed_to_set_window_focus", error = e))?;
+    if let Some(_) = app_handle.get_webview_window(label) {
+        show_and_focus_window(&app_handle, label);
     } else {
         let mut max_height: f64 = 1024.0;
         let mut height: f64 = 1024.0;
@@ -569,11 +516,7 @@ pub async fn create_or_focus_url_window(
             return Err(t!("main.failed_to_navigate_to_url", url = url, error = e).to_string());
         }
 
-        // Ensure the window is visible and has focus
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.show();
-        }
-        let _ = window.set_focus();
+        show_and_focus_window(&app_handle, window_label);
     } else {
         // Create a new webview window if it doesn't exist
         let webview_window = WebviewWindowBuilder::new(

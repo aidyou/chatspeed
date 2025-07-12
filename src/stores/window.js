@@ -1,9 +1,13 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
+
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import { csStorageKey } from '@/config/config'
 import { csGetStorage, csSetStorage } from '@/libs/util'
+
+const windowLabel = getCurrentWebviewWindow().label
 
 /**
  * useWindowStore defines a store for managing window-related state and actions.
@@ -134,6 +138,10 @@ export const useWindowStore = defineStore('window', () => {
     initWindowAlwaysOnTop('main')
   }
 
+  const setMouseEventState = (state) => {
+    invoke('set_mouse_event_state', { state, windowLabel })
+  }
+
   initOs()
 
   return {
@@ -148,5 +156,6 @@ export const useWindowStore = defineStore('window', () => {
     mainWindowAlwaysOnTop,
     initMainWindowAlwaysOnTop,
     toggleMainWindowAlwaysOnTop,
+    setMouseEventState
   }
 })

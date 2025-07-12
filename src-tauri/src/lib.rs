@@ -183,6 +183,7 @@ pub async fn run() -> Result<()> {
             toggle_window_always_on_top,
             get_window_always_on_top,
             quit_window,
+            set_mouse_event_state,
             // toolbar
             // open_screenshot_permission_settings,
             // open_text_selection_permission_settings,
@@ -204,14 +205,15 @@ pub async fn run() -> Result<()> {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
                 // Hide window whenever it loses focus
-                if window.label() == "toolbar" {
+                /* if window.label() == "toolbar" {
                     if !focused {
                         // Try to hide the window and log a warning if it fails
                         if let Err(e) = window.hide() {
                             warn!("Failed to hide toolbar window: {}", e);
                         }
                     }
-                } else if window.label() == "assistant" {
+                } else  */
+                if window.label() == "assistant" {
                     log::debug!(
                         "Assistant window focus changed: focused={}, always_on_top={}",
                         focused,
@@ -220,6 +222,11 @@ pub async fn run() -> Result<()> {
                     if ASSISTANT_ALWAYS_ON_TOP.load(std::sync::atomic::Ordering::Relaxed) {
                         return;
                     }
+                    if crate::constants::ON_MOUSE_EVENT.load(std::sync::atomic::Ordering::Relaxed) {
+                        log::debug!("mouse event is on, ignore to hide assistant window");
+                        return;
+                    }
+
                     if !focused {
                         let window_clone = window.clone();
                         // Cancel the previous timer (if any)

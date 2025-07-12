@@ -207,7 +207,6 @@ main:
   failed_to_create_webview_window: "无法创建WebView窗口: %{error}"
   failed_to_find_window_with_label: "无法找到带有标签的窗口: %{label}"
   failed_to_initialize_logger: "无法初始化记录器"
-  failed_to_navigate_to_settings: "无法导航到设置页面: %{error}"
   failed_to_navigate_to_url: "无法导航到URL: %{url}，错误：%{error}"
   failed_to_retrieve_log_directory: "无法检索应用程序日志目录"
   failed_to_set_max_window_size: "无法设置最大窗口大小: %{error}"
