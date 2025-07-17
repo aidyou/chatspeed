@@ -3,14 +3,8 @@
     <div
       class="titlebar"
       data-tauri-drag-region
-      @mouseup="
-        useWindowStore.setMouseEventState(false)
-        console.log('mouse up')
-      "
-      @mousedown="
-        useWindowStore.setMouseEventState(true)
-        console.log('mouse down')
-      "></div>
+      @mouseup="useWindowStore.setMouseEventState(false)"
+      @mousedown="useWindowStore.setMouseEventState(true)"></div>
     <router-view></router-view>
 
     <!-- Update management dialogs -->

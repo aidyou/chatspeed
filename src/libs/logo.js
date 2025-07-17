@@ -27,7 +27,9 @@ export function getModelLogo(model) {
   // Prefix match dictionary
   const prefixMatch = {
     'k1@': 'moonshot',
-    'kimi@': 'moonshot',
+    'k1.5@': 'moonshot',
+    'k2@': 'moonshot',
+    'kimi': 'moonshot',
     'ds-': 'deepseek',
     'deep_seek': 'deepseek',
     'glm-': 'chatglm',
