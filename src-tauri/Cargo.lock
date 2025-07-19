@@ -741,6 +741,7 @@ dependencies = [
  "log",
  "lru",
  "memchr",
+ "once_cell",
  "parking_lot",
  "phf 0.12.1",
  "plist",

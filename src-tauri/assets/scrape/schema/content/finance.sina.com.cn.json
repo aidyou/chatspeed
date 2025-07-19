@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "新浪新闻",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".main-content",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1.main-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#artibody",
+        "type": "markdown"
+      }
+    ]
+  }
+}

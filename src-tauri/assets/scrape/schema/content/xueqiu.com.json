@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "雪球",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "html",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "div.article__bd__detail",
+        "type": "markdown"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "wikipedia",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "#content",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1#firstHeading",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#mw-content-text",
+        "type": "markdown"
+      }
+    ]
+  }
+}

@@ -2,7 +2,7 @@ use lazy_static::*;
 use parking_lot::RwLock as PLRwLock;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // The main window info
 pub const CFG_WINDOW_POSITION: &str = "window_position";
@@ -49,6 +49,10 @@ pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // on mouse event status
 pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
+// Used to manage the timer task handle for hiding the assistant window
+pub static ASSISTANT_WINDOW_HIDE_TIMER: once_cell::sync::Lazy<
+    Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+> = once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 // The following static variables are used to store the paths of the http server and related directories
 // They are initialized after the http server is initialized,

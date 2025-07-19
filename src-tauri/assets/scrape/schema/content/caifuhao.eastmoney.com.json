@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "东方财富",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".article.page-article",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1.article-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".article-body",
+        "type": "markdown"
+      }
+    ]
+  }
+}

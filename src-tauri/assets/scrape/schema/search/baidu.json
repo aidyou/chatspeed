@@ -1,0 +1,38 @@
+{
+  "config": {
+    "name": "Baidu Search",
+    "url_template": "/s?wd={kw}&pn={offset}&rn={number}&ie=utf-8&rsv_spt=1&rsv_bp=1&rsv_idx=2&rsv_enter=1&rsv_btype=i&tn=baiduhome_pg&inputT={rand}&gpc={time_period}",
+    "pagination_type": "offset",
+    "pagination_param": "offset",
+    "wait_for": "body",
+    "wait_timeout": 15000,
+    "page_timeout": 15000,
+    "max_results_per_page": 50
+  },
+  "selectors": {
+    "base_selector": "#content_left .result.c-container",
+    "fields": [
+      {
+        "name": "sitename",
+        "selector": "a[class^='siteLink_']",
+        "type": "text"
+      },
+      {
+        "name": "title",
+        "selector": "h3 a",
+        "type": "text"
+      },
+      {
+        "name": "url",
+        "selector": "h3 a[href]",
+        "type": "attribute",
+        "attribute": "href"
+      },
+      {
+        "name": "summary",
+        "selector": "span[class^='content-right_']",
+        "type": "text"
+      }
+    ]
+  }
+}

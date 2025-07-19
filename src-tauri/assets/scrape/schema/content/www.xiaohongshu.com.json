@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "小红书",
+    "page_timeout": 15000,
+    "wait_for": "#app",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".note-scroller .note-content",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "#detail-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#detail-desc",
+        "type": "markdown"
+      }
+    ]
+  }
+}

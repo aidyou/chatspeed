@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "yahoo",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "#nimbus-app",
+    "fields": [
+      {
+        "name": "title",
+        "selector": ".cover-headline .cover-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".body .atoms-wrapper",
+        "type": "markdown"
+      }
+    ]
+  }
+}

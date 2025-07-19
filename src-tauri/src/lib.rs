@@ -8,6 +8,7 @@ mod http;
 mod libs;
 mod logger;
 mod mcp;
+mod scraper;
 mod search;
 mod shortcut;
 mod test;
@@ -205,46 +206,56 @@ pub async fn run() -> Result<()> {
             run_react_workflow,
         ])
         .plugin(tauri_plugin_opener::init())
-        .on_window_event(|window, event| match event {
+                .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
-                // Hide window whenever it loses focus
-                /* if window.label() == "toolbar" {
-                    if !focused {
-                        // Try to hide the window and log a warning if it fails
-                        if let Err(e) = window.hide() {
-                            warn!("Failed to hide toolbar window: {}", e);
-                        }
-                    }
-                } else  */
+                // This logic is specifically for the "assistant" window.
                 if window.label() == "assistant" {
-                    log::debug!(
-                        "Assistant window focus changed: focused={}, always_on_top={}",
-                        focused,
-                        ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed)
-                    );
-                    if ASSISTANT_ALWAYS_ON_TOP.load(std::sync::atomic::Ordering::Relaxed) {
-                        return;
-                    }
-                    if crate::constants::ON_MOUSE_EVENT.load(std::sync::atomic::Ordering::Relaxed) {
-                        log::debug!("mouse event is on, ignore to hide assistant window");
-                        return;
-                    }
-
-                    if !focused {
-                        let window_clone = window.clone();
-                        // Cancel the previous timer (if any)
+                    // When the window gains focus...
+                    if *focused {
+                        // It's crucial to cancel any pending hide timer.
+                        // This prevents the window from disappearing after being re-focused.
                         if let Ok(mut timer) = HIDE_TIMER.lock() {
                             if let Some(handle) = timer.take() {
                                 handle.abort();
+                                log::debug!("Assistant window gained focus, hide timer cancelled.");
                             }
-                            // Create a new timer
+                        }
+                    } else {
+                        // When the window loses focus...
+                        // We don't hide it immediately. We start a delayed task.
+                        // This robustly handles cases like dragging, where focus is lost but the window should stay visible.
+                        if let Ok(mut timer) = HIDE_TIMER.lock() {
+                            // Always cancel any previous timer to ensure only one hide task is active.
+                            if let Some(handle) = timer.take() {
+                                handle.abort();
+                            }
+
+                            let window_clone = window.clone();
                             *timer = Some(spawn(async move {
-                                sleep(Duration::from_millis(100)).await;
-                                // 在隐藏窗口前检查窗口是否可见
-                                if window_clone
-                                    .is_visible()
-                                    .map_err(|e| warn!("Failed to check window visibility: {}", e))
-                                    .unwrap_or(false)
+                                // Wait for a short duration. This delay is the key to solving the race condition.
+                                // It allows the `mousedown` event from the frontend (which indicates a drag start)
+                                // to be processed and set the ON_MOUSE_EVENT flag before we check it.
+                                sleep(Duration::from_millis(300)).await;
+
+                                // After the delay, we perform the definitive checks.
+                                let is_pinned =
+                                    ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed);
+                                let is_mouse_interacting =
+                                    crate::constants::ON_MOUSE_EVENT.load(Ordering::Relaxed);
+
+                                // Do not hide the window if it's pinned (always on top) or if a mouse drag is in progress.
+                                if is_pinned || is_mouse_interacting {
+                                    log::debug!(
+                                        "Hiding assistant window cancelled. Pinned: {}, Mouse Event: {}",
+                                        is_pinned,
+                                        is_mouse_interacting
+                                    );
+                                    return;
+                                }
+
+                                // Final check: only hide if the window is still visible and has NOT regained focus during our delay.
+                                if window_clone.is_visible().unwrap_or(false)
+                                    && !window_clone.is_focused().unwrap_or(false)
                                 {
                                     if let Err(e) = window_clone.hide() {
                                         warn!("Failed to hide assistant window: {}", e);
@@ -252,39 +263,32 @@ pub async fn run() -> Result<()> {
                                 }
                             }));
                         }
-                    } else {
-                        // Cancel the timer when the window gains focus
-                        if let Ok(mut timer) = HIDE_TIMER.lock() {
-                            if let Some(handle) = timer.take() {
-                                handle.abort();
-                            }
-                        }
                     }
                 }
             }
-            // When the user clicks on the close button of a window, everything except the settings window is only hidden
+            // When the user clicks on the close button of a window, everything except the settings window is only hidden.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 match window.label() {
                     "main" => {
                         api.prevent_close();
-                        // 检查窗口是否有效，然后再尝试最小化
+                        // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
                             if let Err(e) = window.hide() {
-                                warn!("Failed to minimize window '{}': {}", window.label(), e);
+                                warn!("Failed to hide window '{}': {}", window.label(), e);
                             } else {
-                                log::debug!("Window '{}' minimized", window.label());
+                                log::debug!("Window '{}' hidden", window.label());
                             }
                         } else {
                             log::debug!(
-                                "Window '{}' is not visible, skipping minimize",
+                                "Window '{}' is not visible, skipping hide",
                                 window.label()
                             );
                         }
                     }
-                    // we just hide the main window
+                    // For these windows, we just hide them.
                     "assistant" | "toolbar" => {
                         api.prevent_close();
-                        // 检查窗口是否可见，只有可见的窗口才需要隐藏
+                        // Only hide the window if it's currently visible.
                         if window.is_visible().unwrap_or(false) {
                             if let Err(e) = window.hide() {
                                 warn!("Failed to hide window '{}': {}", window.label(), e);
@@ -301,6 +305,7 @@ pub async fn run() -> Result<()> {
                 }
             }
             tauri::WindowEvent::Resized(size) => {
+                // Do nothing if the window is not yet fully initialized.
                 if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
@@ -311,11 +316,11 @@ pub async fn run() -> Result<()> {
                         || window_size.height != size.height as f64)
                         && (size.width > 0 && size.height > 0)
                     {
-                        // 获取当前窗口的缩放因子
+                        // Get the current window's scale factor.
                         let scale_factor = window.scale_factor().unwrap_or(1.0);
-                        // 转换为逻辑尺寸
+                        // Convert physical size to logical size.
                         let logical_size = size.to_logical(scale_factor);
-                        // Store the window size when the user resizes it to remember for the next startup
+                        // Store the window size when the user resizes it to remember for the next startup.
                         if let Ok(mut store) = config_state.lock() {
                             if let Err(e) = store.set_window_size(WindowSize {
                                 width: logical_size.width,
@@ -328,10 +333,13 @@ pub async fn run() -> Result<()> {
                 }
             }
             tauri::WindowEvent::Moved(position) => {
-                if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
+                if !WINDOW_READY.load(Ordering::Relaxed) {
                     return;
                 }
+
                 if window.label() == "main" {
+                    // Save the main window position when it is moved.
+                    // This is important for restoring the window position on the next startup.
                     let config_store = &window.state::<Arc<Mutex<MainStore>>>();
                     let old_pos = get_saved_window_position(config_store);
                     let screen_name = get_screen_name(&window);
@@ -352,28 +360,45 @@ pub async fn run() -> Result<()> {
                     }
                 } else if window.label() == "assistant" {
                     constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
-                    // record the last move time
                     *LAST_MOVE.lock().unwrap() = Some(Instant::now());
 
-                    // cancel the previous timer
+                    // Cancel any pending hide timer immediately when window movement starts
+                    if let Ok(mut hide_timer) = HIDE_TIMER.lock() {
+                        if let Some(handle) = hide_timer.take() {
+                            handle.abort();
+                            log::debug!("Hide timer cancelled due to window movement");
+                        }
+                    }
+
+                    // Reset the movement detection timer
                     if let Some(handle) = MOVE_TIMER.lock().unwrap().take() {
                         handle.abort();
                     }
 
-                    // start a new timer, considering the move finished after 500ms
+                    let window_clone = window.clone();
                     *MOVE_TIMER.lock().unwrap() = Some(spawn(async move {
-                        log::debug!("assistant window move stop");
-                        sleep(Duration::from_millis(500)).await;
-                        // Check if there are any new move events
-                        let last = LAST_MOVE.lock().unwrap();
-                        if last.map_or(false, |t| t.elapsed() >= Duration::from_millis(500)) {
+                        // Increase detection time to 1 second to accommodate actual dragging
+                        sleep(Duration::from_secs(1)).await;
+
+                        let last_move = LAST_MOVE.lock().unwrap();
+                        if last_move.map_or(false, |t| t.elapsed() >= Duration::from_secs(1)) {
                             constants::ON_MOUSE_EVENT.store(false, Ordering::Relaxed);
+                            log::debug!("Window move ended");
+
+                            // After movement ends, check if window should be hidden
+                            if !window_clone.is_focused().unwrap_or(false)
+                                && !ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed) {
+                                if let Err(e) = window_clone.hide() {
+                                    warn!("Failed to hide window: {}", e);
+                                }
+                            }
                         }
                     }));
                 }
             }
             _ => {}
         })
+
         // Setup the application with necessary configurations and state management
         .setup(|app| {
             // Initialize the logger
@@ -422,7 +447,9 @@ pub async fn run() -> Result<()> {
             // handle desktop shortcut
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
-                register_desktop_shortcut(&app.handle())?;
+                let _ = register_desktop_shortcut(&app.handle()).map_err(|e|{
+                    log::error!("Error on register dasktop shortcut, error:{:?}", e)
+                });
 
                 // initialize text monitor
                 // let monitor = Arc::new(Mutex::new(TextMonitorManager::new()?));
@@ -500,6 +527,12 @@ pub async fn run() -> Result<()> {
             window::setup_window_creation_handlers(app_handle_clone);
 
             WINDOW_READY.store(true, Ordering::SeqCst);
+
+            // copy scrape resource to app data dir
+            let app_handle_clone = app.app_handle().clone();
+            let _ = scraper::ensure_default_configs_exist(&app_handle_clone).map_err(|e| {
+                error!("Failed to ensure default scrape configs exist: {}", e);
+            });
 
             Ok(())
         })

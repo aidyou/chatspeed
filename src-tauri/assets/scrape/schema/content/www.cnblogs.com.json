@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "cnblogs",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "#topics",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1.postTitle>#cb_post_title_url",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#cnblogs_post_body",
+        "type": "markdown"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "yahoo",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".caas-inner-body",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "header.caas-header h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".caas-body",
+        "type": "markdown"
+      }
+    ]
+  }
+}

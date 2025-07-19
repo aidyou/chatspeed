@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "ZAKER新闻",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".main-inner",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1.article-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#content",
+        "type": "markdown"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "微信公众号",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "#img-content",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#js_content",
+        "type": "markdown"
+      }
+    ]
+  }
+}

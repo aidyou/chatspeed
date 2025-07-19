@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "证券时报",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".column-810.l",
+    "fields": [
+      {
+        "name": "title",
+        "selector": ".detail-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".detail-content",
+        "type": "markdown"
+      }
+    ]
+  }
+}

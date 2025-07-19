@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "每日经济新闻",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".g-article",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "div.g-article > div.g-article-top > h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "div.g-articl-text",
+        "type": "markdown"
+      }
+    ]
+  }
+}

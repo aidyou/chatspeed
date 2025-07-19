@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "澎湃新闻手机版",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "main",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "div[class^='index_cententWrap_']",
+        "type": "markdown"
+      }
+    ]
+  }
+}

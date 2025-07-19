@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "股吧",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "#left",
+    "fields": [
+      {
+        "name": "title",
+        "selector": ".newstitle > .cn-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#zw_body",
+        "type": "markdown"
+      }
+    ]
+  }
+}

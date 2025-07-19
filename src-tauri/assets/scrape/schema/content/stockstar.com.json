@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "证券之星",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "body",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "div.tst > h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#container-box div.article_content",
+        "type": "markdown"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "知乎",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".Post-Main",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h1.Post-Title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".Post-RichTextContainer .Post-RichText",
+        "type": "markdown"
+      }
+    ]
+  }
+}

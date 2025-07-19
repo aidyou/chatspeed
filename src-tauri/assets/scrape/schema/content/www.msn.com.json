@@ -1,0 +1,35 @@
+{
+  "config": {
+    "name": "MSN",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": "(async()=>{const traverseShadowWithSlot=()=>{const provider=document.querySelector('fluent-design-system-provider');if(!provider){console.error(\"Provider not found\");return null}const providerShadow=provider.shadowRoot;if(!providerShadow){console.error(\"Provider shadow root not found\");return null}const entryPointViews=providerShadow.querySelector('slot').assignedElements().find(el=>el.tagName.toLowerCase()==='entry-point-views');if(!entryPointViews){console.error(\"entry-point-views not found\");return null}const viewsHeader=entryPointViews.querySelector('views-header-wc');if(!viewsHeader){console.error(\"views-header-wc not found\");return null}const viewsHeaderShadow=viewsHeader.shadowRoot;if(!viewsHeaderShadow){console.error(\"views-header-wc shadow root not found\");return null}const titleElement=viewsHeaderShadow.querySelector('h1.viewsHeaderText');const title=titleElement?titleElement.innerText:null;console.log(\"Title:\",title);const cpArticle=entryPointViews.querySelector('cp-article');if(!cpArticle){console.error(\"cp-article not found\");return{title}}const cpArticleShadow=cpArticle.shadowRoot;if(!cpArticleShadow){console.error(\"cp-article shadow root not found\");return{title}}const contentElement=cpArticleShadow.querySelector('.pmc-paywall');const content=contentElement?contentElement.innerHTML:null;console.log(\"Content:\",content);return{title,content}};const retry=(fn,max=3,delay=500)=>new Promise((resolve)=>{let attempts=0;const attempt=()=>{try{const result=fn();console.log(`Attempt ${attempts+1}:`,result?\"Success\":\"Failed\");resolve(result)}catch(e){console.error(`Attempt ${attempts+1}error:`,e);if(++attempts<max){setTimeout(attempt,delay)}else{resolve(null)}}};attempt()});retry(traverseShadowWithSlot).then((result)=>{console.log(\"Final result:\",result)})})();"
+  },
+  "selectors": {
+    "base_selector": "body",
+    "fields": [
+      {
+        "name": "title",
+        "type": "js_result",
+        "path": "title",
+        "selector": "meta[property='og:title']",
+        "attr": "content",
+        "fallback": {
+          "selector": "h1.primary-title",
+          "method": "text"
+        }
+      },
+      {
+        "name": "content",
+        "type": "js_result",
+        "path": "content",
+        "selector": "div.article-content",
+        "method": "text",
+        "fallback": {
+          "selector": "div[data-content='articleBody']",
+          "method": "markdown"
+        }
+      }
+    ]
+  }
+}

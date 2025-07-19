@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "金融界",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".main",
+    "fields": [
+      {
+        "name": "title",
+        "selector": ".article_title h1 p",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".article_content",
+        "type": "markdown"
+      }
+    ]
+  }
+}

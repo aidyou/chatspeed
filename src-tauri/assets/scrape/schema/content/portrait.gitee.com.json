@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "gitee",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": "body",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h2.git-project-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#git-readme .markdown-body",
+        "type": "markdown"
+      }
+    ]
+  }
+}

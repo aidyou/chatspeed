@@ -272,27 +272,39 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
             user_wants_on_top
         );
 
-        // Use the "always_on_top" trick to grab focus, which is effective on Linux.
-        if let Err(e) = window.set_always_on_top(true) {
-            log::warn!(
-                "Failed to set always_on_top(true) for window '{}': {}",
-                label,
-                e
-            );
-        }
-        if let Err(e) = window.set_focus() {
-            log::warn!("Failed to set focus on window '{}': {}", label, e);
+        #[cfg(target_os = "macos")]
+        {
+            // On Windows, we can use set_always_on_top to bring the window to the front.
+            if let Err(e) = window.set_focus() {
+                log::warn!("Failed to set focus on window '{}': {}", label, e);
+            }
         }
 
-        // 4. Restore the original "always on top" state immediately.
-        if !user_wants_on_top {
-            // If the user did NOT have the window pinned, turn off always_on_top after the trick.
-            if let Err(e) = window.set_always_on_top(false) {
+        // TODO: Need test this on Windows
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Use the "always_on_top" trick to grab focus, which is effective on Linux.
+            if let Err(e) = window.set_always_on_top(true) {
                 log::warn!(
-                    "Failed to restore always_on_top(false) for window '{}': {}",
+                    "Failed to set always_on_top(true) for window '{}': {}",
                     label,
                     e
                 );
+            }
+            if let Err(e) = window.set_focus() {
+                log::warn!("Failed to set focus on window '{}': {}", label, e);
+            }
+
+            // 4. Restore the original "always on top" state immediately.
+            if !user_wants_on_top {
+                // If the user did NOT have the window pinned, turn off always_on_top after the trick.
+                if let Err(e) = window.set_always_on_top(false) {
+                    log::warn!(
+                        "Failed to restore always_on_top(false) for window '{}': {}",
+                        label,
+                        e
+                    );
+                }
             }
         }
         // If user_wants_on_top is true, we simply leave it on top, which is the correct state.

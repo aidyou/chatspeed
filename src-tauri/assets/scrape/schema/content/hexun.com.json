@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "和讯",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".art_context",
+    "fields": [
+      {
+        "name": "title",
+        "selector": ".articleName h1",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": ".art_contextBox",
+        "type": "markdown"
+      }
+    ]
+  }
+}

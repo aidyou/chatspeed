@@ -1,0 +1,38 @@
+{
+  "config": {
+    "name": "Google",
+    "url_template": "/search?q={kw}&ie=UTF-8&newwindow=1&start={offset}&num={number}&tbs={time_period}",
+    "pagination_type": "offset",
+    "pagination_param": "offset",
+    "wait_for": "body",
+    "wait_timeout": 15000,
+    "page_timeout": 15000,
+    "max_results_per_page": 25
+  },
+  "selectors": {
+    "base_selector": "#kp-wp-tab-overview [data-snc], #search [data-snc]",
+    "fields": [
+      {
+        "name": "sitename",
+        "selector": "a > div > div > div > div > span",
+        "type": "text"
+      },
+      {
+        "name": "title",
+        "selector": "h3",
+        "type": "text"
+      },
+      {
+        "name": "url",
+        "selector": "a[href]",
+        "type": "attribute",
+        "attribute": "href"
+      },
+      {
+        "name": "summary",
+        "selector": "div[data-snf][data-sncf]  *",
+        "type": "text"
+      }
+    ]
+  }
+}

@@ -3,8 +3,9 @@
     <div
       class="titlebar"
       data-tauri-drag-region
-      @mouseup="useWindowStore.setMouseEventState(false)"
-      @mousedown="useWindowStore.setMouseEventState(true)"></div>
+      @pointerdown="handleDragStart"
+      @pointerup="handleDragEnd">
+    </div>
     <router-view></router-view>
 
     <!-- Update management dialogs -->
@@ -294,6 +295,14 @@ const setLighlightTheme = () => {
   link.setAttribute('cs-highlight-theme', theme)
   link.href = `/highlight.js/${isDark.value ? 'dark' : 'light'}/${theme}.css`
   document.head.appendChild(link)
+}
+
+const handleDragStart = (e) => {
+  windowStore.setMouseEventState(true);
+}
+
+const handleDragEnd = (e) => {
+  windowStore.setMouseEventState(false);
 }
 </script>
 

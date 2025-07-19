@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "csdn",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".blog-content-box",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "#articleContentId",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#content_views",
+        "type": "markdown"
+      }
+    ]
+  }
+}

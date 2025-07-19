@@ -28,6 +28,7 @@ ChatSpeed is an innovative desktop AI chat application built with Tauri and Vue 
 ## Development Requirements
 
 ### System Dependencies
+
 - sqlite3: Required for database operations
 - bzip2: Required for compression functionality
 
@@ -124,18 +125,19 @@ Note: The environment setup needs to be done each time you open a new command pr
 #### Prerequisites
 
 ```sh
-# Install system dependencies
-sudo apt install pkg-config
-sudo apt-get install libglib2.0-dev
-sudo apt-get install libgtk-3-dev libgdk-pixbuf-2.0-dev
-sudo apt-get install libssl-dev
-sudo apt install libsoup2.4-1 libsoup2.4-dev
-sudo apt install libjavascriptcoregtk-4.1-dev
-sudo apt install libwebkit2gtk-4.1-dev
-sudo apt install libappindicator3-dev
-sudo apt install librsvg2-dev
-sudo apt install sqlite3
-sudo apt install libappindicator3-1
+# Install system dependencies (for Debian/Ubuntu)
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  pkg-config \
+  libssl-dev \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libsoup-3.0-dev \
+  libbz2-dev \
+  libsqlite3-dev
 
 # Install Node.js and Yarn
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -

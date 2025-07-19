@@ -1,0 +1,23 @@
+{
+  "config": {
+    "name": "同花顺",
+    "page_timeout": 15000,
+    "wait_for": "body",
+    "js_code": ""
+  },
+  "selectors": {
+    "base_selector": ".main-fl.fl",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h2.main-title",
+        "type": "text"
+      },
+      {
+        "name": "content",
+        "selector": "#contentApp",
+        "type": "markdown"
+      }
+    ]
+  }
+}
