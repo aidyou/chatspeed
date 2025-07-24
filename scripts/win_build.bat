@@ -29,11 +29,10 @@ rem steps automatically.
 rem ================================================================
 
 echo Setting up build environment and starting build...
-powershell -ExecutionPolicy Bypass -Command ". '%~dp0setup-env.ps1'; yarn tauri build"
+powershell -ExecutionPolicy Bypass -Command ". '%~dp0setup-env.ps1'; cd '%~dp0..'; yarn tauri build"
 if errorlevel 1 (
     echo Build failed.
     exit /b 1
 )
 
 echo Build completed successfully!
-

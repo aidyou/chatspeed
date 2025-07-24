@@ -12,7 +12,7 @@ use crate::ai::network::{
 };
 use crate::http::ccproxy::{
     errors::ProxyAuthError,
-    types::{
+    openai_types::{
         OpenAIChatCompletionChoice,
         OpenAIChatCompletionRequest,
         OpenAIChatCompletionResponse,
@@ -520,6 +520,7 @@ impl ProtocolAdapter for GeminiAdapter {
                 content: assistant_message_content.map(OpenAIMessageContent::Text),
                 tool_calls: assistant_tool_calls,
                 tool_call_id: None,
+                reasoning_content: None, // Added reasoning_content
             },
             finish_reason: finish_reason_str,
         };
@@ -697,6 +698,7 @@ impl ProtocolAdapter for GeminiAdapter {
                 content: delta_content.map(OpenAIMessageContent::Text),
                 tool_calls: delta_tool_calls,
                 tool_call_id: None,
+                reasoning_content: None, // Added reasoning_content
             },
             finish_reason: finish_reason_str.clone(),
         };

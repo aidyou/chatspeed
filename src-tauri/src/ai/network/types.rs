@@ -240,12 +240,12 @@ pub struct Candidate {
 
 #[derive(Debug, Deserialize)]
 pub struct Content {
-    pub parts: Vec<Part>,
+    pub parts: Option<Vec<Part>>,
     #[serde(default)] // Add default in case role is not always present
     pub role: Option<String>, // Added field for role
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Part {
     #[serde(default)]
     pub text: Option<String>,
@@ -253,7 +253,7 @@ pub struct Part {
     pub function_call: Option<GeminiFunctionCall>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionCall {
     pub name: String,

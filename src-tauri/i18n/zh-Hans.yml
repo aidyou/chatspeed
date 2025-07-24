@@ -261,6 +261,22 @@ network:
     unknown_claude_error_no_details: "Claude 流解析未知错误 (无详情)"
     unknown_openai_error: "OpenAI 流解析未知错误"
 
+proxy:
+  error:
+    endpoint_not_found: "端点未找到。"
+    cors_blocked: "请求被CORS策略阻止。"
+    invalid_api_key: "API 密钥（令牌）无效。"
+    internal_server_error: "内部服务器错误: %{error}"
+    invalid_request: "无效的请求: %{error}"
+    missing_auth_header: "授权头缺失或无效。"
+    model_alias_not_found: "模型别名 '%{alias}' 未找到。"
+    no_backend_targets: "模型别名 '%{alias}' 未配置后端目标。"
+    no_keys_configured: "服务器上未配置代理访问密钥。"
+    model_details_fetch_failed: "未能获取 provider_id 为 %{id} 的模型详情。"
+    invalid_protocol: "模型配置的协议无效: %{protocol}。"
+    store_lock_failed: "访问存储失败: %{error}"
+    unexpected_error: "发生意外错误。"
+
 setting:
   failed_to_create_upload_dir: "创建上传目录 '%{path}' 失败: %{error}"
   failed_to_move_logo_file: "移动Logo文件失败: 从 '%{from}' 到 '%{to}', 错误: %{error}"

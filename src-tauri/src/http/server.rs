@@ -18,8 +18,8 @@ use tokio::{
 use warp::{http::StatusCode, reply::Response as WarpResponse, Filter, Rejection};
 
 use crate::{
+    ccproxy::{self, handle_proxy_rejection},
     db::MainStore,
-    http::ccproxy::{self, errors::handle_proxy_rejection},
 };
 use crate::{
     HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
@@ -67,7 +67,7 @@ pub async fn start_http_server(
     // ccproxy_routes itself is a filter that handles its sub-paths and returns a Reply.
     // We combine it with the "ccproxy" base path.
     let ccproxy_base = warp::path("ccproxy");
-    let ccproxy_api_routes = ccproxy_base.and(ccproxy::router::ccproxy_routes(main_store.clone()));
+    let ccproxy_api_routes = ccproxy_base.and(ccproxy::routes(main_store.clone()));
 
     // Set up static theme service
     let static_theme = warp::path("theme").and(warp::fs::dir(theme_dir.clone()));

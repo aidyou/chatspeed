@@ -1,8 +1,13 @@
 use crate::db::MainStore;
-use crate::http::ccproxy::handlers::{
-    authenticate_request, handle_chat_completion_proxy, list_proxied_models_handler,
+use crate::http::ccproxy::{
+    claude_handler::handle_claude_native_chat,
+    claude_types::ClaudeNativeRequest,
+    openai_handler::{
+        authenticate_request, handle_chat_completion_proxy, list_proxied_models_handler,
+    },
+    openai_types::OpenAIChatCompletionRequest,
 };
-use crate::http::ccproxy::types::OpenAIChatCompletionRequest;
+
 use std::sync::{Arc, Mutex};
 use warp::{filters::header::headers_cloned, Filter, Rejection, Reply};
 
@@ -49,7 +54,45 @@ pub fn ccproxy_routes(
         .and_then(handle_chat_completion_proxy)
         .map(|reply| (reply,)); // Wrap the Reply in a tuple
 
+    // POST /ccproxy/v1/messages - Claude messages
+    let claude_messages_route = warp::path!("v1" / "messages")
+        .map(|| log::debug!("Matched /v1/messages"))
+        .and(warp::post())
+        .and(auth_filter.clone())
+        .untuple_one()
+        .and(headers_cloned())
+        .and(warp::body::json::<ClaudeNativeRequest>())
+        // .and(warp::body::bytes())
+        // .and_then(
+        //     |headers: warp::http::HeaderMap, body: bytes::Bytes| async move {
+        //         #[cfg(debug_assertions)]
+        //         {
+        //             if let Ok(body_str) = std::str::from_utf8(&body) {
+        //                 log::debug!("Raw ClaudeNativeRequest body: {}", body_str);
+        //             } else {
+        //                 log::debug!("Raw ClaudeNativeRequest body: <Invalid UTF-8>");
+        //             }
+        //         }
+        //         match serde_json::from_slice::<ClaudeNativeRequest>(&body) {
+        //             Ok(req) => Ok((headers, req)), // Keep headers
+        //             Err(e) => Err(warp::reject::custom(
+        //                 crate::http::ccproxy::errors::ProxyAuthError::InternalError(format!(
+        //                     "Failed to deserialize ClaudeNativeRequest: {}",
+        //                     e
+        //                 )),
+        //             )),
+        //         }
+        //     },
+        // )
+        // .untuple_one()
+        .and(with_main_store(main_store_arc.clone()))
+        .and_then(handle_claude_native_chat)
+        .map(|reply| (reply,));
+
     log::info!("Registered GET /ccproxy/v1/models");
     log::info!("Registered POST /ccproxy/v1/chat/completions");
-    list_models_route.or(chat_completions_route)
+    log::info!("Registered POST /ccproxy/v1/messages");
+    list_models_route
+        .or(chat_completions_route)
+        .or(claude_messages_route)
 }

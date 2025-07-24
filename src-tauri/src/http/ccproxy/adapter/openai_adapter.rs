@@ -3,7 +3,7 @@ use bytes::Bytes;
 
 use crate::http::ccproxy::{
     errors::ProxyAuthError,
-    types::{OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, SseEvent},
+    openai_types::{OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse, SseEvent, OpenAIUsage},
 };
 
 use super::protocol_adapter::{
@@ -108,14 +108,16 @@ impl ProtocolAdapter for OpenAIAdapter {
                 sse_event.event_type = Some(line["event:".len()..].trim().to_string());
                 has_any_field = true;
             } else if line.starts_with("data:") {
-                // For multi-line data, SSE spec says they are concatenated with '\n'.
-                // Here, we are simplifying: if multiple "data:" lines appear in one chunk_str from StreamProcessor,
-                // we'll take the content of the last one or concatenate.
-                // However, StreamProcessor should ideally give one logical event, which might have been pre-concatenated.
-                // For now, let's assume a single 'data' line or that StreamProcessor handles multi-line data correctly into one chunk.
                 let current_data = line["data:".len()..].trim();
-                sse_event.data = Some(current_data.to_string()); // Overwrites if multiple, or use Some(sse_event.data.unwrap_or_default() + "\n" + current_data)
+                sse_event.data = Some(current_data.to_string());
                 has_any_field = true;
+
+                // Attempt to parse the entire OpenAIChatCompletionStreamResponse from the data field
+                if let Ok(stream_response) = serde_json::from_str::<OpenAIChatCompletionStreamResponse>(current_data) {
+                    if let Some(usage) = stream_response.usage {
+                        sse_event.usage = Some(usage);
+                    }
+                }
             } else if line.starts_with("retry:") {
                 sse_event.retry = Some(line["retry:".len()..].trim().to_string());
                 has_any_field = true;

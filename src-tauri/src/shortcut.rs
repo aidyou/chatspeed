@@ -16,7 +16,7 @@ use crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::db::MainStore;
 use crate::open_note_window;
-use crate::window::{toggle_assistant_window, toggle_main_window};
+use crate::window::{show_and_focus_main_window, toggle_assistant_window};
 use crate::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::{
@@ -105,7 +105,7 @@ fn get_shortcuts(config_store: &Arc<Mutex<MainStore>>) -> HashMap<String, String
 fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
     log::debug!("handle_shortcut: {}", shortcut_type);
     match shortcut_type {
-        CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => toggle_main_window(app),
+        CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => show_and_focus_main_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT => {
             toggle_assistant_window(app);

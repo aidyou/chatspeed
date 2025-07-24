@@ -140,38 +140,48 @@ pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) 
             .map(String::from)
     });
     // Prepare response_format object for OpenAI compatibility
+    // This parameter is only added if explicitly provided and valid, to avoid errors on models that don't support it.
     let response_format_obj = match response_format {
-        Some("json_object") => json!({"type": "json_object"}),
-        Some("text") => json!({"type": "text"}),
+        Some("json_object") => Some(json!({"type": "json_object"})),
+        Some("text") => Some(json!({"type": "text"})),
         Some(other) if !other.is_empty() => {
-            // Log a warning for unrecognized response_format, and default to "text"
+            // Log a warning for unrecognized response_format and ignore it.
             log::warn!(
-                "Unrecognized response_format value '{}', defaulting to 'text'.",
+                "Unrecognized response_format value '{}', ignoring it.",
                 other
             );
-            json!({"type": "text"})
+            None
         }
-        _ => json!({"type": "text"}), // Default for None or empty string from frontend
+        _ => None, // Do not add the parameter if it's not provided or is an empty string.
     };
 
-    (
-        // Keep the Rust underscore style
-        json!({
-            "stream": stream.unwrap_or(true),
-            "max_tokens": max_tokens.unwrap_or(4096),
-            "temperature": temperature.unwrap_or(1.0),
-            "top_p": top_p.unwrap_or(0.0),
-            "top_k": top_k,
-            "tool_choice": tool_choice.unwrap_or("auto".to_string()),
-            "presence_penalty": presence_penalty.unwrap_or(0.0),
-            "frequency_penalty": frequency_penalty.unwrap_or(0.0),
-            "response_format": response_format_obj,
-            "stop_sequences": stop_sequences.map_or(Value::Null, |s| json!(s)),
-            "candidate_count": n_candidate_count.map_or(Value::Null, |n| json!(n)),
-            "user_id": user_id.map_or(Value::Null, |u| json!(u)),
-        }),
-        get_meta_data(extra_params),
-    )
+    // Keep the Rust underscore style for the final JSON keys
+    let mut body = json!({
+        "stream": stream.unwrap_or(true),
+        "max_tokens": max_tokens.unwrap_or(4096),
+        "temperature": temperature.unwrap_or(1.0),
+        "top_p": top_p.unwrap_or(0.0),
+        "top_k": top_k,
+        "presence_penalty": presence_penalty.unwrap_or(0.0),
+        "frequency_penalty": frequency_penalty.unwrap_or(0.0),
+        "stop_sequences": stop_sequences.map_or(Value::Null, |s| json!(s)),
+        "candidate_count": n_candidate_count.map_or(Value::Null, |n| json!(n)),
+        "user_id": user_id.map_or(Value::Null, |u| json!(u)),
+    });
+
+    if let Some(rf_obj) = response_format_obj {
+        if let Some(body_obj) = body.as_object_mut() {
+            body_obj.insert("response_format".to_string(), rf_obj);
+        }
+    }
+
+    if let Some(choice) = tool_choice {
+        if let Some(body_obj) = body.as_object_mut() {
+            body_obj.insert("tool_choice".to_string(), serde_json::Value::String(choice));
+        }
+    }
+
+    (body, get_meta_data(extra_params))
 }
 
 /// Update or create metadata options.

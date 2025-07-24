@@ -1,929 +1,982 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize}; // Added Deserialize
-use serde_json::Value; // For tool parameters and choices
+use reqwest::RequestBuilder;
+use warp::http::HeaderMap;
 
 use crate::http::ccproxy::{
-    errors::ProxyAuthError,
-    types::{
-        OpenAIChatCompletionChoice, OpenAIChatCompletionRequest, OpenAIChatCompletionResponse,
-        OpenAIChatCompletionStreamResponse, OpenAIFunctionCall, OpenAIMessageContent,
-        OpenAIMessageContentPart, OpenAIStreamChoice, OpenAITool, OpenAIUsage, SseEvent,
-        UnifiedChatMessage, UnifiedToolCall,
+    claude_types::{
+        ClaudeNativeContentBlock, ClaudeNativeMessage, ClaudeNativeRequest, ClaudeNativeResponse,
+        ClaudeNativeUsage, ClaudeToolChoice, StreamState,
+    },
+    errors::{ProxyAuthError, ProxyResult},
+    openai_types::{
+        OpenAIChatCompletionRequest, OpenAIChatCompletionResponse,
+        OpenAIChatCompletionStreamResponse, OpenAIFunctionDefinition, OpenAIImageUrl,
+        OpenAIMessageContent, OpenAIMessageContentPart, OpenAITool, UnifiedChatMessage,
     },
 };
 
-use super::protocol_adapter::{
-    AdaptedRequest, ProtocolAdapter, RawBackendResponse, RawBackendStreamChunk,
+use crate::ai::network::types::{
+    GeminiContent,
+    GeminiFunctionResponse, // Added
+    GeminiGenerationConfig,
+    GeminiInlineData,
+    GeminiPart,
+    GeminiRequest,
+    GeminiResponse as GeminiNetworkResponse,
 };
+use serde::Serialize;
+use std::convert::Infallible;
 
-pub struct ClaudeAdapter;
-
-// --- Claude API Request Structures ---
-#[derive(Serialize, Debug)]
-struct ClaudeRequestPayload<'a> {
-    model: &'a str, // The actual model name for Claude, e.g., "claude-3-opus-20240229"
-    messages: Vec<ClaudeMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    max_tokens: i32, // Claude's max_tokens is required.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    top_k: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ClaudeTool<'a>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<ClaudeToolChoice>,
+/// Represents the raw response from a backend before adaptation.
+pub struct RawBackendResponse {
+    pub status_code: reqwest::StatusCode,
+    pub headers: HeaderMap,
+    pub body_bytes: Bytes,
 }
 
-#[derive(Serialize, Debug)]
-struct ClaudeMessage {
-    role: String, // "user" or "assistant"
-    content: Vec<ClaudeContentBlockRequest>,
+/// Represents a single, complete chunk from a backend's streaming response.
+pub struct RawBackendStreamChunk {
+    pub data: Bytes,
 }
 
-#[derive(Serialize, Debug)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-enum ClaudeContentBlockRequest {
-    Text {
-        text: String,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        tool_use_id: String,
-        content: String, // Can also be Vec<ClaudeContentBlockRequest> for complex tool results, but string is common for JSON.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        is_error: Option<bool>,
-    },
-    Image {
-        source: ClaudeImageSource,
-    },
-    // Added for assistant messages requesting a tool use.
-    // Claude's 'tool_use' type is for when the assistant wants to use a tool.
-    #[serde(rename = "tool_use")] // Ensure correct serialization for Claude
-    ToolUse {
-        id: String,   // The ID for this tool use request
-        name: String, // The name of the tool to be used
-        input: Value, // The input to the tool, as a JSON object
-    },
+/// Defines the structure of an SSE event after being parsed and adapted.
+#[derive(Debug, Default, Clone)]
+pub struct SseEvent {
+    pub id: Option<String>,
+    pub event_type: Option<String>,
+    pub data: Option<String>,
+    pub retry: Option<String>,
+    pub usage: Option<ClaudeNativeUsage>, // Added usage field
 }
 
-#[derive(Serialize, Debug)]
-struct ClaudeTool<'a> {
-    name: &'a str,
-    description: Option<&'a str>,
-    input_schema: &'a Value, // JSON Schema
+/// Defines the necessary parts of a request after adaptation, ready to be built.
+#[derive(Debug)]
+pub struct AdaptedRequest {
+    pub url: String,
+    pub headers_to_add: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
-
-#[derive(Serialize, Debug)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "type")]
-enum ClaudeToolChoice {
-    Auto,
-    Any, // Forces the model to use a tool
-    Tool { name: String },
-}
-
-#[derive(Serialize, Debug)]
-struct ClaudeImageSource {
-    #[serde(rename = "type")]
-    source_type: String, // e.g., "base64"
-    media_type: String, // e.g., "image/jpeg", "image/png"
-    data: String,       // base64 encoded image data
-}
-
-// --- End Claude API Request Structures ---
-
-// --- Claude API Response Structures ---
-#[derive(Deserialize, Debug)]
-struct ClaudeResponsePayload {
-    id: String,
-    #[serde(rename = "type")]
-    response_type: String, // e.g., "message" or "error"
-    role: Option<String>, // "assistant", present on successful message
-    content: Option<Vec<ClaudeContentBlockResponse>>,
-    model: Option<String>,       // Model that generated the response
-    stop_reason: Option<String>, // e.g., "end_turn", "max_tokens", "tool_use"
-    // stop_sequence: Option<String>, // Not directly mapped for now
-    usage: Option<ClaudeUsage>,
-    // For error responses
-    error: Option<ClaudeErrorResponse>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeContentBlockResponse {
-    #[serde(rename = "type")]
-    block_type: String, // e.g., "text", "tool_use"
-    text: Option<String>,
-    // For tool_use type
-    id: Option<String>,               // Tool use ID
-    name: Option<String>,             // Tool name
-    input: Option<serde_json::Value>, // Tool input
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeUsage {
-    input_tokens: u64,
-    output_tokens: u64,
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeErrorResponse {
-    #[serde(rename = "type")]
-    error_type: String,
-    message: String,
-}
-// --- End Claude API Response Structures ---
-
-// --- Claude API Stream Event Structures ---
-#[derive(Deserialize, Debug)]
-struct ClaudeStreamEvent {
-    #[serde(rename = "type")]
-    event_type: String,
-    message: Option<ClaudeStreamMessageStart>,
-    index: Option<u32>, // For content_block_start, content_block_delta
-    content_block: Option<ClaudeStreamContentBlock>, // For content_block_start
-    delta: Option<ClaudeStreamDelta>, // For content_block_delta, message_delta
-    usage: Option<ClaudeStreamMessageUsage>, // For message_delta
-    error: Option<ClaudeErrorResponse>, // For error event
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeStreamMessageStart {
-    id: String,
-    #[serde(rename = "type")]
-    _message_type: String, // "message"
-    role: String, // "assistant"
-    model: String,
-    // stop_reason: Option<String>, // Not typically in message_start
-    // stop_sequence: Option<String>, // Not typically in message_start
-    usage: ClaudeStreamMessageUsage, // input_tokens here
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeStreamContentBlock {
-    #[serde(rename = "type")]
-    block_type: String, // "text" or "tool_use"
-    text: Option<String>, // For text block_type
-    // For tool_use block_type
-    id: Option<String>,
-    name: Option<String>,
-    input: Option<serde_json::Value>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeStreamDelta {
-    #[serde(rename = "type")]
-    delta_type: Option<String>, // "text_delta", "input_json_delta", "tool_use_delta" (not standard, Claude uses "text_delta" for text, and tool details in content_block_start/delta)
-    text: Option<String>, // For text_delta
-    // For message_delta
-    #[serde(skip_serializing_if = "Option::is_none")]
-    partial_json: Option<String>, // For input_json_delta
-    stop_reason: Option<String>,
-    // stop_sequence: Option<String>,
-    // No usage here, it's in a separate field in message_delta event
-}
-
-#[derive(Deserialize, Debug)]
-struct ClaudeStreamMessageUsage {
-    input_tokens: Option<u64>,  // In message_start
-    output_tokens: Option<u64>, // In message_delta
-}
-// --- End Claude API Stream Event Structures ---
 
 #[async_trait]
-impl ProtocolAdapter for ClaudeAdapter {
+pub trait ClaudeProtocolAdapter: Send + Sync {
+    /// Adapts the incoming Claude-native request to a format suitable for the target backend.
     fn adapt_request(
         &self,
         base_url: &str,
-        target_model_name: &str, // This is the actual Claude model ID
-        target_api_key: &str,
-        openai_request: &OpenAIChatCompletionRequest,
-    ) -> Result<AdaptedRequest, ProxyAuthError> {
-        log::debug!(
-            "ClaudeAdapter: adapt_request for model alias '{}', target Claude model '{}'",
-            openai_request.model, // This is the alias from client
-            target_model_name     // This is the actual model for Claude
-        );
+        actual_model_name: &str,
+        api_key: &str,
+        client_request: &ClaudeNativeRequest,
+    ) -> ProxyResult<AdaptedRequest>;
 
-        let mut claude_messages: Vec<ClaudeMessage> = Vec::new();
-        let mut system_prompt: Option<String> = None;
-        let mut has_tools = false; // Flag to add beta header
-
-        for message in &openai_request.messages {
-            let openai_role = message.role.as_deref().unwrap_or_default();
-            let mut claude_content_blocks: Vec<ClaudeContentBlockRequest> = Vec::new();
-
-            if let Some(content_parts_or_text) = &message.content {
-                match content_parts_or_text {
-                    OpenAIMessageContent::Text(text) => {
-                        claude_content_blocks
-                            .push(ClaudeContentBlockRequest::Text { text: text.clone() });
-                    }
-                    OpenAIMessageContent::Parts(parts_array) => {
-                        for part in parts_array {
-                            match part {
-                                OpenAIMessageContentPart::Text { text } => {
-                                    claude_content_blocks.push(ClaudeContentBlockRequest::Text {
-                                        text: text.clone(),
-                                    });
-                                }
-                                OpenAIMessageContentPart::ImageUrl { image_url } => {
-                                    if image_url.url.starts_with("data:") {
-                                        if let Some(comma_idx) = image_url.url.find(',') {
-                                            let header = &image_url.url[5..comma_idx]; // "image/jpeg;base64" or "image/png;base64" etc.
-                                            let base64_data = &image_url.url[comma_idx + 1..];
-                                            let mime_type = header
-                                                .split(';')
-                                                .next()
-                                                .unwrap_or("application/octet-stream")
-                                                .to_string();
-
-                                            claude_content_blocks.push(
-                                                ClaudeContentBlockRequest::Image {
-                                                    source: ClaudeImageSource {
-                                                        source_type: "base64".to_string(),
-                                                        media_type: mime_type,
-                                                        data: base64_data.to_string(),
-                                                    },
-                                                },
-                                            );
-                                        } else {
-                                            log::warn!(
-                                                "ClaudeAdapter: Malformed data URI in ImageUrl: {}",
-                                                image_url.url
-                                            );
-                                        }
-                                    } else {
-                                        log::warn!("ClaudeAdapter: Non-data URI ImageUrl not supported for Claude: {}", image_url.url);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !claude_content_blocks.is_empty() {
-                match openai_role {
-                    "system" => {
-                        // System prompts in Claude are top-level, not part of messages with content blocks.
-                        // We'll extract text from system messages and concatenate.
-                        let system_text: String = claude_content_blocks
-                            .iter()
-                            .filter_map(|block| {
-                                if let ClaudeContentBlockRequest::Text { text } = block {
-                                    Some(text.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<&str>>()
-                            .join("\n");
-                        system_prompt =
-                            Some(system_prompt.unwrap_or_default() + &system_text + "\n");
-                    }
-                    "user" => {
-                        claude_messages.push(ClaudeMessage {
-                            role: "user".to_string(),
-                            content: claude_content_blocks,
-                        });
-                    }
-                    "assistant" => {
-                        // If the assistant message from OpenAI history contains tool_calls,
-                        // it means the model previously decided to use tools.
-                        // These need to be mapped to Claude's 'tool_use' content blocks.
-                        // An assistant message can have both text content and tool_use requests.
-                        // claude_content_blocks already contains text/image if present from the logic above.
-                        if let Some(tool_calls) = &message.tool_calls {
-                            log::debug!(
-                                "ClaudeAdapter: Processing {} tool_calls for assistant message.",
-                                tool_calls.len()
-                            );
-                            for tool_call in tool_calls {
-                                if let (Some(id), Some(name), Some(arguments_str)) = (
-                                    &tool_call.id,
-                                    &tool_call.function.name,
-                                    &tool_call.function.arguments,
-                                ) {
-                                    // Claude's 'input' for tool_use must be a JSON object.
-                                    // OpenAI's 'arguments' is a JSON string.
-                                    match serde_json::from_str::<Value>(arguments_str) {
-                                        Ok(parsed_args) if parsed_args.is_object() => {
-                                            claude_content_blocks.push(
-                                                ClaudeContentBlockRequest::ToolUse {
-                                                    id: id.clone(),
-                                                    name: name.clone(),
-                                                    input: parsed_args,
-                                                },
-                                            );
-                                        }
-                                        Ok(_) => {
-                                            log::error!("ClaudeAdapter: Tool call arguments for id '{}' are not a JSON object: {}", id, arguments_str);
-                                            // Decide if to skip this tool_use or return an error for the whole request
-                                        }
-                                        Err(e) => {
-                                            log::error!("ClaudeAdapter: Failed to parse tool call arguments for id '{}': {}. Args: {}", id, e, arguments_str);
-                                            // Decide if to skip or error out
-                                        }
-                                    }
-                                } else {
-                                    log::warn!("ClaudeAdapter: Assistant tool_call in history is missing id, name, or arguments: {:?}", tool_call);
-                                }
-                            }
-                        }
-                        // Now, claude_content_blocks contains any text/image parts AND any tool_use parts.
-                        claude_messages.push(ClaudeMessage {
-                            role: "assistant".to_string(),
-                            content: claude_content_blocks,
-                        });
-                    }
-                    "tool" => {
-                        if let Some(tool_call_id) = &message.tool_call_id {
-                            // Assuming the content of a tool message is a single text block representing the tool's output string.
-                            let tool_result_content_str = claude_content_blocks
-                                .iter()
-                                .filter_map(|block| {
-                                    if let ClaudeContentBlockRequest::Text { text } = block {
-                                        Some(text.as_str())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<&str>>()
-                                .join("\n");
-
-                            claude_messages.push(ClaudeMessage {
-                                role: "user".to_string(), // Tool results are provided by the user to Claude
-                                content: vec![ClaudeContentBlockRequest::ToolResult {
-                                    tool_use_id: tool_call_id.clone(),
-                                    content: tool_result_content_str,
-                                    is_error: None, // TODO: Potentially detect if the content indicates an error
-                                }],
-                            });
-                        } else {
-                            log::warn!("ClaudeAdapter: 'tool' role message without tool_call_id, skipping.");
-                        }
-                    }
-                    _ => log::warn!("ClaudeAdapter: Unknown role '{}' encountered.", openai_role),
-                }
-            }
+    /// Modifies the `reqwest::RequestBuilder` before it's sent.
+    /// This is useful for adding headers or making other changes.
+    fn modify_request_builder(
+        &self,
+        builder: RequestBuilder,
+        adapted_request: &AdaptedRequest,
+    ) -> ProxyResult<RequestBuilder> {
+        let mut new_builder = builder;
+        for (key, value) in &adapted_request.headers_to_add {
+            new_builder = new_builder.header(key, value);
         }
-
-        let claude_tools = openai_request.tools.as_ref().map(|oa_tools| {
-            has_tools = true;
-            oa_tools
-                .iter()
-                .filter(|tool| tool.r#type == "function") // Claude primarily supports function-like tools
-                .map(|tool: &OpenAITool| ClaudeTool {
-                    // Explicit type for tool
-                    name: &tool.function.name,
-                    description: tool.function.description.as_deref(),
-                    input_schema: &tool.function.parameters,
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let claude_tool_choice = openai_request.tool_choice.as_ref().map(|oa_choice| {
-            has_tools = true; // Using tool_choice implies tools are relevant
-            match oa_choice {
-                Value::String(s) => match s.as_str() {
-                    "none" => ClaudeToolChoice::Auto, // Claude doesn't have a direct "none". "auto" might be closest if no tools are provided. Or we omit `tool_choice`. For now, map to Auto.
-                    "auto" => ClaudeToolChoice::Auto,
-                    "required" => ClaudeToolChoice::Any, // "required" in OpenAI means model must use a tool.
-                    _ => ClaudeToolChoice::Auto,         // Default
-                },
-                Value::Object(obj)
-                    if obj.get("type").and_then(Value::as_str) == Some("function") =>
-                {
-                    obj.get("function")
-                        .and_then(Value::as_object)
-                        .and_then(|func_obj| func_obj.get("name").and_then(Value::as_str))
-                        .map(|name| ClaudeToolChoice::Tool {
-                            name: name.to_string(),
-                        })
-                        .unwrap_or(ClaudeToolChoice::Auto)
-                }
-                _ => ClaudeToolChoice::Auto,
-            }
-        });
-
-        // Claude requires max_tokens. Use OpenAI's value or a default.
-        let max_tokens = openai_request.max_tokens.unwrap_or(1024); // Default to 1024 if not provided
-
-        let claude_payload = ClaudeRequestPayload {
-            model: target_model_name,
-            messages: claude_messages,
-            system: system_prompt.map(|s| s.trim_end().to_string()),
-            max_tokens,
-            stream: openai_request.stream,
-            temperature: openai_request.temperature,
-            top_p: openai_request.top_p,
-            top_k: openai_request.top_k,
-            tools: claude_tools,
-            tool_choice: claude_tool_choice,
-        };
-
-        let body_bytes = serde_json::to_vec(&claude_payload).map_err(|e| {
-            log::error!(
-                "ClaudeAdapter: Failed to serialize ClaudeRequestPayload: {}",
-                e
-            );
-            ProxyAuthError::InternalError("Failed to serialize request for Claude".to_string())
-        })?;
-
-        let mut headers_to_add = vec![
-            (
-                reqwest::header::CONTENT_TYPE.as_str().to_string(),
-                "application/json".to_string(),
-            ),
-            ("x-api-key".to_string(), target_api_key.to_string()),
-            // Anthropic-Version header is crucial for Claude API
-            ("anthropic-version".to_string(), "2023-06-01".to_string()),
-        ];
-
-        if has_tools || openai_request.tools.is_some() {
-            // Add beta header if tools are defined or chosen
-            // Note: The exact value "tools-2024-04-04" might change. Always refer to official Claude docs.
-            headers_to_add.push(("anthropic-beta".to_string(), "tools-2024-04-04".to_string()));
-        }
-
-        Ok(AdaptedRequest {
-            url: format!("{base_url}/messages"),
-            body: Bytes::from(body_bytes),
-            headers_to_add,
-        })
+        new_builder = new_builder.body(adapted_request.body.clone());
+        Ok(new_builder)
     }
 
+    /// Adapts a single chunk from the backend's stream into an SSE event for the client.
+    fn adapt_stream_chunk(
+        &self,
+        chunk: RawBackendStreamChunk,
+        stream_id: &str,
+        model_name: &str,
+        next_tool_call_stream_index: &mut u32,
+        stream_state: &mut StreamState,
+    ) -> ProxyResult<Vec<SseEvent>>;
+
+    /// Provides the content for the final SSE event (e.g., "[DONE]").
+    fn adapt_stream_end(&self) -> Option<String> {
+        Some("[DONE]".to_string())
+    }
+
+    /// Adapts the full response from the backend into a Claude-native response for the client.
     fn adapt_response_body(
         &self,
-        raw_response: RawBackendResponse,
-        target_model_name: &str, // Used for OpenAI response's 'model' field
-    ) -> Result<OpenAIChatCompletionResponse, ProxyAuthError> {
+        response: RawBackendResponse,
+        model_name: &str,
+    ) -> ProxyResult<ClaudeNativeResponse>;
+}
+
+// --- Concrete Adapters ---
+
+pub struct ClaudeToClaudeAdapter;
+
+#[async_trait]
+impl ClaudeProtocolAdapter for ClaudeToClaudeAdapter {
+    fn adapt_request(
+        &self,
+        base_url: &str,
+        actual_model_name: &str,
+        api_key: &str,
+        client_request: &ClaudeNativeRequest,
+    ) -> ProxyResult<AdaptedRequest> {
+        #[cfg(debug_assertions)]
         log::debug!(
-            "ClaudeAdapter: adapt_response_body. Raw status: {}",
-            raw_response.status_code
+            "ClaudeToClaudeAdapter: Received request: {}\n\n\n\n",
+            serde_json::to_string_pretty(client_request).unwrap_or_default()
         );
+        let mut claude_request = client_request.clone();
+        claude_request.model = actual_model_name.to_string();
 
-        let claude_response: ClaudeResponsePayload =
-            serde_json::from_slice(&raw_response.body_bytes).map_err(|e| {
-                log::error!(
-                    "ClaudeAdapter: Failed to deserialize ClaudeResponsePayload: {}, body: {:?}",
-                    e,
-                    String::from_utf8_lossy(&raw_response.body_bytes)
-                );
-                ProxyAuthError::InternalError(format!(
-                    "Failed to deserialize Claude response body: {}",
-                    e
-                ))
-            })?;
+        let body_bytes = serde_json::to_vec(&claude_request).map_err(|e| {
+            ProxyAuthError::InternalError(format!(
+                "Failed to serialize Claude native request: {}",
+                e
+            ))
+        })?;
 
-        if let Some(error_details) = claude_response.error {
-            log::error!(
-                "Claude API returned an error: type={}, message={}",
-                error_details.error_type,
-                error_details.message
-            );
-            return Err(ProxyAuthError::InternalError(format!(
-                "Claude API Error ({}): {}",
-                error_details.error_type, error_details.message
-            )));
-        }
-
-        let mut assistant_message_content: Option<String> = None;
-        let mut assistant_tool_calls: Option<Vec<UnifiedToolCall>> = None;
-
-        if let Some(content_blocks) = claude_response.content {
-            for block in content_blocks {
-                match block.block_type.as_str() {
-                    "text" => {
-                        if let Some(text) = block.text {
-                            assistant_message_content =
-                                Some(assistant_message_content.unwrap_or_default() + &text);
-                        }
-                    }
-                    "tool_use" => {
-                        if let (Some(id), Some(name), Some(input_val)) =
-                            (block.id, block.name, block.input)
-                        {
-                            let tool_call = UnifiedToolCall {
-                                id: Some(id),                         // Use Claude's tool_use_id as the tool_call.id
-                                r#type: Some("function".to_string()), // Assuming all Claude tools are functions
-                                function: OpenAIFunctionCall {
-                                    name: Some(name),
-                                    arguments: Some(input_val.to_string()), // Convert JSON value to string
-                                },
-                                index: None, // Not applicable for non-streaming response tool_calls array
-                            };
-                            assistant_tool_calls
-                                .get_or_insert_with(Vec::new)
-                                .push(tool_call);
-                        } else {
-                            log::warn!(
-                                "ClaudeAdapter: Received 'tool_use' block with missing id, name, or input."
-                            );
-                        }
-                    }
-                    _ => log::warn!(
-                        "ClaudeAdapter: Unknown content block type '{}'",
-                        block.block_type
-                    ),
-                }
-            }
-        }
-
-        let finish_reason_str = match claude_response.stop_reason.as_deref() {
-            Some("end_turn") => Some("stop".to_string()),
-            Some("max_tokens") => Some("length".to_string()),
-            Some("tool_use") => Some("tool_calls".to_string()),
-            Some(other_reason) => {
-                log::info!(
-                    "ClaudeAdapter: Received other stop_reason '{}', mapping to 'stop'.",
-                    other_reason
-                );
-                Some("stop".to_string())
-            }
-            None => None,
-        };
-
-        let choice = OpenAIChatCompletionChoice {
-            index: 0,
-            message: UnifiedChatMessage {
-                role: claude_response.role, // Should be "assistant"
-                content: assistant_message_content.map(OpenAIMessageContent::Text),
-                tool_calls: assistant_tool_calls,
-                tool_call_id: None,
-            },
-            finish_reason: finish_reason_str,
-        };
-
-        let usage = claude_response.usage.map(|u| OpenAIUsage {
-            prompt_tokens: u.input_tokens,
-            completion_tokens: u.output_tokens,
-            total_tokens: u.input_tokens + u.output_tokens,
-        });
-
-        Ok(OpenAIChatCompletionResponse {
-            id: format!("claude-{}", claude_response.id), // Use Claude's message ID
-            object: "chat.completion".to_string(),
-            created: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            model: target_model_name.to_string(), // Use the target_model_name passed in
-            choices: vec![choice],
-            usage,
+        Ok(AdaptedRequest {
+            url: format!("{}/messages", base_url),
+            headers_to_add: vec![
+                (
+                    reqwest::header::CONTENT_TYPE.as_str().to_string(),
+                    "application/json".to_string(),
+                ),
+                ("x-api-key".to_string(), api_key.to_string()),
+            ],
+            body: body_bytes,
         })
     }
 
     fn adapt_stream_chunk(
         &self,
-        raw_chunk: RawBackendStreamChunk,
-        stream_id: &str,                       // For OpenAI chunk 'id' field
-        target_model_name: &str,               // For OpenAI chunk 'model' field
-        next_tool_call_stream_index: &mut u32, // For OpenAI tool call 'index'
-    ) -> Result<Option<SseEvent>, ProxyAuthError> {
-        let chunk_str = String::from_utf8_lossy(&raw_chunk.data);
-        log::trace!("ClaudeAdapter: adapt_stream_chunk received: {}", chunk_str);
-
-        // Claude stream sends events separated by double newlines.
-        // Each event block usually starts with "event: <type>" followed by "data: <json>".
-        for event_block_str in chunk_str.split("\n\n") {
-            if event_block_str.trim().is_empty() {
-                continue;
+        chunk: RawBackendStreamChunk,
+        _stream_id: &str,
+        _model_name: &str,
+        _next_tool_call_stream_index: &mut u32,
+        _stream_state: &mut StreamState,
+    ) -> ProxyResult<Vec<SseEvent>> {
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "ClaudeToClaudeAdapter: Received stream chunk: {:?}",
+            chunk.data
+        );
+        let chunk_str = String::from_utf8_lossy(&chunk.data);
+        let mut events = Vec::new();
+        let mut event = SseEvent::default();
+        for line in chunk_str.lines() {
+            if let Some(event_type) = line.strip_prefix("event: ") {
+                event.event_type = Some(event_type.trim().to_string());
+            } else if let Some(data) = line.strip_prefix("data: ") {
+                event.data = Some(data.trim().to_string());
             }
+        }
+        if event.data.is_some() {
+            events.push(event);
+        }
+        Ok(events)
+    }
 
-            let mut event_type_from_line: Option<String> = None;
-            let mut data_json_str: Option<String> = None;
+    fn adapt_response_body(
+        &self,
+        response: RawBackendResponse,
+        _model_name: &str,
+    ) -> ProxyResult<ClaudeNativeResponse> {
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "ClaudeToClaudeAdapter: Received response body: {:?}",
+            response.body_bytes
+        );
+        Ok(
+            serde_json::from_slice::<ClaudeNativeResponse>(&response.body_bytes).map_err(|e| {
+                ProxyAuthError::InternalError(format!(
+                    "Failed to parse Claude native response: {}",
+                    e
+                ))
+            })?,
+        )
+    }
+}
 
-            for line in event_block_str.lines() {
-                if line.starts_with("event: ") {
-                    event_type_from_line =
-                        Some(line.trim_start_matches("event: ").trim().to_string());
-                } else if line.starts_with("data: ") {
-                    data_json_str = Some(line.trim_start_matches("data: ").trim().to_string());
-                }
-            }
+pub struct ClaudeToOpenAIAdapter;
 
-            if event_type_from_line.is_none() || data_json_str.is_none() {
-                log::warn!(
-                    "ClaudeAdapter: Skipping malformed event block: {}",
-                    event_block_str
-                );
-                continue;
-            }
-
-            let event_type = event_type_from_line.unwrap();
-            let data_str = data_json_str.unwrap();
-
-            log::trace!(
-                "ClaudeAdapter: Processing event type '{}', data: {}",
-                event_type,
-                data_str
+#[async_trait]
+impl ClaudeProtocolAdapter for ClaudeToOpenAIAdapter {
+    fn adapt_request(
+        &self,
+        base_url: &str,
+        actual_model_name: &str,
+        api_key: &str,
+        client_request: &ClaudeNativeRequest,
+    ) -> ProxyResult<AdaptedRequest> {
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "ClaudeToOpenAIAdapter: Received request: {}\n\n\n\n",
+            serde_json::to_string_pretty(client_request).unwrap_or_default()
+        );
+        let openai_request = convert_claude_to_openai(client_request, actual_model_name)?;
+        let body_bytes = serde_json::to_vec(&openai_request).map_err(|e| {
+            log::error!(
+                "ClaudeToOpenAIAdapter: Failed to serialize OpenAI request: {}",
+                e
             );
+            ProxyAuthError::InternalError(format!("Failed to serialize OpenAI request: {}", e))
+        })?;
 
-            match event_type.as_str() {
-                "message_start" => {
-                    // The message_start event contains the overall message ID and input token usage.
-                    // We don't typically send a separate SSE event for this in OpenAI format,
-                    // but we use the ID for subsequent chunks.
-                    // The model name from here can also be used if `target_model_name` isn't precise enough.
-                    if let Ok(start_event_data) =
-                        serde_json::from_str::<ClaudeStreamEvent>(&data_str)
-                    {
-                        if let Some(msg) = start_event_data.message {
-                            log::debug!(
-                                "ClaudeAdapter: Stream started. ID: {}, Model: {}",
-                                msg.id,
-                                msg.model
-                            );
-                            // The stream_id passed in is already unique for the OpenAI stream.
-                            // msg.id is Claude's internal message ID.
-                        }
-                    }
-                }
-                "content_block_start" => {
-                    // If it's a tool_use block, we might need to prepare a tool_call structure.
-                    if let Ok(event_data) = serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
-                        if let Some(block) = event_data.content_block {
-                            if block.block_type == "tool_use" {
-                                // A tool use block is starting
-                                if let (Some(tool_id), Some(tool_name), Some(tool_input_value)) =
-                                    (block.id, block.name, block.input)
-                                // `input` might be an empty object {} if args are streamed via input_json_delta
-                                {
-                                    // Send the initial part of the tool call, arguments might be empty or partial here.
-                                    // If tool_input_value is not empty, it means Claude sent some/all arguments upfront.
-                                    let tool_call = UnifiedToolCall {
-                                        index: Some(*next_tool_call_stream_index),
-                                        id: Some(tool_id),
-                                        r#type: Some("function".to_string()),
-                                        function: OpenAIFunctionCall {
-                                            name: Some(tool_name),
-                                            // Convert the JSON Value from Claude's input to a string for OpenAI
-                                            // If input is an empty object, arguments will be "".
-                                            // If input has content, it will be serialized.
-                                            // If arguments are streamed, this initial part might be empty or just "{"
-                                            arguments: Some(
-                                                if tool_input_value.is_object()
-                                                    && tool_input_value
-                                                        .as_object()
-                                                        .map_or(false, |m| m.is_empty())
-                                                {
-                                                    "".to_string()
-                                                } else {
-                                                    tool_input_value.to_string()
-                                                },
-                                            ),
-                                        },
-                                    };
-                                    let choice = OpenAIStreamChoice {
-                                        index: 0,
-                                        delta: UnifiedChatMessage {
-                                            role: Some("assistant".to_string()),
-                                            content: None,
-                                            tool_calls: Some(vec![tool_call]),
-                                            tool_call_id: None,
-                                        },
-                                        finish_reason: None,
-                                    };
-                                    let sse_resp = OpenAIChatCompletionStreamResponse {
-                                        id: stream_id.to_string(),
-                                        object: "chat.completion.chunk".to_string(),
-                                        created: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs(),
-                                        model: target_model_name.to_string(),
-                                        choices: vec![choice],
-                                        usage: None,
-                                    };
-                                    if let Ok(json_payload) = serde_json::to_string(&sse_resp) {
-                                        return Ok(Some(SseEvent {
-                                            data: Some(json_payload),
-                                            ..Default::default()
-                                        }));
-                                    }
-                                    // Increment the index for the next potential tool call,
-                                    // as this `content_block_start` initiates a new tool_call sequence.
-                                    *next_tool_call_stream_index += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                "content_block_delta" => {
-                    if let Ok(event_data) = serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
-                        if let Some(delta) = event_data.delta {
-                            if delta.delta_type.as_deref() == Some("input_json_delta") {
-                                // Use the new `partial_json` field
-                                if let Some(partial_json_args) = delta.partial_json {
-                                    // This is a delta for tool call arguments.
-                                    // The `next_tool_call_stream_index` would have been incremented by `content_block_start`.
-                                    // We need to send this for the *current* tool call, so use `*next_tool_call_stream_index - 1`.
-                                    // Ensure index is not 0 if it was never incremented (edge case).
-                                    let current_tool_call_idx = if *next_tool_call_stream_index > 0
-                                    {
-                                        *next_tool_call_stream_index - 1
-                                    } else {
-                                        0 // Should not happen if content_block_start for tool_use was processed
-                                    };
-                                    let tool_call_delta = UnifiedToolCall {
-                                        index: Some(current_tool_call_idx),
-                                        id: None, // ID and name were sent in the initial part
-                                        r#type: None,
-                                        function: OpenAIFunctionCall {
-                                            name: None,
-                                            arguments: Some(partial_json_args),
-                                        },
-                                    };
-                                    let choice = OpenAIStreamChoice {
-                                        index: 0,
-                                        delta: UnifiedChatMessage {
-                                            role: Some("assistant".to_string()), // Role for tool call deltas
-                                            content: None,
-                                            tool_calls: Some(vec![tool_call_delta]),
-                                            tool_call_id: None,
-                                        },
-                                        finish_reason: None,
-                                    };
-                                    let sse_resp = OpenAIChatCompletionStreamResponse {
-                                        id: stream_id.to_string(), // Use the overall stream ID
-                                        object: "chat.completion.chunk".to_string(),
-                                        created: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs(),
-                                        model: target_model_name.to_string(),
-                                        choices: vec![choice],
-                                        usage: None,
-                                    };
-                                    if let Ok(json_payload) = serde_json::to_string(&sse_resp) {
-                                        return Ok(Some(SseEvent {
-                                            data: Some(json_payload),
-                                            ..Default::default()
-                                        }));
-                                    }
-                                }
-                            } else if let Some(text_delta) = delta.text {
-                                // Standard text_delta
-                                let choice = OpenAIStreamChoice {
-                                    index: 0,
-                                    delta: UnifiedChatMessage {
-                                        role: Some("assistant".to_string()),
-                                        content: Some(OpenAIMessageContent::Text(text_delta)),
-                                        tool_calls: None,
-                                        tool_call_id: None,
-                                    },
-                                    finish_reason: None,
-                                };
-                                let sse_resp = OpenAIChatCompletionStreamResponse {
-                                    id: stream_id.to_string(),
-                                    object: "chat.completion.chunk".to_string(),
-                                    created: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                    model: target_model_name.to_string(),
-                                    choices: vec![choice],
-                                    usage: None,
-                                };
-                                if let Ok(json_payload) = serde_json::to_string(&sse_resp) {
-                                    return Ok(Some(SseEvent {
-                                        data: Some(json_payload),
-                                        ..Default::default()
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-                "content_block_stop" => {
-                    if let Ok(event_data) = serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
-                        if let Some(index) = event_data.index {
-                            // Check if this index corresponds to a tool_call that was started.
-                            log::debug!("ClaudeAdapter: content_block_stop for index {}", index);
-                            // `next_tool_call_stream_index` is now incremented when a `tool_use` `content_block_start`
-                            // is processed, as Claude typically sends the full tool input at once.
-                            // This event mainly signals the end of that specific block (text or tool_use).
-                            // No specific OpenAI SSE event is usually generated for content_block_stop itself.
-                        }
-                    }
-                }
-                "message_delta" => {
-                    if let Ok(event_data) = serde_json::from_str::<ClaudeStreamEvent>(&data_str) {
-                        let mut finish_reason_str: Option<String> = None;
-                        let mut usage_data: Option<OpenAIUsage> = None;
+        let url = if base_url.contains("router.huggingface.co") {
+            base_url
+                .split_once("/hf-inference/models")
+                .map(|(base, _)| format!("{base}/hf-inference/models/{actual_model_name}/v1"))
+                .unwrap_or_else(|| {
+                    format!(
+                        "https://router.huggingface.co/hf-inference/models/{actual_model_name}/v1"
+                    )
+                })
+        } else {
+            format!("{base_url}/chat/completions")
+        };
 
-                        if let Some(delta) = event_data.delta {
-                            finish_reason_str = match delta.stop_reason.as_deref() {
-                                Some("end_turn") => Some("stop".to_string()),
-                                Some("max_tokens") => Some("length".to_string()),
-                                Some("tool_use") => Some("tool_calls".to_string()), // This indicates the model wants to use tools.
-                                Some(other) => {
-                                    log::info!(
-                                        "ClaudeAdapter: Stream message_delta stop_reason: {}",
-                                        other
-                                    );
-                                    Some("stop".to_string())
-                                }
-                                None => None,
-                            };
-                        }
-                        if let Some(usage) = event_data.usage {
-                            if let Some(output_tokens) = usage.output_tokens {
-                                // Input tokens are usually in message_start.
-                                // OpenAI stream usage typically only includes completion_tokens and total_tokens if available.
-                                usage_data = Some(OpenAIUsage {
-                                    prompt_tokens: 0, // Or fetch from a stored message_start event
-                                    completion_tokens: output_tokens,
-                                    total_tokens: output_tokens, // Simplification
-                                });
-                            }
-                        }
+        Ok(AdaptedRequest {
+            url,
+            headers_to_add: {
+                let mut headers = vec![(
+                    reqwest::header::CONTENT_TYPE.as_str().to_string(),
+                    "application/json".to_string(),
+                )];
+                if !api_key.is_empty() {
+                    headers.push(("Authorization".to_string(), format!("Bearer {}", api_key)));
+                }
+                headers
+            },
+            body: body_bytes,
+        })
+    }
 
-                        if finish_reason_str.is_some() || usage_data.is_some() {
-                            let choice = OpenAIStreamChoice {
-                                index: 0,
-                                delta: UnifiedChatMessage {
-                                    role: None,
-                                    content: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                }, // Delta is empty here
-                                finish_reason: finish_reason_str,
-                            };
-                            let sse_resp = OpenAIChatCompletionStreamResponse {
-                                id: stream_id.to_string(),
-                                object: "chat.completion.chunk".to_string(),
-                                created: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                model: target_model_name.to_string(),
-                                choices: vec![choice],
-                                usage: usage_data,
-                            };
-                            if let Ok(json_payload) = serde_json::to_string(&sse_resp) {
-                                return Ok(Some(SseEvent {
-                                    data: Some(json_payload),
-                                    ..Default::default()
-                                }));
-                            }
-                        }
-                    }
+    fn adapt_stream_chunk(
+        &self,
+        chunk: RawBackendStreamChunk,
+        _stream_id: &str,
+        _model_name: &str,
+        _next_tool_call_stream_index: &mut u32,
+        stream_state: &mut StreamState,
+    ) -> ProxyResult<Vec<SseEvent>> {
+        let chunk_str = String::from_utf8_lossy(&chunk.data);
+        if chunk_str.contains("[DONE]") {
+            return Ok(vec![]);
+        }
+        match convert_openai_stream_to_claude_stream(chunk_str, stream_state) {
+            Ok(sse_events) => Ok(sse_events),
+            Err(e) => Err(warp::reject::custom(ProxyAuthError::InternalError(
+                format!("Stream conversion failed: {}", e),
+            ))),
+        }
+    }
+
+    fn adapt_response_body(
+        &self,
+        response: RawBackendResponse,
+        model_name: &str,
+    ) -> ProxyResult<ClaudeNativeResponse> {
+        let openai_response: OpenAIChatCompletionResponse =
+            serde_json::from_slice(&response.body_bytes).map_err(|e| {
+                ProxyAuthError::InternalError(format!("Failed to parse OpenAI response: {}", e))
+            })?;
+        Ok(convert_openai_to_claude(&openai_response, model_name)?)
+    }
+}
+
+pub struct ClaudeToGeminiAdapter;
+
+#[async_trait]
+impl ClaudeProtocolAdapter for ClaudeToGeminiAdapter {
+    fn adapt_request(
+        &self,
+        base_url: &str,
+        actual_model_name: &str,
+        api_key: &str,
+        client_request: &ClaudeNativeRequest,
+    ) -> ProxyResult<AdaptedRequest> {
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "ClaudeToGeminiAdapter: Received request: {}\n\n\n\n",
+            serde_json::to_string_pretty(client_request).unwrap_or_default()
+        );
+        let gemini_request = convert_claude_to_gemini(client_request, actual_model_name)?;
+        let body_bytes = serde_json::to_vec(&gemini_request).map_err(|e| {
+            ProxyAuthError::InternalError(format!("Failed to serialize Gemini request: {}", e))
+        })?;
+
+        Ok(AdaptedRequest {
+            url: if client_request.stream.unwrap_or(false) {
+                format!(
+                    "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+                    base_url, actual_model_name, api_key
+                )
+            } else {
+                format!(
+                    "{}/models/{}:generateContent?key={}",
+                    base_url, actual_model_name, api_key
+                )
+            },
+            headers_to_add: vec![
+                (
+                    reqwest::header::CONTENT_TYPE.as_str().to_string(),
+                    "application/json".to_string(),
+                ),
+                // ("x-goog-api-key".to_string(), api_key.to_string()),
+            ],
+            body: body_bytes,
+        })
+    }
+
+    fn adapt_stream_chunk(
+        &self,
+        chunk: RawBackendStreamChunk,
+        _stream_id: &str,
+        _model_name: &str,
+        _next_tool_call_stream_index: &mut u32,
+    ) -> ProxyResult<Option<SseEvent>> {
+        let chunk_str = String::from_utf8_lossy(&chunk.data);
+        if chunk_str.contains("[DONE]") {
+            return Ok(None);
+        }
+        match convert_gemini_stream_to_claude_stream(chunk_str) {
+            Some(Ok(sse_event)) => Ok(Some(sse_event)),
+            Some(Err(_)) => Err(warp::reject::custom(ProxyAuthError::InternalError(
+                "Stream conversion failed".to_string(),
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    fn adapt_response_body(
+        &self,
+        response: RawBackendResponse,
+        model_name: &str,
+    ) -> ProxyResult<ClaudeNativeResponse> {
+        let gemini_response: GeminiNetworkResponse = serde_json::from_slice(&response.body_bytes)
+            .map_err(|e| {
+            ProxyAuthError::InternalError(format!("Failed to parse Gemini response: {}", e))
+        })?;
+        Ok(convert_gemini_to_claude(&gemini_response, model_name)?)
+    }
+}
+
+// ==========================================================================================
+// Conversion functions
+// ==========================================================================================
+
+/// Convert Claude native request to OpenAI format
+pub fn convert_claude_to_openai(
+    claude_request: &ClaudeNativeRequest,
+    actual_model_name: &str,
+) -> Result<OpenAIChatCompletionRequest, ProxyAuthError> {
+    let mut openai_messages = Vec::new();
+
+    if let Some(system_prompt) = &claude_request.system {
+        openai_messages.push(UnifiedChatMessage {
+            role: Some("system".to_string()),
+            content: Some(OpenAIMessageContent::Text(system_prompt.clone())),
+            ..Default::default()
+        });
+    }
+
+    openai_messages.extend(convert_claude_messages_to_openai(&claude_request.messages)?);
+
+    let openai_request = OpenAIChatCompletionRequest {
+        model: actual_model_name.to_string(),
+        messages: openai_messages,
+        max_tokens: Some(claude_request.max_tokens),
+        stream: claude_request.stream,
+        temperature: claude_request.temperature,
+        top_p: claude_request.top_p,
+        top_k: None, // OpenAI API does not support top_k
+        tools: claude_request.tools.as_ref().map(|tools| {
+            tools
+                .iter()
+                .map(|tool| OpenAITool {
+                    r#type: "function".to_string(),
+                    function: OpenAIFunctionDefinition {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        parameters: tool.input_schema.clone(),
+                    },
+                })
+                .collect()
+        }),
+        tool_choice: claude_request
+            .tool_choice
+            .as_ref()
+            .map(|choice| match choice {
+                ClaudeToolChoice::Auto => serde_json::json!("auto"),
+                ClaudeToolChoice::Any => serde_json::json!("any"),
+                ClaudeToolChoice::Tool { name } => serde_json::json!({
+                    "type": "function",
+                    "function": { "name": name }
+                }),
+            }),
+        ..Default::default()
+    };
+
+    Ok(openai_request)
+}
+
+/// Convert Claude messages to OpenAI format
+pub fn convert_claude_messages_to_openai(
+    claude_messages: &[ClaudeNativeMessage],
+) -> Result<Vec<UnifiedChatMessage>, ProxyAuthError> {
+    let mut openai_messages = Vec::new();
+
+    for claude_msg in claude_messages {
+        let mut openai_content_parts = Vec::new();
+        let mut reasoning_content: Option<String> = None;
+
+        for content_block in &claude_msg.content {
+            match content_block {
+                ClaudeNativeContentBlock::Text { text } => {
+                    openai_content_parts
+                        .push(OpenAIMessageContentPart::Text { text: text.clone() });
                 }
-                "message_stop" => {
-                    // This is the final event. OpenAI typically sends [DONE] via adapt_stream_end.
-                    log::debug!("ClaudeAdapter: Stream ended (message_stop event).");
-                    // No specific SSE event for this, [DONE] is handled by adapt_stream_end.
+                ClaudeNativeContentBlock::Image { source } => {
+                    openai_content_parts.push(OpenAIMessageContentPart::ImageUrl {
+                        image_url: OpenAIImageUrl {
+                            url: format!("data:{};base64, {}", source.media_type, source.data),
+                            detail: None,
+                        },
+                    });
                 }
-                "ping" => {
-                    // No OpenAI equivalent, just acknowledge.
-                    log::trace!("ClaudeAdapter: Ping event received.");
+                ClaudeNativeContentBlock::ToolUse { id: _, name, input } => {
+                    openai_content_parts.push(OpenAIMessageContentPart::Text {
+                        text: format!(
+                            "Tool call: {}({})",
+                            name,
+                            serde_json::to_string(input).unwrap_or_default()
+                        ),
+                    });
                 }
-                "error" => {
-                    if let Ok(error_event_data) =
-                        serde_json::from_str::<ClaudeStreamEvent>(&data_str)
-                    {
-                        if let Some(err_details) = error_event_data.error {
-                            log::error!(
-                                "ClaudeAdapter: Error event in stream: type={}, message={}",
-                                err_details.error_type,
-                                err_details.message
-                            );
-                            //  Optionally, could try to format this as an OpenAI error in the stream,
-                            //  but for now, we'll just log and the stream might be cut by the handler.
-                            //  Returning an error from adapt_stream_chunk would stop processing.
-                            return Err(ProxyAuthError::InternalError(format!(
-                                "Claude Stream Error ({}): {}",
-                                err_details.error_type, err_details.message
-                            )));
-                        }
-                    }
+                ClaudeNativeContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
+                    openai_content_parts.push(OpenAIMessageContentPart::Text {
+                        text: format!("Tool result for {}: {}", tool_use_id, content),
+                    });
                 }
-                _ => {
-                    log::warn!(
-                        "ClaudeAdapter: Unknown stream event type received: {}",
-                        event_type
-                    );
+                ClaudeNativeContentBlock::Thinking { thinking } => {
+                    // Store thinking content to be used in the reasoning_content field.
+                    reasoning_content = Some(thinking.clone());
                 }
             }
         }
 
-        // If the loop completes, it means no event in this chunk was adapted.
-        Ok(None)
+        let content = if openai_content_parts.is_empty() {
+            OpenAIMessageContent::Text(String::new())
+        } else if openai_content_parts.len() == 1
+            && matches!(
+                openai_content_parts[0],
+                OpenAIMessageContentPart::Text { .. }
+            )
+        {
+            if let OpenAIMessageContentPart::Text { text } = openai_content_parts.remove(0) {
+                OpenAIMessageContent::Text(text)
+            } else {
+                unreachable!()
+            }
+        } else {
+            OpenAIMessageContent::Parts(openai_content_parts)
+        };
+
+        openai_messages.push(UnifiedChatMessage {
+            role: Some(claude_msg.role.clone()),
+            content: Some(content),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content,
+        });
     }
 
-    fn adapt_stream_end(&self) -> Option<String> {
-        // Claude stream ends with a `message_stop` event.
-        // The standard OpenAI stream end is `data: [DONE]\n\n`.
-        Some("[DONE]".to_string())
+    Ok(openai_messages)
+}
+
+/// Convert Gemini streaming format to Claude streaming format
+pub fn convert_gemini_stream_to_claude_stream(
+    chunk_str: std::borrow::Cow<str>,
+) -> Option<Result<SseEvent, Infallible>> {
+    for event_block_str in chunk_str.split("\n\n") {
+        if event_block_str.trim().is_empty() {
+            continue;
+        }
+
+        let mut data: Option<String> = None;
+
+        for line in event_block_str.lines() {
+            if line.starts_with("data: ") {
+                data = Some(line.trim_start_matches("data: ").trim().to_string());
+            }
+        }
+
+        if let Some(data_str) = data {
+            if data_str == "[DONE]" {
+                return None;
+            }
+
+            match parse_and_convert_gemini_chunk(&data_str) {
+                Ok(claude_events) => {
+                    if !claude_events.is_empty() {
+                        let event_data = claude_events[0].clone();
+                        let event = SseEvent {
+                            event_type: Some("content_block_delta".to_string()),
+                            data: Some(event_data),
+                            ..Default::default()
+                        };
+                        return Some(Ok(event));
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to convert Gemini stream chunk: {}", e);
+                    return None;
+                }
+            }
+        }
     }
+
+    None
+}
+
+/// Parse Gemini streaming chunk and convert to Claude SSE format
+pub fn parse_and_convert_gemini_chunk(
+    data_str: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut events = Vec::new();
+
+    let gemini_chunk: GeminiNetworkResponse = serde_json::from_str(data_str)?;
+
+    if let Some(candidates) = &gemini_chunk.candidates {
+        if let Some(candidate) = candidates.first() {
+            let content_parts = &candidate.content.parts;
+            let text_content: String = content_parts
+                .iter()
+                .filter_map(|part| part.text.clone())
+                .collect::<Vec<_>>()
+                .join("");
+
+            if !text_content.is_empty() {
+                let claude_delta = ClaudeStreamDeltaResponse {
+                    block_type: "content_block_delta".to_string(),
+                    index: 0,
+                    delta: ClaudeStreamTextDelta {
+                        delta_type: "text_delta".to_string(),
+                        text: text_content,
+                    },
+                    usage: gemini_chunk
+                        .usage_metadata
+                        .as_ref()
+                        .map(|u| ClaudeNativeUsage {
+                            input_tokens: u.prompt_token_count as u64,
+                            output_tokens: u.candidates_token_count.unwrap_or(0) as u64,
+                        }),
+                };
+
+                let claude_data = serde_json::to_string(&claude_delta)?;
+                events.push(claude_data);
+            }
+
+            if let Some(_) = &candidate.finish_reason {
+                let claude_stop = serde_json::json!({
+                    "type": "message_stop"
+                });
+
+                let stop_data = serde_json::to_string(&claude_stop)?;
+                events.push(stop_data);
+            }
+        }
+    }
+
+    Ok(events)
+}
+
+/// Convert OpenAI streaming format to Claude streaming format
+pub fn convert_openai_stream_to_claude_stream(
+    chunk_str: std::borrow::Cow<str>,
+) -> Option<Result<SseEvent, Infallible>> {
+    for event_block_str in chunk_str.split("\n\n") {
+        if event_block_str.trim().is_empty() {
+            continue;
+        }
+
+        let mut data: Option<String> = None;
+
+        for line in event_block_str.lines() {
+            if line.starts_with("data: ") {
+                data = Some(line.trim_start_matches("data: ").trim().to_string());
+            }
+        }
+
+        if let Some(data_str) = data {
+            if data_str == "[DONE]" {
+                return None;
+            }
+
+            match parse_and_convert_openai_chunk(&data_str) {
+                Ok(claude_events) => {
+                    if !claude_events.is_empty() {
+                        let event_data = claude_events[0].clone();
+                        let event = SseEvent {
+                            event_type: Some("content_block_delta".to_string()),
+                            data: Some(event_data),
+                            ..Default::default()
+                        };
+                        return Some(Ok(event));
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to convert OpenAI stream chunk: {}", e);
+                    return None;
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Parse OpenAI streaming chunk and convert to Claude SSE format
+pub fn parse_and_convert_openai_chunk(
+    data_str: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut events = Vec::new();
+    log::debug!("event data: {}", &data_str);
+    let openai_chunk: OpenAIChatCompletionStreamResponse = serde_json::from_str(data_str)?;
+
+    let choices = &openai_chunk.choices;
+    for choice in choices {
+        let delta = &choice.delta;
+
+        // Handle reasoning content as thinking blocks
+        if let Some(reasoning_content) = &delta.reasoning_content {
+            if !reasoning_content.is_empty() {
+                // Map reasoning content to Claude's thinking format
+                let thinking_start = serde_json::json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "text",
+                        "text": reasoning_content
+                    }
+                });
+                events.push(serde_json::to_string(&thinking_start)?);
+
+                let thinking_delta = serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "text_delta",
+                        "text": reasoning_content
+                    }
+                });
+                events.push(serde_json::to_string(&thinking_delta)?);
+            }
+        }
+
+        if let Some(content) = &delta.content {
+            let text = match content {
+                OpenAIMessageContent::Text(text) => text.clone(),
+                OpenAIMessageContent::Parts(parts) => parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        OpenAIMessageContentPart::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            };
+
+            if !text.is_empty() {
+                let claude_delta = ClaudeStreamDeltaResponse {
+                    block_type: "content_block_delta".to_string(),
+                    index: 1,
+                    delta: ClaudeStreamTextDelta {
+                        delta_type: "text_delta".to_string(),
+                        text: text,
+                    },
+                    usage: openai_chunk.usage.as_ref().map(|u| ClaudeNativeUsage {
+                        input_tokens: u.prompt_tokens,
+                        output_tokens: u.completion_tokens,
+                    }),
+                };
+
+                let claude_data = serde_json::to_string(&claude_delta)?;
+                events.push(claude_data);
+            }
+
+            if let Some(_finish_reason) = &choice.finish_reason {
+                let claude_stop = serde_json::json!({
+                    "type": "message_stop"
+                });
+
+                let stop_data = serde_json::to_string(&claude_stop)?;
+                events.push(stop_data);
+            }
+        }
+    }
+
+    Ok(events)
+}
+
+/// Claude streaming response structures
+#[derive(Serialize)]
+struct ClaudeStreamDeltaResponse {
+    #[serde(rename = "type")]
+    block_type: String,
+    index: u32,
+    delta: ClaudeStreamTextDelta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<ClaudeNativeUsage>, // Added usage field
+}
+
+#[derive(Serialize)]
+struct ClaudeStreamTextDelta {
+    #[serde(rename = "type")]
+    delta_type: String,
+    text: String,
+}
+
+/// Convert Claude request to Gemini format
+pub fn convert_claude_to_gemini(
+    claude_request: &ClaudeNativeRequest,
+    _actual_model_name: &str,
+) -> Result<GeminiRequest, ProxyAuthError> {
+    let mut gemini_contents: Vec<GeminiContent> = Vec::new();
+
+    for claude_msg in &claude_request.messages {
+        let role = match claude_msg.role.as_str() {
+            "user" => "user",
+            "assistant" => "model",
+            _ => "user",
+        };
+
+        let mut parts = Vec::new();
+        for content_block in &claude_msg.content {
+            match content_block {
+                ClaudeNativeContentBlock::Text { text } => {
+                    parts.push(GeminiPart {
+                        text: Some(text.clone()),
+                        inline_data: None,
+                        function_call: None,
+                        function_response: None,
+                    });
+                }
+                ClaudeNativeContentBlock::Image { source } => {
+                    parts.push(GeminiPart {
+                        text: None,
+                        inline_data: Some(GeminiInlineData {
+                            mime_type: source.media_type.clone(),
+                            data: source.data.clone(),
+                        }),
+                        function_call: None,
+                        function_response: None,
+                    });
+                }
+                ClaudeNativeContentBlock::ToolUse { id: _, name, input } => {
+                    parts.push(crate::ai::network::types::GeminiPart {
+                        text: None,
+                        inline_data: None,
+                        function_call: Some(crate::ai::network::types::GeminiFunctionCall {
+                            name: name.clone(),
+                            args: input.clone(),
+                        }),
+                        function_response: None,
+                    });
+                }
+                ClaudeNativeContentBlock::ToolResult {
+                    tool_use_id: _,
+                    content,
+                    ..
+                } => {
+                    parts.push(GeminiPart {
+                        text: None,
+                        inline_data: None,
+                        function_call: None,
+                        function_response: Some(GeminiFunctionResponse {
+                            name: "tool_result".to_string(), // Or map to actual tool name if available
+                            response: serde_json::Value::String(content.clone()),
+                        }),
+                    });
+                }
+                ClaudeNativeContentBlock::Thinking { thinking } => {
+                    // Gemini does not have a direct equivalent for thinking content in user messages.
+                    // We can represent it as text for now, or ignore it.
+                    parts.push(GeminiPart {
+                        text: Some(thinking.clone()),
+                        inline_data: None,
+                        function_call: None,
+                        function_response: None,
+                    });
+                }
+            }
+        }
+
+        gemini_contents.push(GeminiContent {
+            role: role.to_string(),
+            parts,
+        });
+    }
+
+    let generation_config = GeminiGenerationConfig {
+        max_output_tokens: Some(claude_request.max_tokens),
+        temperature: claude_request.temperature,
+        top_p: claude_request.top_p,
+        top_k: None, // OpenAI API does not support top_k
+        stop_sequences: None,
+    };
+
+    let gemini_request = GeminiRequest {
+        contents: gemini_contents,
+        generation_config: Some(generation_config),
+        tools: None,
+        tool_config: None,
+        system_instruction: claude_request.system.as_ref().map(|s| GeminiContent {
+            role: "system".to_string(),
+            parts: vec![GeminiPart {
+                text: Some(s.clone()),
+                ..Default::default()
+            }],
+        }),
+    };
+
+    Ok(gemini_request)
+}
+
+/// Convert Gemini response to Claude format
+pub fn convert_gemini_to_claude(
+    gemini_response: &GeminiNetworkResponse,
+    actual_model_name: &str,
+) -> Result<ClaudeNativeResponse, ProxyAuthError> {
+    let mut content = Vec::new();
+    let mut usage = None;
+    let mut stop_reason = None;
+
+    if let Some(candidates) = &gemini_response.candidates {
+        if let Some(candidate) = candidates.first() {
+            let content_parts = &candidate.content.parts;
+            let text_content: String = content_parts
+                .iter()
+                .filter_map(|part| part.text.clone())
+                .collect::<Vec<_>>()
+                .join("");
+
+            content.push(ClaudeNativeContentBlock::Text { text: text_content });
+
+            stop_reason = candidate.finish_reason.as_ref().map(|reason| {
+                match reason.as_str() {
+                    "STOP" => "end_turn",
+                    "MAX_TOKENS" => "max_tokens",
+                    _ => "end_turn",
+                }
+                .to_string()
+            });
+        }
+    }
+
+    if let Some(usage_metadata) = &gemini_response.usage_metadata {
+        usage = Some(ClaudeNativeUsage {
+            input_tokens: usage_metadata.prompt_token_count as u64,
+            output_tokens: usage_metadata.candidates_token_count.unwrap_or(0) as u64,
+        });
+    }
+
+    let claude_response = ClaudeNativeResponse {
+        id: format!("gemini-claude-{}-converted", uuid::Uuid::new_v4()),
+        response_type: "message".to_string(),
+        role: Some("assistant".to_string()),
+        content,
+        model: Some(actual_model_name.to_string()),
+        stop_reason,
+        usage,
+        error: None,
+    };
+
+    Ok(claude_response)
+}
+
+/// Convert OpenAI response to Claude format
+pub fn convert_openai_to_claude(
+    openai_response: &OpenAIChatCompletionResponse,
+    actual_model_name: &str,
+) -> Result<ClaudeNativeResponse, ProxyAuthError> {
+    let content = openai_response
+        .choices
+        .iter()
+        .filter_map(|choice| {
+            if let Some(ref content) = choice.message.content {
+                match content {
+                    OpenAIMessageContent::Text(text) => Some(text.clone()),
+                    OpenAIMessageContent::Parts(parts) => Some(
+                        parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                OpenAIMessageContentPart::Text { text } => Some(text.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    ),
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_string();
+
+    let mut claude_content = Vec::new();
+
+    // Add reasoning content if present
+    if let Some(reasoning) = openai_response
+        .choices
+        .first()
+        .and_then(|choice| choice.message.reasoning_content.clone())
+    {
+        claude_content.push(ClaudeNativeContentBlock::Thinking {
+            thinking: reasoning,
+        });
+    }
+
+    // Add text content
+    claude_content.push(ClaudeNativeContentBlock::Text { text: content });
+
+    let stop_reason = openai_response
+        .choices
+        .first()
+        .and_then(|choice| choice.finish_reason.as_ref())
+        .map(|reason| {
+            match reason.as_str() {
+                "stop" => "end_turn",
+                "length" => "max_tokens",
+                _ => "end_turn",
+            }
+            .to_string()
+        });
+
+    let usage = openai_response
+        .usage
+        .as_ref()
+        .map(|usage| ClaudeNativeUsage {
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+        });
+
+    Ok(ClaudeNativeResponse {
+        id: format!("openai-claude-{}-converted", openai_response.id),
+        response_type: "message".to_string(),
+        role: Some("assistant".to_string()),
+        content: claude_content,
+        model: Some(actual_model_name.to_string()),
+        stop_reason,
+        usage,
+        error: None,
+    })
 }

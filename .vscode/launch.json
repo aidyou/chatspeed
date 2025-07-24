@@ -4,39 +4,141 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Tauri Development Debug",
+      "name": "🚀 Tauri Development (Full Stack)",
       "cargo": {
-        "args": [
-          "build",
-          "--manifest-path=./src-tauri/Cargo.toml",
-          "--no-default-features"
-        ]
+        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml", "--no-default-features"],
+        "filter": {
+          "name": "chatspeed",
+          "kind": "bin"
+        }
       },
-      "preLaunchTask": "debug-environment",
-      "sourceLanguages": [
-        "rust"
-      ],
-      "terminal": "integrated",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
       "env": {
-        "RUST_BACKTRACE": "1"
-      }
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "start-frontend-dev-server"
     },
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Tauri Production Debug",
+      "name": "🔧 Tauri Backend Only",
       "cargo": {
-        "args": [
-          "build",
-          "--release",
-          "--manifest-path=./src-tauri/Cargo.toml"
-        ]
+        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml", "--no-default-features"],
+        "filter": {
+          "name": "chatspeed",
+          "kind": "bin"
+        }
       },
-      "preLaunchTask": "debug-environment",
-      "sourceLanguages": [
-        "rust"
-      ],
-      "terminal": "integrated"
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "prepare-debug-backend"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "🏗️ Tauri Production Debug",
+      "cargo": {
+        "args": ["build", "--release", "--manifest-path=./src-tauri/Cargo.toml"],
+        "filter": {
+          "name": "chatspeed",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "info"
+      },
+      "preLaunchTask": "build-frontend-production"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "🧪 Debug Tests",
+      "cargo": {
+        "args": ["test", "--manifest-path=./src-tauri/Cargo.toml", "--no-run"],
+        "filter": {
+          "name": "chatspeed",
+          "kind": "test"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "env": {
+        "RUST_BACKTRACE": "full",
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "type": "cppvsdbg",
+      "request": "launch",
+      "name": "🚀 Tauri Development (Windows MSVC)",
+      "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "windows-build-debug",
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "cppvsdbg",
+      "request": "launch",
+      "name": "🔧 Tauri Backend (Windows MSVC)",
+      "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "windows-prepare-debug",
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "gdb",
+      "request": "launch",
+      "name": "🚀 Tauri Development (Linux GDB)",
+      "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "linux-build-debug"
+    },
+    {
+      "type": "gdb",
+      "request": "launch",
+      "name": "🔧 Tauri Backend (Linux GDB)",
+      "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "TAURI_DEV": "1"
+      },
+      "preLaunchTask": "linux-prepare-debug"
     }
   ]
 }

@@ -2,6 +2,15 @@
   "recommendations": [
     "Vue.volar",
     "tauri-apps.tauri-vscode",
-    "rust-lang.rust-analyzer"
-  ]
+    "rust-lang.rust-analyzer",
+    "vadimcn.vscode-lldb",
+    "ms-vscode.vscode-typescript-next",
+    "bradlc.vscode-tailwindcss",
+    "ms-vscode.vscode-json",
+    "yzhang.markdown-all-in-one",
+    "formulahendry.auto-rename-tag",
+    "christian-kohler.path-intellisense",
+    "ms-vscode.hexeditor"
+  ],
+  "unwantedRecommendations": ["ms-vscode.cpptools", "ms-vscode.cmake-tools"]
 }

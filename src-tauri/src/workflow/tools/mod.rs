@@ -4,6 +4,7 @@ mod plot;
 mod search_dedup;
 mod types;
 mod web_crawler;
+mod web_scraper;
 mod web_search;
 
 pub use chat_completion::ChatCompletion;
@@ -12,4 +13,5 @@ pub use plot::Plot;
 pub use search_dedup::SearchDedup;
 pub use types::ModelName;
 pub use web_crawler::Crawler;
+pub use web_scraper::WebScraperTool;
 pub use web_search::Search;

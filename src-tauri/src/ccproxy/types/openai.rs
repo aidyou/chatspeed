@@ -56,6 +56,8 @@ pub struct UnifiedChatMessage {
     pub tool_calls: Option<Vec<UnifiedToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>, // Used by "tool" role messages in requests
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>, // Added for custom reasoning content
                                       // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
                                       // However, OpenAI's request/non-stream response tool_calls don't have an index.
                                       // So, `UnifiedToolCall` will handle the `index` for streaming.
@@ -85,7 +87,7 @@ pub struct OpenAIImageUrl {
     pub detail: Option<String>, // "auto", "low", "high"
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)] // Added Serialize
+#[derive(Serialize, Deserialize, Debug, Clone, Default)] // Added Default
 pub struct OpenAIChatCompletionRequest {
     pub model: String, // This will be our proxy alias
     pub messages: Vec<UnifiedChatMessage>,
@@ -206,18 +208,11 @@ pub struct OpenAIFunctionDefinition {
 
 /// Represents a parsed Server-Sent Event with its distinct fields.
 /// Adapters will produce this, and handlers.rs will consume it to build warp::sse::Event.
-#[derive(Serialize, Debug, Clone, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SseEvent {
-    /// The event's 'id' field.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// The event's 'event' field (type of event).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_type: Option<String>, // Renamed from 'event' to avoid conflict with warp::sse::Event builder methods
-    /// The event's 'data' field content.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
     pub data: Option<String>,
-    /// The event's 'retry' field value (as a string, to be parsed later if needed).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub retry: Option<String>,
+    pub usage: Option<OpenAIUsage>, // Added usage field
 }

@@ -47,7 +47,7 @@ plugin_review.md
 test/
 
 # 本地文档和品牌相关文件
-/docs/
+/archive/docs/
 /brand.md
 
 src-tauri/src/plugins
@@ -55,5 +55,8 @@ src-tauri/src/plugins
 # temp copy files
 * copy.*
 
+# the ide config file
 .windsurf
 .roo
+.claude
+.trae

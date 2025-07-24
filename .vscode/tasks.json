@@ -2,40 +2,412 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "start-frontend-dev-server",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["dev"],
+      "group": "build",
+      "isBackground": true,
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^.*\\[(.*)\\].*ERROR.*$",
+          "file": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*VITE.*",
+          "endsPattern": ".*Local:.*http://localhost:1420.*"
+        }
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "build-frontend-production",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["build"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": {
+        "owner": "typescript",
+        "pattern": {
+          "regexp": "^([^\\s].*)\\((\\d+|\\d+,\\d+|\\d+,\\d+,\\d+,\\d+)\\):\\s+(error|warning|info)\\s+(TS\\d+)\\s*:\\s*(.*)$",
+          "file": 1,
+          "location": 2,
+          "severity": 3,
+          "code": 4,
+          "message": 5
+        }
+      },
+      "dependsOn": ["prepare-debug"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
       "label": "prepare-debug",
       "type": "shell",
-      "command": "make prepare-debug",
+      "command": "make",
+      "args": ["prepare-debug"],
+      "group": "build",
       "presentation": {
+        "echo": true,
         "reveal": "always",
-        "panel": "shared"
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "prepare-debug-backend",
+      "type": "shell",
+      "command": "make",
+      "args": ["copy-lang-file"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "cleanup-debug",
+      "type": "shell",
+      "command": "echo",
+      "args": ["Debug session ended. Frontend dev server may still be running."],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
       },
       "problemMatcher": []
     },
     {
-      "label": "start-dev-server",
+      "label": "kill-dev-server",
       "type": "shell",
-      "command": "yarn dev",
+      "command": "pkill",
+      "args": ["-f", "vite"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "cargo-check-tauri",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["check", "--manifest-path", "src-tauri/Cargo.toml"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "cargo-build-tauri-debug",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "cargo-build-tauri-debug-no-features",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml", "--no-default-features"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "cargo-build-tauri-release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--release", "--manifest-path", "src-tauri/Cargo.toml"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "tauri-dev-build-for-debug",
+      "dependsOrder": "sequence",
+      "dependsOn": ["prepare-debug-backend", "cargo-build-tauri-debug-no-features"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "tauri-dev",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["tauri", "dev"],
+      "group": "build",
       "isBackground": true,
       "presentation": {
+        "echo": true,
         "reveal": "always",
-        "panel": "shared"
+        "panel": "dedicated",
+        "showReuseMessage": false
       },
       "problemMatcher": {
+        "owner": "tauri",
         "pattern": {
           "regexp": "^.*$"
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": ".*VITE.*",
-          "endsPattern": ".*ready in.*"
+          "beginsPattern": ".*Compiling.*",
+          "endsPattern": ".*Finished.*"
         }
+      },
+      "dependsOn": ["prepare-debug"],
+      "options": {
+        "cwd": "${workspaceFolder}"
       }
     },
     {
-      "label": "debug-environment",
-      "dependsOrder": "sequence",
-      "dependsOn": ["prepare-debug", "start-dev-server"],
+      "label": "tauri-build",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["tauri", "build"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "dependsOn": ["build-frontend-production"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "tauri-info",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["tauri", "info"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "clean-all",
+      "type": "shell",
+      "command": "make",
+      "args": ["clean"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "install-dependencies",
+      "type": "shell",
+      "command": "yarn",
+      "args": ["install"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "label": "windows-build-debug",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml", "--no-default-features"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": ["start-frontend-dev-server"]
+    },
+    {
+      "label": "windows-prepare-debug",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-Command",
+        "Copy-Item 'src-tauri/i18n/available_language.json' 'src/i18n/do_not_edit/copy_from_rust_src_i18n.json' -Force"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "windows-kill-dev-server",
+      "type": "shell",
+      "command": "taskkill",
+      "args": ["/F", "/IM", "node.exe"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
       "problemMatcher": []
+    },
+    {
+      "label": "linux-build-debug",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml", "--no-default-features"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$rustc"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": ["start-frontend-dev-server"]
+    },
+    {
+      "label": "linux-prepare-debug",
+      "type": "shell",
+      "command": "cp",
+      "args": [
+        "src-tauri/i18n/available_language.json",
+        "src/i18n/do_not_edit/copy_from_rust_src_i18n.json"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "customArgs",
+      "description": "Custom arguments for Tauri app",
+      "default": "--dev",
+      "type": "promptString"
+    },
+    {
+      "id": "buildMode",
+      "description": "Build mode",
+      "default": "debug",
+      "type": "pickString",
+      "options": ["debug", "release"]
     }
   ]
 }

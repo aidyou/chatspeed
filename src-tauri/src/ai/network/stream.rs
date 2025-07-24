@@ -244,32 +244,32 @@ impl StreamParser {
                                     });
                                 }
 
-                                for (part_index, part) in
-                                    candidate.content.parts.into_iter().enumerate()
-                                {
-                                    // Check if the part is a function call
-                                    // Note: Gemini's Part struct needs to be updated to handle functionCall
-                                    // Assuming Part now has an optional functionCall field (it does)
-                                    if let Some(func_call) = part.function_call {
-                                        // Serialize args Value to String
-                                        let args_string = serde_json::to_string(&func_call.args).map_err(|e| {
+                                if let Some(parts) = candidate.content.parts.as_ref() {
+                                    for (part_index, part) in parts.into_iter().enumerate() {
+                                        // Check if the part is a function call
+                                        // Note: Gemini's Part struct needs to be updated to handle functionCall
+                                        // Assuming Part now has an optional functionCall field (it does)
+                                        if let Some(func_call) = &part.function_call {
+                                            // Serialize args Value to String
+                                            let args_string = serde_json::to_string(&func_call.args).map_err(|e| {
                                             t!("network.stream.gemini_tool_arg_serialization_error", error = e.to_string())
                                                 .to_string()
                                         })?;
 
-                                        tool_calls_in_chunk.push(ToolCallDeclaration {
-                                            // Use a combination of candidate and part index for uniqueness if needed,
-                                            // but simple part_index might suffice if only one candidate is streamed.
-                                            // Let's use part_index for now, assuming single candidate stream.
-                                            index: part_index as u32,
-                                            id: String::new(), // Gemini stream delta doesn't provide ID
-                                            name: func_call.name,
-                                            arguments: Some(args_string),
-                                            results: None,
-                                        });
-                                    } else if let Some(text_val) = part.text {
-                                        if !text_val.is_empty() {
-                                            text_content_parts.push(text_val);
+                                            tool_calls_in_chunk.push(ToolCallDeclaration {
+                                                // Use a combination of candidate and part index for uniqueness if needed,
+                                                // but simple part_index might suffice if only one candidate is streamed.
+                                                // Let's use part_index for now, assuming single candidate stream.
+                                                index: part_index as u32,
+                                                id: String::new(), // Gemini stream delta doesn't provide ID
+                                                name: func_call.name.clone(),
+                                                arguments: Some(args_string),
+                                                results: None,
+                                            });
+                                        } else if let Some(text_val) = &part.text {
+                                            if !text_val.is_empty() {
+                                                text_content_parts.push(text_val.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -347,21 +347,22 @@ impl StreamParser {
                                 let mut tool_calls_list: Vec<ToolCallDeclaration> = Vec::new();
                                 let mut text_parts_content = String::new();
 
-                                for (part_idx, part) in
-                                    candidate.content.parts.into_iter().enumerate()
-                                {
-                                    if let Some(func_call) = part.function_call {
-                                        let args_string = serde_json::to_string(&func_call.args)
-                                            .unwrap_or_default();
-                                        tool_calls_list.push(ToolCallDeclaration {
-                                            index: part_idx as u32,
-                                            id: String::new(),
-                                            name: func_call.name,
-                                            arguments: Some(args_string),
-                                            results: None,
-                                        });
-                                    } else if let Some(text_val) = part.text {
-                                        text_parts_content.push_str(&text_val);
+                                if let Some(parts) = candidate.content.parts {
+                                    for (part_idx, part) in parts.into_iter().enumerate() {
+                                        if let Some(func_call) = part.function_call {
+                                            let args_string =
+                                                serde_json::to_string(&func_call.args)
+                                                    .unwrap_or_default();
+                                            tool_calls_list.push(ToolCallDeclaration {
+                                                index: part_idx as u32,
+                                                id: String::new(),
+                                                name: func_call.name,
+                                                arguments: Some(args_string),
+                                                results: None,
+                                            });
+                                        } else if let Some(text_val) = part.text {
+                                            text_parts_content.push_str(&text_val);
+                                        }
                                     }
                                 }
                                 if !text_parts_content.is_empty() {

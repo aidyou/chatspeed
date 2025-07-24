@@ -272,39 +272,27 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
             user_wants_on_top
         );
 
-        #[cfg(target_os = "macos")]
-        {
-            // On Windows, we can use set_always_on_top to bring the window to the front.
-            if let Err(e) = window.set_focus() {
-                log::warn!("Failed to set focus on window '{}': {}", label, e);
-            }
+        // Use the "always_on_top" trick to grab focus, which is effective on Linux.
+        if let Err(e) = window.set_always_on_top(true) {
+            log::warn!(
+                "Failed to set always_on_top(true) for window '{}': {}",
+                label,
+                e
+            );
+        }
+        if let Err(e) = window.set_focus() {
+            log::warn!("Failed to set focus on window '{}': {}", label, e);
         }
 
-        // TODO: Need test this on Windows
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Use the "always_on_top" trick to grab focus, which is effective on Linux.
-            if let Err(e) = window.set_always_on_top(true) {
+        // 4. Restore the original "always on top" state immediately.
+        if !user_wants_on_top {
+            // If the user did NOT have the window pinned, turn off always_on_top after the trick.
+            if let Err(e) = window.set_always_on_top(false) {
                 log::warn!(
-                    "Failed to set always_on_top(true) for window '{}': {}",
+                    "Failed to restore always_on_top(false) for window '{}': {}",
                     label,
                     e
                 );
-            }
-            if let Err(e) = window.set_focus() {
-                log::warn!("Failed to set focus on window '{}': {}", label, e);
-            }
-
-            // 4. Restore the original "always on top" state immediately.
-            if !user_wants_on_top {
-                // If the user did NOT have the window pinned, turn off always_on_top after the trick.
-                if let Err(e) = window.set_always_on_top(false) {
-                    log::warn!(
-                        "Failed to restore always_on_top(false) for window '{}': {}",
-                        label,
-                        e
-                    );
-                }
             }
         }
         // If user_wants_on_top is true, we simply leave it on top, which is the correct state.
@@ -359,15 +347,12 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
 }
 
 /// Toggles the visibility of the main window using the robust helper function.
-pub fn toggle_main_window(app: &tauri::AppHandle) {
+pub fn show_and_focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         match (window.is_visible(), window.is_focused()) {
             (Ok(true), Ok(true)) => {
-                // If the window is visible and has focus, hide it.
-                log::debug!("Main window is visible and focused, hiding it.");
-                if let Err(e) = window.hide() {
-                    log::warn!("Failed to hide main window: {}", e);
-                }
+                // If the window is visible and has focus, ignore it.
+                log::debug!("Main window is visible and focused, ignore.");
             }
             _ => {
                 // In all other cases (hidden, minimized, or in the background),

@@ -84,17 +84,39 @@ lazy_static! {
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory")).parent().unwrap().into()
             } else {
-                // In development and production environments, use CARGO_MANIFEST_DIR or current working directory
-                env::var("CARGO_MANIFEST_DIR")
+                // In development and production environments, get project root from CARGO_MANIFEST_DIR
+                // CARGO_MANIFEST_DIR points to src-tauri/, so we need to go up one level to get project root
+                let manifest_dir = env::var("CARGO_MANIFEST_DIR")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"))
+                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"));
+
+                log::debug!("CARGO_MANIFEST_DIR: {:?}", manifest_dir);
+
+                // Check if we're in a Tauri project structure (src-tauri directory)
+                let project_root = if manifest_dir.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
+                    // Go up one level to get the project root
+                    let root = manifest_dir.parent().unwrap_or(&manifest_dir).to_path_buf();
+                    log::debug!("Detected Tauri project structure, using project root: {:?}", root);
+                    root
+                } else {
+                    // If not in src-tauri, use the manifest directory as-is
+                    log::debug!("Not in Tauri project structure, using manifest dir as root: {:?}", manifest_dir);
+                    manifest_dir
+                };
+                project_root
             };
             let path = PathBuf::from(project_root).join("dev_data");
+            log::debug!("STORE_DIR will be: {:?}", path);
+
             // Create directory if it doesn't exist
             if !path.exists() {
                 if let Err(e) = std::fs::create_dir_all(&path) {
                     log::error!("Failed to create dev-data directory: {}", e);
+                } else {
+                    log::debug!("Created dev_data directory at: {:?}", path);
                 }
+            } else {
+                log::debug!("dev_data directory already exists at: {:?}", path);
             }
             Arc::new(PLRwLock::new(path))
         }

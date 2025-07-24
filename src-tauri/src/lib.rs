@@ -1,5 +1,6 @@
 // modules
 mod ai;
+mod ccproxy;
 mod commands;
 mod constants;
 mod db;

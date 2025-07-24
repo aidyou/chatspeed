@@ -463,10 +463,13 @@ impl AiChatTrait for OpenAIChat {
                         .collect::<Vec<Value>>();
                     if !openai_tools.is_empty() {
                         obj.insert("tools".to_string(), json!(openai_tools));
-                        obj.insert(
-                            "tool_choice".to_string(),
-                            params.get("tool_choice").cloned().unwrap_or(json!("auto")),
-                        );
+                        // Only add tool_choice if it's explicitly provided in the params.
+                        // Avoids sending a default "auto" which may not be supported by all models.
+                        if let Some(tool_choice_val) = params.get("tool_choice").cloned() {
+                            if tool_choice_val.as_str().map_or(true, |s| !s.is_empty()) {
+                                obj.insert("tool_choice".to_string(), tool_choice_val);
+                            }
+                        }
                     }
                 }
                 None => {}
