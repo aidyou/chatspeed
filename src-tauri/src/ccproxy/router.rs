@@ -1,21 +1,14 @@
-use crate::ccproxy::gemini::GeminiRequest;
+use crate::ccproxy::common::CcproxyQuery;
 use crate::ccproxy::gemini_handler::handle_gemini_native_chat;
 use crate::ccproxy::{
     auth::authenticate_request,
     claude_handler::handle_claude_native_chat,
     openai_handler::{handle_chat_completion_proxy, list_proxied_models_handler},
-    types::{claude::ClaudeNativeRequest, openai::OpenAIChatCompletionRequest},
 };
 use crate::db::MainStore;
 
-use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use warp::{filters::header::headers_cloned, Filter, Rejection, Reply};
-
-#[derive(Deserialize)]
-struct GeminiQuery {
-    key: String,
-}
 
 /// Helper function to inject MainStore into Warp filters.
 fn with_main_store(
@@ -34,6 +27,7 @@ pub fn routes(
     // MODIFIED: Extract type is now a tuple
     // Authentication filter chain
     let auth_filter = headers_cloned()
+        .and(warp::query::<CcproxyQuery>())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(authenticate_request)
         .untuple_one();
@@ -55,6 +49,7 @@ pub fn routes(
         .and(auth_filter.clone()) // Reuse auth_filter, ensure it's Clone
         .untuple_one()
         .and(headers_cloned()) // Extract original client headers
+        .and(warp::query::<CcproxyQuery>())
         .and(warp::body::bytes())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(handle_chat_completion_proxy)
@@ -67,6 +62,7 @@ pub fn routes(
         .and(auth_filter.clone())
         .untuple_one()
         .and(headers_cloned())
+        .and(warp::query::<CcproxyQuery>())
         .and(warp::body::bytes())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(handle_claude_native_chat)
@@ -75,14 +71,14 @@ pub fn routes(
     //
     let gemini_generate_content_route =
         warp::path!("gemini" / "v1beta" / "models" / String / String)
-            .and(warp::query::<GeminiQuery>())
-            .map(|model_name: String, action: String, key: GeminiQuery| {
+            .and(warp::query::<CcproxyQuery>())
+            .map(|model_name: String, action: String, query: CcproxyQuery| {
                 log::debug!(
                     "Matched /gemini/v1beta/models/{}/{}?key=***",
                     model_name,
                     action
                 );
-                (model_name, action, key.key)
+                (model_name, action, query)
             })
             .and(warp::post())
             .and(auth_filter.clone()) // Reuse auth_filter, ensure it's Clone

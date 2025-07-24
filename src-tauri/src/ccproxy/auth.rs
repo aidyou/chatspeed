@@ -1,5 +1,6 @@
 use crate::{
     ccproxy::{
+        common::CcproxyQuery,
         errors::{ProxyAuthError, ProxyResult},
         openai::ChatCompletionProxyKeysConfig,
     },
@@ -13,33 +14,50 @@ use std::sync::{Arc, Mutex};
 /// Reads `chat_completion_proxy_keys` from `MainStore`.
 pub async fn authenticate_request(
     headers: warp::http::header::HeaderMap,
+    query: CcproxyQuery,
     main_store: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<()> {
-    // Check for x-api-key header first (Claude native format)
+    // In order of priority, we check for an API key in:
+    // 1. "Authorization: Bearer <token>" header (OpenAI format)
+    // 2. "x-api-key: <token>" header (Claude format)
+    // 3. "key=<token>" query parameter (Google AI Studio format)
+    // The first non-empty key found is used.
+
+    let bearer_token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let api_key_header = headers
         .get("x-api-key")
-        .and_then(|value| value.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    // Check for Authorization Bearer token (OpenAI compatible format)
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok());
+    let query_param_key = query
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    let token_to_check = match (api_key_header, auth_header) {
-        // Prefer x-api-key if both are provided
-        (Some(api_key), _) => api_key.to_string(),
-        (_, Some(header_val)) if header_val.starts_with("Bearer ") => {
-            header_val.trim_start_matches("Bearer ").to_string()
-        }
-        _ => {
+    let token_to_check = bearer_token
+        .or(api_key_header)
+        .or(query_param_key)
+        .map(str::to_string)
+        .ok_or_else(|| {
             #[cfg(debug_assertions)]
             log::warn!(
-                "Proxy authentication: Missing or invalid Authorization header or x-api-key."
+                "Proxy authentication: Missing token from 'Authorization' header, 'x-api-key' header, or 'key' query param."
             );
+            warp::reject::custom(ProxyAuthError::MissingToken)
+        })?;
 
-            return Err(warp::reject::custom(ProxyAuthError::MissingToken));
-        }
-    };
+    if token_to_check.is_empty() {
+        log::warn!("Proxy authentication: Bearer token, x-api-key header, or query parameter `key` is missing or empty.");
+        return Err(warp::reject::custom(ProxyAuthError::MissingToken));
+    }
 
     let proxy_keys: ChatCompletionProxyKeysConfig = {
         if let Ok(store_guard) = main_store.lock() {

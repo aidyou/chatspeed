@@ -1,5 +1,6 @@
 use crate::ai::network::{StreamFormat, StreamProcessor};
 use crate::ccproxy::adapter::unified::SseStatus;
+use crate::ccproxy::common::CcproxyQuery;
 use crate::db::{AiModel, MainStore};
 use crate::{
     ai::interaction::chat_completion::ChatProtocol,
@@ -31,14 +32,20 @@ pub async fn handle_gemini_native_chat(
     // For now, we'll let `from_gemini` set a default or rely on the handler's routing.
     route_model_alias: String,
     generate_action: String,
-    _key: String,
+    query: CcproxyQuery,
     original_client_headers: HeaderMap,
     client_request_body: bytes::Bytes, // Changed from GeminiRequest
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
+    let log_to_file = query
+        .debug
+        .unwrap_or(crate::ccproxy::common::DEFAULT_LOG_TO_FILE);
+
     // Log the raw request body
-    if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
-        log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
+    if log_to_file {
+        if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
+            log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
+        }
     }
 
     // Manually deserialize the request body
@@ -153,8 +160,9 @@ pub async fn handle_gemini_native_chat(
             }
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
-
-        log::info!(target: "ccproxy_logger", "Gemini Response Error Status: {}, Body: \n{}\n---", status_code, error_body_str);
+        if log_to_file {
+            log::info!(target: "ccproxy_logger", "Gemini Response Error Status: {}, Body: \n{}\n---\n", status_code, error_body_str);
+        }
 
         log::warn!(
             "Backend API error (alias: '{}', model: '{}', provider: '{}'): status_code={}, response={}",
@@ -250,7 +258,9 @@ pub async fn handle_gemini_native_chat(
             ..Default::default()
         }));
 
-        log::info!(target: "ccproxy_logger", "Gemini Stream Response Chunk Start: \n-----\n");
+        if log_to_file {
+            log::info!(target: "ccproxy_logger", "Gemini Stream Response Chunk Start: \n-----\n");
+        }
 
         let sse_status_clone = sse_status.clone();
         let unified_stream = processed_backend_stream
@@ -260,9 +270,11 @@ pub async fn handle_gemini_native_chat(
                 async move {
                     match result_from_processor {
                         Ok(chunk) => {
-                            if let Ok(body_str) = std::str::from_utf8(&chunk) {
-                                if !body_str.trim().is_empty() {
-                                    log::info!(target: "ccproxy_logger", "{}", body_str);
+                            if log_to_file {
+                                if let Ok(body_str) = std::str::from_utf8(&chunk) {
+                                    if !body_str.trim().is_empty() {
+                                        log::info!(target: "ccproxy_logger", "{}", body_str);
+                                    }
                                 }
                             }
                             adapter
@@ -340,8 +352,10 @@ pub async fn handle_gemini_native_chat(
             .await
             .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
 
-        if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
-            log::info!(target: "ccproxy_logger", "Gemini Response Body: \n{}\n---", body_str);
+        if log_to_file {
+            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+                log::info!(target: "ccproxy_logger", "Gemini Response Body: \n{}\n---", body_str);
+            }
         }
 
         let backend_response = BackendResponse { body: body_bytes };

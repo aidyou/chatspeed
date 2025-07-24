@@ -10,7 +10,16 @@ use crate::{
     db::{AiModel, MainStore},
 };
 use reqwest::Client;
+use serde::Deserialize;
 use std::sync::{Arc, Mutex};
+
+pub const DEFAULT_LOG_TO_FILE: bool = true;
+
+#[derive(Deserialize)]
+pub struct CcproxyQuery {
+    pub key: Option<String>,
+    pub debug: Option<bool>,
+}
 
 /// Common logic for model retrieval and rotation
 pub struct ModelResolver;
