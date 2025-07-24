@@ -83,9 +83,26 @@ async fn get_ai_model(
 
 pub async fn handle_chat_completion_proxy(
     original_client_headers: HeaderMap,
-    client_request_payload: OpenAIChatCompletionRequest,
+    client_request_body: bytes::Bytes, // Changed from OpenAIChatCompletionRequest
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
+    // Log the raw request body
+    if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
+        log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
+    }
+
+    // Manually deserialize the request body
+    let client_request_payload: OpenAIChatCompletionRequest =
+        match serde_json::from_slice(&client_request_body) {
+            Ok(payload) => payload,
+            Err(e) => {
+                log::error!("Failed to deserialize OpenAIChatCompletionRequest: {}", e);
+                return Err(warp::reject::custom(ProxyAuthError::InternalError(
+                    t!("proxy.error.invalid_request_format").to_string(),
+                )));
+            }
+        };
+
     let proxy_alias = client_request_payload.model.clone();
     let is_streaming_request = client_request_payload.stream.unwrap_or(false);
 
@@ -179,6 +196,8 @@ pub async fn handle_chat_completion_proxy(
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
 
+        log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Error, Status: {}, Body: \n{}\n---", status_code, error_body_str);
+
         log::warn!(
             "Proxy target returned an error. Status: {}, Body: {}",
             status_code,
@@ -271,6 +290,7 @@ pub async fn handle_chat_completion_proxy(
             ..Default::default()
         }));
 
+        log::info!(target: "ccproxy_logger", "OpenAI-Compatible Stream Response Chunk Start: \n-----\n");
         let sse_status_clone = sse_status.clone();
         let unified_stream = reassembled_stream
             .then(move |item| {
@@ -280,6 +300,11 @@ pub async fn handle_chat_completion_proxy(
                     match item {
                         // The item from the channel is a Result<Bytes, String>
                         Ok(chunk) => {
+                            if let Ok(body_str) = std::str::from_utf8(&chunk) {
+                                if !body_str.trim().is_empty() {
+                                    log::info!(target: "ccproxy_logger", "{}", body_str);
+                                }
+                            }
                             // Attempt to adapt the complete chunk
                             adapter
                                 .adapt_stream_chunk(chunk, status)
@@ -326,6 +351,10 @@ pub async fn handle_chat_completion_proxy(
             .bytes()
             .await
             .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+
+        if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+            log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Body: \n{}\n---", body_str);
+        }
 
         let backend_response =
             crate::ccproxy::adapter::backend::BackendResponse { body: body_bytes };

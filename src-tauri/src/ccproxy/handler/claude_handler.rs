@@ -26,9 +26,26 @@ use std::str::FromStr;
 /// Handle Claude native format chat completion requests
 pub async fn handle_claude_native_chat(
     original_client_headers: HeaderMap,
-    client_request_payload: ClaudeNativeRequest,
+    client_request_body: bytes::Bytes, // Changed from ClaudeNativeRequest
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
+    // Log the raw request body
+    if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
+        log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
+    }
+
+    // Manually deserialize the request body
+    let client_request_payload: ClaudeNativeRequest =
+        match serde_json::from_slice(&client_request_body) {
+            Ok(payload) => payload,
+            Err(e) => {
+                log::error!("Failed to deserialize ClaudeNativeRequest: {}", e);
+                return Err(warp::reject::custom(ProxyAuthError::InternalError(
+                    t!("proxy.error.invalid_request_format").to_string(),
+                )));
+            }
+        };
+
     let proxy_alias = client_request_payload.model.clone();
     let is_streaming_request = client_request_payload.stream.unwrap_or(false);
 
@@ -120,6 +137,7 @@ pub async fn handle_claude_native_chat(
             }
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
+        log::info!(target: "ccproxy_logger", "Claude Response Error, Status: {}, Body: \n{}\n---", status_code, error_body_str);
 
         log::warn!(
             "Proxy target returned an error. Status: {}, Body: {}",
@@ -213,6 +231,7 @@ pub async fn handle_claude_native_chat(
             ..Default::default()
         }));
 
+        log::info!(target: "ccproxy_logger", "Claude Stream Response Chunk Start: \n-----\n");
         let sse_status_clone = sse_status.clone();
         let unified_stream = reassembled_stream
             .then(move |item| {
@@ -222,6 +241,11 @@ pub async fn handle_claude_native_chat(
                     match item {
                         // The item from the channel is a Result<Bytes, String>
                         Ok(chunk) => {
+                            if let Ok(body_str) = std::str::from_utf8(&chunk) {
+                                if !body_str.trim().is_empty() {
+                                    log::info!(target: "ccproxy_logger", "{}", body_str);
+                                }
+                            }
                             // Attempt to adapt the complete chunk
                             adapter
                                 .adapt_stream_chunk(chunk, status)
@@ -264,6 +288,10 @@ pub async fn handle_claude_native_chat(
             .bytes()
             .await
             .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+
+        if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+            log::info!(target: "ccproxy_logger", "Claude Response Body: \n{}\n---", body_str);
+        }
 
         let backend_response = BackendResponse { body: body_bytes };
         let unified_response = backend_adapter

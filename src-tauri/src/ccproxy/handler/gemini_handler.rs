@@ -33,9 +33,25 @@ pub async fn handle_gemini_native_chat(
     generate_action: String,
     _key: String,
     original_client_headers: HeaderMap,
-    client_request_payload: GeminiRequest,
+    client_request_body: bytes::Bytes, // Changed from GeminiRequest
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
+    // Log the raw request body
+    if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
+        log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
+    }
+
+    // Manually deserialize the request body
+    let client_request_payload: GeminiRequest = match serde_json::from_slice(&client_request_body) {
+        Ok(payload) => payload,
+        Err(e) => {
+            log::error!("Failed to deserialize GeminiRequest: {}", e);
+            return Err(warp::reject::custom(ProxyAuthError::InternalError(
+                t!("proxy.error.invalid_request_format").to_string(),
+            )));
+        }
+    };
+
     let proxy_alias = route_model_alias; // Use the model alias from the route
 
     // 1. Convert to UnifiedRequest
@@ -138,6 +154,8 @@ pub async fn handle_gemini_native_chat(
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
 
+        log::info!(target: "ccproxy_logger", "Gemini Response Error Status: {}, Body: \n{}\n---", status_code, error_body_str);
+
         log::warn!(
             "Backend API error (alias: '{}', model: '{}', provider: '{}'): status_code={}, response={}",
             proxy_alias,
@@ -232,32 +250,42 @@ pub async fn handle_gemini_native_chat(
             ..Default::default()
         }));
 
+        log::info!(target: "ccproxy_logger", "Gemini Stream Response Chunk Start: \n-----\n");
+
         let sse_status_clone = sse_status.clone();
-        let unified_stream =
-            processed_backend_stream
-                .then(move |result_from_processor| {
-                    let adapter = backend_adapter.clone();
-                    let status = sse_status_clone.clone();
-                    async move {
-                        match result_from_processor {
-                        Ok(complete_backend_chunk_data) => adapter
-                            .adapt_stream_chunk(complete_backend_chunk_data, status)
+        let unified_stream = processed_backend_stream
+            .then(move |result_from_processor| {
+                let adapter = backend_adapter.clone();
+                let status = sse_status_clone.clone();
+                async move {
+                    match result_from_processor {
+                        Ok(chunk) => {
+                            if let Ok(body_str) = std::str::from_utf8(&chunk) {
+                                if !body_str.trim().is_empty() {
+                                    log::info!(target: "ccproxy_logger", "{}", body_str);
+                                }
+                            }
+                            adapter
+                            .adapt_stream_chunk(chunk, status)
                             .await
                             .unwrap_or_else(|e| {
                                 vec![crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
                                     message: e.to_string(),
                                 }]
-                            }),
+                            })
+                        }
                         Err(e) => {
                             log::error!("Error from StreamProcessor: {}", e);
-                            vec![crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
-                                message: e.to_string(),
-                            }]
+                            vec![
+                                crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
+                                    message: e.to_string(),
+                                },
+                            ]
                         }
                     }
-                    }
-                })
-                .flat_map(iter);
+                }
+            })
+            .flat_map(iter);
 
         let sse_stream = unified_stream.flat_map(move |unified_chunk| {
             let events = output_adapter
@@ -311,6 +339,10 @@ pub async fn handle_gemini_native_chat(
             .bytes()
             .await
             .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+
+        if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+            log::info!(target: "ccproxy_logger", "Gemini Response Body: \n{}\n---", body_str);
+        }
 
         let backend_response = BackendResponse { body: body_bytes };
         let unified_response = backend_adapter

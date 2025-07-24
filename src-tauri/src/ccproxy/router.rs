@@ -55,7 +55,7 @@ pub fn routes(
         .and(auth_filter.clone()) // Reuse auth_filter, ensure it's Clone
         .untuple_one()
         .and(headers_cloned()) // Extract original client headers
-        .and(warp::body::json::<OpenAIChatCompletionRequest>())
+        .and(warp::body::bytes())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(handle_chat_completion_proxy)
         .map(|reply| (reply,)); // Wrap the Reply in a tuple
@@ -67,30 +67,7 @@ pub fn routes(
         .and(auth_filter.clone())
         .untuple_one()
         .and(headers_cloned())
-        .and(warp::body::json::<ClaudeNativeRequest>())
-        // .and(warp::body::bytes())
-        // .and_then(
-        //     |headers: warp::http::HeaderMap, body: bytes::Bytes| async move {
-        //         #[cfg(debug_assertions)]
-        //         {
-        //             if let Ok(body_str) = std::str::from_utf8(&body) {
-        //                 log::debug!("Raw ClaudeNativeRequest body: {}", body_str);
-        //             } else {
-        //                 log::debug!("Raw ClaudeNativeRequest body: <Invalid UTF-8>");
-        //             }
-        //         }
-        //         match serde_json::from_slice::<ClaudeNativeRequest>(&body) {
-        //             Ok(req) => Ok((headers, req)), // Keep headers
-        //             Err(e) => Err(warp::reject::custom(
-        //                 crate::http::ccproxy::errors::ProxyAuthError::InternalError(format!(
-        //                     "Failed to deserialize ClaudeNativeRequest: {}",
-        //                     e
-        //                 )),
-        //             )),
-        //         }
-        //     },
-        // )
-        // .untuple_one()
+        .and(warp::body::bytes())
         .and(with_main_store(main_store_arc.clone()))
         .and_then(handle_claude_native_chat)
         .map(|reply| (reply,));
@@ -111,7 +88,7 @@ pub fn routes(
             .and(auth_filter.clone()) // Reuse auth_filter, ensure it's Clone
             .untuple_one()
             .and(headers_cloned()) // Extract original client headers
-            .and(warp::body::json::<GeminiRequest>())
+            .and(warp::body::bytes())
             .and(with_main_store(main_store_arc.clone()))
             .and_then(handle_gemini_native_chat)
             .map(|reply| (reply,)); // Wrap the Reply in a tuple

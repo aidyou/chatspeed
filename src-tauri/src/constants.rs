@@ -49,10 +49,6 @@ pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // on mouse event status
 pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
-// Used to manage the timer task handle for hiding the assistant window
-pub static ASSISTANT_WINDOW_HIDE_TIMER: once_cell::sync::Lazy<
-    Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-> = once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 // The following static variables are used to store the paths of the http server and related directories
 // They are initialized after the http server is initialized,
@@ -72,6 +68,8 @@ lazy_static! {
     pub static ref PLUGINS_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // shared data dir: ${app_data}/shared
     pub static ref SHARED_DATA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
+    // log dir: ${app_data}/log, it will be initialized at startup in @src-tauri/src/logger.rs L108 `setup_logger`
+    pub static ref LOG_DIR: Arc<PLRwLock<PathBuf>> = Arc::new(PLRwLock::new(PathBuf::new()));
 
     // Just for Development environment data directory
     pub static ref STORE_DIR: Arc<PLRwLock<PathBuf>> = {

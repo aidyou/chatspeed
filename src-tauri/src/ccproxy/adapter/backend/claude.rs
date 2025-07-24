@@ -181,6 +181,8 @@ impl BackendAdapter for ClaudeBackendAdapter {
         })
     }
 
+    /// Adapt a stream chunk into a unified stream chunk.
+    /// @link https://docs.anthropic.com/en/docs/build-with-claude/streaming
     async fn adapt_stream_chunk(
         &self,
         chunk: bytes::Bytes,

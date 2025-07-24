@@ -138,14 +138,16 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 )])
             }
 
-            UnifiedStreamChunk::MessageStop {
-                stop_reason: _,
-                usage,
-            } => {
+            UnifiedStreamChunk::MessageStop { stop_reason, usage } => {
                 let message_index = if let Ok(status) = sse_status.read() {
                     status.message_index
                 } else {
                     0
+                };
+                let reason = if stop_reason == "tool_use" || stop_reason == "max_tokens" {
+                    stop_reason
+                } else {
+                    "end_turn".to_string()
                 };
                 Ok(vec![
                     Event::default().event("content_block_stop").data(
@@ -159,7 +161,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
                         json!({
                             "type": "message_delta",
                             "delta": {
-                                "stop_reason": "end_turn".to_string()
+                                "stop_reason": reason
                             },
                             "usage": {
                                 "output_tokens": usage.output_tokens

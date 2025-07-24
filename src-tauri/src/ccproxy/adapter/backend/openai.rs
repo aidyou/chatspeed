@@ -235,6 +235,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
         })
     }
 
+    /// Adapt a openai stream chunk into a unified stream chunk.
+    /// @link https://platform.openai.com/docs/api-reference/chat-streaming
     async fn adapt_stream_chunk(
         &self,
         chunk: bytes::Bytes,

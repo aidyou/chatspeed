@@ -56,10 +56,11 @@ pub fn console_log_formatter(
     let reset = "\x1B[0m";
 
     out.finish(format_args!(
-        "{}{}[{}] {}:{} {}{}",
+        "{}{}[{}] {} - {}:{} {}{}",
         level_color,
         chrono::Local::now().format("%H:%M:%S.%3f "),
         get_level(level),
+        record.target(),
         simplify_file_path(record.file().unwrap_or("")),
         record.line().unwrap_or(0),
         replace_sensitive_info(message.to_string().as_str()),
@@ -191,11 +192,17 @@ pub fn setup_logger(app: &tauri::App) {
         .path()
         .app_log_dir()
         .expect(&t!("main.failed_to_retrieve_log_directory"));
+
+    *LOG_DIR.write() = log_dir.clone();
+
     let log_file_path = log_dir.join("chatspeed.log");
+    let ccproxy_log_path = log_dir.join("ccproxy.log");
+
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
     // Create log file
     File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
+    File::create(&ccproxy_log_path).expect("Failed to create ccproxy.log");
 
     // Create base dispatcher
     let base_dispatcher = fern::Dispatch::new().level(log::LevelFilter::Debug);
@@ -213,21 +220,34 @@ pub fn setup_logger(app: &tauri::App) {
     let file_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Debug)
         .filter(|record| {
-            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Debug
+            record.target().contains("chatspeed")
+                || (record.level() < log::LevelFilter::Debug && record.target() != "ccproxy_logger")
         })
         .format(file_log_formatter)
         .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));
+
+    // ccproxy dispatcher - raw format
+    let ccproxy_dispatcher = fern::Dispatch::new()
+        .level(log::LevelFilter::Info)
+        .filter(|record| record.target() == "ccproxy_logger")
+        .format(|out, message, _| out.finish(format_args!("{}", message)))
+        .chain(fern::log_file(&ccproxy_log_path).expect("Failed to create ccproxy.log"));
 
     // Apply logger configuration
     base_dispatcher
         .chain(stdout_dispatcher)
         .chain(file_dispatcher)
+        .chain(ccproxy_dispatcher)
         .apply()
         .expect(&t!("main.failed_to_initialize_logger"));
 
-    log::debug!(
+    log::info!(
         "Logger initialized successfully, log file path: {:?}",
         log_file_path
+    );
+    log::info!(
+        "Logger initialized successfully, ccproxy log file path: {:?}",
+        ccproxy_log_path
     );
 }
 
@@ -244,6 +264,8 @@ fn get_level(level: log::Level) -> String {
 
 #[cfg(test)]
 use log::SetLoggerError;
+
+use crate::constants::LOG_DIR;
 
 /// Set up logger for tests
 ///
