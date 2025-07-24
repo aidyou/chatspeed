@@ -1,25 +1,25 @@
 import { invoke } from '@tauri-apps/api/core'
 import { marked } from 'marked'
 import i18n from '@/i18n/index.js'
-import he from 'he';
+import he from 'he'
 
 // Regular expressions
-const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g;
-const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g;
-const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g;
-const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g;
-const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g;
-const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g;
-const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/; // just deal the first think tag
-const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g;
+const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g
+const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g
+const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g
+const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g
+const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g
+const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g
+const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/ // just deal the first think tag
+const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g
 // const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
-const THINK_CONTENT_REGEX = /<think>[\s\S]+?<\/think>/;
-const PLACEHOLDER_RESTORE_REGEX = /___(?:CODE|MATH|BLOCK_MATH|THINK)_\d+___/g;
+const THINK_CONTENT_REGEX = /<think>[\s\S]+?<\/think>/
+const PLACEHOLDER_RESTORE_REGEX = /___(?:CODE|MATH|BLOCK_MATH|THINK)_\d+___/g
 
-const MATH_BLOCK_REGEX = /\$\$([\s\S]+?)\$\$/g;
-const MATH_INLINE_REGEX = /\$([^\n]+?)\$/g;
-const CHINESE_CHARS_REGEX = /[\u4e00-\u9fa5]/;
-const CHINESE_CHARS_GROUP_REGEX = /([\u4e00-\u9fa5]+)/g;
+const MATH_BLOCK_REGEX = /\$\$([\s\S]+?)\$\$/g
+const MATH_INLINE_REGEX = /\$([^\n]+?)\$/g
+const CHINESE_CHARS_REGEX = /[\u4e00-\u9fa5]/
+const CHINESE_CHARS_GROUP_REGEX = /([\u4e00-\u9fa5]+)/g
 
 import { getLanguageByCode } from '@/i18n/langUtils'
 import { useSettingStore } from '@/stores/setting'
@@ -45,7 +45,13 @@ const settingStore = useSettingStore()
  * @param {string} [metadata.targetLang] - Target language for translation
  * @returns {Array<{role: string, content: string}>} Processed messages ready for AI
  */
-export const chatPreProcess = async (inputMessage, historyMessages, quoteMessage, skill, metadata = {}) => {
+export const chatPreProcess = async (
+  inputMessage,
+  historyMessages,
+  quoteMessage,
+  skill,
+  metadata = {}
+) => {
   const messages = []
   const skillType = skill?.metadata?.type
   const useSystemRole = skill?.metadata?.useSystemRole
@@ -79,7 +85,10 @@ export const chatPreProcess = async (inputMessage, historyMessages, quoteMessage
       if (prompt.includes('{content}')) {
         finalContent = buildUserMessage(prompt.replace(/\{content\}/g, inputMessage), quoteMessage)
       } else {
-        finalContent = buildUserMessage(prompt ? `${prompt}\n\n${inputMessage}` : inputMessage, quoteMessage)
+        finalContent = buildUserMessage(
+          prompt ? `${prompt}\n\n${inputMessage}` : inputMessage,
+          quoteMessage
+        )
       }
 
       messages.push({ role: 'user', content: finalContent })
@@ -88,6 +97,7 @@ export const chatPreProcess = async (inputMessage, historyMessages, quoteMessage
 
   // Add history messages to the messages array
   const history = buildHistoryMessages(historyMessages)
+  console.log(history)
 
   // Handle system role messages
   if (useSystemRole && messages[0]?.role === 'system') {
@@ -107,31 +117,47 @@ export const chatPreProcess = async (inputMessage, historyMessages, quoteMessage
  * @returns {Array<{role: string, content: string}>} Formatted history messages
  */
 function buildHistoryMessages(historyMessages) {
-  return historyMessages.reduceRight((acc, message) => {
-    // If the contextCleared marker is encountered, stop collecting
-    if (message.metadata?.contextCleared) {
-      acc.stop = true
+  const acc = historyMessages.reduceRight(
+    (acc, message) => {
+      // If the contextCleared marker is encountered, stop collecting
+      if (message.metadata?.contextCleared) {
+        acc.stop = true
+        return acc
+      }
+
+      // If collection has already stopped, return directly
+      if (acc.stop) {
+        return acc
+      }
+
+      // Skip if current message has same role as the last message added to the accumulator.
+      // This ensures the roles are always alternating.
+      if (acc.messages.length > 0 && message.role === acc.messages[0].role) {
+        return acc
+      }
+
+      // Collect message
+      acc.messages.unshift({
+        role: message.role,
+        content:
+          message.role === 'assistant'
+            ? message.content.replace(/<think>[\s\S]*?<\/think>/g, '')
+            : message.content
+      })
+
       return acc
-    }
+    },
+    { messages: [], stop: false }
+  )
 
-    // If collection has already stopped, return directly
-    if (acc.stop) {
-      return acc
-    }
+  const processedMessages = acc.messages
 
-    // Skip if current message has same role as previous message
-    if (acc.messages.length > 0 && message.role === acc.messages[acc.messages.length - 1].role) {
-      return acc
-    }
+  // Ensure the first message is from the user
+  if (processedMessages.length > 0 && processedMessages[0].role === 'assistant') {
+    processedMessages.shift()
+  }
 
-    // Collect message
-    acc.messages.unshift({
-      role: message.role,
-      content: (message.role === 'assistant' ? message.content.replace(/<think>[\s\S]*?<\/think>/g, '') : message.content)
-    })
-
-    return acc
-  }, { messages: [], stop: false }).messages
+  return processedMessages
 }
 
 /**
@@ -166,7 +192,12 @@ function buildUserMessage(inputMessage, quoteMessage) {
  * @param {string} inputMessage - The input message to be translated.
  * @returns {Promise<string>} - A promise that resolves to the processed prompt with placeholders replaced by actual values.
  */
-export const processTranslationPrompt = async (prompt, sourceLangCode, targetLangCode, inputMessage) => {
+export const processTranslationPrompt = async (
+  prompt,
+  sourceLangCode,
+  targetLangCode,
+  inputMessage
+) => {
   let sourceLang = ''
   let targetLang = ''
 
@@ -237,7 +268,7 @@ export const getTranslationTargetLang = (sourceLang, targetLang) => {
  * @param {string} text - The text to be escaped
  * @returns {string} - Escaped text with HTML entities
  */
-export const htmlspecialchars = (text) => {
+export const htmlspecialchars = text => {
   // const map = {
   //   '&': '&amp;',
   //   '"': '&quot;',
@@ -247,20 +278,23 @@ export const htmlspecialchars = (text) => {
   //   .replace(/[&"']/g, m => map[m])
   //   .replace(/<([a-zA-Z][^>\n]*?)>/g, (_match, p1) => `&lt;${p1}&gt;`)
   //   .replace(/<\/[a-zA-Z]+>/g, (match) => `&lt;/${match.slice(2, -1)}&gt;`)
-  return he.encode(text, { '&': false });
+  return he.encode(text, { '&': false })
 }
 
 /**
  * modify parseMarkdown function
  */
 export const parseMarkdown = (content, reference) => {
-  content = content ? content.trim() : '';
+  content = content ? content.trim() : ''
   if (!content) return ''
 
   let refs = ''
   // format refs [1,2,3](@ref) -> [^1][^2][^3]
   content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
-    return numbers.split(',').map(num => `[^${num.trim()}]`).join('')
+    return numbers
+      .split(',')
+      .map(num => `[^${num.trim()}]`)
+      .join('')
   })
   // format refs [^1^] -> [^1]
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
@@ -286,10 +320,12 @@ export const parseMarkdown = (content, reference) => {
     return id
   })
 
-
   if (Array.isArray(reference) && reference.length > 0) {
     reference.forEach(item => {
-      content = content.replace(new RegExp(`\\[\\^${item.id}\\]`, 'g'), `<a href="${item.url}" class="reference-link" title="${item.title.replace(/"/g, '\'').trim()}">${item.id}</a>`)
+      content = content.replace(
+        new RegExp(`\\[\\^${item.id}\\]`, 'g'),
+        `<a href="${item.url}" class="reference-link" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
+      )
     })
   }
 
@@ -313,9 +349,11 @@ export const parseMarkdown = (content, reference) => {
   }
 
   content = content.replace(THINK_REGEX, (_match, _classAttr, className, content) => {
-    const translationKey = className?.includes('thinking') ? 'chat.reasoning' : 'chat.reasoningProcess'
+    const translationKey = className?.includes('thinking')
+      ? 'chat.reasoning'
+      : 'chat.reasoningProcess'
     return `<div class="chat-think ${className || ''}"><div class="chat-think-title expanded"><span>${i18n.global.t(translationKey)}</span></div><div class="think-content">${content}</div></div>`
-  });
+  })
 
   // Handle line breaks to ensure correct Markdown line break behavior:
   // 1. Preserve line breaks within code blocks
@@ -323,26 +361,25 @@ export const parseMarkdown = (content, reference) => {
   // 3. Retain consecutive line breaks (empty lines) for creating new paragraphs
 
   // Use Map to store placeholders for better performance and cleaner restoration
-  const blocks = new Map();
-  let counter = 0;
+  const blocks = new Map()
+  let counter = 0
 
   // Create placeholder for special content (code blocks, math formulas)
   const createPlaceholder = (content, prefix) => {
-    const id = `___${prefix}_${counter++}___`;
-    blocks.set(id, content);
-    return id;
-  };
+    const id = `___${prefix}_${counter++}___`
+    blocks.set(id, content)
+    return id
+  }
 
   // Protect special content by replacing them with placeholders
-  content = content
-    .replace(CODE_BLOCK_REGEX, match => createPlaceholder(match, 'CODE'))
+  content = content.replace(CODE_BLOCK_REGEX, match => createPlaceholder(match, 'CODE'))
 
   // Add two spaces at the end of non-empty lines for soft line breaks, but retain consecutive line breaks for paragraph separation
-  content = content.replace(LINE_BREAK_REGEX, '$1  \n');
+  content = content.replace(LINE_BREAK_REGEX, '$1  \n')
 
   // Replace all <think>...</think> blocks with placeholders
-  const thinkBlocks = new Map();
-  let thinkCounter = 0;
+  const thinkBlocks = new Map()
+  let thinkCounter = 0
   content = content.replace(THINK_CONTENT_REGEX, match => {
     const id = `___THINK_${thinkCounter++}___`
     thinkBlocks.set(id, match)
@@ -375,7 +412,10 @@ export const parseMarkdown = (content, reference) => {
   }
 
   // Restore all protected content in a single pass
-  content = content.replace(PLACEHOLDER_RESTORE_REGEX, match => blocks.get(match) || thinkBlocks.get(match));
+  content = content.replace(
+    PLACEHOLDER_RESTORE_REGEX,
+    match => blocks.get(match) || thinkBlocks.get(match)
+  )
 
   // Replace strings wrapped with ``` to ```\n$1\n``` and trim leading and trailing spaces from $1
   // content = content.replace(BLOCK_CODE_REGEX, (_match, p1, p2) => {
@@ -391,14 +431,14 @@ export const parseMarkdown = (content, reference) => {
       case 'mysql':
       case 'pgsql':
       case 'postgres':
-        lang = 'sql';
-        break;
+        lang = 'sql'
+        break
       case 'log':
-        lang = 'text';
-        break;
+        lang = 'text'
+        break
       case 'vue':
-        lang = 'html';
-        break;
+        lang = 'html'
+        break
     }
     if (lang === 'mermaid') {
       return `<div class="svg-container mermaid" data-content="${encodeURIComponent(ev.text)}"><div class="generating-svg"><i class="cs cs-loading cs-spin"></i>${i18n.global.t('chat.generatingDiagram')}</div></div>`

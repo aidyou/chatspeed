@@ -958,7 +958,7 @@ const dispatchChatCompletion = async (messageId = null) => {
 
   let historyMessages = []
   if (settingStore.settings.historyMessages > 0 && !disableContext.value) {
-    historyMessages = chatStore.messages.slice(-1 * settingStore.settings.historyMessages * 2)
+    historyMessages = chatStore.messages.slice(-1 * (settingStore.settings.historyMessages * 2 + 1))
     if (
       historyMessages.length > 0 &&
       historyMessages[historyMessages.length - 1].id === messageId
@@ -1239,7 +1239,6 @@ const handleTitleGenerated = payload => {
 const handleChatMessage = async payload => {
   let isDone = false
   chatState.value.isReasoning = payload?.type == 'reasoning'
-  console.log(payload)
   switch (payload?.type) {
     case 'step':
       currentAssistantMessage.value = payload?.chunk || ''

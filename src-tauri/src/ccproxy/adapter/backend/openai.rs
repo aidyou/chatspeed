@@ -385,24 +385,24 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         }
 
                         for tc in tool_calls {
-                            if let Some(index) = tc.index {
-                                if index == 0 {
-                                    let tool_id = tc.id.clone().unwrap_or(
-                                        format!("tool_{}", uuid::Uuid::new_v4()).to_string(),
-                                    );
-                                    let mut message_id = 0;
+                            if let Some(name) = tc.function.name.clone() {
+                                if !name.is_empty() {
+                                    let tool_id = tc.id.clone().unwrap_or_else(|| {
+                                        format!("tool_{}", uuid::Uuid::new_v4())
+                                    });
+                                    let mut message_index = 0;
                                     if let Ok(mut status) = sse_status.write() {
                                         status.tool_id = tool_id.clone();
-                                        message_id = status.message_index;
+                                        message_index = status.message_index;
                                     }
-                                    let name = tc.function.name.clone().unwrap_or_default();
+
                                     // for claude only
                                     unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
-                                        index: message_id,
+                                        index: message_index,
                                         block: json!({
                                             "type":"tool_use",
-                                            "id":tool_id,
-                                            "name":name.clone(),
+                                            "id": tool_id.clone(),
+                                            "name": name.clone(),
                                             "input":{}
                                         }),
                                     });
@@ -410,12 +410,19 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                     unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
                                         tool_type: "tool_use".to_string(),
                                         id: tool_id.clone(),
-                                        name: name,
+                                        name,
                                     });
                                 }
-                                if let Some(args) = tc.function.arguments {
+                            }
+
+                            if let Some(args) = tc.function.arguments {
+                                if !args.is_empty() {
+                                    let mut tool_id = String::new();
+                                    if let Ok(status) = sse_status.read() {
+                                        tool_id = status.tool_id.clone();
+                                    };
                                     unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
-                                        id: tc.id.clone().unwrap_or_default(),
+                                        id: tool_id,
                                         delta: args,
                                     });
                                 }
