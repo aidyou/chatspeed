@@ -1,7 +1,7 @@
 use crate::{
     ai::{network::ProxyType, util::get_proxy_type},
     ccproxy::{
-        errors::{ProxyAuthError, ProxyResult},
+        errors::{CCProxyError, ProxyResult},
         openai::ChatCompletionProxyConfig,
         proxy_rotator::PROXY_BACKEND_ROTATOR,
         types::openai::BackendModelTarget,
@@ -37,7 +37,7 @@ impl ModelResolver {
                 "Proxy alias '{}' has no backend targets configured.",
                 proxy_alias
             );
-            return Err(warp::reject::custom(ProxyAuthError::NoBackendTargets(
+            return Err(warp::reject::custom(CCProxyError::NoBackendTargets(
                 proxy_alias,
             )));
         }
@@ -61,7 +61,7 @@ impl ModelResolver {
                 "Target AI provider base_url is empty for alias '{}'",
                 proxy_alias
             );
-            return Err(warp::reject::custom(ProxyAuthError::InternalError(
+            return Err(warp::reject::custom(CCProxyError::InternalError(
                 "Target base URL is empty".to_string(),
             )));
         }
@@ -76,7 +76,7 @@ impl ModelResolver {
     ) -> ProxyResult<Vec<BackendModelTarget>> {
         let store_guard = main_store_arc.lock().map_err(|e| {
             let err_msg = format!("Failed to lock MainStore: {}", e);
-            warp::reject::custom(ProxyAuthError::StoreLockError(err_msg))
+            warp::reject::custom(CCProxyError::StoreLockError(err_msg))
         })?;
 
         let proxy_config: ChatCompletionProxyConfig =
@@ -84,7 +84,7 @@ impl ModelResolver {
 
         proxy_config.get(proxy_alias).cloned().ok_or_else(|| {
             log::warn!("Proxy alias '{}' not found in configuration.", proxy_alias);
-            warp::reject::custom(ProxyAuthError::ModelAliasNotFound(proxy_alias.to_string()))
+            warp::reject::custom(CCProxyError::ModelAliasNotFound(proxy_alias.to_string()))
         })
     }
 
@@ -106,14 +106,14 @@ impl ModelResolver {
     ) -> ProxyResult<AiModel> {
         let store_guard = main_store_arc.lock().map_err(|e| {
             let err_msg = format!("Failed to lock MainStore: {}", e);
-            warp::reject::custom(ProxyAuthError::StoreLockError(err_msg))
+            warp::reject::custom(CCProxyError::StoreLockError(err_msg))
         })?;
 
         store_guard
             .config
             .get_ai_model_by_id(provider_id)
             .map_err(|e| {
-                warp::reject::custom(ProxyAuthError::ModelDetailsFetchError(format!(
+                warp::reject::custom(CCProxyError::ModelDetailsFetchError(format!(
                     "Failed to get model details: {}",
                     e
                 )))
@@ -167,7 +167,7 @@ impl ModelResolver {
         client_builder.build().map_err(|e| {
             let err_msg = format!("Failed to build HTTP client: {}", e);
             log::error!("{}", err_msg);
-            warp::reject::custom(ProxyAuthError::InternalError(err_msg))
+            warp::reject::custom(CCProxyError::InternalError(err_msg))
         })
     }
 }

@@ -25,7 +25,7 @@ struct SerperSearchRequest {
 impl From<SerperSearchRequest> for String {
     fn from(request: SerperSearchRequest) -> Self {
         // Serialization of this struct is not expected to fail.
-        serde_json::to_string(&request).unwrap()
+        serde_json::to_string(&request).unwrap_or_default()
     }
 }
 

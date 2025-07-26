@@ -1,15 +1,16 @@
 use crate::ccproxy::adapter::backend::update_message_block;
-use crate::ccproxy::adapter::unified::SseStatus;
+use crate::ccproxy::adapter::unified::{
+    SseStatus, UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedResponse, UnifiedRole,
+};
 use async_trait::async_trait;
+use quick_xml::de::from_str;
 use reqwest::{Client, RequestBuilder};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::unified::{
-    UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
-    UnifiedToolChoice, UnifiedUsage,
-};
+use crate::ccproxy::adapter::unified::{UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage};
 use crate::ccproxy::openai::UnifiedToolCall;
 use crate::ccproxy::types::openai::{
     OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse,
@@ -17,7 +18,106 @@ use crate::ccproxy::types::openai::{
     OpenAIMessageContentPart, OpenAITool, UnifiedChatMessage,
 };
 
+#[derive(Deserialize, Debug)]
+struct ToolUse {
+    #[serde(rename = "name")]
+    name: String,
+    #[serde(rename = "params")]
+    params: Params,
+}
+
+#[derive(Deserialize, Debug)]
+struct Params {
+    #[serde(rename = "param", default)]
+    param: Vec<Param>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Param {
+    #[serde(rename = "@name")]
+    name: String,
+
+    // parse the type attribute: <param name="location" type="string" value="北京" />
+    #[serde(rename = "@value")]
+    value: Option<String>,
+
+    // parse the text content: <param name="location">北京</param>
+    #[serde(rename = "$text", default)]
+    text_content: Option<String>,
+}
+
+impl Param {
+    fn get_value(&self) -> String {
+        // use the @value attribate first
+        self.value
+            .as_ref()
+            .map(|s| s.trim())
+            .or_else(|| self.text_content.as_deref().map(|s| s.trim()))
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
 pub struct OpenAIBackendAdapter;
+
+fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
+    let mut prompt = "You have access to the following tools. To use a tool, respond with an XML block like this:
+<ccp:tool_use>
+    <name>TOOL_NAME</name>
+    <params>
+        <param name=\"PARAM_NAME\" type=\"PARAM_TYPE\" value=\"PARAM_VALUE\" />
+    </params>
+</ccp:tool_use>
+
+IMPORTANT: When you need to perform the same operation multiple times with different parameters (e.g., checking weather for multiple cities, or querying different dates), you MUST make separate tool calls for each one. Use multiple <ccp:tool_use> blocks in your response.
+
+Example: If asked to check weather for Beijing and Shanghai, make two separate tool calls:
+<ccp:tool_use>
+    <name>get_weather</name>
+    <params>
+        <param name=\"location\" type=\"string\" value=\"Beijing\" />
+        <param name=\"date\" type=\"string\" value=\"2025-08-08\" />
+    </params>
+</ccp:tool_use>
+<ccp:tool_use>
+    <name>get_weather</name>
+    <params>
+        <param name=\"location\" type=\"string\" value=\"Shanghai\" />
+        <param name=\"date\" type=\"string\" value=\"2025-08-08\" />
+    </params>
+</ccp:tool_use>
+
+Here are the available tools:
+".to_string();
+
+    for tool in tools {
+        prompt.push_str(&format!(
+            "\n- `{}`: {}\n",
+            tool.name,
+            tool.description.as_deref().unwrap_or("")
+        ));
+        if let Some(schema) = tool.input_schema.as_object() {
+            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                prompt.push_str("  Parameters:\n");
+                for (name, details) in properties {
+                    let param_type = details
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("any");
+                    let description = details
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    prompt.push_str(&format!(
+                        "    - `{}` ({}): {}\n",
+                        name, param_type, description
+                    ));
+                }
+            }
+        }
+    }
+    prompt
+}
 
 #[async_trait]
 impl BackendAdapter for OpenAIBackendAdapter {
@@ -30,11 +130,52 @@ impl BackendAdapter for OpenAIBackendAdapter {
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         let mut openai_messages = Vec::new();
+        let mut unified_request = unified_request.clone();
+
+        if unified_request.tool_compat_mode {
+            if let Some(tools) = &unified_request.tools {
+                let tool_prompt = generate_tool_prompt(tools);
+                // Prepend to the last user message
+                if let Some(last_message) = unified_request.messages.iter_mut().last() {
+                    if last_message.role == UnifiedRole::User {
+                        if let Some(UnifiedContentBlock::Text { text }) =
+                            last_message.content.get_mut(0)
+                        {
+                            *text = format!("{}\n\n{}", tool_prompt, text);
+                        } else {
+                            last_message
+                                .content
+                                .insert(0, UnifiedContentBlock::Text { text: tool_prompt });
+                        }
+                    }
+                } else {
+                    // if last message is not from user, add a new user message
+                    unified_request.messages.push(UnifiedMessage {
+                        role: UnifiedRole::User,
+                        content: vec![UnifiedContentBlock::Text { text: tool_prompt }],
+                        reasoning_content: None,
+                    });
+                }
+                // Remove tools from the request to avoid sending them to the backend
+                unified_request.tools = None;
+            }
+        }
 
         for msg in &unified_request.messages {
             let role = match msg.role {
                 UnifiedRole::System => "system",
-                UnifiedRole::User => "user",
+                UnifiedRole::User => {
+                    // Check if it contains ToolResult, if so it should be the tool role
+                    let has_tool_result = msg
+                        .content
+                        .iter()
+                        .any(|block| matches!(block, UnifiedContentBlock::ToolResult { .. }));
+                    if has_tool_result {
+                        "tool"
+                    } else {
+                        "user"
+                    }
+                }
                 UnifiedRole::Assistant => "assistant",
                 UnifiedRole::Tool => "tool",
             };
@@ -105,7 +246,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 } else {
                     Some(tool_calls)
                 },
-                tool_call_id,
+                tool_call_id: if role == "tool" { tool_call_id } else { None },
                 reasoning_content: None, // OpenAI does not have a direct equivalent for thinking content in requests
             });
         }
@@ -180,26 +321,97 @@ impl BackendAdapter for OpenAIBackendAdapter {
             .ok_or_else(|| anyhow::anyhow!("No choices in OpenAI response"))?;
 
         let mut content_blocks = Vec::new();
-        if let Some(content) = first_choice.message.content {
-            match content {
-                OpenAIMessageContent::Text(text) => {
-                    content_blocks.push(UnifiedContentBlock::Text { text })
-                }
-                OpenAIMessageContent::Parts(parts) => {
-                    for part in parts {
-                        match part {
-                            OpenAIMessageContentPart::Text { text } => {
-                                content_blocks.push(UnifiedContentBlock::Text { text })
+
+        // Handle tool compatibility mode parsing
+        if backend_response.tool_compat_mode {
+            if let Some(content) = first_choice.message.content {
+                let text = match content {
+                    OpenAIMessageContent::Text(text) => text,
+                    OpenAIMessageContent::Parts(parts) => parts
+                        .into_iter()
+                        .filter_map(|part| match part {
+                            OpenAIMessageContentPart::Text { text } => Some(text),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(""),
+                };
+
+                let mut processed_text = text.clone();
+                while let Some(start_pos) = processed_text.find("<ccp:tool_use>") {
+                    // Add text before the tool call as a separate text block
+                    if start_pos > 0 {
+                        content_blocks.push(UnifiedContentBlock::Text {
+                            text: processed_text[..start_pos].to_string(),
+                        });
+                    }
+
+                    // Search for the end tag *after* the start tag to handle multiple tools correctly
+                    // and prevent panics from invalid slicing.
+                    if let Some(relative_end_pos) =
+                        processed_text[start_pos..].find("</ccp:tool_use>")
+                    {
+                        let end_pos = start_pos + relative_end_pos;
+                        let tool_xml =
+                            &processed_text[start_pos..end_pos + "</ccp:tool_use>".len()];
+                        if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
+                            let mut arguments = serde_json::Map::new();
+                            for param in parsed_tool.params.param {
+                                arguments.insert(
+                                    param.name.clone(),
+                                    serde_json::Value::String(param.get_value()),
+                                );
                             }
-                            OpenAIMessageContentPart::ImageUrl { image_url: _ } => {
-                                // This case should ideally not happen for assistant responses, but handle defensively
-                                anyhow::bail!("Image URL in assistant response not supported for UnifiedResponse");
+
+                            content_blocks.push(UnifiedContentBlock::ToolUse {
+                                id: format!("tool_{}", uuid::Uuid::new_v4()),
+                                name: parsed_tool.name,
+                                input: serde_json::Value::Object(arguments),
+                            });
+                        }
+                        // Remove the parsed tool XML from the text
+                        processed_text =
+                            processed_text[end_pos + "</ccp:tool_use>".len()..].to_string();
+                    } else {
+                        // Incomplete tool call, treat remaining as text
+                        if !processed_text.is_empty() {
+                            content_blocks.push(UnifiedContentBlock::Text {
+                                text: processed_text.clone(),
+                            });
+                        }
+                        break;
+                    }
+                }
+                // Add any remaining text after the last tool call
+                if !processed_text.is_empty() {
+                    content_blocks.push(UnifiedContentBlock::Text {
+                        text: processed_text,
+                    });
+                }
+            }
+        } else {
+            // Original parsing logic for non-tool compatibility mode
+            if let Some(content) = first_choice.message.content {
+                match content {
+                    OpenAIMessageContent::Text(text) => {
+                        content_blocks.push(UnifiedContentBlock::Text { text })
+                    }
+                    OpenAIMessageContent::Parts(parts) => {
+                        for part in parts {
+                            match part {
+                                OpenAIMessageContentPart::Text { text } => {
+                                    content_blocks.push(UnifiedContentBlock::Text { text })
+                                }
+                                OpenAIMessageContentPart::ImageUrl { image_url: _ } => {
+                                    anyhow::bail!("Image URL in assistant response not supported for UnifiedResponse");
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
         if let Some(reasoning_content) = first_choice.message.reasoning_content {
             if !reasoning_content.is_empty() {
                 content_blocks.push(UnifiedContentBlock::Thinking {
@@ -208,13 +420,16 @@ impl BackendAdapter for OpenAIBackendAdapter {
             }
         }
 
-        if let Some(tool_calls) = first_choice.message.tool_calls {
-            for tc in tool_calls {
-                content_blocks.push(UnifiedContentBlock::ToolUse {
-                    id: tc.id.clone().unwrap_or_default(),
-                    name: tc.function.name.unwrap_or_default(),
-                    input: serde_json::from_str(&tc.function.arguments.unwrap_or_default())?,
-                });
+        // Handle native tool calls (non-tool compatibility mode)
+        if !backend_response.tool_compat_mode {
+            if let Some(tool_calls) = first_choice.message.tool_calls {
+                for tc in tool_calls {
+                    content_blocks.push(UnifiedContentBlock::ToolUse {
+                        id: tc.id.clone().unwrap_or_default(),
+                        name: tc.function.name.unwrap_or_default(),
+                        input: serde_json::from_str(&tc.function.arguments.unwrap_or_default())?,
+                    });
+                }
             }
         }
 
@@ -252,7 +467,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
 
             let mut data_str: Option<String> = None;
             for line in event_block_str.lines() {
-                if line.starts_with("data: ") {
+                if line.starts_with("data:") {
                     data_str = Some(line["data:".len()..].trim().to_string());
                     break;
                 }
@@ -288,6 +503,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     if let Some(content) = delta.reasoning_content {
                         if !content.is_empty() {
                             if let Ok(mut status) = sse_status.write() {
+                                // Send the thinking start flag
                                 if status.thinking_delta_count == 0 {
                                     unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
                                         index: 0,
@@ -313,59 +529,266 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                 })
                             }
                         };
-                        if has_text {
-                            if let Ok(status) = sse_status.write() {
-                                update_message_block(status, "text".to_string());
-                            }
-                        }
 
                         if let Ok(mut status) = sse_status.write() {
-                            if status.text_delta_count == 0 && has_text {
-                                // The thinking block is usually before the content block,
-                                // so we need to output a block end flag first
-                                if status.thinking_delta_count > 0 {
-                                    unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
-                                        index: (status.message_index - 1).max(0),
-                                    });
+                            // Handle tool compatibility mode for streaming
+                            if status.tool_compat_mode {
+                                // Check buffer size before adding new content
+                                if status.tool_compat_fragment_buffer.len() > 1024 * 1024 {
+                                    log::warn!("Fragment buffer size limit exceeded");
+                                    let fragment = status.tool_compat_fragment_buffer.clone();
+                                    status.tool_compat_buffer.push_str(&fragment);
+
+                                    status.tool_compat_fragment_buffer.clear();
+                                    status.tool_compat_fragment_count = 0;
+                                    status.tool_compat_last_flush_time = std::time::Instant::now();
                                 }
 
-                                if status.tool_delta_count > 0 {
-                                    unified_chunks.push(UnifiedStreamChunk::ToolUseEnd {
-                                        id: status.tool_id.clone(),
+                                status
+                                    .tool_compat_fragment_buffer
+                                    .push_str(&match &content {
+                                        OpenAIMessageContent::Text(text) => text.as_str(),
+                                        OpenAIMessageContent::Parts(parts) => parts
+                                            .iter()
+                                            .find_map(|part| match part {
+                                                OpenAIMessageContentPart::Text { text } => {
+                                                    Some(text.as_str())
+                                                }
+                                                _ => None,
+                                            })
+                                            .unwrap_or(""),
                                     });
-                                    // reset tool delta count
-                                    status.tool_delta_count = 0;
-                                }
+                                status.tool_compat_fragment_count += 1;
 
-                                // start the new content block
-                                unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
-                                    index: status.message_index,
-                                    block: json!({
-                                         "type": "text",
-                                         "text": ""
-                                    }),
-                                });
-                            }
-                        };
+                                let now = std::time::Instant::now();
+                                let time_since_flush = now
+                                    .duration_since(status.tool_compat_last_flush_time)
+                                    .as_millis();
 
-                        match content {
-                            OpenAIMessageContent::Text(text) => {
-                                if !text.is_empty() {
-                                    if let Ok(mut status) = sse_status.write() {
-                                        status.text_delta_count += 1;
+                                // Force flush if conditions are met
+                                let should_flush = status.tool_compat_fragment_count >= 25
+                                    || time_since_flush >= 100
+                                    || status.tool_compat_fragment_buffer.len() > 500
+                                    || status
+                                        .tool_compat_fragment_buffer
+                                        .contains("<ccp:tool_use>")
+                                    || status
+                                        .tool_compat_fragment_buffer
+                                        .contains("</ccp:tool_use>");
+
+                                if should_flush {
+                                    let fragment = status.tool_compat_fragment_buffer.clone();
+                                    status.tool_compat_buffer.push_str(&fragment);
+                                    status.tool_compat_fragment_buffer.clear();
+                                    status.tool_compat_fragment_count = 0;
+                                    status.tool_compat_last_flush_time = now;
+
+                                    // Process tool calls in the buffer
+                                    loop {
+                                        if !status.in_tool_call_block {
+                                            let buffer = &status.tool_compat_buffer;
+                                            let tool_start = "<ccp:tool_use>";
+
+                                            if let Some(start_pos) = buffer.find(tool_start) {
+                                                log::debug!("buffer has tool start tag `<cpp:tool_use>` at pos: {}", start_pos);
+                                                // Send text before the tool tag
+                                                let text_before = &buffer[..start_pos];
+                                                if !text_before.is_empty() {
+                                                    unified_chunks.push(UnifiedStreamChunk::Text {
+                                                        delta: text_before.to_string(),
+                                                    });
+                                                }
+
+                                                status.tool_compat_buffer =
+                                                    buffer[start_pos..].to_string();
+                                                status.in_tool_call_block = true;
+                                            } else {
+                                                break;
+                                            }
+                                        }
+
+                                        if status.in_tool_call_block {
+                                            let buffer = &status.tool_compat_buffer;
+                                            let tool_end = "</ccp:tool_use>";
+
+                                            if let Some(end_pos) = buffer.find(tool_end) {
+                                                let tool_xml = &buffer[..end_pos + tool_end.len()];
+                                                log::debug!("find tool end tag `</ccp:tool_use>` at pos: {}, tool xml: {}", end_pos, tool_xml);
+
+                                                if let Ok(parsed_tool) =
+                                                    from_str::<ToolUse>(tool_xml)
+                                                {
+                                                    let tool_id =
+                                                        format!("ccp_{}", uuid::Uuid::new_v4());
+                                                    let mut arguments = serde_json::Map::new();
+                                                    for param in parsed_tool.params.param {
+                                                        arguments.insert(
+                                                            param.name.clone(),
+                                                            serde_json::Value::String(
+                                                                param.get_value(),
+                                                            ),
+                                                        );
+                                                    }
+
+                                                    // Send tool call start
+                                                    unified_chunks.push(
+                                                        UnifiedStreamChunk::ToolUseStart {
+                                                            tool_type: "function".to_string(),
+                                                            id: tool_id.clone(),
+                                                            name: parsed_tool.name.clone(),
+                                                        },
+                                                    );
+
+                                                    // Send tool call parameters
+                                                    let args_json =
+                                                        serde_json::to_string(&arguments)
+                                                            .unwrap_or_default();
+                                                    unified_chunks.push(
+                                                        UnifiedStreamChunk::ToolUseDelta {
+                                                            id: tool_id,
+                                                            delta: args_json.clone(),
+                                                        },
+                                                    );
+                                                    log::info!(
+                                                        "tool parse success, name: {}, param: {}",
+                                                        parsed_tool.name.clone(),
+                                                        args_json
+                                                    )
+                                                } else {
+                                                    unified_chunks.push(
+                                                        UnifiedStreamChunk::Error {
+                                                            message: format!(
+                                                                "tool xml parse failed, xml: {}",
+                                                                tool_xml
+                                                            ),
+                                                        },
+                                                    );
+                                                    log::warn!(
+                                                        "tool xml parse failed, xml: {}",
+                                                        tool_xml
+                                                    );
+                                                }
+
+                                                status.tool_compat_buffer =
+                                                    buffer[end_pos + tool_end.len()..].to_string();
+                                                status.in_tool_call_block = false;
+                                            } else {
+                                                break;
+                                            }
+                                        }
                                     }
-                                    unified_chunks.push(UnifiedStreamChunk::Text { delta: text });
+
+                                    // After processing complete tool calls, handle the remaining buffer.
+                                    // This part handles text that is not part of a tool call, but might
+                                    // end with a partial tool tag (e.g., "<ccp:tool_u").
+                                    if !status.in_tool_call_block
+                                        && !status.tool_compat_buffer.is_empty()
+                                    {
+                                        let buffer = &status.tool_compat_buffer;
+                                        let tool_start = "<ccp:tool_use>";
+                                        let tool_end = "</ccp:tool_use>";
+
+                                        let mut partial_tag_len = 0;
+
+                                        // Check for a partial start tag at the end of the buffer to avoid flushing it as text.
+                                        // Iterate from the minimum of buffer length and tag length down to 1.
+                                        for i in (1..=std::cmp::min(buffer.len(), tool_start.len()))
+                                            .rev()
+                                        {
+                                            if buffer.ends_with(&tool_start[..i]) {
+                                                partial_tag_len = i;
+                                                break;
+                                            }
+                                        }
+
+                                        // Also check for a partial end tag if no partial start tag was found.
+                                        // This prevents flushing text that might be part of a closing tool tag.
+                                        if partial_tag_len == 0 {
+                                            for i in
+                                                (1..=std::cmp::min(buffer.len(), tool_end.len()))
+                                                    .rev()
+                                            {
+                                                if buffer.ends_with(&tool_end[..i]) {
+                                                    partial_tag_len = i;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        let text_to_flush_len = buffer.len() - partial_tag_len;
+                                        if text_to_flush_len > 0 {
+                                            // Flush the text part that is definitely not part of a tag.
+                                            let text_to_flush = &buffer[..text_to_flush_len];
+                                            unified_chunks.push(UnifiedStreamChunk::Text {
+                                                delta: text_to_flush.to_string(),
+                                            });
+                                            // Update the buffer to only contain the partial tag (or be empty).
+                                            status.tool_compat_buffer =
+                                                buffer[text_to_flush_len..].to_string();
+                                        }
+                                        // If text_to_flush_len is 0, the entire buffer is a partial tag.
+                                        // In this case, we do nothing and wait for the next chunk to complete the tag.
+                                    }
                                 }
-                            }
-                            OpenAIMessageContent::Parts(parts) => {
+                            } else {
+                                // Original streaming logic for non-tool compatibility mode
+                                if has_text {
+                                    if let Ok(status) = sse_status.write() {
+                                        update_message_block(status, "text".to_string());
+                                    }
+                                }
+
                                 if let Ok(mut status) = sse_status.write() {
-                                    status.text_delta_count += parts.len() as u32;
-                                }
-                                for part in parts {
-                                    if let OpenAIMessageContentPart::Text { text } = part {
+                                    if status.text_delta_count == 0 && has_text {
+                                        if status.thinking_delta_count > 0 {
+                                            unified_chunks.push(
+                                                UnifiedStreamChunk::ContentBlockStop {
+                                                    index: (status.message_index - 1).max(0),
+                                                },
+                                            );
+                                        }
+
+                                        if status.tool_delta_count > 0 {
+                                            unified_chunks.push(UnifiedStreamChunk::ToolUseEnd {
+                                                id: status.tool_id.clone(),
+                                            });
+                                            status.tool_delta_count = 0;
+                                        }
+
+                                        unified_chunks.push(
+                                            UnifiedStreamChunk::ContentBlockStart {
+                                                index: status.message_index,
+                                                block: json!({
+                                                     "type": "text",
+                                                     "text": ""
+                                                }),
+                                            },
+                                        );
+                                    }
+                                };
+
+                                match content {
+                                    OpenAIMessageContent::Text(text) => {
                                         if !text.is_empty() {
+                                            if let Ok(mut status) = sse_status.write() {
+                                                status.text_delta_count += 1;
+                                            }
                                             unified_chunks
                                                 .push(UnifiedStreamChunk::Text { delta: text });
+                                        }
+                                    }
+                                    OpenAIMessageContent::Parts(parts) => {
+                                        if let Ok(mut status) = sse_status.write() {
+                                            status.text_delta_count += parts.len() as u32;
+                                        }
+                                        for part in parts {
+                                            if let OpenAIMessageContentPart::Text { text } = part {
+                                                if !text.is_empty() {
+                                                    unified_chunks.push(UnifiedStreamChunk::Text {
+                                                        delta: text,
+                                                    });
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -433,6 +856,29 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     }
 
                     if let Some(finish_reason) = choice.finish_reason {
+                        if let Ok(mut status) = sse_status.write() {
+                            if !status.tool_compat_buffer.is_empty()
+                                || !status.tool_compat_fragment_buffer.is_empty()
+                            {
+                                log::debug!("Flushing remaining buffers at stream end - buffer: {} chars, fragment: {} chars, in_tool_block: {}",
+                                    status.tool_compat_buffer.len(),
+                                    status.tool_compat_fragment_buffer.len(),
+                                    status.in_tool_call_block
+                                );
+                                unified_chunks.push(UnifiedStreamChunk::Text {
+                                    delta: format!(
+                                        "{}{}",
+                                        status.tool_compat_buffer,
+                                        status.tool_compat_fragment_buffer
+                                    ),
+                                });
+
+                                status.tool_compat_buffer.clear();
+                                status.tool_compat_fragment_buffer.clear();
+                                status.in_tool_call_block = false;
+                            }
+                        }
+
                         let stop_reason = match finish_reason.to_lowercase().as_str() {
                             "stop" => "stop".to_string(),
                             "length" => "max_tokens".to_string(),

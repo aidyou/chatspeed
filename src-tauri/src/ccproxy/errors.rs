@@ -3,7 +3,7 @@ use warp::{filters::cors::CorsForbidden, http::StatusCode, Rejection, Reply};
 
 /// Custom error types for the ccproxy module.
 #[derive(Debug)]
-pub enum ProxyAuthError {
+pub enum CCProxyError {
     /// The provided token is invalid.
     InvalidToken,
     /// An internal server error occurred.
@@ -24,7 +24,7 @@ pub enum ProxyAuthError {
     StoreLockError(String),
 }
 
-impl warp::reject::Reject for ProxyAuthError {}
+impl warp::reject::Reject for CCProxyError {}
 
 /// Handles rejections specific to the ccproxy module, particularly authentication errors.
 pub async fn handle_proxy_rejection(
@@ -37,7 +37,7 @@ pub async fn handle_proxy_rejection(
         );
         (
             StatusCode::NOT_FOUND,
-            "not_found",
+            "Not Found",
             t!("proxy.error.endpoint_not_found").to_string(),
         )
     } else if err.find::<CorsForbidden>().is_some() {
@@ -47,54 +47,66 @@ pub async fn handle_proxy_rejection(
         );
         (
             StatusCode::FORBIDDEN, // More appropriate status for CORS rejections
-            "cors_error",
+            "Cors Error",
             t!("proxy.error.cors_blocked").to_string(),
         )
-    } else if let Some(auth_error) = err.find::<ProxyAuthError>() {
-        let (status, err_type_str, msg_str_slice) = match auth_error {
-            ProxyAuthError::InvalidToken => (
+    } else if let Some(customer_error) = err.find::<CCProxyError>() {
+        let (status, err_type_str, msg_str_slice) = match customer_error {
+            CCProxyError::InvalidToken => (
                 StatusCode::UNAUTHORIZED,
-                "authentication_error",
+                "Authentication Error",
                 t!("proxy.error.invalid_api_key").to_string(),
             ),
-            ProxyAuthError::InternalError(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_server_error",
-                t!("proxy.error.internal_server_error", error = e.to_string()).to_string(),
-            ),
-            ProxyAuthError::MissingToken => (
+            CCProxyError::MissingToken => (
                 StatusCode::UNAUTHORIZED,
-                "authentication_error",
+                "Authentication Error",
                 t!("proxy.error.missing_auth_header").to_string(),
             ),
-            ProxyAuthError::ModelAliasNotFound(alias) => (
-                StatusCode::NOT_FOUND,
-                "not_found",
-                t!("proxy.error.model_alias_not_found", alias = alias.to_string()).to_string(),
-            ),
-            ProxyAuthError::NoBackendTargets(alias) => (
+            CCProxyError::NoBackendTargets(alias) => (
                 StatusCode::BAD_REQUEST,
-                "configuration_error",
+                "Configuration Error",
                 t!("proxy.error.no_backend_targets", alias = alias.to_string()).to_string(),
             ),
-            ProxyAuthError::NoKeysConfigured => (
+            CCProxyError::NoKeysConfigured => (
                 StatusCode::UNAUTHORIZED,
-                "configuration_error",
+                "Configuration Error",
                 t!("proxy.error.no_keys_configured").to_string(),
             ),
-            ProxyAuthError::ModelDetailsFetchError(id_str) => (
+            CCProxyError::InvalidProtocolError(protocol_str) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "database_error",
-                t!("proxy.error.model_details_fetch_failed", id = id_str.to_string()).to_string(),
+                "Configuration Error",
+                t!(
+                    "proxy.error.invalid_protocol",
+                    protocol = protocol_str.to_string()
+                )
+                .to_string(),
             ),
-            ProxyAuthError::InvalidProtocolError(protocol_str) => (
+            CCProxyError::InternalError(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "configuration_error",
-                t!("proxy.error.invalid_protocol", protocol = protocol_str.to_string()).to_string(),
+                "Internal Server Error",
+                t!("proxy.error.internal_server_error", error = e.to_string()).to_string(),
             ),
-            ProxyAuthError::StoreLockError(e) => (
+            CCProxyError::ModelAliasNotFound(alias) => (
+                StatusCode::NOT_FOUND,
+                "Not Found",
+                t!(
+                    "proxy.error.model_alias_not_found",
+                    alias = alias.to_string()
+                )
+                .to_string(),
+            ),
+            CCProxyError::ModelDetailsFetchError(id_str) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "store_error",
+                "Database Error",
+                t!(
+                    "proxy.error.model_details_fetch_failed",
+                    id = id_str.to_string()
+                )
+                .to_string(),
+            ),
+            CCProxyError::StoreLockError(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Store Error",
                 t!("proxy.error.store_lock_failed", error = e.to_string()).to_string(),
             ),
         };
@@ -104,7 +116,7 @@ pub async fn handle_proxy_rejection(
         log::error!("Unhandled rejection routed to error handler: {:?}", err);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_server_error",
+            "Internal Server Error",
             t!("proxy.error.unexpected_error").to_string(),
         )
     };

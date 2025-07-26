@@ -5,6 +5,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use warp::{http::header::HeaderMap, Reply};
 
+use crate::ccproxy::connection_monitor::{ConnectionMonitor, HeartbeatMonitor, MonitoredStream};
+
 use crate::ai::interaction::ChatProtocol;
 use crate::ai::network::{StreamFormat, StreamProcessor};
 use crate::ccproxy::adapter::unified::SseStatus;
@@ -15,7 +17,7 @@ use crate::ccproxy::{
         input::from_claude,
         output::{ClaudeOutputAdapter, OutputAdapter},
     },
-    errors::{ProxyAuthError, ProxyResult},
+    errors::{CCProxyError, ProxyResult},
     types::claude::ClaudeNativeRequest,
     types::openai::BackendModelTarget,
 };
@@ -28,6 +30,7 @@ pub async fn handle_claude_native_chat(
     original_client_headers: HeaderMap,
     query: CcproxyQuery,
     client_request_body: bytes::Bytes, // Changed from ClaudeNativeRequest
+    tool_compat_mode: bool,
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
     let log_to_file = query
@@ -36,9 +39,7 @@ pub async fn handle_claude_native_chat(
 
     if log_to_file {
         // Log the raw request body
-        if let Ok(body_str) = std::str::from_utf8(&client_request_body) {
-            log::info!(target: "ccproxy_logger", "Request Body: \n{}\n---", body_str);
-        }
+        log::info!(target: "ccproxy_logger", "Client Request Body: \n{}\n---", String::from_utf8_lossy(&client_request_body));
     }
 
     // Manually deserialize the request body
@@ -47,21 +48,21 @@ pub async fn handle_claude_native_chat(
             Ok(payload) => payload,
             Err(e) => {
                 log::error!("Failed to deserialize ClaudeNativeRequest: {}", e);
-                return Err(warp::reject::custom(ProxyAuthError::InternalError(
-                    t!("proxy.error.invalid_request_format").to_string(),
+                return Err(warp::reject::custom(CCProxyError::InternalError(
+                    t!("proxy.error.invalid_request_format", error = e.to_string()).to_string(),
                 )));
             }
         };
 
     let proxy_alias = client_request_payload.model.clone();
-    let is_streaming_request = client_request_payload.stream.unwrap_or(false);
 
     // 1. Convert to UnifiedRequest
-    let unified_request = from_claude(client_request_payload).map_err(|e| {
-        ProxyAuthError::InternalError(
+    let unified_request = from_claude(client_request_payload, tool_compat_mode).map_err(|e| {
+        CCProxyError::InternalError(
             t!("proxy.error.invalid_request", error = e.to_string()).to_string(),
         )
     })?;
+    let is_streaming_request = unified_request.stream;
 
     // 2. Resolve model and get backend adapter
     let (ai_model_details, selected_target) =
@@ -72,7 +73,7 @@ pub async fn handle_claude_native_chat(
     let actual_model_name = selected_target.model.clone();
 
     let backend_chat_protocol = ChatProtocol::from_str(&ai_model_details.api_protocol)
-        .map_err(|e| warp::reject::custom(ProxyAuthError::InvalidProtocolError(e.to_string())))?;
+        .map_err(|e| warp::reject::custom(CCProxyError::InvalidProtocolError(e.to_string())))?;
 
     let backend_adapter: Arc<dyn BackendAdapter> = match backend_chat_protocol {
         ChatProtocol::OpenAI | ChatProtocol::Ollama | ChatProtocol::HuggingFace => {
@@ -97,7 +98,7 @@ pub async fn handle_claude_native_chat(
             &actual_model_name,
         )
         .await
-        .map_err(|e| ProxyAuthError::InternalError(e.to_string()))?;
+        .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
     // Set common headers
     onward_request_builder = onward_request_builder.header("Content-Type", "application/json");
@@ -125,22 +126,22 @@ pub async fn handle_claude_native_chat(
     }
 
     let target_response = onward_request_builder.send().await.map_err(|e| {
-        warp::reject::custom(ProxyAuthError::InternalError(format!(
+        warp::reject::custom(CCProxyError::InternalError(format!(
             "Request to backend failed: {}",
             e
         )))
     })?;
 
     // Handle error response
-    if !target_response.status().is_success() {
-        let status_code = target_response.status();
+    let status_code = target_response.status();
+    if !status_code.is_success() {
         let headers_from_target = target_response.headers().clone();
         let error_body_bytes = match target_response.bytes().await {
             Ok(bytes) => bytes,
             Err(e) => {
                 log::error!("Failed to read backend error response: {}", e);
                 let err_msg = t!("network.response_read_error", error = e.to_string()).to_string();
-                return Err(warp::reject::custom(ProxyAuthError::InternalError(err_msg)));
+                return Err(warp::reject::custom(CCProxyError::InternalError(err_msg)));
             }
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
@@ -177,10 +178,9 @@ pub async fn handle_claude_native_chat(
             error_body_str.to_string()
         };
         final_error_json = serde_json::json!({
-            "message": message_content,
+            "code": status_code.as_u16().to_string(),
             "type": error_type_str,
-            "param": null,
-            "code": status_code.as_u16().to_string()
+            "message": message_content,
         });
 
         let warp_status_code = warp::http::StatusCode::from_u16(status_code.as_u16())
@@ -228,23 +228,45 @@ pub async fn handle_claude_native_chat(
         };
 
         let stream_processor = StreamProcessor::new();
+        let connection_monitor = ConnectionMonitor::new();
+
+        // Set up callback for client disconnection
+        {
+            let stream_processor_clone = stream_processor.clone();
+            connection_monitor
+                .on_disconnect(move || {
+                    log::info!("Client disconnected, stopping backend stream processing");
+                    stream_processor_clone.stop();
+                })
+                .await;
+        }
+
+        // Start heartbeat monitoring (check every 30 seconds)
+        let heartbeat_monitor = HeartbeatMonitor::new(connection_monitor.clone(), 30);
+        let _heartbeat_handle = heartbeat_monitor.start_heartbeat();
+
         let reassembled_receiver = stream_processor
             .process_stream(target_response, &stream_format)
             .await;
 
         // Wrap the receiver in a stream to make it compatible with futures_util::StreamExt
         let reassembled_stream = ReceiverStream::new(reassembled_receiver);
-        let sse_status = Arc::new(RwLock::new(SseStatus {
-            message_id: format!("msg_{}", Uuid::new_v4().simple()),
-            model_id: proxy_alias.clone(),
-            ..Default::default()
-        }));
+        let monitored_stream = MonitoredStream::new_with_heartbeat(
+            reassembled_stream,
+            connection_monitor.clone(),
+            heartbeat_monitor,
+        );
+        let sse_status = Arc::new(RwLock::new(SseStatus::new(
+            format!("msg_{}", Uuid::new_v4().simple()),
+            proxy_alias.clone(),
+            tool_compat_mode,
+        )));
 
         if log_to_file {
-            log::info!(target: "ccproxy_logger", "Claude Stream Response Chunk Start: \n-----\n");
+            log::info!(target: "ccproxy_logger", "Claude Response Status Code: {}, Claude Stream Response Chunk Start: \n-----\n", status_code);
         }
         let sse_status_clone = sse_status.clone();
-        let unified_stream = reassembled_stream
+        let unified_stream = monitored_stream
             .then(move |item| {
                 let adapter = backend_adapter.clone();
                 let status = sse_status_clone.clone();
@@ -252,12 +274,8 @@ pub async fn handle_claude_native_chat(
                     match item {
                         // The item from the channel is a Result<Bytes, String>
                         Ok(chunk) => {
-                            if log_to_file {
-                                if let Ok(body_str) = std::str::from_utf8(&chunk) {
-                                    if !body_str.trim().is_empty() {
-                                        log::info!(target: "ccproxy_logger", "{}", body_str);
-                                    }
-                                }
+                            #[cfg(debug_assertions)] {
+                                log::debug!("recv: {}", String::from_utf8_lossy(&chunk));
                             }
                             // Attempt to adapt the complete chunk
                             adapter
@@ -271,6 +289,7 @@ pub async fn handle_claude_native_chat(
                                 })
                         }
                         Err(e) => {
+                            log::error!("error on backend stream: {}",e.to_string());
                             // This is an error from the StreamProcessor itself
                             vec![crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
                                 message: e.to_string(),
@@ -284,15 +303,41 @@ pub async fn handle_claude_native_chat(
         let sse_stream = unified_stream.flat_map(move |unified_chunk| {
             let events = output_adapter
                 .adapt_stream_chunk(unified_chunk, sse_status.clone())
-                .unwrap();
+                .unwrap_or_else(|_| {
+                    log::error!(
+                        "adapt_stream_chunk failed unexpectedly despite Infallible error type"
+                    );
+                    Vec::new()
+                });
+
+            if log_to_file && events.len() > 0 {
+                log::info!(target:"ccproxy_logger","{}", events.iter().map(|event| event.to_string()).collect::<Vec<String>>().join(""));
+            }
             futures_util::stream::iter(
                 events
                     .into_iter()
                     .map(|event| Ok::<warp::sse::Event, std::convert::Infallible>(event)),
             )
         });
+
+        // 创建一个可以检测客户端断开的流
+        let client_disconnect_stream = sse_stream.inspect({
+            let connection_monitor = connection_monitor.clone();
+            move |event| {
+                // 如果发送事件失败，说明客户端可能已断开
+                if event.is_err() {
+                    log::info!("SSE event send failed, client likely disconnected");
+                    let monitor = connection_monitor.clone();
+                    tokio::spawn(async move {
+                        monitor.mark_disconnected().await;
+                    });
+                }
+            }
+        });
+
         let mut response =
-            warp::sse::reply(warp::sse::keep_alive().stream(sse_stream)).into_response();
+            warp::sse::reply(warp::sse::keep_alive().stream(client_disconnect_stream))
+                .into_response();
         *response.status_mut() = warp::http::StatusCode::OK;
 
         Ok(response)
@@ -300,22 +345,23 @@ pub async fn handle_claude_native_chat(
         let body_bytes = target_response
             .bytes()
             .await
-            .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
 
         if log_to_file {
-            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
-                log::info!(target: "ccproxy_logger", "Claude Response Body: \n{}\n---", body_str);
-            }
+            log::info!(target: "ccproxy_logger", "Claude Response Body: \n{}\n---", String::from_utf8_lossy(&body_bytes));
         }
 
-        let backend_response = BackendResponse { body: body_bytes };
+        let backend_response = BackendResponse {
+            body: body_bytes,
+            tool_compat_mode,
+        };
         let unified_response = backend_adapter
             .adapt_response(backend_response)
             .await
-            .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
         let response = output_adapter
             .adapt_response(unified_response)
-            .map_err(|e| warp::reject::custom(ProxyAuthError::InternalError(e.to_string())))?;
+            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
         Ok(response.into_response())
     }
 }

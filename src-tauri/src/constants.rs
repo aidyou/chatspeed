@@ -2,7 +2,7 @@ use lazy_static::*;
 use parking_lot::RwLock as PLRwLock;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 // The main window info
 pub const CFG_WINDOW_POSITION: &str = "window_position";

@@ -1,7 +1,7 @@
 use crate::{
     ccproxy::{
         common::CcproxyQuery,
-        errors::{ProxyAuthError, ProxyResult},
+        errors::{CCProxyError, ProxyResult},
         openai::ChatCompletionProxyKeysConfig,
     },
     db::MainStore,
@@ -51,12 +51,12 @@ pub async fn authenticate_request(
             log::warn!(
                 "Proxy authentication: Missing token from 'Authorization' header, 'x-api-key' header, or 'key' query param."
             );
-            warp::reject::custom(ProxyAuthError::MissingToken)
+            warp::reject::custom(CCProxyError::MissingToken)
         })?;
 
     if token_to_check.is_empty() {
         log::warn!("Proxy authentication: Bearer token, x-api-key header, or query parameter `key` is missing or empty.");
-        return Err(warp::reject::custom(ProxyAuthError::MissingToken));
+        return Err(warp::reject::custom(CCProxyError::MissingToken));
     }
 
     let proxy_keys: ChatCompletionProxyKeysConfig = {
@@ -75,7 +75,7 @@ pub async fn authenticate_request(
 
     if proxy_keys.is_empty() {
         log::warn!("Proxy authentication: 'chat_completion_proxy_keys' is configured but the list is empty.");
-        return Err(warp::reject::custom(ProxyAuthError::NoKeysConfigured));
+        return Err(warp::reject::custom(CCProxyError::NoKeysConfigured));
     }
 
     if proxy_keys.iter().any(|k| k.token == token_to_check) {
@@ -90,6 +90,6 @@ pub async fn authenticate_request(
             token_to_check.get(..5).unwrap_or(&token_to_check)
         );
 
-        Err(warp::reject::custom(ProxyAuthError::InvalidToken))
+        Err(warp::reject::custom(CCProxyError::InvalidToken))
     }
 }

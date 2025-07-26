@@ -517,7 +517,7 @@ impl AiChatTrait for OpenAIChat {
                 provider: provider_name_for_error.clone(),
                 details: response.content.clone(),
             };
-            log::error!("{} API returned an error: {}", provider_name_for_error, err);
+            // log::error!("{} API returned an error: {}", provider_name_for_error, err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 err.to_string(),

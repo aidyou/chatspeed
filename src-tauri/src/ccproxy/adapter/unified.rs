@@ -43,6 +43,9 @@ pub struct UnifiedRequest {
     pub response_mime_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Value>,
+
+    // For tool compatibility mode
+    pub tool_compat_mode: bool,
 }
 
 /// A single message in the chat history.
@@ -185,7 +188,6 @@ pub struct UnifiedUsage {
     pub output_tokens: u64,
 }
 
-#[derive(Default)]
 pub struct SseStatus {
     pub message_start: bool,
     pub thinking_delta_count: u32,
@@ -196,4 +198,44 @@ pub struct SseStatus {
     pub tool_id: String,
     pub message_index: u32,
     pub current_content_block: String,
+    // For tool compatibility mode
+    pub tool_compat_mode: bool,
+    pub tool_compat_buffer: String,
+    pub in_tool_call_block: bool,
+    pub tool_compat_fragment_buffer: String,
+    pub tool_compat_fragment_count: u32,
+    pub tool_compat_last_flush_time: std::time::Instant,
+}
+
+impl Default for SseStatus {
+    fn default() -> Self {
+        Self {
+            message_start: false,
+            thinking_delta_count: 0,
+            text_delta_count: 0,
+            tool_delta_count: 0,
+            model_id: String::new(),
+            message_id: String::new(),
+            tool_id: String::new(),
+            message_index: 0,
+            current_content_block: String::new(),
+            tool_compat_mode: false,
+            tool_compat_buffer: String::new(),
+            in_tool_call_block: false,
+            tool_compat_fragment_buffer: String::new(),
+            tool_compat_fragment_count: 0,
+            tool_compat_last_flush_time: std::time::Instant::now(),
+        }
+    }
+}
+impl SseStatus {
+    pub fn new(message_id: String, model_id: String, tool_compat_mode: bool) -> Self {
+        Self {
+            message_id,
+            model_id,
+            tool_compat_mode,
+            tool_compat_last_flush_time: std::time::Instant::now(),
+            ..Default::default()
+        }
+    }
 }

@@ -149,7 +149,7 @@ impl Plugin for HttpPlugin {
             // 验证必需的 url 字段
             match obj.get("url") {
                 Some(url) if url.is_string() => {
-                    let url_str = url.as_str().unwrap();
+                    let url_str = url.as_str().unwrap_or_default();
                     if url_str.is_empty() {
                         return Err(Box::new(PluginError::InvalidInput(
                             t!("http.errors.empty_url").to_string(),

@@ -211,7 +211,8 @@ pub fn setup_logger(app: &tauri::App) {
     let stdout_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Debug)
         .filter(|record| {
-            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Debug
+            record.target().contains("chatspeed")
+                || (record.level() < log::LevelFilter::Debug && record.target() != "ccproxy_logger")
         })
         .format(console_log_formatter)
         .chain(std::io::stdout());

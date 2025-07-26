@@ -847,7 +847,7 @@ impl AiChatTrait for GeminiChat {
                 provider: "Gemini".to_string(),
                 details: response.content.clone(),
             };
-            log::error!("Gemini API returned an error: {}", err);
+            // log::error!("Gemini API returned an error: {}", err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 err.to_string(),
@@ -886,7 +886,7 @@ impl AiChatTrait for GeminiChat {
                 t!("api_key_is_require_for_list_models", provider = "Gemini").to_string(),
             ));
         }
-        let endpoint_with_key = format!("/models?key={}", api_key.unwrap());
+        let endpoint_with_key = format!("/models?key={}", api_key.unwrap_or_default());
 
         // For Gemini, API key is in query param, so ApiConfig.api_key should be None
         // to prevent DefaultApiClient from adding a "Bearer" token.

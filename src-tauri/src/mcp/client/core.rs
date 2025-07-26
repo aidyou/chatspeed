@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use super::types::{McpClientInternal, McpServerConfig, McpStatus, StatusChangeCallback};
 use rmcp::{service::RunningService, RoleClient};

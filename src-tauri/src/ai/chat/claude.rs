@@ -741,7 +741,7 @@ impl AiChatTrait for ClaudeChat {
                 provider: "Claude".to_string(),
                 details: response.content.clone(),
             };
-            log::error!("Claude API returned an error: {}", err);
+            // log::error!("Claude API returned an error: {}", err);
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 err.to_string(),

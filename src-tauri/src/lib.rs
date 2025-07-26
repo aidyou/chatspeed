@@ -361,7 +361,13 @@ pub async fn run() -> Result<()> {
                     }
                 } else if window.label() == "assistant" {
                     constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
-                    *LAST_MOVE.lock().unwrap() = Some(Instant::now());
+
+                    // Update last move time, log error if mutex is poisoned
+                    if let Ok(mut last_move) = LAST_MOVE.lock() {
+                        *last_move = Some(Instant::now());
+                    } else {
+                        error!("LAST_MOVE mutex is poisoned");
+                    }
 
                     // Cancel any pending hide timer immediately when window movement starts
                     if let Ok(mut hide_timer) = HIDE_TIMER.lock() {
@@ -372,17 +378,29 @@ pub async fn run() -> Result<()> {
                     }
 
                     // Reset the movement detection timer
-                    if let Some(handle) = MOVE_TIMER.lock().unwrap().take() {
-                        handle.abort();
+                    if let Ok(mut move_timer) = MOVE_TIMER.lock() {
+                        if let Some(handle) = move_timer.take() {
+                            handle.abort();
+                        }
+                    } else {
+                        error!("MOVE_TIMER mutex is poisoned");
+                        return;
                     }
 
                     let window_clone = window.clone();
-                    *MOVE_TIMER.lock().unwrap() = Some(spawn(async move {
+                    let new_timer = spawn(async move {
                         // Increase detection time to 1 second to accommodate actual dragging
                         sleep(Duration::from_secs(1)).await;
 
-                        let last_move = LAST_MOVE.lock().unwrap();
-                        if last_move.map_or(false, |t| t.elapsed() >= Duration::from_secs(1)) {
+                        // Check if movement has ended
+                        let movement_ended = if let Ok(last_move) = LAST_MOVE.lock() {
+                            last_move.map_or(false, |t| t.elapsed() >= Duration::from_secs(1))
+                        } else {
+                            error!("LAST_MOVE mutex is poisoned in timer task");
+                            false
+                        };
+
+                        if movement_ended {
                             constants::ON_MOUSE_EVENT.store(false, Ordering::Relaxed);
                             log::debug!("Window move ended");
 
@@ -394,7 +412,15 @@ pub async fn run() -> Result<()> {
                                 }
                             }
                         }
-                    }));
+                    });
+
+                    // Store the new timer handle
+                    if let Ok(mut move_timer) = MOVE_TIMER.lock() {
+                        *move_timer = Some(new_timer);
+                    } else {
+                        error!("MOVE_TIMER mutex is poisoned when storing new timer");
+                        new_timer.abort(); // Clean up the timer if we can't store it
+                    }
                 }
             }
             _ => {}

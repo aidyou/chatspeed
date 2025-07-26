@@ -630,7 +630,7 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: &Arc<Mutex<Main
         // .unwrap() is safe here assuming get_config honors the default on missing/error.
         let saved_size = c
             .get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
-            .unwrap();
+            .unwrap_or_default();
         if saved_size.width > 0.0 && saved_size.height > 0.0 {
             let new_logical_size = LogicalSize::new(saved_size.width, saved_size.height);
             if let Err(e) = window.set_size(tauri::Size::Logical(new_logical_size)) {

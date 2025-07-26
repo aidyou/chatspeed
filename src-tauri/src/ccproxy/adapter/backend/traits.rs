@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 /// Represents a raw response from a backend, before being converted to a unified format.
 pub struct BackendResponse {
     pub body: bytes::Bytes,
+    pub tool_compat_mode: bool,
 }
 
 /// A trait for adapting between the `UnifiedRequest`/`UnifiedResponse` and a specific backend protocol.

@@ -68,6 +68,7 @@ impl StreamProcessor {
             StreamFormat::Gemini => b"\r\n",
             _ => b"\n\n",
         };
+        let deliv_len = deliv.len();
 
         tokio::spawn(async move {
             let mut buffer = BytesMut::with_capacity(8192);
@@ -78,9 +79,13 @@ impl StreamProcessor {
                         buffer.extend_from_slice(&chunk);
 
                         loop {
+                            if stop_flag.load(Ordering::Relaxed) {
+                                return Ok::<(), String>(());
+                            }
+
                             match memchr::memmem::find(&buffer, deliv) {
                                 Some(pos) => {
-                                    let end = pos + 2;
+                                    let end = pos + deliv_len;
                                     if end > buffer.len() {
                                         break;
                                     }
@@ -94,7 +99,15 @@ impl StreamProcessor {
                             }
                         }
                     }
-                    Ok(None) => break,
+                    Ok(None) => {
+                        // Handle remaining data in buffer
+                        if !buffer.is_empty() {
+                            log::debug!("buffer remain: {}", String::from_utf8_lossy(&buffer));
+                            let remaining = buffer.split().freeze();
+                            let _ = tx.send(Ok(remaining)).await;
+                        }
+                        break;
+                    }
                     Err(e) => {
                         let _ = tx.send(Err(e.to_string())).await;
                         break;

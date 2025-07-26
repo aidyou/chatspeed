@@ -8,7 +8,7 @@ use crate::ccproxy::{
 use serde_json::Value;
 
 /// Converts an OpenAI-compatible chat completion request into the `UnifiedRequest`.
-pub fn from_openai(req: OpenAIChatCompletionRequest) -> Result<UnifiedRequest, anyhow::Error> {
+pub fn from_openai(req: OpenAIChatCompletionRequest, tool_compat_mode: bool) -> Result<UnifiedRequest, anyhow::Error> {
     let mut messages = Vec::new();
     let mut system_prompt = None;
 
@@ -62,6 +62,7 @@ pub fn from_openai(req: OpenAIChatCompletionRequest) -> Result<UnifiedRequest, a
         safety_settings: None,
         response_mime_type: None,
         response_schema: None,
+        tool_compat_mode,
     })
 }
 

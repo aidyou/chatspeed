@@ -108,11 +108,48 @@ pub async fn start_http_server(
         .with(cors)
         .recover(handle_proxy_rejection); // This single recover handles rejections from routes and CORS.
 
-    // Find an available port
-    let port = find_available_port(21912, 65535)?;
-    let addr: SocketAddr = format!("127.0.0.1:{}", port)
-        .parse()
-        .map_err(|e: AddrParseError| e.to_string())?;
+    // Find an available port with retry mechanism
+    let (_port, addr) = {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 5;
+
+        loop {
+            attempts += 1;
+            let port = find_available_port(21912, 65535)?;
+            let addr: SocketAddr = format!("127.0.0.1:{}", port)
+                .parse()
+                .map_err(|e: AddrParseError| format!("Failed to parse address: {}", e))?;
+
+            log::info!("Found available port: {} (attempt {})", port, attempts);
+
+            // Verify the address is still bindable before proceeding
+            match std::net::TcpListener::bind(addr) {
+                Ok(test_listener) => {
+                    drop(test_listener);
+                    log::debug!("Port {} is confirmed available", port);
+                    break (port, addr);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Port {} became unavailable: {} (attempt {})",
+                        port,
+                        e,
+                        attempts
+                    );
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(format!(
+                            "Failed to find stable port after {} attempts",
+                            MAX_ATTEMPTS
+                        ));
+                    }
+                    // Small delay before retry
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+            }
+        }
+    };
+
     log::info!("Serving static files at http://{}", addr);
 
     INIT.call_once(|| {
@@ -132,6 +169,13 @@ pub async fn start_http_server(
 
     // Start the HTTP server
     let serve_handle = task::spawn(async move {
+        log::info!("Starting HTTP server on {}", addr);
+
+        // Add a small delay to ensure port is fully released
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Start the server - warp 0.3.7 doesn't have try_bind, so we use run
+        // The panic issue should be mitigated by our improved port checking above
         warp::serve(serve).run(addr).await;
     });
 
@@ -167,10 +211,24 @@ pub async fn start_http_server(
 /// # Returns
 /// * `Result<u16, String>` - An available port number or an error message.
 fn find_available_port(start_port: u16, max_port: u16) -> Result<u16, String> {
+    use std::net::{SocketAddr, TcpListener};
+
     for port in start_port..=max_port {
-        let addr = format!("127.0.0.1:{}", port);
-        if std::net::TcpListener::bind(&addr).is_ok() {
-            return Ok(port);
+        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+            .parse()
+            .map_err(|e| format!("Invalid address format: {}", e))?;
+
+        match TcpListener::bind(addr) {
+            Ok(listener) => {
+                // Get the actual bound port (in case we used port 0)
+                let bound_port = listener
+                    .local_addr()
+                    .map_err(|e| format!("Failed to get local address: {}", e))?
+                    .port();
+                drop(listener); // Close the listener immediately
+                return Ok(bound_port);
+            }
+            Err(_) => continue,
         }
     }
     Err(t!(

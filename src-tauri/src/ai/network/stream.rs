@@ -452,7 +452,7 @@ impl StreamParser {
             return Ok(stream_chunks);
         }
 
-        let data_str = data_json_str.unwrap();
+        let data_str = data_json_str.unwrap_or_default();
         if data_str.is_empty() {
             return Ok(stream_chunks);
         }

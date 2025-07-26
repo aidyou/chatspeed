@@ -144,6 +144,19 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 } else {
                     0
                 };
+
+                let input_tokens = if usage.input_tokens > 0 {
+                    usage.input_tokens
+                } else {
+                    if let Ok(status) = sse_status.read() {
+                        (status.text_delta_count
+                            + status.thinking_delta_count
+                            + status.tool_delta_count) as u64
+                    } else {
+                        0
+                    }
+                };
+
                 let reason = if stop_reason == "tool_use" || stop_reason == "max_tokens" {
                     stop_reason
                 } else {
@@ -164,12 +177,15 @@ impl OutputAdapter for ClaudeOutputAdapter {
                                 "stop_reason": reason
                             },
                             "usage": {
-                                "output_tokens": usage.output_tokens
+                                "output_tokens": usage.output_tokens,
+                                "input_tokens": input_tokens,
                             }
                         })
                         .to_string(),
                     ),
-                    Event::default().event("message_stop"),
+                    Event::default()
+                        .event("message_stop")
+                        .data(json!({"type": "message_stop"}).to_string()),
                 ])
             }
             UnifiedStreamChunk::Error { message } => {

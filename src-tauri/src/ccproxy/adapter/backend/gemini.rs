@@ -224,7 +224,7 @@ impl BackendAdapter for GeminiBackendAdapter {
         let mut unified_chunks = Vec::new();
 
         for line in chunk_str.lines() {
-            if line.starts_with("data: ") {
+            if line.starts_with("data:") {
                 let data_str = line["data:".len()..].trim();
                 let gemini_response: GeminiNetworkResponse = serde_json::from_str(data_str)?;
 
@@ -250,8 +250,8 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 if !text.is_empty() {
                                     if let Ok(mut status) = sse_status.write() {
                                         if status.text_delta_count == 0 {
-                                            // 服务器端可能输出：消息 -》 工具 -》 消息
-                                            // 所以在输出消息时，如果有工具内容，则代表工具输出结束
+                                            // Server may output: message -> tool -> message
+                                            // So when outputting a message, if there is tool content, it means the tool output has ended
                                             if status.tool_delta_count > 0 {
                                                 unified_chunks.push(
                                                     UnifiedStreamChunk::ToolUseEnd {

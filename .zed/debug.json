@@ -3,22 +3,35 @@
     "label": "Debug Tauri App (macOS/Linux)",
     "build": {
       "command": "yarn",
-      "args": ["tauri", "dev", "--no-watch"]
+      "args": [
+        "tauri",
+        "dev",
+        "--no-watch"
+      ]
     },
-    "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
-    "cwd": "${workspaceFolder}"
+    "cwd": "${workspaceFolder}",
+    "adapter": "CodeLLDB"
   },
   {
     "label": "Debug Rust Backend (macOS/Linux)",
     "build": {
       "command": "cargo",
-      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml", "--no-default-features"]
+      "args": [
+        "build",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--no-default-features"
+      ]
     },
     "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed",
     "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
     "cwd": "${workspaceFolder}",
     "env": {
@@ -30,10 +43,15 @@
     "label": "Debug Tauri App (Windows)",
     "build": {
       "command": "powershell",
-      "args": ["-Command", "yarn tauri dev --no-watch"]
+      "args": [
+        "-Command",
+        "yarn tauri dev --no-watch"
+      ]
     },
     "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
     "cwd": "${workspaceFolder}"
   },
@@ -41,11 +59,18 @@
     "label": "Debug Rust Backend (Windows)",
     "build": {
       "command": "cargo",
-      "args": ["build", "--manifest-path", "src-tauri/Cargo.toml", "--no-default-features"]
+      "args": [
+        "build",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--no-default-features"
+      ]
     },
     "program": "${workspaceFolder}/src-tauri/target/debug/chatspeed.exe",
     "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
     "cwd": "${workspaceFolder}",
     "env": {
@@ -57,11 +82,18 @@
     "label": "Debug Production Build (Cross-platform)",
     "build": {
       "command": "cargo",
-      "args": ["build", "--release", "--manifest-path", "src-tauri/Cargo.toml"]
+      "args": [
+        "build",
+        "--release",
+        "--manifest-path",
+        "src-tauri/Cargo.toml"
+      ]
     },
     "program": "${workspaceFolder}/src-tauri/target/release/chatspeed${os:windows .exe}",
     "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
     "cwd": "${workspaceFolder}",
     "env": {
@@ -72,11 +104,18 @@
     "label": "Debug Tests (Cross-platform)",
     "build": {
       "command": "cargo",
-      "args": ["test", "--manifest-path", "src-tauri/Cargo.toml", "--no-run"]
+      "args": [
+        "test",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--no-run"
+      ]
     },
     "program": "${workspaceFolder}/src-tauri/target/debug/deps/chatspeed-*${os:windows .exe}",
     "adapter": "CodeLLDB",
-    "sourceLanguages": ["rust"],
+    "sourceLanguages": [
+      "rust"
+    ],
     "request": "launch",
     "cwd": "${workspaceFolder}",
     "env": {

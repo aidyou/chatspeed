@@ -9,7 +9,10 @@ use crate::ccproxy::{
 };
 
 /// Converts a Gemini-compatible chat completion request into the `UnifiedRequest`.
-pub fn from_gemini(req: GeminiRequest) -> Result<UnifiedRequest, anyhow::Error> {
+pub fn from_gemini(
+    req: GeminiRequest,
+    tool_compat_mode: bool,
+) -> Result<UnifiedRequest, anyhow::Error> {
     let mut messages = Vec::new();
     let mut system_prompt = None;
 
@@ -134,6 +137,7 @@ pub fn from_gemini(req: GeminiRequest) -> Result<UnifiedRequest, anyhow::Error> 
         response_mime_type,
         response_schema,
         safety_settings: req.safety_settings.clone(),
+        tool_compat_mode,
     })
 }
 

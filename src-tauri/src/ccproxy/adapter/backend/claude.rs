@@ -17,6 +17,92 @@ use crate::ccproxy::types::claude::{
 
 pub struct ClaudeBackendAdapter;
 
+impl ClaudeBackendAdapter {
+    /// Validate that tool call sequences are properly formed for Claude API
+    fn validate_tool_call_sequence(
+        &self,
+        messages: &[crate::ccproxy::adapter::unified::UnifiedMessage],
+    ) -> Result<(), anyhow::Error> {
+        let mut pending_tool_calls: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for (i, msg) in messages.iter().enumerate() {
+            match msg.role {
+                UnifiedRole::Assistant => {
+                    // Check for tool calls in assistant messages
+                    for block in &msg.content {
+                        if let UnifiedContentBlock::ToolUse { id, name, .. } = block {
+                            log::debug!(
+                                "Found tool call in message[{}]: id={}, name={}",
+                                i,
+                                id,
+                                name
+                            );
+                            pending_tool_calls.insert(id.clone());
+                        }
+                    }
+                }
+                UnifiedRole::User | UnifiedRole::Tool => {
+                    // Check for tool results in user/tool messages
+                    for block in &msg.content {
+                        if let UnifiedContentBlock::ToolResult { tool_use_id, .. } = block {
+                            log::debug!(
+                                "Found tool result in message[{}]: tool_use_id={}",
+                                i,
+                                tool_use_id
+                            );
+                            pending_tool_calls.remove(tool_use_id.as_str());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check if there are any unresolved tool calls
+        if !pending_tool_calls.is_empty() {
+            let missing_ids: Vec<String> = pending_tool_calls.into_iter().collect();
+            log::error!(
+                "Tool call validation failed. Missing tool results for IDs: {:?}",
+                missing_ids
+            );
+
+            // Log the full message sequence for debugging
+            for (i, msg) in messages.iter().enumerate() {
+                log::error!(
+                    "Message[{}] role={:?}, content_blocks={}",
+                    i,
+                    msg.role,
+                    msg.content.len()
+                );
+                for (j, block) in msg.content.iter().enumerate() {
+                    match block {
+                        UnifiedContentBlock::Text { text } => {
+                            log::error!("  Block[{}]: Text ({}chars)", j, text.len());
+                        }
+                        UnifiedContentBlock::ToolUse { id, name, .. } => {
+                            log::error!("  Block[{}]: ToolUse id={}, name={}", j, id, name);
+                        }
+                        UnifiedContentBlock::ToolResult { tool_use_id, .. } => {
+                            log::error!("  Block[{}]: ToolResult tool_use_id={}", j, tool_use_id);
+                        }
+                        _ => {
+                            log::error!("  Block[{}]: {:?}", j, std::mem::discriminant(block));
+                        }
+                    }
+                }
+            }
+
+            return Err(anyhow::anyhow!(
+                "Tool call sequence validation failed. Assistant messages with tool_calls must be followed by corresponding tool result messages. Missing responses for tool_call_ids: {:?}",
+                missing_ids
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl BackendAdapter for ClaudeBackendAdapter {
     async fn adapt_request(
@@ -27,6 +113,9 @@ impl BackendAdapter for ClaudeBackendAdapter {
         base_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        // Validate tool call sequence before processing
+        self.validate_tool_call_sequence(&unified_request.messages)?;
+
         let mut claude_messages = Vec::new();
 
         for msg in &unified_request.messages {
@@ -192,12 +281,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
         let mut unified_chunks = Vec::new();
 
         for line in chunk_str.lines() {
-            if line.starts_with("event: ") {
-                let event_type = line["event: ".len()..].trim();
+            if line.starts_with("event:") {
+                let event_type = line["event:".len()..].trim();
                 // Assuming data: always follows event:
-                let data_line = chunk_str.lines().find(|l| l.starts_with("data: "));
+                let data_line = chunk_str.lines().find(|l| l.starts_with("data:"));
                 if let Some(data_line) = data_line {
-                    let data_str = data_line["data: ".len()..].trim();
+                    let data_str = data_line["data:".len()..].trim();
                     let claude_event: ClaudeStreamEvent = serde_json::from_str(data_str)?;
 
                     match event_type {

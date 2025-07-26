@@ -1,16 +1,15 @@
 use super::OutputAdapter;
 use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
-use serde_json::json;
-use std::convert::Infallible;
-use std::sync::{Arc, RwLock};
-use warp::{reply::json, sse::Event};
-
-pub struct OpenAIOutputAdapter;
-
 use crate::ccproxy::types::openai::{
     OpenAIChatCompletionChoice, OpenAIChatCompletionResponse, OpenAIMessageContent, OpenAIUsage,
     UnifiedChatMessage,
 };
+
+use serde_json::json;
+use std::convert::Infallible;
+use warp::{reply::json, sse::Event};
+
+pub struct OpenAIOutputAdapter;
 
 impl OutputAdapter for OpenAIOutputAdapter {
     fn adapt_response(&self, response: UnifiedResponse) -> Result<impl warp::Reply, anyhow::Error> {
@@ -20,11 +19,11 @@ impl OutputAdapter for OpenAIOutputAdapter {
 
         for c in response.content {
             match c {
-                crate::ccproxy::adapter::unified::UnifiedContentBlock::Text { text } => {
-                    text_content.push_str(&text);
-                }
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::Thinking { thinking } => {
                     reasoning_content = Some(thinking);
+                }
+                crate::ccproxy::adapter::unified::UnifiedContentBlock::Text { text } => {
+                    text_content.push_str(&text);
                 }
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolUse {
                     id,
@@ -41,23 +40,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         index: None,
                     });
                 }
-                crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error: _,
-                } => {
-                    // OpenAI doesn't have a direct equivalent for tool results in assistant responses.
-                    // We'll append it as text content for now.
-                    text_content.push_str(&format!("\nTool Result ({}) {}", tool_use_id, content));
-                }
-                crate::ccproxy::adapter::unified::UnifiedContentBlock::Image {
-                    media_type, ..
-                } => {
-                    // OpenAI doesn't have a direct equivalent for image content in assistant responses.
-                    // We'll append it as text content for now.
-                    text_content
-                        .push_str(&format!("\nImage ({}) [base64 data omitted]", media_type));
-                }
+                _ => {}
             }
         }
 
@@ -82,7 +65,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
             object: "chat.completion".to_string(),
             created: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .map_err(|e| anyhow::anyhow!("Failed to get system time: {}", e))?
                 .as_secs(),
             model: response.model,
             choices: vec![choice],
@@ -99,9 +82,8 @@ impl OutputAdapter for OpenAIOutputAdapter {
     fn adapt_stream_chunk(
         &self,
         chunk: UnifiedStreamChunk,
-        _sse_status: Arc<RwLock<SseStatus>>,
+        _sse_status: std::sync::Arc<std::sync::RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
-        let event = Event::default();
         match chunk {
             UnifiedStreamChunk::MessageStart { id, model, usage } => {
                 // Convert to OpenAI-compatible message_start event
@@ -113,18 +95,18 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         "output_tokens": usage.output_tokens
                     }
                 });
-                Ok(vec![event
+                Ok(vec![Event::default()
                     .id(id)
                     .event("message_start")
                     .data(data.to_string())])
             }
             UnifiedStreamChunk::Thinking { delta } => {
                 let data = json!({ "choices": [{ "delta": { "reasoning_content": delta } }] });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::Text { delta } => {
                 let data = json!({ "choices": [{ "delta": { "content": delta } }] });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::ToolUseStart {
                 tool_type: _,
@@ -145,7 +127,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         }
                     }]
                 });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::ToolUseDelta { id: _, delta } => {
                 let data = json!({
@@ -160,10 +142,10 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         }
                     }]
                 });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::ToolUseEnd { id: _ } => {
-                Ok(vec![event.data("")]) // No direct OpenAI equivalent for tool_use_end delta
+                Ok(vec![Event::default().data("")]) // No direct OpenAI equivalent for tool_use_end delta
             }
             UnifiedStreamChunk::MessageStop { stop_reason, usage } => {
                 let data = json!({
@@ -176,12 +158,12 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         "total_tokens": usage.input_tokens + usage.output_tokens
                     }
                 });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::Error { message } => {
                 // Map internal errors to a data event for the client
                 let data = json!({ "error": { "message": message } });
-                Ok(vec![event.data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             _ => Ok(vec![]),
         }
