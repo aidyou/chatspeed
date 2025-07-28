@@ -355,7 +355,6 @@ mod tests {
     use crate::workflow::dag::config::{NodeType, ToolConfig};
 
     use super::*;
-    use serde_json::json;
 
     fn sample_node(id: &str) -> NodeConfig {
         NodeConfig {

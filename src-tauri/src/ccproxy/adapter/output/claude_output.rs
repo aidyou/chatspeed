@@ -57,9 +57,14 @@ impl OutputAdapter for ClaudeOutputAdapter {
             content,
             model: Some(response.model),
             stop_reason: response.stop_reason,
+            stop_sequence: None, // Add missing field
             usage: Some(ClaudeNativeUsage {
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
+                cache_creation_input_tokens: None, // Add missing field
+                cache_read_input_tokens: None,     // Add missing field
+                cache_creation: None,              // Add missing field
+                server_tool_use: None,             // Add missing field
             }),
             error: None,
         };

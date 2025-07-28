@@ -58,9 +58,9 @@ pub struct UnifiedChatMessage {
     pub tool_call_id: Option<String>, // Used by "tool" role messages in requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>, // Added for custom reasoning content
-                                      // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
-                                      // However, OpenAI's request/non-stream response tool_calls don't have an index.
-                                      // So, `UnifiedToolCall` will handle the `index` for streaming.
+                                           // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
+                                           // However, OpenAI's request/non-stream response tool_calls don't have an index.
+                                           // So, `UnifiedToolCall` will handle the `index` for streaming.
 }
 
 /// Represents the content of an OpenAI message, which can be simple text or a list of parts for multimodal.
@@ -95,31 +95,38 @@ pub struct OpenAIChatCompletionRequest {
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
-    // Add other common OpenAI parameters if needed, e.g., temperature, max_tokens, etc.
-    // These will be passed through to the actual AI call if not overridden by proxy config.
+    // Generation control parameters
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f32>, // Range: 0.0 to 2.0, default: 1.0
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
+    pub top_p: Option<f32>, // Range: 0.0 to 1.0, default: 1.0
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub presence_penalty: Option<f32>, // Range: -2.0 to 2.0, default: 0.0
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>, // Range: -2.0 to 2.0, default: 0.0
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub frequency_penalty: Option<f32>,
+    pub response_format: Option<OpenAIResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_format: Option<Value>,
+    pub stop: Option<Vec<String>>, // Max 4 sequences
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop: Option<Vec<String>>,
+    pub seed: Option<i32>, // For deterministic sampling
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub n: Option<u32>, // Number of chat completion choices to generate for each input message.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
-    // tools, tool_choice, etc.
+    pub user: Option<String>, // End-user identifier
+    // Tools and function calling
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<OpenAITool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<Value>, // Can be "none", "auto", or {"type": "function", "function": {"name": "my_function"}}
+    pub tool_choice: Option<OpenAIToolChoice>,
+    // Advanced features
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<bool>, // Whether to return log probabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<i32>, // Number of most likely tokens to return at each position
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<OpenAIStreamOptions>,
+    // Advanced parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logit_bias: Option<HashMap<String, f32>>, // Token ID to bias value mapping (-100 to 100)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize
@@ -136,7 +143,9 @@ pub struct OpenAIChatCompletionResponse {
 pub struct OpenAIChatCompletionChoice {
     pub index: u32,
     pub message: UnifiedChatMessage, // For non-streaming, role: "assistant"
-    pub finish_reason: Option<String>, // e.g., "stop", "length", "tool_calls"
+    pub finish_reason: Option<String>, // e.g., "stop", "length", "tool_calls", "content_filter"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<OpenAILogprobs>, // Log probabilities for the choice
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize
@@ -164,6 +173,8 @@ pub struct OpenAIStreamChoice {
     pub delta: UnifiedChatMessage, // Using the unified message structure for delta
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<OpenAILogprobs>, // Log probabilities for streaming
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -206,13 +217,143 @@ pub struct OpenAIFunctionDefinition {
     pub parameters: Value, // JSON schema for the function's parameters
 }
 
-/// Represents a parsed Server-Sent Event with its distinct fields.
-/// Adapters will produce this, and handlers.rs will consume it to build warp::sse::Event.
-#[derive(Debug, Default, Clone)]
+/// Response format specification for OpenAI requests
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIResponseFormat {
+    #[serde(rename = "type")]
+    pub format_type: String, // "text" or "json_object"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<Value>, // JSON schema for structured output
+}
+
+/// Tool choice specification for OpenAI requests
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum OpenAIToolChoice {
+    String(String), // "none", "auto", "required"
+    Object(OpenAIToolChoiceObject),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIToolChoiceObject {
+    #[serde(rename = "type")]
+    pub choice_type: String, // "function"
+    pub function: OpenAIToolChoiceFunction,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIToolChoiceFunction {
+    pub name: String,
+}
+
+/// Stream options for OpenAI requests
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIStreamOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_usage: Option<bool>, // Whether to include usage in final chunk
+}
+
+/// Log probabilities result for OpenAI responses
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAILogprobs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<OpenAILogprobsContent>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAILogprobsContent {
+    pub token: String,
+    pub logprob: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<Vec<OpenAITopLogprob>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAITopLogprob {
+    pub token: String,
+    pub logprob: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Server-Sent Events structure for OpenAI streaming responses
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SseEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub retry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<OpenAIUsage>, // Added usage field
+}
+
+impl OpenAIChatCompletionRequest {
+    /// Validate request parameters according to OpenAI API constraints
+    pub fn validate(&self) -> Result<(), String> {
+        // Validate temperature range (0.0 to 2.0)
+        if let Some(temp) = self.temperature {
+            if temp < 0.0 || temp > 2.0 {
+                return Err("Temperature must be between 0.0 and 2.0".to_string());
+            }
+        }
+
+        // Validate top_p range (0.0 to 1.0)
+        if let Some(top_p) = self.top_p {
+            if top_p < 0.0 || top_p > 1.0 {
+                return Err("top_p must be between 0.0 and 1.0".to_string());
+            }
+        }
+
+        // Validate presence_penalty range (-2.0 to 2.0)
+        if let Some(penalty) = self.presence_penalty {
+            if penalty < -2.0 || penalty > 2.0 {
+                return Err("presence_penalty must be between -2.0 and 2.0".to_string());
+            }
+        }
+
+        // Validate frequency_penalty range (-2.0 to 2.0)
+        if let Some(penalty) = self.frequency_penalty {
+            if penalty < -2.0 || penalty > 2.0 {
+                return Err("frequency_penalty must be between -2.0 and 2.0".to_string());
+            }
+        }
+
+        // Validate stop sequences (max 4)
+        if let Some(ref stop) = self.stop {
+            if stop.len() > 4 {
+                return Err("Maximum 4 stop sequences allowed".to_string());
+            }
+        }
+
+        // Validate max_tokens is positive
+        if let Some(max_tokens) = self.max_tokens {
+            if max_tokens <= 0 {
+                return Err("max_tokens must be positive".to_string());
+            }
+        }
+
+        // Validate top_logprobs range (0 to 20)
+        if let Some(top_logprobs) = self.top_logprobs {
+            if top_logprobs < 0 || top_logprobs > 20 {
+                return Err("top_logprobs must be between 0 and 20".to_string());
+            }
+        }
+
+        // Validate logit_bias values range (-100 to 100)
+        if let Some(ref logit_bias) = self.logit_bias {
+            for (_, &bias) in logit_bias.iter() {
+                if bias < -100.0 || bias > 100.0 {
+                    return Err("logit_bias values must be between -100.0 and 100.0".to_string());
+                }
+            }
+        }
+
+        Ok(())
+    }
 }

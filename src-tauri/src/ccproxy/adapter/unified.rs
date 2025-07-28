@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,29 +22,52 @@ pub struct UnifiedRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<UnifiedToolChoice>,
     pub stream: bool,
+
     // Common generation parameters
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f32>, // Range varies by protocol: OpenAI (0-2), Claude/Gemini (0-1)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
+    pub top_p: Option<f32>, // Range: 0-1 for all protocols
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>,
+    pub top_k: Option<i32>, // OpenAI doesn't support directly, Claude/Gemini do
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
 
-    // For openai only
+    // OpenAI-specific parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>, // Range: -2.0 to 2.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>, // Range: -2.0 to 2.0
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i32>, // For deterministic sampling
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>, // End-user identifier
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<bool>, // Whether to return log probabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_logprobs: Option<i32>, // Number of most likely tokens to return
 
-    // For gemini only
+    // Claude-specific parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<UnifiedMetadata>, // Request metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<UnifiedThinking>, // Extended thinking configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<UnifiedCacheControl>, // Cache control
+
+    // Gemini-specific parameters
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safety_settings: Option<Vec<SafetySetting>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content: Option<String>, // Context cache content name
 
     // For tool compatibility mode
     pub tool_compat_mode: bool,
@@ -111,6 +136,27 @@ pub enum UnifiedToolChoice {
     Auto,
     Required,
     Tool { name: String },
+}
+
+/// Unified metadata for requests (primarily for Claude)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>, // External identifier for the user
+}
+
+/// Unified thinking configuration (for Claude and Gemini)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedThinking {
+    pub budget_tokens: i32, // Token budget for internal reasoning
+}
+
+/// Unified cache control configuration (primarily for Claude)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedCacheControl {
+    pub cache_type: String, // "ephemeral"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>, // "5m" or "1h"
 }
 
 // ===================================
@@ -186,6 +232,23 @@ pub enum UnifiedStreamChunk {
 pub struct UnifiedUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    // Claude-specific detailed usage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    // Gemini-specific detailed usage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thoughts_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content_tokens: Option<u64>,
+}
+
+pub struct GeminiFunctionCallPart {
+    pub name: String,
+    pub args: String,
 }
 
 pub struct SseStatus {
@@ -205,6 +268,8 @@ pub struct SseStatus {
     pub tool_compat_fragment_buffer: String,
     pub tool_compat_fragment_count: u32,
     pub tool_compat_last_flush_time: std::time::Instant,
+    // For gemini tools: tool_id -> tool define
+    pub gemini_tools: HashMap<String, GeminiFunctionCallPart>,
 }
 
 impl Default for SseStatus {
@@ -225,6 +290,7 @@ impl Default for SseStatus {
             tool_compat_fragment_buffer: String::new(),
             tool_compat_fragment_count: 0,
             tool_compat_last_flush_time: std::time::Instant::now(),
+            gemini_tools: HashMap::new(),
         }
     }
 }

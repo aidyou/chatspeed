@@ -1,14 +1,26 @@
 use crate::ccproxy::{
-    adapter::unified::{
-        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
-        UnifiedToolChoice,
+    adapter::{
+        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        unified::{
+            UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
+            UnifiedToolChoice,
+        },
     },
-    types::openai::{OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart},
+    types::openai::{
+        OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart,
+        OpenAIToolChoice,
+    },
 };
-use serde_json::Value;
 
 /// Converts an OpenAI-compatible chat completion request into the `UnifiedRequest`.
-pub fn from_openai(req: OpenAIChatCompletionRequest, tool_compat_mode: bool) -> Result<UnifiedRequest, anyhow::Error> {
+pub fn from_openai(
+    req: OpenAIChatCompletionRequest,
+    tool_compat_mode: bool,
+) -> Result<UnifiedRequest, anyhow::Error> {
+    // Validate OpenAI request parameters
+    if let Err(e) = req.validate() {
+        anyhow::bail!("OpenAI request validation failed: {}", e);
+    }
     let mut messages = Vec::new();
     let mut system_prompt = None;
 
@@ -30,7 +42,11 @@ pub fn from_openai(req: OpenAIChatCompletionRequest, tool_compat_mode: bool) -> 
 
         let content = convert_openai_content(msg.content, msg.tool_calls)?;
 
-        messages.push(UnifiedMessage { role, content, reasoning_content: None });
+        messages.push(UnifiedMessage {
+            role,
+            content,
+            reasoning_content: None,
+        });
     }
 
     let tools = req.tools.map(|tools| {
@@ -53,15 +69,53 @@ pub fn from_openai(req: OpenAIChatCompletionRequest, tool_compat_mode: bool) -> 
         tools,
         tool_choice,
         stream: req.stream.unwrap_or(false),
-        temperature: req.temperature,
+        temperature: req.temperature.map(|t| {
+            // Clamp to OpenAI range first, then it will be adapted in backend adapters
+            clamp_to_protocol_range(t, Protocol::OpenAI, Parameter::Temperature)
+        }),
         max_tokens: req.max_tokens,
-        top_p: req.top_p,
-        top_k: req.top_k,
+        top_p: req
+            .top_p
+            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::TopP)),
+        top_k: None, // OpenAI doesn't support top_k directly
         stop_sequences: req.stop,
-        response_format: req.response_format,
-        safety_settings: None,
-        response_mime_type: None,
-        response_schema: None,
+        // OpenAI-specific parameters
+        presence_penalty: req
+            .presence_penalty
+            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::PresencePenalty)),
+        frequency_penalty: req
+            .frequency_penalty
+            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::FrequencyPenalty)),
+        response_format: req
+            .response_format
+            .as_ref()
+            .map(|rf| serde_json::to_value(rf).unwrap_or(serde_json::Value::Null)),
+        seed: req.seed,
+        user: req.user.clone(),
+        logprobs: req.logprobs,
+        top_logprobs: req.top_logprobs,
+        // Claude-specific parameters - map OpenAI user to Claude metadata.user_id
+        metadata: req.user.map(
+            |user_id| crate::ccproxy::adapter::unified::UnifiedMetadata {
+                user_id: Some(user_id),
+            },
+        ),
+        thinking: None,      // OpenAI doesn't support thinking mode
+        cache_control: None, // OpenAI doesn't support cache control
+        // Gemini-specific parameters - map OpenAI response_format to Gemini fields
+        safety_settings: None, // OpenAI doesn't have safety settings
+        response_mime_type: req.response_format.as_ref().and_then(|rf| {
+            if rf.format_type == "json_object" {
+                Some("application/json".to_string())
+            } else {
+                Some("text/plain".to_string())
+            }
+        }),
+        response_schema: req
+            .response_format
+            .as_ref()
+            .and_then(|rf| rf.json_schema.clone()),
+        cached_content: None,
         tool_compat_mode,
     })
 }
@@ -123,28 +177,22 @@ fn convert_openai_content(
 }
 
 /// Converts OpenAI's tool_choice format to the `UnifiedToolChoice`.
-fn convert_openai_tool_choice(choice: Value) -> UnifiedToolChoice {
+fn convert_openai_tool_choice(choice: OpenAIToolChoice) -> UnifiedToolChoice {
     match choice {
-        Value::String(s) => match s.as_str() {
+        OpenAIToolChoice::String(s) => match s.as_str() {
             "none" => UnifiedToolChoice::None,
             "auto" => UnifiedToolChoice::Auto,
             "required" => UnifiedToolChoice::Required,
             _ => UnifiedToolChoice::Auto,
         },
-        Value::Object(obj) => {
-            if obj.get("type").and_then(Value::as_str) == Some("function") {
-                if let Some(name) = obj
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(Value::as_str)
-                {
-                    return UnifiedToolChoice::Tool {
-                        name: name.to_string(),
-                    };
+        OpenAIToolChoice::Object(obj) => {
+            if obj.choice_type == "function" {
+                UnifiedToolChoice::Tool {
+                    name: obj.function.name,
                 }
+            } else {
+                UnifiedToolChoice::Auto
             }
-            UnifiedToolChoice::Auto
         }
-        _ => UnifiedToolChoice::Auto,
     }
 }

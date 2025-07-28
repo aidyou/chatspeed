@@ -10,7 +10,7 @@ use crate::db::MainStore;
 use std::sync::{Arc, Mutex};
 use warp::{filters::header::headers_cloned, Filter, Rejection, Reply};
 
-const TOOL_COMPAT_MODE: &str = "tool_compat_mode";
+const TOOL_COMPAT_MODE: &str = "compat_mode";
 
 /// Helper function to inject MainStore into Warp filters.
 fn with_main_store(
@@ -122,14 +122,14 @@ pub fn routes(
 
     log::info!("Registered GET /ccproxy/v1/models");
     log::info!("Registered POST /ccproxy/tool_use/v1/chat/completions");
-    log::info!("Registered POST /ccproxy/tool_compat_mode/v1/chat/completions");
+    log::info!("Registered POST /ccproxy/compat_mode/v1/chat/completions");
     log::info!("Registered POST /ccproxy/tool_use/claude/v1/messages");
-    log::info!("Registered POST /ccproxy/tool_compat_mode/claude/v1/messages");
+    log::info!("Registered POST /ccproxy/compat_mode/claude/v1/messages");
     log::info!(
         "Registered POST /ccproxy/tool_use/gemini/v1beta/models/{{modelId}}/generateContent?key=API-Key"
     );
     log::info!(
-        "Registered POST /ccproxy/tool_compat_mode/gemini/v1beta/models/{{modelId}}/generateContent?key=API-Key"
+        "Registered POST /ccproxy/compat_mode/gemini/v1beta/models/{{modelId}}/generateContent?key=API-Key"
     );
     list_models_route
         .or(chat_completions_route)

@@ -1,9 +1,12 @@
 use serde_json::json;
 
 use crate::ccproxy::{
-    adapter::unified::{
-        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
-        UnifiedToolChoice,
+    adapter::{
+        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        unified::{
+            UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
+            UnifiedToolChoice,
+        },
     },
     gemini::{GeminiPart, GeminiRequest},
 };
@@ -13,6 +16,10 @@ pub fn from_gemini(
     req: GeminiRequest,
     tool_compat_mode: bool,
 ) -> Result<UnifiedRequest, anyhow::Error> {
+    // Validate Gemini request parameters
+    if let Err(e) = req.validate() {
+        anyhow::bail!("Gemini request validation failed: {}", e);
+    }
     let mut messages = Vec::new();
     let mut system_prompt = None;
 
@@ -85,7 +92,8 @@ pub fn from_gemini(
     let temperature = req
         .generation_config
         .as_ref()
-        .and_then(|config| config.temperature);
+        .and_then(|config| config.temperature)
+        .map(|t| clamp_to_protocol_range(t, Protocol::Gemini, Parameter::Temperature));
     let max_tokens = req
         .generation_config
         .as_ref()
@@ -93,7 +101,8 @@ pub fn from_gemini(
     let top_p = req
         .generation_config
         .as_ref()
-        .and_then(|config| config.top_p);
+        .and_then(|config| config.top_p)
+        .map(|p| clamp_to_protocol_range(p, Protocol::Gemini, Parameter::TopP));
     let top_k = req
         .generation_config
         .as_ref()
@@ -133,10 +142,31 @@ pub fn from_gemini(
         top_p,
         top_k,
         stop_sequences,
+        // OpenAI-specific parameters - map Gemini response format to OpenAI
+        presence_penalty: None,  // Gemini doesn't support presence penalty
+        frequency_penalty: None, // Gemini doesn't support frequency penalty
         response_format,
+        seed: None,         // Gemini doesn't support deterministic seeding
+        user: None,         // Gemini doesn't have user field
+        logprobs: None,     // Gemini doesn't support log probabilities
+        top_logprobs: None, // Gemini doesn't support log probabilities
+        // Claude-specific parameters - map Gemini fields to Claude equivalents
+        metadata: None, // Gemini doesn't have user metadata
+        thinking: req
+            .generation_config
+            .as_ref()
+            .and_then(|config| config.thinking_config.as_ref())
+            .map(
+                |thinking| crate::ccproxy::adapter::unified::UnifiedThinking {
+                    budget_tokens: thinking.thinking_budget.unwrap_or(0),
+                },
+            ),
+        cache_control: None, // Gemini uses cached_content instead
+        // Gemini-specific parameters
+        safety_settings: req.safety_settings.clone(),
         response_mime_type,
         response_schema,
-        safety_settings: req.safety_settings.clone(),
+        cached_content: req.cached_content,
         tool_compat_mode,
     })
 }

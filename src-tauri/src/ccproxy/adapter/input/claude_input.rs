@@ -1,81 +1,19 @@
+use anyhow::Result;
+
 use crate::ccproxy::{
-    adapter::unified::{
-        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
-        UnifiedToolChoice,
+    adapter::{
+        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        unified::{
+            UnifiedCacheControl, UnifiedContentBlock, UnifiedMessage, UnifiedMetadata,
+            UnifiedRequest, UnifiedRole, UnifiedThinking, UnifiedTool, UnifiedToolChoice,
+        },
     },
-    claude::ClaudeToolChoice,
-    types::claude::{ClaudeNativeContentBlock, ClaudeNativeRequest},
+    types::claude::{ClaudeNativeContentBlock, ClaudeNativeRequest, ClaudeToolChoice},
 };
 
-/// Converts a Claude-native chat completion request into the `UnifiedRequest`.
-pub fn from_claude(
-    req: ClaudeNativeRequest,
-    tool_compat_mode: bool,
-) -> Result<UnifiedRequest, anyhow::Error> {
-    let messages = req
-        .messages
-        .into_iter()
-        .map(|msg| {
-            let role = match msg.role.as_str() {
-                "user" => UnifiedRole::User,
-                "assistant" => UnifiedRole::Assistant,
-                _ => anyhow::bail!("Invalid role '{}' in Claude message. Only 'user' and 'assistant' are supported in messages array", msg.role),
-            };
-            let content = msg
-                .content
-                .into_iter()
-                .map(convert_claude_content_block)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(UnifiedMessage {
-                role,
-                content,
-                reasoning_content: None,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let tools = req.tools.map(|tools| {
-        tools
-            .into_iter()
-            .map(|tool| UnifiedTool {
-                name: tool.name,
-                description: tool.description,
-                input_schema: tool.input_schema,
-            })
-            .collect()
-    });
-
-    let tool_choice = req.tool_choice.map(|choice| match choice {
-        ClaudeToolChoice::Auto => UnifiedToolChoice::Auto,
-        ClaudeToolChoice::Any => UnifiedToolChoice::Required, // Claude's 'any' is closer to OpenAI's 'required'
-        ClaudeToolChoice::Tool { name } => UnifiedToolChoice::Tool { name },
-    });
-
-    Ok(UnifiedRequest {
-        model: req.model,
-        messages,
-        system_prompt: req.system,
-        tools,
-        tool_choice,
-        stream: false,
-        // stream: req.stream.unwrap_or(false),
-        temperature: req.temperature,
-        max_tokens: Some(req.max_tokens),
-        top_p: req.top_p,
-        top_k: req.top_k,
-        stop_sequences: None, // Claude API doesn't have a direct stop sequence field in the request
-        response_format: None,
-        safety_settings: None,
-        response_mime_type: None,
-        response_schema: None,
-        tool_compat_mode,
-    })
-}
-
-/// Converts a single Claude content block to a `UnifiedContentBlock`.
-fn convert_claude_content_block(
-    block: ClaudeNativeContentBlock,
-) -> Result<UnifiedContentBlock, anyhow::Error> {
+/// Converts a single Claude native content block into a unified content block.
+/// This function handles the direct mapping between the source and unified formats.
+fn convert_claude_content_block(block: ClaudeNativeContentBlock) -> Result<UnifiedContentBlock> {
     match block {
         ClaudeNativeContentBlock::Text { text } => Ok(UnifiedContentBlock::Text { text }),
         ClaudeNativeContentBlock::Image { source } => Ok(UnifiedContentBlock::Image {
@@ -91,12 +29,156 @@ fn convert_claude_content_block(
             is_error,
         } => Ok(UnifiedContentBlock::ToolResult {
             tool_use_id,
-            content,
+            content, // The source is already a String, which is correct for the unified format.
             is_error: is_error.unwrap_or(false),
         }),
-        ClaudeNativeContentBlock::Thinking { .. } => {
-            // 'Thinking' blocks are part of responses, not requests. We can ignore them here.
-            anyhow::bail!("'Thinking' content block is not supported in requests.")
+        ClaudeNativeContentBlock::Thinking { thinking } => {
+            Ok(UnifiedContentBlock::Thinking { thinking })
         }
     }
+}
+
+/// Adapts a native Claude request to the unified request format.
+///
+/// This function is crucial for translating Claude-specific structures, especially
+/// the tool-calling message sequence, into a standardized format that backend
+/// adapters can understand.
+pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<UnifiedRequest> {
+    // Validate Claude request parameters before proceeding.
+    if let Err(e) = req.validate() {
+        anyhow::bail!("Claude request validation failed: {}", e);
+    }
+
+    // Use `flat_map` to handle the one-to-many transformation required for tool results.
+    // A single Claude `user` message containing `tool_result` blocks needs to be
+    // transformed into one or more `UnifiedMessage`s, each with the `Tool` role.
+    let messages = req
+        .messages
+        .into_iter()
+        .flat_map(|msg| -> Vec<anyhow::Result<UnifiedMessage>> {
+            match msg.role.as_str() {
+                "assistant" => {
+                    // Assistant messages are converted directly.
+                    let result = msg
+                        .content
+                        .into_iter()
+                        .map(convert_claude_content_block)
+                        .collect::<Result<Vec<_>>>()
+                        .map(|content| UnifiedMessage {
+                            role: UnifiedRole::Assistant,
+                            content,
+                            reasoning_content: None,
+                        });
+                    vec![result]
+                }
+                "user" => {
+                    // For user messages, we need to check if they contain tool results.
+                    let has_tool_result = msg
+                        .content
+                        .iter()
+                        .any(|c| matches!(c, ClaudeNativeContentBlock::ToolResult { .. }));
+
+                    if has_tool_result {
+                        // This is a tool result message. Each ToolResult block becomes a separate Tool message.
+                        // Other blocks in this message (like text) are ignored as per standard API behavior.
+                        msg.content
+                            .into_iter()
+                            .filter_map(|block| {
+                                if matches!(block, ClaudeNativeContentBlock::ToolResult { .. }) {
+                                    // Convert only the ToolResult blocks.
+                                    Some(
+                                        convert_claude_content_block(block).map(|unified_block| {
+                                            UnifiedMessage {
+                                                role: UnifiedRole::Tool, // This is the crucial change.
+                                                content: vec![unified_block],
+                                                reasoning_content: None,
+                                            }
+                                        }),
+                                    )
+                                } else {
+                                    // Ignore other blocks like text in a tool result message.
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        // It's a regular user message without tool results.
+                        let result = msg
+                            .content
+                            .into_iter()
+                            .map(convert_claude_content_block)
+                            .collect::<Result<Vec<_>>>()
+                            .map(|content| UnifiedMessage {
+                                role: UnifiedRole::User,
+                                content,
+                                reasoning_content: None,
+                            });
+                        vec![result]
+                    }
+                }
+                _ => vec![Err(anyhow::anyhow!(
+                    "Invalid role '{}' in Claude message. Only 'user' and 'assistant' are supported in messages array",
+                    msg.role
+                ))],
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let tools = req.tools.map(|tools| {
+        tools
+            .into_iter()
+            .map(|tool| UnifiedTool {
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.input_schema,
+            })
+            .collect()
+    });
+
+    let tool_choice = req.tool_choice.map(|choice| match choice {
+        ClaudeToolChoice::Auto => UnifiedToolChoice::Auto,
+        ClaudeToolChoice::Any => UnifiedToolChoice::Required, // Claude's 'any' is closer to OpenAI's 'required'.
+        ClaudeToolChoice::Tool { name } => UnifiedToolChoice::Tool { name },
+    });
+
+    Ok(UnifiedRequest {
+        model: req.model,
+        messages,
+        system_prompt: req.system,
+        tools,
+        tool_choice,
+        stream: false, // Stream handling is managed by the handler, not in the request body itself.
+        temperature: req
+            .temperature
+            .map(|t| clamp_to_protocol_range(t, Protocol::Claude, Parameter::Temperature)),
+        max_tokens: Some(req.max_tokens),
+        top_p: req
+            .top_p
+            .map(|p| clamp_to_protocol_range(p, Protocol::Claude, Parameter::TopP)),
+        top_k: req.top_k,
+        stop_sequences: req.stop_sequences,
+        // OpenAI-specific parameters
+        presence_penalty: None,
+        frequency_penalty: None,
+        response_format: None,
+        seed: None,
+        user: req.metadata.as_ref().and_then(|m| m.user_id.clone()),
+        logprobs: None,
+        top_logprobs: None,
+        // Claude-specific parameters
+        metadata: req.metadata.map(|m| UnifiedMetadata { user_id: m.user_id }),
+        thinking: req.thinking.map(|t| UnifiedThinking {
+            budget_tokens: t.budget_tokens,
+        }),
+        cache_control: req.cache_control.map(|c| UnifiedCacheControl {
+            cache_type: c.cache_type,
+            ttl: c.ttl,
+        }),
+        // Gemini-specific parameters
+        safety_settings: None,
+        response_mime_type: None,
+        response_schema: None,
+        cached_content: None,
+        tool_compat_mode,
+    })
 }

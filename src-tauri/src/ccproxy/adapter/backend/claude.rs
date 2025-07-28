@@ -6,9 +6,12 @@ use serde_json::Value;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::unified::{
-    UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
-    UnifiedToolChoice, UnifiedUsage,
+use crate::ccproxy::adapter::{
+    range_adapter::{adapt_temperature, Protocol},
+    unified::{
+        UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
+        UnifiedToolChoice, UnifiedUsage,
+    },
 };
 use crate::ccproxy::types::claude::{
     ClaudeNativeContentBlock, ClaudeNativeMessage, ClaudeNativeRequest, ClaudeNativeResponse,
@@ -198,11 +201,32 @@ impl BackendAdapter for ClaudeBackendAdapter {
             system: unified_request.system_prompt.clone(),
             max_tokens: unified_request.max_tokens.unwrap_or(1024),
             stream: Some(unified_request.stream),
-            temperature: unified_request.temperature,
+            temperature: unified_request.temperature.map(|t| {
+                // Adapt temperature from source protocol to Claude range
+                adapt_temperature(t, Protocol::OpenAI, Protocol::Claude)
+            }),
             top_p: unified_request.top_p,
             top_k: unified_request.top_k,
+            stop_sequences: unified_request.stop_sequences.clone(), // Add missing field
             tools: claude_tools,
             tool_choice: claude_tool_choice,
+            metadata: unified_request.metadata.as_ref().map(|m| {
+                crate::ccproxy::types::claude::ClaudeMetadata {
+                    user_id: m.user_id.clone(),
+                }
+            }),
+            thinking: unified_request.thinking.as_ref().map(|t| {
+                crate::ccproxy::types::claude::ClaudeThinking {
+                    thinking_type: "enabled".to_string(),
+                    budget_tokens: t.budget_tokens,
+                }
+            }),
+            cache_control: unified_request.cache_control.as_ref().map(|c| {
+                crate::ccproxy::types::claude::ClaudeCacheControl {
+                    cache_type: c.cache_type.clone(),
+                    ttl: c.ttl.clone(),
+                }
+            }),
         };
 
         let mut request_builder = client.post(format!("{}/messages", base_url));
@@ -258,6 +282,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
             .map(|u| UnifiedUsage {
                 input_tokens: u.input_tokens,
                 output_tokens: u.output_tokens,
+                cache_creation_input_tokens: u.cache_creation_input_tokens,
+                cache_read_input_tokens: u.cache_read_input_tokens,
+                tool_use_prompt_tokens: None,
+                thoughts_tokens: None,
+                cached_content_tokens: None,
             })
             .unwrap_or_default();
 
@@ -279,6 +308,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
     ) -> Result<Vec<UnifiedStreamChunk>, anyhow::Error> {
         let chunk_str = String::from_utf8_lossy(&chunk);
         let mut unified_chunks = Vec::new();
+        let model_id = sse_status.read().map(|x| x.model_id.clone());
 
         for line in chunk_str.lines() {
             if line.starts_with("event:") {
@@ -292,17 +322,26 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     match event_type {
                         "message_start" => {
                             if let Some(msg) = claude_event.message {
+                                let model = model_id
+                                    .as_deref()
+                                    .unwrap_or(msg.model.as_str())
+                                    .to_string();
                                 if let Ok(mut status) = sse_status.write() {
                                     status.message_start = true;
                                     status.message_id = msg.id.clone();
-                                    status.model_id = msg.model.clone();
+                                    status.model_id = model.clone();
                                 }
                                 unified_chunks.push(UnifiedStreamChunk::MessageStart {
                                     id: msg.id,
-                                    model: msg.model,
+                                    model: model,
                                     usage: UnifiedUsage {
                                         input_tokens: msg.usage.input_tokens.unwrap_or(0),
                                         output_tokens: 0,
+                                        cache_creation_input_tokens: None,
+                                        cache_read_input_tokens: None,
+                                        tool_use_prompt_tokens: None,
+                                        thoughts_tokens: None,
+                                        cached_content_tokens: None,
                                     },
                                 });
                             }
@@ -451,6 +490,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         .map(|u| UnifiedUsage {
                                             input_tokens: u.input_tokens.unwrap_or(0),
                                             output_tokens: u.output_tokens.unwrap_or(0),
+                                            cache_creation_input_tokens: None,
+                                            cache_read_input_tokens: None,
+                                            tool_use_prompt_tokens: None,
+                                            thoughts_tokens: None,
+                                            cached_content_tokens: None,
                                         })
                                         .unwrap_or_default();
                                     unified_chunks.push(UnifiedStreamChunk::MessageStop {

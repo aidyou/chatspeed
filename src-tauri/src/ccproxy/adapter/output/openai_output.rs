@@ -58,6 +58,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 ..Default::default()
             },
             finish_reason: response.stop_reason,
+            logprobs: None, // Add missing logprobs field
         };
 
         let openai_response = OpenAIChatCompletionResponse {

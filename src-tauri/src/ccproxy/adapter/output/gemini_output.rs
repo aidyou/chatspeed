@@ -1,10 +1,12 @@
 use super::OutputAdapter;
-use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::adapter::unified::{
+    GeminiFunctionCallPart, SseStatus, UnifiedResponse, UnifiedStreamChunk,
+};
 use crate::ccproxy::gemini::{
     GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
     GeminiUsageMetadata,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 use warp::sse::Event;
@@ -47,18 +49,32 @@ impl OutputAdapter for GeminiOutputAdapter {
             prompt_token_count: response.usage.input_tokens,
             candidates_token_count: Some(response.usage.output_tokens),
             total_token_count: response.usage.input_tokens + response.usage.output_tokens,
+            tool_use_prompt_token_count: None, // Add missing field
+            thoughts_token_count: None,        // Add missing field
+            cached_content_token_count: None,  // Add missing field
+            prompt_tokens_details: None,       // Add missing field
+            candidates_tokens_details: None,   // Add missing field
         };
 
         let gemini_response = GeminiNetworkResponse {
             candidates: Some(vec![GeminiCandidate {
+                index: Some(0), // Add missing field
                 content: GeminiContent {
                     role: "model".to_string(),
                     parts: gemini_parts,
                 },
                 finish_reason: response.stop_reason.map(|s| s.into()), // Convert stop_reason string to GeminiFinishReason
+                safety_ratings: None,                                  // Add missing field
+                citation_metadata: None,                               // Add missing field
+                grounding_metadata: None,                              // Add missing field
+                avg_logprobs: None,                                    // Add missing field
+                finish_message: None,                                  // Add missing field
             }]),
             prompt_feedback: None,
             usage_metadata: Some(usage),
+            model_version: None, // Add missing field
+            create_time: None,   // Add missing field
+            response_id: None,   // Add missing field
         };
 
         Ok(warp::reply::json(&gemini_response))
@@ -67,26 +83,27 @@ impl OutputAdapter for GeminiOutputAdapter {
     fn adapt_stream_chunk(
         &self,
         chunk: UnifiedStreamChunk,
-        _sse_status: Arc<RwLock<SseStatus>>,
+        sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
         let event = Event::default();
         match chunk {
             UnifiedStreamChunk::MessageStart {
                 id: _,
                 model: _,
-                usage,
+                usage: _,
             } => {
                 // Gemini does not have a distinct message_start event in stream.
                 // Usage info comes in message_delta or final chunk.
                 // We'll return an empty data event, as Gemini expects a continuous stream of content.
-                let data = json!({
-                    "usageMetadata": {
-                        "promptTokenCount": usage.input_tokens,
-                        "candidatesTokenCount": 0,
-                        "totalTokenCount": usage.input_tokens
-                    }
-                });
-                Ok(vec![event.data(data.to_string())])
+                // let data = json!({
+                //     "usageMetadata": {
+                //         "promptTokenCount": usage.input_tokens,
+                //         "candidatesTokenCount": 0,
+                //         "totalTokenCount": usage.input_tokens
+                //     }
+                // });
+                // Ok(vec![event.data(data.to_string())])
+                Ok(vec![])
             }
             UnifiedStreamChunk::Thinking { delta } | UnifiedStreamChunk::Text { delta } => {
                 let data = json!({
@@ -101,58 +118,69 @@ impl OutputAdapter for GeminiOutputAdapter {
             }
             UnifiedStreamChunk::ToolUseStart {
                 tool_type: _,
-                id: _,
+                id,
                 name,
             } => {
-                // ToolUseStart for Gemini can be modeled as a function_call part in the stream
-                // Arguments are typically streamed via ToolUseDelta
-                let data = json!({
-                    "candidates": [{
-                        "content": {
-                            "role": "model",
-                            "parts": [{
-                                "functionCall": {
-                                    "name": name,
-                                    "args": {} // Start with empty args, delta will fill
-                                }
-                            }]
-                        }
-                    }]
-                });
-                Ok(vec![event.data(data.to_string())])
+                if let Ok(mut status) = sse_status.write() {
+                    status
+                        .gemini_tools
+                        .entry(id)
+                        .or_insert(GeminiFunctionCallPart {
+                            name,
+                            args: "".to_string(),
+                        });
+                }
+                Ok(vec![])
             }
-            UnifiedStreamChunk::ToolUseDelta { id: _, delta } => {
-                // Stream tool arguments. Gemini expects args as a single JSON object for function_call.
-                // This might require accumulating deltas and sending a complete JSON.
-                // For simplicity now, we assume delta is the full argument string, or we append.
-                // A more robust solution would involve stateful accumulation.
-                let data = json!({
-                    "candidates": [{
-                        "content": {
-                            "role": "model",
-                            "parts": [{
-                                "functionCall": {
-                                    "args": serde_json::from_str::<Value>(&delta).unwrap_or(Value::String(delta))
-                                }
-                            }]
-                        }
-                    }]
-                });
-                Ok(vec![event.data(data.to_string())])
+            UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+                if let Ok(mut status) = sse_status.write() {
+                    if let Some(tool) = status.gemini_tools.get_mut(&id) {
+                        tool.args.push_str(&delta);
+                    }
+                }
+                Ok(vec![])
             }
             UnifiedStreamChunk::ToolUseEnd { id: _ } => {
                 // Gemini doesn't have a distinct ToolUseEnd stream event.
                 // The function_call is typically considered complete when no more deltas for it arrive.
-                Ok(vec![event.data("")])
+                Ok(vec![])
             }
             UnifiedStreamChunk::MessageStop { stop_reason, usage } => {
-                let data = json!({
+                // Extract and process tool calls
+                let mut parts = vec![];
+
+                // Gemini's parallel tool calling requires all tools to be accumulated and sent together
+                // in a single parts array, rather than sending them individually as separate messages
+                // Example:
+                // data:{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"date":"2035-01-05","location":"shenzhen"},"name":"get_weather"}},{"functionCall":{"args":{"date":"2035-01-05","location":"beijing"},"name":"get_weather"}},{"functionCall":{"args":{"date":"2035-01-05","location":"shanghai"},"name":"get_weather"}}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":48,"promptTokenCount":56,"totalTokenCount":104}}
+                if let Ok(mut status) = sse_status.write() {
+                    if !status.gemini_tools.is_empty() {
+                        parts = status
+                            .gemini_tools
+                            .values()
+                            .map(|tool| {
+                                serde_json::json!({
+                                    "functionCall": {
+                                        "name": &tool.name,
+                                        "args": serde_json::from_str::<serde_json::Value>(&tool.args)
+                                            .unwrap_or_else(|_| serde_json::Value::String(tool.args.clone())),
+                                    }
+                                })
+                            })
+                            .collect::<Vec<serde_json::Value>>();
+
+                        status.gemini_tools.clear();
+                    }
+                }
+
+                // Build the complete response in one go
+                let end_event = serde_json::json!({
                     "candidates": [{
-                        "finishReason": stop_reason,
                         "content": {
                             "role": "model",
-                            "parts": []
-                        }
+                            "parts": parts
+                        },
+                        "finishReason": stop_reason
                     }],
                     "usageMetadata": {
                         "promptTokenCount": usage.input_tokens,
@@ -160,8 +188,10 @@ impl OutputAdapter for GeminiOutputAdapter {
                         "totalTokenCount": usage.input_tokens + usage.output_tokens
                     }
                 });
-                Ok(vec![event.data(data.to_string())])
+
+                Ok(vec![event.data(end_event.to_string())])
             }
+
             UnifiedStreamChunk::Error { message } => {
                 // Map internal errors to a data event for the client
                 let data = json!({ "error": { "message": message } });

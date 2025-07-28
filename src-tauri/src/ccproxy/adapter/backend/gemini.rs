@@ -6,9 +6,12 @@ use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::unified::{
-    UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
-    UnifiedToolChoice, UnifiedUsage,
+use crate::ccproxy::adapter::{
+    range_adapter::{adapt_temperature, Protocol},
+    unified::{
+        UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
+        UnifiedToolChoice, UnifiedUsage,
+    },
 };
 use crate::ccproxy::gemini::{
     GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig, GeminiFunctionDeclaration,
@@ -17,6 +20,99 @@ use crate::ccproxy::gemini::{
 };
 
 pub struct GeminiBackendAdapter;
+
+impl GeminiBackendAdapter {
+    /// Extract only Gemini-supported JSON Schema fields
+    ///
+    /// @link https://ai.google.dev/api/caching#Schema
+    /// @link https://ai.google.dev/api/caching?hl=zh-cn#Schema
+    fn extract_gemini_schema(schema: &serde_json::Value) -> serde_json::Value {
+        match schema {
+            serde_json::Value::Object(obj) => {
+                let mut gemini_schema = serde_json::Map::new();
+
+                // Gemini API 支持的 JSON Schema 字段
+                let supported_fields = [
+                    "type",
+                    "description",
+                    "enum",
+                    "properties",
+                    "required",
+                    "items",
+                    "format",
+                    "minimum",
+                    "maximum",
+                    "minLength",
+                    "maxLength",
+                    "pattern",
+                    "minItems",
+                    "maxItems",
+                ];
+
+                for field in supported_fields {
+                    if let Some(value) = obj.get(field) {
+                        match field {
+                            "properties" => {
+                                // Recursively process each property in properties
+                                if let serde_json::Value::Object(props) = value {
+                                    let mut cleaned_props = serde_json::Map::new();
+                                    for (prop_name, prop_schema) in props {
+                                        cleaned_props.insert(
+                                            prop_name.clone(),
+                                            Self::extract_gemini_schema(prop_schema),
+                                        );
+                                    }
+                                    gemini_schema.insert(
+                                        field.to_string(),
+                                        serde_json::Value::Object(cleaned_props),
+                                    );
+                                }
+                            }
+                            "items" => {
+                                // Recursively process array items schema
+                                gemini_schema
+                                    .insert(field.to_string(), Self::extract_gemini_schema(value));
+                            }
+                            "format" => {
+                                // According to Gemini official documentation, supported formats:
+                                // NUMBER: float, double
+                                // INTEGER: int32, int64
+                                // STRING: enum, date-time
+                                if let serde_json::Value::String(format_str) = value {
+                                    match format_str.as_str() {
+                                        "float" | "double" | "int32" | "int64" | "enum"
+                                        | "date-time" => {
+                                            gemini_schema.insert(field.to_string(), value.clone());
+                                        }
+                                        _ => {
+                                            // Skip unsupported format values like "uri", "email", etc.
+                                            log::debug!(
+                                                "Skipping unsupported format '{}' for Gemini API",
+                                                format_str
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Directly copy other supported fields
+                                gemini_schema.insert(field.to_string(), value.clone());
+                            }
+                        }
+                    }
+                }
+
+                serde_json::Value::Object(gemini_schema)
+            }
+            serde_json::Value::Array(arr) => serde_json::Value::Array(
+                arr.iter()
+                    .map(|item| Self::extract_gemini_schema(item))
+                    .collect(),
+            ),
+            _ => schema.clone(),
+        }
+    }
+}
 
 #[async_trait]
 impl BackendAdapter for GeminiBackendAdapter {
@@ -118,7 +214,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                     .map(|tool| GeminiFunctionDeclaration {
                         name: tool.name.clone(),
                         description: tool.description.clone().unwrap_or_default(),
-                        parameters: tool.input_schema.clone(),
+                        parameters: Self::extract_gemini_schema(&tool.input_schema),
                     })
                     .collect(),
             }]
@@ -139,18 +235,27 @@ impl BackendAdapter for GeminiBackendAdapter {
         let gemini_request = GeminiRequest {
             contents: gemini_contents,
             generation_config: Some(GeminiGenerationConfig {
-                temperature: unified_request.temperature,
+                temperature: unified_request.temperature.map(|t| {
+                    // Adapt temperature from source protocol to Gemini range
+                    adapt_temperature(t, Protocol::OpenAI, Protocol::Gemini)
+                }),
                 top_p: unified_request.top_p,
                 top_k: unified_request.top_k.map(|v| v as i32),
                 max_output_tokens: unified_request.max_tokens.map(|v| v as i32),
                 stop_sequences: unified_request.stop_sequences.clone(),
                 response_mime_type: unified_request.response_mime_type.clone(),
                 response_schema: unified_request.response_schema.clone(),
+                thinking_config: unified_request.thinking.as_ref().map(|t| {
+                    crate::ccproxy::types::gemini::GeminiThinkingConfig {
+                        thinking_budget: Some(t.budget_tokens),
+                    }
+                }),
             }),
             tools: gemini_tools,
             tool_config: gemini_tool_config,
             system_instruction,
             safety_settings: unified_request.safety_settings.clone(),
+            cached_content: unified_request.cached_content.clone(),
         };
 
         let url = if unified_request.stream {
@@ -221,12 +326,24 @@ impl BackendAdapter for GeminiBackendAdapter {
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<UnifiedStreamChunk>, anyhow::Error> {
         let chunk_str = String::from_utf8_lossy(&chunk);
-        let mut unified_chunks = Vec::new();
+        #[cfg(debug_assertions)]
+        {
+            log::debug!("gemini sse chunk: {}", chunk_str);
+        }
 
+        let mut unified_chunks = Vec::new();
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
                 let data_str = line["data:".len()..].trim();
-                let gemini_response: GeminiNetworkResponse = serde_json::from_str(data_str)?;
+                let gemini_response: GeminiNetworkResponse = serde_json::from_str(data_str)
+                    .map_err(|e| {
+                        log::error!(
+                            "Gemini delta deserialize failed, delta: {}, error:{}",
+                            &data_str,
+                            e.to_string()
+                        );
+                        e
+                    })?;
 
                 if let Ok(mut status) = sse_status.write() {
                     if !status.message_start {
@@ -238,6 +355,11 @@ impl BackendAdapter for GeminiBackendAdapter {
                             usage: UnifiedUsage {
                                 input_tokens: 0, // Gemini stream doesn't provide input tokens in the first chunk
                                 output_tokens: 0,
+                                cache_creation_input_tokens: None,
+                                cache_read_input_tokens: None,
+                                tool_use_prompt_tokens: None,
+                                thoughts_tokens: None,
+                                cached_content_tokens: None,
                             },
                         });
                     }
@@ -282,48 +404,44 @@ impl BackendAdapter for GeminiBackendAdapter {
                             }
 
                             if let Some(function_call) = part.function_call.clone() {
-                                let tool_id = format!("tool_{}", function_call.name);
-                                let mut tool_delta_count = 0;
+                                // Gemini's functionCall in a stream for parallel calls is a COMPLETE, ATOMIC event.
+                                // It is NOT a delta of a larger call.
+                                // Therefore, for each one, we must emit a full Start -> Delta -> End sequence.
+
+                                let tool_index;
+                                // We need a unique ID for each parallel call. Let's use an index from our status.
                                 if let Ok(mut status) = sse_status.write() {
-                                    tool_delta_count = status.tool_delta_count;
+                                    tool_index = status.tool_delta_count;
+                                    // Increment the total count of tools we've seen in this turn.
                                     status.tool_delta_count += 1;
-                                    status.tool_id = tool_id.clone();
-                                    update_message_block(status, "tool_use".to_string());
-                                }
-                                if tool_delta_count == 0 {
-                                    if let Ok(status) = sse_status.read() {
-                                        if status.text_delta_count > 0 {
-                                            unified_chunks.push(
-                                                UnifiedStreamChunk::ContentBlockStop {
-                                                    index: (status.message_index - 1).max(0),
-                                                },
-                                            );
-                                        }
-                                        // for claude only
-                                        unified_chunks.push(
-                                            UnifiedStreamChunk::ContentBlockStart {
-                                                index: status.message_index,
-                                                block: json!({
-                                                    "type":"tool_use",
-                                                    "id":tool_id.clone(),
-                                                    "name":function_call.name.clone(),
-                                                    "input":{}
-                                                }),
-                                            },
-                                        );
-                                        // for gemini and openai
-                                        unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
-                                            tool_type: "tool_use".to_string(),
-                                            id: tool_id.clone(),
-                                            name: function_call.name.clone(),
-                                        });
-                                    }
+                                } else {
+                                    // Handle error, maybe continue to next line
+                                    continue;
                                 }
 
+                                // Generate a unique ID for this specific tool call.
+                                let tool_id = format!("{}_{}", function_call.name, tool_index);
+                                let tool_name = function_call.name.clone();
+
+                                // The `args` field contains the full JSON for the arguments.
+                                // It might be a complex JSON object, not just a string.
+                                let args_json_string = function_call.args.to_string();
+
+                                // 1. Announce the start of this specific tool call.
+                                unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
+                                    tool_type: "tool_use".to_string(), // or whatever is appropriate
+                                    id: tool_id.clone(),
+                                    name: tool_name,
+                                });
+
+                                // 2. Send all its arguments in a single delta.
                                 unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
                                     id: tool_id.clone(),
-                                    delta: function_call.args.to_string(),
+                                    delta: args_json_string,
                                 });
+
+                                // 3. Immediately announce the end of this specific tool call.
+                                unified_chunks.push(UnifiedStreamChunk::ToolUseEnd { id: tool_id });
                             }
                         }
 
@@ -335,6 +453,11 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 .map(|u| UnifiedUsage {
                                     input_tokens: u.prompt_token_count,
                                     output_tokens: u.candidates_token_count.unwrap_or(0),
+                                    cache_creation_input_tokens: None,
+                                    cache_read_input_tokens: None,
+                                    tool_use_prompt_tokens: u.tool_use_prompt_token_count,
+                                    thoughts_tokens: u.thoughts_token_count,
+                                    cached_content_tokens: u.cached_content_token_count,
                                 })
                                 .unwrap_or_default();
                             unified_chunks

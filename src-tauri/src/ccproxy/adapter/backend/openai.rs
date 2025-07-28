@@ -10,12 +10,16 @@ use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::unified::{UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage};
+use crate::ccproxy::adapter::{
+    range_adapter::{adapt_temperature, Protocol},
+    unified::{UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage},
+};
 use crate::ccproxy::openai::UnifiedToolCall;
 use crate::ccproxy::types::openai::{
     OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse,
     OpenAIFunctionCall, OpenAIFunctionDefinition, OpenAIImageUrl, OpenAIMessageContent,
-    OpenAIMessageContentPart, OpenAITool, UnifiedChatMessage,
+    OpenAIMessageContentPart, OpenAITool, OpenAIToolChoice, OpenAIToolChoiceFunction,
+    OpenAIToolChoiceObject, UnifiedChatMessage,
 };
 
 #[derive(Deserialize, Debug)]
@@ -57,48 +61,25 @@ impl Param {
             .to_string()
     }
 }
+const TOOL_TAG_START: &str = "<ccp:tool_use>";
+const TOOL_TAG_END: &str = "</ccp:tool_use>";
 
 pub struct OpenAIBackendAdapter;
 
-fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
-    let mut prompt = "You have access to the following tools. To use a tool, respond with an XML block like this:
-<ccp:tool_use>
-    <name>TOOL_NAME</name>
-    <params>
-        <param name=\"PARAM_NAME\" type=\"PARAM_TYPE\" value=\"PARAM_VALUE\" />
-    </params>
-</ccp:tool_use>
-
-IMPORTANT: When you need to perform the same operation multiple times with different parameters (e.g., checking weather for multiple cities, or querying different dates), you MUST make separate tool calls for each one. Use multiple <ccp:tool_use> blocks in your response.
-
-Example: If asked to check weather for Beijing and Shanghai, make two separate tool calls:
-<ccp:tool_use>
-    <name>get_weather</name>
-    <params>
-        <param name=\"location\" type=\"string\" value=\"Beijing\" />
-        <param name=\"date\" type=\"string\" value=\"2025-08-08\" />
-    </params>
-</ccp:tool_use>
-<ccp:tool_use>
-    <name>get_weather</name>
-    <params>
-        <param name=\"location\" type=\"string\" value=\"Shanghai\" />
-        <param name=\"date\" type=\"string\" value=\"2025-08-08\" />
-    </params>
-</ccp:tool_use>
-
-Here are the available tools:
-".to_string();
+fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
+    let mut tools_xml = String::new();
+    tools_xml.push_str("<cpp:tools description=\"You available tools\">\n");
 
     for tool in tools {
-        prompt.push_str(&format!(
-            "\n- `{}`: {}\n",
+        tools_xml.push_str(&format!(
+            "<cpp:tool_use>\n<n>{}</n>\n<description>{}</description>\n",
             tool.name,
             tool.description.as_deref().unwrap_or("")
         ));
+
         if let Some(schema) = tool.input_schema.as_object() {
             if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                prompt.push_str("  Parameters:\n");
+                tools_xml.push_str("<params>\n");
                 for (name, details) in properties {
                     let param_type = details
                         .get("type")
@@ -108,15 +89,59 @@ Here are the available tools:
                         .get("description")
                         .and_then(|d| d.as_str())
                         .unwrap_or("");
-                    prompt.push_str(&format!(
-                        "    - `{}` ({}): {}\n",
+                    tools_xml.push_str(&format!(
+                        "<param name=\"{}\" type=\"{}\">{}</param>\n",
                         name, param_type, description
                     ));
                 }
+                tools_xml.push_str("</params>\n");
             }
         }
+        tools_xml.push_str("</cpp:tool_use>\n");
     }
-    prompt
+    tools_xml.push_str("</cpp:tools>");
+    tools_xml
+}
+
+fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
+    let tools_xml = generate_tools_xml(tools);
+
+    let template = r#"You have access to the following tools:
+
+{TOOLS_LIST}
+
+Each tool in the above list is defined within <cpp:tool_use>...</cpp:tool_use> tags, containing:
+- <name>tool_name</name>: The name of the tool
+- <description>tool_description</description>: What the tool does
+- <params>: The parameters the tool accepts
+
+To use a tool, respond with an XML block like this:
+<ccp:tool_use>
+    <name>TOOL_NAME</name>
+    <params>
+        <param name="PARAM_NAME" type="PARAM_TYPE">PARAM_VALUE</param>
+    </params>
+</ccp:tool_use>
+
+IMPORTANT: When you need to perform the same operation multiple times with different parameters (e.g., checking weather for multiple cities, or querying different dates), you MUST make separate tool calls for each one. Use multiple <ccp:tool_use> blocks in your response.
+
+Example: If asked to read two files, make two separate tool calls:
+<ccp:tool_use>
+    <name>Read</name>
+    <params>
+        <param name="file_path" type="string">/path/to/a.txt</param>
+    </params>
+</ccp:tool_use>
+<ccp:tool_use>
+    <name>Read</name>
+    <params>
+        <param name="file_path" type="string">/path/to/b.txt</param>
+    </params>
+</ccp:tool_use>
+
+"#;
+
+    template.replace("{TOOLS_LIST}", &tools_xml)
 }
 
 #[async_trait]
@@ -129,7 +154,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         base_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
-        let mut openai_messages = Vec::new();
+        let mut openai_messages: Vec<UnifiedChatMessage> = Vec::new();
         let mut unified_request = unified_request.clone();
 
         if unified_request.tool_compat_mode {
@@ -161,36 +186,24 @@ impl BackendAdapter for OpenAIBackendAdapter {
             }
         }
 
-        for msg in &unified_request.messages {
-            let role = match msg.role {
-                UnifiedRole::System => "system",
-                UnifiedRole::User => {
-                    // Check if it contains ToolResult, if so it should be the tool role
-                    let has_tool_result = msg
-                        .content
-                        .iter()
-                        .any(|block| matches!(block, UnifiedContentBlock::ToolResult { .. }));
-                    if has_tool_result {
-                        "tool"
-                    } else {
-                        "user"
-                    }
-                }
-                UnifiedRole::Assistant => "assistant",
-                UnifiedRole::Tool => "tool",
-            };
+        let mut last_role: Option<UnifiedRole> = None;
 
-            let mut content_parts = Vec::new();
-            let mut tool_calls = Vec::new();
-            let mut tool_call_id = None;
+        for msg in &unified_request.messages {
+            let current_role = msg.role.clone();
+
+            // Convert current message's content blocks to OpenAI content parts.
+            let mut current_content_parts: Vec<OpenAIMessageContentPart> = Vec::new();
+            let mut current_tool_calls = Vec::new();
+            let mut current_tool_call_id = None;
 
             for block in &msg.content {
                 match block {
                     UnifiedContentBlock::Text { text } => {
-                        content_parts.push(OpenAIMessageContentPart::Text { text: text.clone() });
+                        current_content_parts
+                            .push(OpenAIMessageContentPart::Text { text: text.clone() });
                     }
                     UnifiedContentBlock::Image { media_type, data } => {
-                        content_parts.push(OpenAIMessageContentPart::ImageUrl {
+                        current_content_parts.push(OpenAIMessageContentPart::ImageUrl {
                             image_url: OpenAIImageUrl {
                                 url: format!("data:{};base64,{}", media_type, data),
                                 detail: None,
@@ -198,7 +211,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         });
                     }
                     UnifiedContentBlock::ToolUse { id, name, input } => {
-                        tool_calls.push(UnifiedToolCall {
+                        current_tool_calls.push(UnifiedToolCall {
                             id: Some(id.clone()),
                             r#type: Some("function".to_string()),
                             function: OpenAIFunctionCall {
@@ -213,42 +226,80 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         content,
                         is_error: _,
                     } => {
-                        tool_call_id = Some(tool_use_id.clone());
-                        content_parts.push(OpenAIMessageContentPart::Text {
+                        current_tool_call_id = Some(tool_use_id.clone());
+                        current_content_parts.push(OpenAIMessageContentPart::Text {
                             text: content.clone(),
                         });
                     }
-                    UnifiedContentBlock::Thinking { .. } => {
-                        // ignore the thinking field, the input hasn't there field
-                    }
+                    UnifiedContentBlock::Thinking { .. } => { /* ignore */ }
                 }
             }
 
-            let openai_content = if content_parts.is_empty() {
-                None
-            } else if content_parts.len() == 1
-                && matches!(content_parts[0], OpenAIMessageContentPart::Text { .. })
-            {
-                if let OpenAIMessageContentPart::Text { text } = content_parts.remove(0) {
-                    Some(OpenAIMessageContent::Text(text))
-                } else {
-                    unreachable!()
+            // Decide whether to merge with the previous message or create a new one.
+            if current_role == UnifiedRole::User && last_role == Some(UnifiedRole::User) {
+                if let Some(last_message) = openai_messages.last_mut() {
+                    if let Some(existing_content) = &mut last_message.content {
+                        match existing_content {
+                            OpenAIMessageContent::Text(text) => {
+                                let mut new_parts =
+                                    vec![OpenAIMessageContentPart::Text { text: text.clone() }];
+                                new_parts.extend(current_content_parts);
+                                *existing_content = OpenAIMessageContent::Parts(new_parts);
+                            }
+                            OpenAIMessageContent::Parts(parts) => {
+                                parts.extend(current_content_parts);
+                            }
+                        }
+                    } else if !current_content_parts.is_empty() {
+                        last_message.content =
+                            Some(OpenAIMessageContent::Parts(current_content_parts));
+                    }
                 }
             } else {
-                Some(OpenAIMessageContent::Parts(content_parts))
-            };
+                // Not merging, create a new message.
+                let role_str = match msg.role {
+                    UnifiedRole::System => "system",
+                    UnifiedRole::User => "user",
+                    UnifiedRole::Assistant => "assistant",
+                    UnifiedRole::Tool => "tool",
+                };
 
-            openai_messages.push(UnifiedChatMessage {
-                role: Some(role.to_string()),
-                content: openai_content,
-                tool_calls: if tool_calls.is_empty() {
+                let openai_content = if current_content_parts.is_empty() {
                     None
+                } else if current_content_parts.len() == 1
+                    && matches!(
+                        &current_content_parts[0],
+                        OpenAIMessageContentPart::Text { .. }
+                    )
+                {
+                    if let OpenAIMessageContentPart::Text { text } = current_content_parts.remove(0)
+                    {
+                        Some(OpenAIMessageContent::Text(text))
+                    } else {
+                        unreachable!();
+                    }
                 } else {
-                    Some(tool_calls)
-                },
-                tool_call_id: if role == "tool" { tool_call_id } else { None },
-                reasoning_content: None, // OpenAI does not have a direct equivalent for thinking content in requests
-            });
+                    Some(OpenAIMessageContent::Parts(current_content_parts))
+                };
+
+                openai_messages.push(UnifiedChatMessage {
+                    role: Some(role_str.to_string()),
+                    content: openai_content,
+                    tool_calls: if current_tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(current_tool_calls)
+                    },
+                    tool_call_id: if role_str == "tool" {
+                        current_tool_call_id
+                    } else {
+                        None
+                    },
+                    reasoning_content: None,
+                });
+            }
+
+            last_role = Some(current_role);
         }
 
         let openai_tools = unified_request.tools.as_ref().map(|tools| {
@@ -269,13 +320,15 @@ impl BackendAdapter for OpenAIBackendAdapter {
             .tool_choice
             .as_ref()
             .map(|choice| match choice {
-                UnifiedToolChoice::None => json!("none"),
-                UnifiedToolChoice::Auto => json!("auto"),
-                UnifiedToolChoice::Required => json!("required"),
-                UnifiedToolChoice::Tool { name } => json!({
-                    "type": "function",
-                    "function": { "name": name }
-                }),
+                UnifiedToolChoice::None => OpenAIToolChoice::String("none".to_string()),
+                UnifiedToolChoice::Auto => OpenAIToolChoice::String("auto".to_string()),
+                UnifiedToolChoice::Required => OpenAIToolChoice::String("required".to_string()),
+                UnifiedToolChoice::Tool { name } => {
+                    OpenAIToolChoice::Object(OpenAIToolChoiceObject {
+                        choice_type: "function".to_string(),
+                        function: OpenAIToolChoiceFunction { name: name.clone() },
+                    })
+                }
             });
 
         let openai_request = OpenAIChatCompletionRequest {
@@ -283,17 +336,26 @@ impl BackendAdapter for OpenAIBackendAdapter {
             messages: openai_messages,
             stream: Some(unified_request.stream),
             max_tokens: unified_request.max_tokens,
-            temperature: unified_request.temperature,
+            temperature: unified_request.temperature.map(|t| {
+                // Adapt temperature from source protocol to OpenAI range
+                adapt_temperature(t, Protocol::Claude, Protocol::OpenAI)
+            }),
             top_p: unified_request.top_p,
-            top_k: unified_request.top_k, // OpenAI API does not directly support top_k, but some compatible APIs might
-            presence_penalty: None,
-            frequency_penalty: None,
-            response_format: unified_request.response_format.clone(),
+            presence_penalty: unified_request.presence_penalty,
+            frequency_penalty: unified_request.frequency_penalty,
+            response_format: unified_request
+                .response_format
+                .as_ref()
+                .and_then(|rf| serde_json::from_value(rf.clone()).ok()),
             stop: unified_request.stop_sequences.clone(),
-            n: None,
-            user: None,
+            seed: unified_request.seed,
+            user: unified_request.user.clone(),
             tools: openai_tools,
             tool_choice: openai_tool_choice,
+            logprobs: unified_request.logprobs,
+            top_logprobs: unified_request.top_logprobs,
+            stream_options: None,
+            logit_bias: None, // Not supported in unified request yet
         };
 
         let mut request_builder = client.post(format!("{}/chat/completions", base_url));
@@ -303,6 +365,10 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 request_builder.header("Authorization", format!("Bearer {}", api_key));
         }
         request_builder = request_builder.json(&openai_request);
+        log::debug!(
+            "openai request: {}",
+            serde_json::to_string_pretty(&openai_request).unwrap_or_default()
+        );
 
         Ok(request_builder)
     }
@@ -311,6 +377,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
         &self,
         backend_response: BackendResponse,
     ) -> Result<UnifiedResponse, anyhow::Error> {
+        log::debug!(
+            "openai response: {}",
+            String::from_utf8_lossy(&backend_response.body)
+        );
+
         let openai_response: OpenAIChatCompletionResponse =
             serde_json::from_slice(&backend_response.body)?;
 
@@ -338,7 +409,18 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 };
 
                 let mut processed_text = text.clone();
-                while let Some(start_pos) = processed_text.find("<ccp:tool_use>") {
+                let open_tags = processed_text.matches(TOOL_TAG_START).count();
+                let close_tags = processed_text.matches(TOOL_TAG_END).count();
+                let end_tag_len = TOOL_TAG_END.len();
+                if open_tags > 0 && open_tags != close_tags {
+                    log::warn!(
+                        "Mismatched tool tags in response: {} open, {} close",
+                        open_tags,
+                        close_tags
+                    );
+                }
+
+                while let Some(start_pos) = processed_text.find(TOOL_TAG_START) {
                     // Add text before the tool call as a separate text block
                     if start_pos > 0 {
                         content_blocks.push(UnifiedContentBlock::Text {
@@ -348,12 +430,9 @@ impl BackendAdapter for OpenAIBackendAdapter {
 
                     // Search for the end tag *after* the start tag to handle multiple tools correctly
                     // and prevent panics from invalid slicing.
-                    if let Some(relative_end_pos) =
-                        processed_text[start_pos..].find("</ccp:tool_use>")
-                    {
+                    if let Some(relative_end_pos) = processed_text[start_pos..].find(TOOL_TAG_END) {
                         let end_pos = start_pos + relative_end_pos;
-                        let tool_xml =
-                            &processed_text[start_pos..end_pos + "</ccp:tool_use>".len()];
+                        let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
                         if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
                             let mut arguments = serde_json::Map::new();
                             for param in parsed_tool.params.param {
@@ -363,15 +442,28 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                 );
                             }
 
+                            log::debug!(
+                                "tool_use parse result: name: {}, param: {:?}",
+                                &parsed_tool.name,
+                                &arguments
+                            );
+
                             content_blocks.push(UnifiedContentBlock::ToolUse {
                                 id: format!("tool_{}", uuid::Uuid::new_v4()),
                                 name: parsed_tool.name,
                                 input: serde_json::Value::Object(arguments),
                             });
+                        } else {
+                            let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
+
+                            log::warn!("parse tool xml failed, xml: {}", tool_xml);
+                            // If parsing fails, treat the text as a regular text block
+                            content_blocks.push(UnifiedContentBlock::Text {
+                                text: tool_xml.to_string(),
+                            });
                         }
                         // Remove the parsed tool XML from the text
-                        processed_text =
-                            processed_text[end_pos + "</ccp:tool_use>".len()..].to_string();
+                        processed_text = processed_text[(end_pos + end_tag_len)..].to_string();
                     } else {
                         // Incomplete tool call, treat remaining as text
                         if !processed_text.is_empty() {
@@ -438,6 +530,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
             .map(|u| UnifiedUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                tool_use_prompt_tokens: None,
+                thoughts_tokens: None,
+                cached_content_tokens: None,
             })
             .unwrap_or_default();
 
@@ -492,6 +589,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             usage: UnifiedUsage {
                                 input_tokens: 0, // OpenAI stream doesn't provide input tokens in the first chunk
                                 output_tokens: 0,
+                                cache_creation_input_tokens: None,
+                                cache_read_input_tokens: None,
+                                tool_use_prompt_tokens: None,
+                                thoughts_tokens: None,
+                                cached_content_tokens: None,
                             },
                         });
                     }
@@ -569,12 +671,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                 let should_flush = status.tool_compat_fragment_count >= 25
                                     || time_since_flush >= 100
                                     || status.tool_compat_fragment_buffer.len() > 500
-                                    || status
-                                        .tool_compat_fragment_buffer
-                                        .contains("<ccp:tool_use>")
-                                    || status
-                                        .tool_compat_fragment_buffer
-                                        .contains("</ccp:tool_use>");
+                                    || status.tool_compat_fragment_buffer.contains(TOOL_TAG_START)
+                                    || status.tool_compat_fragment_buffer.contains(TOOL_TAG_END);
 
                                 if should_flush {
                                     let fragment = status.tool_compat_fragment_buffer.clone();
@@ -587,7 +685,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                     loop {
                                         if !status.in_tool_call_block {
                                             let buffer = &status.tool_compat_buffer;
-                                            let tool_start = "<ccp:tool_use>";
+                                            let tool_start = TOOL_TAG_START;
 
                                             if let Some(start_pos) = buffer.find(tool_start) {
                                                 log::debug!("buffer has tool start tag `<cpp:tool_use>` at pos: {}", start_pos);
@@ -609,11 +707,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
 
                                         if status.in_tool_call_block {
                                             let buffer = &status.tool_compat_buffer;
-                                            let tool_end = "</ccp:tool_use>";
+                                            let tool_end = TOOL_TAG_END;
 
                                             if let Some(end_pos) = buffer.find(tool_end) {
                                                 let tool_xml = &buffer[..end_pos + tool_end.len()];
-                                                log::debug!("find tool end tag `</ccp:tool_use>` at pos: {}, tool xml: {}", end_pos, tool_xml);
+                                                log::debug!("find tool end tag `{}` at pos: {}, tool xml: {}",TOOL_TAG_END, end_pos, tool_xml);
 
                                                 if let Ok(parsed_tool) =
                                                     from_str::<ToolUse>(tool_xml)
@@ -685,8 +783,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                         && !status.tool_compat_buffer.is_empty()
                                     {
                                         let buffer = &status.tool_compat_buffer;
-                                        let tool_start = "<ccp:tool_use>";
-                                        let tool_end = "</ccp:tool_use>";
+                                        let tool_start = TOOL_TAG_START;
+                                        let tool_end = TOOL_TAG_END;
 
                                         let mut partial_tag_len = 0;
 
@@ -891,6 +989,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             .map(|u| UnifiedUsage {
                                 input_tokens: u.prompt_tokens,
                                 output_tokens: u.completion_tokens,
+                                cache_creation_input_tokens: None,
+                                cache_read_input_tokens: None,
+                                tool_use_prompt_tokens: None,
+                                thoughts_tokens: None,
+                                cached_content_tokens: None,
                             })
                             .unwrap_or_default();
                         unified_chunks.push(UnifiedStreamChunk::MessageStop { stop_reason, usage });
