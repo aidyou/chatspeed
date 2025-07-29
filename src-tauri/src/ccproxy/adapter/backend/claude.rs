@@ -1,5 +1,3 @@
-use crate::ccproxy::adapter::backend::update_message_block;
-use crate::ccproxy::adapter::unified::SseStatus;
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
@@ -7,13 +5,14 @@ use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
 use crate::ccproxy::adapter::{
+    backend::update_message_block,
     range_adapter::{adapt_temperature, Protocol},
     unified::{
-        UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
-        UnifiedToolChoice, UnifiedUsage,
+        SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
+        UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
     },
 };
-use crate::ccproxy::types::claude::{
+use crate::ccproxy::claude::{
     ClaudeNativeContentBlock, ClaudeNativeMessage, ClaudeNativeRequest, ClaudeNativeResponse,
     ClaudeNativeTool, ClaudeStreamEvent, ClaudeToolChoice,
 };
@@ -312,14 +311,14 @@ impl BackendAdapter for ClaudeBackendAdapter {
 
         for line in chunk_str.lines() {
             if line.starts_with("event:") {
-                let event_type = line["event:".len()..].trim();
+                // let event_type = line["event:".len()..].trim();
                 // Assuming data: always follows event:
                 let data_line = chunk_str.lines().find(|l| l.starts_with("data:"));
                 if let Some(data_line) = data_line {
                     let data_str = data_line["data:".len()..].trim();
                     let claude_event: ClaudeStreamEvent = serde_json::from_str(data_str)?;
 
-                    match event_type {
+                    match claude_event.event_type.as_str() {
                         "message_start" => {
                             if let Some(msg) = claude_event.message {
                                 let model = model_id
@@ -366,28 +365,32 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                     "text" => {
                                         if let Ok(mut status) = sse_status.write() {
                                             status.text_delta_count += 1;
-                                            update_message_block(status, "text".to_string());
+                                            update_message_block(&mut status, "text".to_string());
                                         }
                                     }
                                     "thinking" => {
                                         if let Ok(mut status) = sse_status.write() {
                                             status.thinking_delta_count += 1;
-                                            update_message_block(status, "thinking".to_string());
+                                            update_message_block(
+                                                &mut status,
+                                                "thinking".to_string(),
+                                            );
                                         }
                                     }
-                                    // 对于 claude -> claude 来说，我们不需要处理 tool_use 和server_tool_use 事件，
-                                    // 他们被包含在 content_block_start 事件中
-                                    // "tool_use" => {
-                                    //     if let Ok(mut status) = sse_status.write() {
-                                    //         status.tool_id = block.id.clone().unwrap_or_default();
-                                    //         update_message_block(status, "tool_use".to_string());
-                                    //     }
-                                    //     unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
-                                    //         tool_type: "tool_use".to_string(),
-                                    //         id: block.id.unwrap_or_default(),
-                                    //         name: block.name.unwrap_or_default(),
-                                    //     });
-                                    // }
+                                    "tool_use" => {
+                                        let tool_id = block.id.clone().unwrap_or(
+                                            format!("tool_{}", uuid::Uuid::new_v4()).to_string(),
+                                        );
+                                        if let Ok(mut status) = sse_status.write() {
+                                            status.tool_id = tool_id.clone();
+                                            update_message_block(&mut status, tool_id.clone());
+                                        }
+                                        unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
+                                            tool_type: "tool_use".to_string(),
+                                            id: tool_id,
+                                            name: block.name.unwrap_or_default(),
+                                        });
+                                    }
                                     // "server_tool_use" => {
                                     //     if let Ok(mut status) = sse_status.write() {
                                     //         status.tool_id = block.id.clone().unwrap_or_default();
@@ -412,7 +415,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                     Some("text_delta") => {
                                         if let Ok(mut status) = sse_status.write() {
                                             status.text_delta_count += 1;
-                                            update_message_block(status, "text".to_string());
+                                            update_message_block(&mut status, "text".to_string());
                                         }
                                         if let Some(text) = delta.text {
                                             unified_chunks
@@ -424,7 +427,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             if let Ok(mut status) = sse_status.write() {
                                                 status.thinking_delta_count += 1;
                                                 update_message_block(
-                                                    status,
+                                                    &mut status,
                                                     "thinking".to_string(),
                                                 );
                                             }
@@ -433,9 +436,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         }
                                     }
                                     Some("input_json_delta") => {
-                                        let tool_id = if let Ok(status) = sse_status.write() {
+                                        let tool_id = if let Ok(mut status) = sse_status.write() {
                                             let id = status.tool_id.clone();
-                                            update_message_block(status, "tool_use".to_string());
+                                            update_message_block(
+                                                &mut status,
+                                                "tool_use".to_string(),
+                                            );
                                             id
                                         } else {
                                             String::new()
@@ -455,30 +461,16 @@ impl BackendAdapter for ClaudeBackendAdapter {
                             unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
                                 index: claude_event.index.unwrap_or_default(),
                             });
-                            if let Some(block) = claude_event.content_block {
-                                match block.block_type.as_str() {
-                                    "text" => {
-                                        if let Ok(mut status) = sse_status.write() {
-                                            status.text_delta_count += 1;
-                                            update_message_block(status, "text".to_string());
-                                        }
-                                    }
-                                    "thinking" => {
-                                        if let Ok(mut status) = sse_status.write() {
-                                            status.thinking_delta_count += 1;
-                                            update_message_block(status, "thinking".to_string());
-                                        }
-                                    }
-                                    // "tool_use" => {
-                                    //     if let Ok(mut status) = sse_status.write() {
-                                    //         unified_chunks.push(UnifiedStreamChunk::ToolUseEnd {
-                                    //             id: status.tool_id.clone(),
-                                    //         });
-                                    //         status.tool_id = "".to_string();
-                                    //         update_message_block(status, "tool_use".to_string());
-                                    //     }
-                                    // }
-                                    _ => {}
+
+                            // Check if we need to end a tool use based on current status
+                            if let Ok(mut status) = sse_status.write() {
+                                if !status.tool_id.is_empty()
+                                    && status.current_content_block.contains("tool")
+                                {
+                                    unified_chunks.push(UnifiedStreamChunk::ToolUseEnd {
+                                        id: status.tool_id.clone(),
+                                    });
+                                    status.tool_id = "".to_string();
                                 }
                             }
                         }

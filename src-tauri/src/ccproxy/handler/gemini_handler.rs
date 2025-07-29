@@ -19,7 +19,6 @@ use crate::{
 use futures_util::{stream::iter, StreamExt};
 use rust_i18n::t;
 
-use crate::ccproxy::connection_monitor::{ConnectionMonitor, HeartbeatMonitor, MonitoredStream};
 use serde_json::Value;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
@@ -63,17 +62,12 @@ pub async fn handle_gemini_native_chat(
     let proxy_alias = route_model_alias; // Use the model alias from the route
 
     // 1. Convert to UnifiedRequest
-    let mut unified_request =
-        from_gemini(client_request_payload, tool_compat_mode).map_err(|e| {
+    let unified_request = from_gemini(client_request_payload, tool_compat_mode, generate_action)
+        .map_err(|e| {
             CCProxyError::InternalError(
                 t!("proxy.error.invalid_request", error = e.to_string()).to_string(),
             )
         })?;
-    if generate_action == "streamGenerateContent" {
-        unified_request.stream = true
-    } else {
-        unified_request.stream = false
-    }
 
     // Determine if the original request was streaming
     let is_streaming_request = unified_request.stream;
@@ -243,23 +237,6 @@ pub async fn handle_gemini_native_chat(
 
         // Create a StreamProcessor instance to handle reassembly of backend chunks
         let stream_processor = StreamProcessor::new();
-        let connection_monitor = ConnectionMonitor::new();
-
-        // Set up callback for client disconnection
-        {
-            let stream_processor_clone = stream_processor.clone();
-            connection_monitor
-                .on_disconnect(move || {
-                    log::info!("Client disconnected, stopping backend stream processing");
-                    stream_processor_clone.stop();
-                })
-                .await;
-        }
-
-        // Start heartbeat monitoring (check every 30 seconds)
-        let heartbeat_monitor = HeartbeatMonitor::new(connection_monitor.clone(), 30);
-        let _heartbeat_handle = heartbeat_monitor.start_heartbeat();
-
         let stream_format_for_processor = match backend_chat_protocol {
             ChatProtocol::Gemini => StreamFormat::Gemini,
             ChatProtocol::Claude => StreamFormat::Claude,
@@ -271,11 +248,6 @@ pub async fn handle_gemini_native_chat(
             .await;
 
         let processed_backend_stream = ReceiverStream::new(backend_event_receiver);
-        let monitored_stream = MonitoredStream::new_with_heartbeat(
-            processed_backend_stream,
-            connection_monitor.clone(),
-            heartbeat_monitor,
-        );
         let sse_status = Arc::new(RwLock::new(SseStatus::new(
             format!("msg_{}", Uuid::new_v4().simple()),
             proxy_alias.clone(),
@@ -287,7 +259,7 @@ pub async fn handle_gemini_native_chat(
         }
 
         let sse_status_clone = sse_status.clone();
-        let unified_stream = monitored_stream
+        let unified_stream = processed_backend_stream
             .then(move |result_from_processor| {
                 let adapter = backend_adapter.clone();
                 let status = sse_status_clone.clone();
@@ -348,23 +320,7 @@ pub async fn handle_gemini_native_chat(
             warp::http::StatusCode::OK
         };
 
-        // 创建一个可以检测客户端断开的流
-        let client_disconnect_stream = sse_stream.inspect({
-            let connection_monitor = connection_monitor.clone();
-            move |event| {
-                // 如果发送事件失败，说明客户端可能已断开
-                if event.is_err() {
-                    log::info!("SSE event send failed, client likely disconnected");
-                    let monitor = connection_monitor.clone();
-                    tokio::spawn(async move {
-                        monitor.mark_disconnected().await;
-                    });
-                }
-            }
-        });
-
-        let sse_reply_inner =
-            warp::sse::reply(warp::sse::keep_alive().stream(client_disconnect_stream));
+        let sse_reply_inner = warp::sse::reply(warp::sse::keep_alive().stream(sse_stream));
         let mut response =
             warp::reply::with_status(sse_reply_inner, sse_status_code).into_response();
 

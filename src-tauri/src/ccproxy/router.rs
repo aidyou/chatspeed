@@ -3,7 +3,7 @@ use crate::ccproxy::gemini_handler::handle_gemini_native_chat;
 use crate::ccproxy::{
     auth::authenticate_request,
     claude_handler::handle_claude_native_chat,
-    handler::openai_handler::{handle_chat_completion_proxy, list_proxied_models_handler},
+    openai_handler::{handle_chat_completion_proxy, list_proxied_models_handler},
 };
 use crate::db::MainStore;
 
@@ -35,8 +35,11 @@ pub fn routes(
         .untuple_one();
 
     // GET /ccproxy/v1/models
-    let list_models_route = warp::path!("v1" / "models") // Define path relative to the base in server.rs
-        .map(|| log::debug!("Matched /v1/models")) // Optional: log when path is matched
+    let list_models_route = warp::path!(String / "v1" / "models") // Define path relative to the base in server.rs
+        .map(|adition_str: String| {
+            log::debug!("Matched /{adition_str}/v1/models");
+            (adition_str,)
+        })
         .and(warp::get())
         .and(auth_filter.clone())
         .untuple_one()

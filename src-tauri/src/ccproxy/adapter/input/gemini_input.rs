@@ -15,6 +15,7 @@ use crate::ccproxy::{
 pub fn from_gemini(
     req: GeminiRequest,
     tool_compat_mode: bool,
+    generate_action: String,
 ) -> Result<UnifiedRequest, anyhow::Error> {
     // Validate Gemini request parameters
     if let Err(e) = req.validate() {
@@ -83,11 +84,11 @@ pub fn from_gemini(
         }
     });
 
-    let stream = req
-        .generation_config
-        .as_ref()
-        .and_then(|config| config.max_output_tokens)
-        .is_none(); // Heuristic: If max_output_tokens is not set, assume streaming
+    let stream = if generate_action == "streamGenerateContent".to_string() {
+        true
+    } else {
+        false
+    };
 
     let temperature = req
         .generation_config

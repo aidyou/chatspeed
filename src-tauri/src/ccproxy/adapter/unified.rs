@@ -270,6 +270,8 @@ pub struct SseStatus {
     pub tool_compat_last_flush_time: std::time::Instant,
     // For gemini tools: tool_id -> tool define
     pub gemini_tools: HashMap<String, GeminiFunctionCallPart>,
+    // For tracking tool_id to index mapping
+    pub tool_id_to_index: HashMap<String, u32>,
 }
 
 impl Default for SseStatus {
@@ -291,6 +293,7 @@ impl Default for SseStatus {
             tool_compat_fragment_count: 0,
             tool_compat_last_flush_time: std::time::Instant::now(),
             gemini_tools: HashMap::new(),
+            tool_id_to_index: HashMap::new(),
         }
     }
 }

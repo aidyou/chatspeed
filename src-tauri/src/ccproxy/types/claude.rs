@@ -81,6 +81,7 @@ pub struct ClaudeImageSource {
 pub struct ClaudeNativeTool {
     pub name: String,
     pub description: Option<String>,
+    #[serde(default)]
     pub input_schema: Value,
 }
 
@@ -209,7 +210,7 @@ pub struct ClaudeStreamUsage {
 #[derive(Deserialize, Debug, Clone)]
 pub struct ClaudeStreamEvent {
     #[serde(rename = "type")]
-    // pub event_type: String,
+    pub event_type: String,
     pub message: Option<ClaudeStreamMessageStart>,
     pub index: Option<u32>,
     pub content_block: Option<ClaudeStreamContentBlock>,
@@ -293,13 +294,13 @@ where
 
     match system_input {
         Some(SystemInput::String(s)) => Ok(Some(s)),
-        Some(SystemInput::Array(blocks)) => {
-            if let Some(first_block) = blocks.first() {
-                Ok(Some(first_block.text.clone()))
-            } else {
-                Ok(None)
-            }
-        }
+        Some(SystemInput::Array(blocks)) => Ok(Some(
+            blocks
+                .into_iter()
+                .map(|x| x.text.clone())
+                .collect::<Vec<String>>()
+                .join("\n"),
+        )),
         None => Ok(None),
     }
 }

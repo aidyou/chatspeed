@@ -129,18 +129,7 @@ impl BackendAdapter for GeminiBackendAdapter {
 
         for msg in &unified_request.messages {
             let role = match msg.role {
-                UnifiedRole::System => {
-                    // System instructions are handled separately in Gemini
-                    for block in &msg.content {
-                        if let UnifiedContentBlock::Text { text } = block {
-                            system_instruction_parts.push(GeminiPart {
-                                text: Some(text.clone()),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    continue;
-                }
+                UnifiedRole::System => continue,
                 UnifiedRole::User => "user",
                 UnifiedRole::Assistant => "model",
                 UnifiedRole::Tool => "function", // Gemini tool results are from the 'function' role
@@ -196,6 +185,15 @@ impl BackendAdapter for GeminiBackendAdapter {
                 role: role.to_string(),
                 parts,
             });
+        }
+
+        if let Some(sys_prompt_str) = unified_request.system_prompt.as_ref() {
+            if !sys_prompt_str.trim().is_empty() {
+                system_instruction_parts.push(GeminiPart {
+                    text: Some(sys_prompt_str.to_string()),
+                    ..Default::default()
+                });
+            }
         }
 
         let system_instruction = if !system_instruction_parts.is_empty() {
@@ -397,7 +395,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                         }
 
                                         status.text_delta_count += 1;
-                                        update_message_block(status, "text".to_string());
+                                        update_message_block(&mut status, "text".to_string());
                                     }
                                     unified_chunks.push(UnifiedStreamChunk::Text { delta: text });
                                 }
@@ -408,19 +406,39 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 // It is NOT a delta of a larger call.
                                 // Therefore, for each one, we must emit a full Start -> Delta -> End sequence.
 
-                                let tool_index;
+                                // Generate a unique ID for this specific tool call.
+                                let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
+                                let mut message_index = 0;
                                 // We need a unique ID for each parallel call. Let's use an index from our status.
                                 if let Ok(mut status) = sse_status.write() {
-                                    tool_index = status.tool_delta_count;
                                     // Increment the total count of tools we've seen in this turn.
                                     status.tool_delta_count += 1;
+
+                                    if status.tool_id != "" {
+                                        // send tool stop
+                                        unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
+                                            index: status.message_index,
+                                        })
+                                    }
+                                    status.tool_id = tool_id.clone();
+                                    update_message_block(
+                                        &mut status,
+                                        format!("{tool_id}").to_string(),
+                                    );
+                                    message_index = status.message_index;
+                                    // Record tool_id to index mapping
+                                    status
+                                        .tool_id_to_index
+                                        .insert(tool_id.clone(), message_index);
                                 } else {
                                     // Handle error, maybe continue to next line
+                                    log::warn!(
+                                        "failed to get status write lock, block index: {}",
+                                        message_index
+                                    );
                                     continue;
                                 }
 
-                                // Generate a unique ID for this specific tool call.
-                                let tool_id = format!("{}_{}", function_call.name, tool_index);
                                 let tool_name = function_call.name.clone();
 
                                 // The `args` field contains the full JSON for the arguments.
@@ -428,6 +446,17 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 let args_json_string = function_call.args.to_string();
 
                                 // 1. Announce the start of this specific tool call.
+                                // for claude only
+                                unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
+                                    index: message_index,
+                                    block: json!({
+                                        "type":"tool_use",
+                                        "id": tool_id.clone(),
+                                        "name": tool_name.clone(),
+                                        "input":{}
+                                    }),
+                                });
+                                // for openai and gemini
                                 unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
                                     tool_type: "tool_use".to_string(), // or whatever is appropriate
                                     id: tool_id.clone(),

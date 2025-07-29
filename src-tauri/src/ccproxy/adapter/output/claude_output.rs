@@ -82,10 +82,15 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 Ok(vec![gen_message_start_event(id, model, usage.input_tokens)])
             }
             UnifiedStreamChunk::Thinking { delta } => {
+                let message_index = if let Ok(status) = sse_status.read() {
+                    status.message_index
+                } else {
+                    0
+                };
                 Ok(vec![Event::default().event("content_block_delta").data(
                     json!({
                         "type": "content_block_delta",
-                        "index": 0,
+                        "index": message_index,
                         "delta": { "type": "thinking_delta", "thinking": delta }
                     })
                     .to_string(),
@@ -107,9 +112,13 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     .to_string(),
                 )])
             }
-            UnifiedStreamChunk::ToolUseDelta { id: _, delta } => {
+            UnifiedStreamChunk::ToolUseDelta { id, delta } => {
                 let message_index = if let Ok(status) = sse_status.read() {
-                    status.message_index
+                    status
+                        .tool_id_to_index
+                        .get(&id)
+                        .copied()
+                        .unwrap_or(status.message_index)
                 } else {
                     0
                 };

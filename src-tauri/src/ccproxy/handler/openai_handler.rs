@@ -14,7 +14,6 @@ use crate::ai::{
 };
 use crate::ccproxy::adapter::unified::SseStatus;
 use crate::ccproxy::common::CcproxyQuery;
-use crate::ccproxy::connection_monitor::{ConnectionMonitor, HeartbeatMonitor, MonitoredStream};
 use crate::ccproxy::{
     adapter::{
         backend::BackendAdapter,
@@ -32,6 +31,7 @@ use crate::db::{AiModel, MainStore};
 /// Handles the `/v1/models` (list models) request.
 /// Reads `chat_completion_proxy` from `MainStore`.
 pub async fn list_proxied_models_handler(
+    _addition_path: String,
     main_store: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<impl Reply> {
     let config: HashMap<String, Vec<BackendModelTarget>> = {
@@ -288,34 +288,12 @@ pub async fn handle_chat_completion_proxy(
         };
 
         let stream_processor = StreamProcessor::new();
-        let connection_monitor = ConnectionMonitor::new();
-
-        // Set up callback for client disconnection
-        {
-            let stream_processor_clone = stream_processor.clone();
-            connection_monitor
-                .on_disconnect(move || {
-                    log::info!("Client disconnected, stopping backend stream processing");
-                    stream_processor_clone.stop();
-                })
-                .await;
-        }
-
-        // Start heartbeat monitoring (check every 30 seconds)
-        let heartbeat_monitor = HeartbeatMonitor::new(connection_monitor.clone(), 30);
-        let _heartbeat_handle = heartbeat_monitor.start_heartbeat();
-
         let reassembled_receiver = stream_processor
             .process_stream(target_response, &stream_format)
             .await;
 
         // Wrap the receiver in a stream to make it compatible with futures_util::StreamExt
         let reassembled_stream = ReceiverStream::new(reassembled_receiver);
-        let monitored_stream = MonitoredStream::new_with_heartbeat(
-            reassembled_stream,
-            connection_monitor.clone(),
-            heartbeat_monitor,
-        );
         let sse_status = Arc::new(RwLock::new(SseStatus::new(
             format!("msg_{}", Uuid::new_v4().simple()),
             proxy_alias.clone(),
@@ -326,7 +304,7 @@ pub async fn handle_chat_completion_proxy(
             log::info!(target: "ccproxy_logger", "OpenAI-Compatible Stream Response Chunk Start: \n-----\n");
         }
         let sse_status_clone = sse_status.clone();
-        let unified_stream = monitored_stream
+        let unified_stream = reassembled_stream
             .then(move |item| {
                 let adapter = backend_adapter.clone();
                 let status = sse_status_clone.clone();
@@ -338,17 +316,19 @@ pub async fn handle_chat_completion_proxy(
                                 log::debug!("recv: {}", String::from_utf8_lossy(&chunk));
                             }
                             // Attempt to adapt the complete chunk
-                            adapter
+                            let result = adapter
                                 .adapt_stream_chunk(chunk, status)
                                 .await
                                 .unwrap_or_else(|e| {
+                                    log::error!("handler: adapt_stream_chunk failed: {}", e);
                                     // If adaptation fails, create an error chunk
                                     vec![
                                         crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
                                             message: e.to_string(),
                                         },
                                     ]
-                                })
+                                });
+                            result
                         }
                         Err(e) => {
                             // This is an error from the StreamProcessor itself
@@ -384,24 +364,8 @@ pub async fn handle_chat_completion_proxy(
             )
         });
 
-        // 创建一个可以检测客户端断开的流
-        let client_disconnect_stream = sse_stream.inspect({
-            let connection_monitor = connection_monitor.clone();
-            move |event| {
-                // 如果发送事件失败，说明客户端可能已断开
-                if event.is_err() {
-                    log::info!("SSE event send failed, client likely disconnected");
-                    let monitor = connection_monitor.clone();
-                    tokio::spawn(async move {
-                        monitor.mark_disconnected().await;
-                    });
-                }
-            }
-        });
-
         let mut response =
-            warp::sse::reply(warp::sse::keep_alive().stream(client_disconnect_stream))
-                .into_response();
+            warp::sse::reply(warp::sse::keep_alive().stream(sse_stream)).into_response();
         *response.status_mut() = warp::http::StatusCode::OK;
         Ok(response)
     } else {

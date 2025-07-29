@@ -5,7 +5,6 @@
 mod adapter;
 mod auth;
 mod common;
-mod connection_monitor;
 mod errors;
 mod handler;
 mod proxy_rotator;

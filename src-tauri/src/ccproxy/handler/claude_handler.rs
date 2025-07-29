@@ -5,8 +5,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use warp::{http::header::HeaderMap, Reply};
 
-use crate::ccproxy::connection_monitor::{ConnectionMonitor, HeartbeatMonitor, MonitoredStream};
-
 use crate::ai::interaction::ChatProtocol;
 use crate::ai::network::{StreamFormat, StreamProcessor};
 use crate::ccproxy::adapter::unified::SseStatus;
@@ -47,7 +45,11 @@ pub async fn handle_claude_native_chat(
         match serde_json::from_slice(&client_request_body) {
             Ok(payload) => payload,
             Err(e) => {
-                log::error!("Failed to deserialize ClaudeNativeRequest: {}", e);
+                log::error!(
+                    "Failed to deserialize ClaudeNativeRequest: {}, the request: {}",
+                    e,
+                    String::from_utf8_lossy(&client_request_body)
+                );
                 return Err(warp::reject::custom(CCProxyError::InternalError(
                     t!("proxy.error.invalid_request_format", error = e.to_string()).to_string(),
                 )));
@@ -228,34 +230,12 @@ pub async fn handle_claude_native_chat(
         };
 
         let stream_processor = StreamProcessor::new();
-        let connection_monitor = ConnectionMonitor::new();
-
-        // Set up callback for client disconnection
-        {
-            let stream_processor_clone = stream_processor.clone();
-            connection_monitor
-                .on_disconnect(move || {
-                    log::info!("Client disconnected, stopping backend stream processing");
-                    stream_processor_clone.stop();
-                })
-                .await;
-        }
-
-        // Start heartbeat monitoring (check every 30 seconds)
-        let heartbeat_monitor = HeartbeatMonitor::new(connection_monitor.clone(), 30);
-        let _heartbeat_handle = heartbeat_monitor.start_heartbeat();
-
         let reassembled_receiver = stream_processor
             .process_stream(target_response, &stream_format)
             .await;
 
         // Wrap the receiver in a stream to make it compatible with futures_util::StreamExt
         let reassembled_stream = ReceiverStream::new(reassembled_receiver);
-        let monitored_stream = MonitoredStream::new_with_heartbeat(
-            reassembled_stream,
-            connection_monitor.clone(),
-            heartbeat_monitor,
-        );
         let sse_status = Arc::new(RwLock::new(SseStatus::new(
             format!("msg_{}", Uuid::new_v4().simple()),
             proxy_alias.clone(),
@@ -266,7 +246,7 @@ pub async fn handle_claude_native_chat(
             log::info!(target: "ccproxy_logger", "Claude Response Status Code: {}, Claude Stream Response Chunk Start: \n-----\n", status_code);
         }
         let sse_status_clone = sse_status.clone();
-        let unified_stream = monitored_stream
+        let unified_stream = reassembled_stream
             .then(move |item| {
                 let adapter = backend_adapter.clone();
                 let status = sse_status_clone.clone();
@@ -274,9 +254,9 @@ pub async fn handle_claude_native_chat(
                     match item {
                         // The item from the channel is a Result<Bytes, String>
                         Ok(chunk) => {
-                            #[cfg(debug_assertions)] {
-                                log::debug!("recv: {}", String::from_utf8_lossy(&chunk));
-                            }
+                            // #[cfg(debug_assertions)] {
+                            //     log::debug!("recv: {}", String::from_utf8_lossy(&chunk));
+                            // }
                             // Attempt to adapt the complete chunk
                             adapter
                                 .adapt_stream_chunk(chunk, status)
@@ -320,24 +300,8 @@ pub async fn handle_claude_native_chat(
             )
         });
 
-        // 创建一个可以检测客户端断开的流
-        let client_disconnect_stream = sse_stream.inspect({
-            let connection_monitor = connection_monitor.clone();
-            move |event| {
-                // 如果发送事件失败，说明客户端可能已断开
-                if event.is_err() {
-                    log::info!("SSE event send failed, client likely disconnected");
-                    let monitor = connection_monitor.clone();
-                    tokio::spawn(async move {
-                        monitor.mark_disconnected().await;
-                    });
-                }
-            }
-        });
-
         let mut response =
-            warp::sse::reply(warp::sse::keep_alive().stream(client_disconnect_stream))
-                .into_response();
+            warp::sse::reply(warp::sse::keep_alive().stream(sse_stream)).into_response();
         *response.status_mut() = warp::http::StatusCode::OK;
 
         Ok(response)

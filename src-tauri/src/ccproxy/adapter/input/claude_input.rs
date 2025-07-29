@@ -21,7 +21,18 @@ fn convert_claude_content_block(block: ClaudeNativeContentBlock) -> Result<Unifi
             data: source.data,
         }),
         ClaudeNativeContentBlock::ToolUse { id, name, input } => {
-            Ok(UnifiedContentBlock::ToolUse { id, name, input })
+            // Claude's tool use input might contain single quotes for JSON keys, which is invalid JSON.
+            // Replace single quotes with double quotes to ensure valid JSON.
+            let cleaned_input_str = input.to_string().replace("'", "\"");
+            let cleaned_input = serde_json::from_str(&cleaned_input_str).unwrap_or_else(|e| {
+                log::warn!("Failed to parse Claude tool input as JSON after cleaning: {}. Original input: {}", e, input);
+                serde_json::json!({})
+            });
+            Ok(UnifiedContentBlock::ToolUse {
+                id,
+                name,
+                input: cleaned_input,
+            })
         }
         ClaudeNativeContentBlock::ToolResult {
             tool_use_id,
@@ -79,28 +90,48 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
                         .any(|c| matches!(c, ClaudeNativeContentBlock::ToolResult { .. }));
 
                     if has_tool_result {
-                        // This is a tool result message. Each ToolResult block becomes a separate Tool message.
-                        // Other blocks in this message (like text) are ignored as per standard API behavior.
-                        msg.content
-                            .into_iter()
-                            .filter_map(|block| {
-                                if matches!(block, ClaudeNativeContentBlock::ToolResult { .. }) {
-                                    // Convert only the ToolResult blocks.
-                                    Some(
-                                        convert_claude_content_block(block).map(|unified_block| {
-                                            UnifiedMessage {
-                                                role: UnifiedRole::Tool, // This is the crucial change.
-                                                content: vec![unified_block],
-                                                reasoning_content: None,
-                                            }
-                                        }),
-                                    )
-                                } else {
-                                    // Ignore other blocks like text in a tool result message.
-                                    None
-                                }
-                            })
-                            .collect()
+                        // This message contains tool results. We need to separate tool results from other content.
+                        let mut messages = Vec::new();
+                        let mut tool_result_blocks = Vec::new();
+                        let mut other_blocks = Vec::new();
+
+                        // Separate tool result blocks from other content blocks
+                        for block in msg.content {
+                            if matches!(block, ClaudeNativeContentBlock::ToolResult { .. }) {
+                                tool_result_blocks.push(block);
+                            } else {
+                                other_blocks.push(block);
+                            }
+                        }
+
+                        // Create Tool messages for each tool result block
+                        for tool_block in tool_result_blocks {
+                            messages.push(
+                                convert_claude_content_block(tool_block).map(|unified_block| {
+                                    UnifiedMessage {
+                                        role: UnifiedRole::Tool,
+                                        content: vec![unified_block],
+                                        reasoning_content: None,
+                                    }
+                                })
+                            );
+                        }
+
+                        // Create a User message for remaining content blocks (if any)
+                        if !other_blocks.is_empty() {
+                            let user_message = other_blocks
+                                .into_iter()
+                                .map(convert_claude_content_block)
+                                .collect::<Result<Vec<_>>>()
+                                .map(|content| UnifiedMessage {
+                                    role: UnifiedRole::User,
+                                    content,
+                                    reasoning_content: None,
+                                });
+                            messages.push(user_message);
+                        }
+
+                        messages
                     } else {
                         // It's a regular user message without tool results.
                         let result = msg
@@ -144,10 +175,13 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
     Ok(UnifiedRequest {
         model: req.model,
         messages,
-        system_prompt: req.system,
+        system_prompt: req
+            .system
+            .map(|x| serde_json::to_string(&x).unwrap_or_default()),
         tools,
         tool_choice,
-        stream: false, // Stream handling is managed by the handler, not in the request body itself.
+        // stream: false, // Stream handling is managed by the handler, not in the request body itself.
+        stream: req.stream.unwrap_or(false),
         temperature: req
             .temperature
             .map(|t| clamp_to_protocol_range(t, Protocol::Claude, Parameter::Temperature)),

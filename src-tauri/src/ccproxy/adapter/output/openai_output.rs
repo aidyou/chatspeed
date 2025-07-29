@@ -83,7 +83,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
     fn adapt_stream_chunk(
         &self,
         chunk: UnifiedStreamChunk,
-        _sse_status: std::sync::Arc<std::sync::RwLock<SseStatus>>,
+        sse_status: std::sync::Arc<std::sync::RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
         match chunk {
             UnifiedStreamChunk::MessageStart { id, model, usage } => {
@@ -91,22 +91,72 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let data = json!({
                     "id": id.clone(),
                     "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
+                    "choices": [
+                      {
+                        "index": 0,
+                        "delta": {
+                          "role": "assistant",
+                          "content": ""
+                        },
+                        "finish_reason": null
+                      }
+                    ],
                     "usage": {
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens
+                        "prompt_tokens": usage.input_tokens,
+                        "completion_tokens": usage.output_tokens,
+                        "total_tokens": usage.input_tokens + usage.output_tokens
                     }
                 });
-                Ok(vec![Event::default()
-                    .id(id)
-                    .event("message_start")
-                    .data(data.to_string())])
+                Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::Thinking { delta } => {
-                let data = json!({ "choices": [{ "delta": { "reasoning_content": delta } }] });
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
+                let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
+                    "choices": [{
+                        "index":0,
+                        "delta": { "reasoning_content": delta } ,
+                        "finish_reason": null
+                    }]
+                });
                 Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::Text { delta } => {
-                let data = json!({ "choices": [{ "delta": { "content": delta } }] });
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
+                let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
+                    "choices": [{
+                        "index":0,
+                        "delta": { "content": delta },
+                        "finish_reason": null,
+                    }]
+                });
                 Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::ToolUseStart {
@@ -114,43 +164,98 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 id,
                 name,
             } => {
+                let message_index = if let Ok(status) = sse_status.read() {
+                    status.message_index
+                } else {
+                    0
+                };
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
                 let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
                     "choices": [{
+                        "index":0,
                         "delta": {
                             "tool_calls": [{
-                                "index": 0,
+                                "index": message_index,
                                 "id": id,
                                 "function": {
                                     "name": name,
                                     "arguments": ""
                                 }
                             }]
-                        }
+                        },
+                        "finish_reason": null
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
             UnifiedStreamChunk::ToolUseDelta { id: _, delta } => {
+                let message_index = if let Ok(status) = sse_status.read() {
+                    status.message_index
+                } else {
+                    0
+                };
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
                 let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
                     "choices": [{
+                        "index":0,
                         "delta": {
                             "tool_calls": [{
-                                "index": 0,
+                                "index": message_index,
                                 "function": {
                                     "arguments": delta
                                 }
                             }]
-                        }
+                        },
+                        "finish_reason": null
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
-            UnifiedStreamChunk::ToolUseEnd { id: _ } => {
-                Ok(vec![Event::default().data("")]) // No direct OpenAI equivalent for tool_use_end delta
-            }
+            UnifiedStreamChunk::ToolUseEnd { id: _ } => Ok(vec![]),
             UnifiedStreamChunk::MessageStop { stop_reason, usage } => {
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
                 let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
                     "choices": [{
+                        "index":0,
                         "finish_reason": stop_reason
                     }],
                     "usage": {
