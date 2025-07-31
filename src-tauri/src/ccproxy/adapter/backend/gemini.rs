@@ -84,6 +84,9 @@ impl GeminiBackendAdapter {
                                         | "date-time" => {
                                             gemini_schema.insert(field.to_string(), value.clone());
                                         }
+                                        "uint" | "uint32" | "uint64" => {
+                                            gemini_schema.insert(field.to_string(), json!("int64"));
+                                        }
                                         _ => {
                                             // Skip unsupported format values like "uri", "email", etc.
                                             log::debug!(
@@ -120,9 +123,9 @@ impl BackendAdapter for GeminiBackendAdapter {
         &self,
         client: &Client,
         unified_request: &UnifiedRequest,
-        api_key: &str,
-        base_url: &str,
-        model: &str,
+        _api_key: &str,
+        full_provider_url: &str,
+        _model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         let mut gemini_contents = Vec::new();
         let mut system_instruction_parts = Vec::new();
@@ -256,21 +259,31 @@ impl BackendAdapter for GeminiBackendAdapter {
             cached_content: unified_request.cached_content.clone(),
         };
 
-        let url = if unified_request.stream {
-            format!(
-                "{}/models/{}:streamGenerateContent?alt=sse&key={}",
-                base_url, model, api_key
-            )
-        } else {
-            format!(
-                "{}/models/{}:generateContent?key={}",
-                base_url, model, api_key
-            )
-        };
-
-        let mut request_builder = client.post(url);
+        let mut request_builder = client.post(full_provider_url);
         request_builder = request_builder.header("Content-Type", "application/json");
         request_builder = request_builder.json(&gemini_request);
+
+        #[cfg(debug_assertions)]
+        {
+            match serde_json::to_string_pretty(&gemini_request) {
+                Ok(request_json) => {
+                    log::debug!("Gemini request: {}", request_json);
+                }
+                Err(e) => {
+                    log::error!("Failed to serialize Gemini request: {}", e);
+                    // Try to serialize individual parts to identify the issue
+                    if let Some(tools) = &gemini_request.tools {
+                        for (i, tool) in tools.iter().enumerate() {
+                            if let Err(tool_err) = serde_json::to_string(&tool) {
+                                log::error!("Failed to serialize tool {}: {}", i, tool_err);
+                                log::error!("Tool details: {:?}", tool.function_declarations);
+                            }
+                        }
+                    }
+                    return Err(anyhow::anyhow!("Failed to serialize Gemini request: {}", e));
+                }
+            }
+        }
 
         Ok(request_builder)
     }
@@ -307,6 +320,9 @@ impl BackendAdapter for GeminiBackendAdapter {
         if let Some(usage_meta) = gemini_response.usage_metadata {
             usage.input_tokens = usage_meta.prompt_token_count;
             usage.output_tokens = usage_meta.candidates_token_count.unwrap_or(0);
+            usage.tool_use_prompt_tokens = usage_meta.tool_use_prompt_token_count;
+            usage.thoughts_tokens = usage_meta.thoughts_token_count;
+            usage.cached_content_tokens = usage_meta.cached_content_token_count;
         }
 
         Ok(UnifiedResponse {
@@ -353,11 +369,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                             usage: UnifiedUsage {
                                 input_tokens: 0, // Gemini stream doesn't provide input tokens in the first chunk
                                 output_tokens: 0,
-                                cache_creation_input_tokens: None,
-                                cache_read_input_tokens: None,
-                                tool_use_prompt_tokens: None,
-                                thoughts_tokens: None,
-                                cached_content_tokens: None,
+                                ..Default::default()
                             },
                         });
                     }
@@ -487,6 +499,10 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     tool_use_prompt_tokens: u.tool_use_prompt_token_count,
                                     thoughts_tokens: u.thoughts_token_count,
                                     cached_content_tokens: u.cached_content_token_count,
+                                    total_duration: None,
+                                    load_duration: None,
+                                    prompt_eval_duration: None,
+                                    eval_duration: None,
                                 })
                                 .unwrap_or_default();
                             unified_chunks

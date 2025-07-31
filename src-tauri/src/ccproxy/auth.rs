@@ -1,8 +1,8 @@
 use crate::{
     ccproxy::{
-        common::CcproxyQuery,
         errors::{CCProxyError, ProxyResult},
-        openai::ChatCompletionProxyKeysConfig,
+        helper::CcproxyQuery,
+        types::ChatCompletionProxyKeysConfig,
     },
     db::MainStore,
 };

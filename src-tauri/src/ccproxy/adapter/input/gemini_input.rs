@@ -95,10 +95,11 @@ pub fn from_gemini(
         .as_ref()
         .and_then(|config| config.temperature)
         .map(|t| clamp_to_protocol_range(t, Protocol::Gemini, Parameter::Temperature));
-    let max_tokens = req
-        .generation_config
-        .as_ref()
-        .and_then(|config| config.max_output_tokens);
+    let max_tokens = req.generation_config.as_ref().and_then(|config| {
+        config
+            .max_output_tokens
+            .and_then(|m| if m <= 0 { None } else { Some(m) })
+    });
     let top_p = req
         .generation_config
         .as_ref()

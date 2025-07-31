@@ -155,7 +155,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         client: &Client,
         unified_request: &UnifiedRequest,
         api_key: &str,
-        base_url: &str,
+        full_provider_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         let mut openai_messages: Vec<UnifiedChatMessage> = Vec::new();
@@ -500,7 +500,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
             logit_bias: None, // Not supported in unified request yet
         };
 
-        let mut request_builder = client.post(format!("{}/chat/completions", base_url));
+        let mut request_builder = client.post(full_provider_url);
         request_builder = request_builder.header("Content-Type", "application/json");
         if !api_key.is_empty() {
             request_builder =
@@ -508,27 +508,31 @@ impl BackendAdapter for OpenAIBackendAdapter {
         }
 
         // Try to serialize the request and log it for debugging
-        match serde_json::to_string_pretty(&openai_request) {
-            Ok(request_json) => {
-                log::debug!("openai request: {}", request_json);
-                request_builder = request_builder.json(&openai_request);
-            }
-            Err(e) => {
-                log::error!("Failed to serialize OpenAI request: {}", e);
-                // Try to serialize individual parts to identify the issue
-                if let Some(tools) = &openai_request.tools {
-                    for (i, tool) in tools.iter().enumerate() {
-                        if let Err(tool_err) = serde_json::to_string(&tool) {
-                            log::error!("Failed to serialize tool {}: {}", i, tool_err);
-                            log::error!(
-                                "Tool details - name: {}, type: {}",
-                                tool.function.name,
-                                tool.r#type
-                            );
+        request_builder = request_builder.json(&openai_request);
+
+        #[cfg(debug_assertions)]
+        {
+            match serde_json::to_string_pretty(&openai_request) {
+                Ok(request_json) => {
+                    log::debug!("OpenAI request: {}", request_json);
+                }
+                Err(e) => {
+                    log::error!("Failed to serialize OpenAI request: {}", e);
+                    // Try to serialize individual parts to identify the issue
+                    if let Some(tools) = &openai_request.tools {
+                        for (i, tool) in tools.iter().enumerate() {
+                            if let Err(tool_err) = serde_json::to_string(&tool) {
+                                log::error!("Failed to serialize tool {}: {}", i, tool_err);
+                                log::error!(
+                                    "Tool details - name: {}, type: {}",
+                                    tool.function.name,
+                                    tool.r#type
+                                );
+                            }
                         }
                     }
+                    return Err(anyhow::anyhow!("Failed to serialize OpenAI request: {}", e));
                 }
-                return Err(anyhow::anyhow!("Failed to serialize OpenAI request: {}", e));
             }
         }
 
@@ -711,6 +715,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 tool_use_prompt_tokens: None,
                 thoughts_tokens: None,
                 cached_content_tokens: None,
+                ..Default::default()
             })
             .unwrap_or_default();
 
@@ -859,8 +864,10 @@ impl OpenAIBackendAdapter {
         if let Ok(mut status) = sse_status.write() {
             if !status.message_start {
                 status.message_start = true;
-                if !openai_chunk.id.is_empty() {
-                    status.message_id = openai_chunk.id.clone();
+                if let Some(id) = openai_chunk.id.as_ref() {
+                    if !id.is_empty() {
+                        status.message_id = id.clone();
+                    }
                 }
                 unified_chunks.push(UnifiedStreamChunk::MessageStart {
                     id: status.message_id.clone(),
@@ -868,11 +875,7 @@ impl OpenAIBackendAdapter {
                     usage: UnifiedUsage {
                         input_tokens: 0, // OpenAI stream doesn't provide input tokens in the first chunk
                         output_tokens: 0,
-                        cache_creation_input_tokens: None,
-                        cache_read_input_tokens: None,
-                        tool_use_prompt_tokens: None,
-                        thoughts_tokens: None,
-                        cached_content_tokens: None,
+                        ..Default::default()
                     },
                 });
             }
@@ -1034,6 +1037,7 @@ impl OpenAIBackendAdapter {
                 tool_use_prompt_tokens: None,
                 thoughts_tokens: None,
                 cached_content_tokens: None,
+                ..Default::default()
             })
             .unwrap_or_default();
 

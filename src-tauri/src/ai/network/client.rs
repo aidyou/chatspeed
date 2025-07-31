@@ -1,6 +1,7 @@
+use crate::ccproxy::StreamFormat;
 use crate::libs::util::urlencode;
 
-use super::stream::{StreamFormat, StreamParser};
+use super::stream::StreamParser;
 use super::{types::*, StreamChunk};
 use async_trait::async_trait;
 use bytes::Bytes;

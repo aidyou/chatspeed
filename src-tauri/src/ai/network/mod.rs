@@ -1,9 +1,7 @@
 mod client;
 mod stream;
-mod stream_processor;
 pub mod types;
 
 pub use client::{ApiClient, DefaultApiClient};
-pub use stream::{StreamChunk, StreamFormat, TokenUsage};
-pub use stream_processor::StreamProcessor;
+pub use stream::{StreamChunk, TokenUsage};
 pub use types::*;

@@ -22,6 +22,7 @@ pub enum CCProxyError {
     InvalidProtocolError(String),
     /// Failed to acquire lock on the MainStore.
     StoreLockError(String),
+    Forbidden(String),
 }
 
 impl warp::reject::Reject for CCProxyError {}
@@ -40,6 +41,16 @@ pub async fn handle_proxy_rejection(
             "Not Found",
             t!("proxy.error.endpoint_not_found").to_string(),
         )
+    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
+        log::debug!(
+            "handle_proxy_rejection: Received 'MethodNotAllowed': {:?}",
+            err
+        );
+        (
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Method Not Allowed",
+            "Method Not Allowed".to_string(),
+        )
     } else if err.find::<CorsForbidden>().is_some() {
         log::debug!(
             "handle_proxy_rejection: Received 'CorsForbidden': {:?}",
@@ -52,6 +63,9 @@ pub async fn handle_proxy_rejection(
         )
     } else if let Some(customer_error) = err.find::<CCProxyError>() {
         let (status, err_type_str, msg_str_slice) = match customer_error {
+            CCProxyError::Forbidden(s) => {
+                (StatusCode::FORBIDDEN, "Authentication Error", s.to_string())
+            }
             CCProxyError::InvalidToken => (
                 StatusCode::UNAUTHORIZED,
                 "Authentication Error",

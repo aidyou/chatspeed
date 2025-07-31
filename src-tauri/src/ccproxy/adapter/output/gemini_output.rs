@@ -6,15 +6,19 @@ use crate::ccproxy::gemini::{
     GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
     GeminiUsageMetadata,
 };
+use crate::ccproxy::helper::sse::Event;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::sse::Event;
 
 pub struct GeminiOutputAdapter;
 
 impl OutputAdapter for GeminiOutputAdapter {
-    fn adapt_response(&self, response: UnifiedResponse) -> Result<impl warp::Reply, anyhow::Error> {
+    fn adapt_response(
+        &self,
+        response: UnifiedResponse,
+        sse_status: Arc<RwLock<SseStatus>>,
+    ) -> Result<impl warp::Reply, anyhow::Error> {
         let mut gemini_parts = Vec::new();
         for block in response.content {
             match block {
@@ -45,6 +49,17 @@ impl OutputAdapter for GeminiOutputAdapter {
             }
         }
 
+        let model = if let Ok(status) = sse_status.read() {
+            status.model_id.clone()
+        } else {
+            response.model
+        };
+        let message_id = if let Ok(status) = sse_status.read() {
+            status.message_id.clone()
+        } else {
+            response.id
+        };
+
         let usage = GeminiUsageMetadata {
             prompt_token_count: response.usage.input_tokens,
             candidates_token_count: Some(response.usage.output_tokens),
@@ -72,9 +87,9 @@ impl OutputAdapter for GeminiOutputAdapter {
             }]),
             prompt_feedback: None,
             usage_metadata: Some(usage),
-            model_version: None, // Add missing field
-            create_time: None,   // Add missing field
-            response_id: None,   // Add missing field
+            model_version: Some(model), // Add missing field
+            create_time: Some(chrono::Utc::now().to_rfc3339()), // Add missing field
+            response_id: Some(message_id), // Add missing field
         };
 
         Ok(warp::reply::json(&gemini_response))

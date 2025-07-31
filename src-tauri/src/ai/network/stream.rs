@@ -1,36 +1,10 @@
 use bytes::Bytes;
 use rust_i18n::t;
 use serde_json::Value;
-use std::fmt;
-
-use crate::ai::traits::chat::{MessageType, ToolCallDeclaration};
 
 use super::{ClaudeEventType, ClaudeStreamEvent, GeminiResponse, OpenAIStreamResponse};
-
-/// Represents different types of stream response formats
-pub enum StreamFormat {
-    /// OpenAI compatible format
-    /// data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}
-    OpenAI,
-
-    /// Google AI (Gemini) format
-    /// {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}]}
-    Gemini,
-
-    /// Claude format
-    /// {"completion":"Hello","usage":{"input_tokens":10,"output_tokens":10}}
-    Claude,
-}
-
-impl fmt::Debug for StreamFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OpenAI => write!(f, "StreamFormat::OpenAI"),
-            Self::Gemini => write!(f, "StreamFormat::Gemini"),
-            Self::Claude => write!(f, "StreamFormat::Claude"),
-        }
-    }
-}
+use crate::ai::traits::chat::{MessageType, ToolCallDeclaration};
+use crate::ccproxy::StreamFormat;
 
 /// Token usage information
 #[derive(Debug, Default, Clone)]
@@ -84,6 +58,7 @@ impl StreamParser {
         // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
+        log::debug!("openai stream chunk- {}", chunk_str);
 
         for line in chunk_str.lines() {
             // log::debug!("openai stream line- {}", line);

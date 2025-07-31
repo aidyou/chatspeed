@@ -112,7 +112,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
         client: &Client,
         unified_request: &UnifiedRequest,
         api_key: &str,
-        base_url: &str,
+        full_provider_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         // Validate tool call sequence before processing
@@ -228,7 +228,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
             }),
         };
 
-        let mut request_builder = client.post(format!("{}/messages", base_url));
+        let mut request_builder = client.post(full_provider_url);
         request_builder = request_builder.header("Content-Type", "application/json");
         request_builder = request_builder.header("x-api-key", api_key);
         request_builder = request_builder.header("anthropic-version", "2023-06-01");
@@ -236,6 +236,32 @@ impl BackendAdapter for ClaudeBackendAdapter {
             request_builder = request_builder.header("anthropic-beta", "tools-2024-04-04");
         }
         request_builder = request_builder.json(&claude_request);
+
+        #[cfg(debug_assertions)]
+        {
+            match serde_json::to_string_pretty(&claude_request) {
+                Ok(request_json) => {
+                    log::debug!("Claude request: {}", request_json);
+                }
+                Err(e) => {
+                    log::error!("Failed to serialize Claude request: {}", e);
+                    // Try to serialize individual parts to identify the issue
+                    if let Some(tools) = &claude_request.tools {
+                        for (i, tool) in tools.iter().enumerate() {
+                            if let Err(tool_err) = serde_json::to_string(&tool) {
+                                log::error!("Failed to serialize tool {}: {}", i, tool_err);
+                                log::error!(
+                                    "Tool details - name: {}, params: {}",
+                                    tool.name,
+                                    tool.input_schema
+                                );
+                            }
+                        }
+                    }
+                    return Err(anyhow::anyhow!("Failed to serialize Claude request: {}", e));
+                }
+            }
+        }
 
         Ok(request_builder)
     }
@@ -283,9 +309,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                 output_tokens: u.output_tokens,
                 cache_creation_input_tokens: u.cache_creation_input_tokens,
                 cache_read_input_tokens: u.cache_read_input_tokens,
-                tool_use_prompt_tokens: None,
-                thoughts_tokens: None,
-                cached_content_tokens: None,
+                ..Default::default()
             })
             .unwrap_or_default();
 
@@ -336,11 +360,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                     usage: UnifiedUsage {
                                         input_tokens: msg.usage.input_tokens.unwrap_or(0),
                                         output_tokens: 0,
-                                        cache_creation_input_tokens: None,
-                                        cache_read_input_tokens: None,
-                                        tool_use_prompt_tokens: None,
-                                        thoughts_tokens: None,
-                                        cached_content_tokens: None,
+                                        ..Default::default()
                                     },
                                 });
                             }
@@ -482,11 +502,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         .map(|u| UnifiedUsage {
                                             input_tokens: u.input_tokens.unwrap_or(0),
                                             output_tokens: u.output_tokens.unwrap_or(0),
-                                            cache_creation_input_tokens: None,
-                                            cache_read_input_tokens: None,
-                                            tool_use_prompt_tokens: None,
-                                            thoughts_tokens: None,
-                                            cached_content_tokens: None,
+                                            ..Default::default()
                                         })
                                         .unwrap_or_default();
                                     unified_chunks.push(UnifiedStreamChunk::MessageStop {

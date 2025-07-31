@@ -59,7 +59,7 @@ impl Default for ModelConfig {
 }
 
 /// Represents an AI model with various attributes.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct AiModel {
     /// Optional identifier for the AI model.
     pub id: Option<i64>,

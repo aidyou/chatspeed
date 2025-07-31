@@ -19,6 +19,7 @@ use warp::{http::StatusCode, reply::Response as WarpResponse, Filter, Rejection}
 
 use crate::{
     ccproxy::{self, handle_proxy_rejection},
+    constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT},
     db::MainStore,
 };
 use crate::{
@@ -62,13 +63,6 @@ pub async fn start_http_server(
     std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
 
-    // Create ccproxy routes
-    // The base path for these routes will be "/ccproxy"
-    // ccproxy_routes itself is a filter that handles its sub-paths and returns a Reply.
-    // We combine it with the "ccproxy" base path.
-    let ccproxy_base = warp::path("ccproxy");
-    let ccproxy_api_routes = ccproxy_base.and(ccproxy::routes(main_store.clone()));
-
     // Set up static theme service
     let static_theme = warp::path("theme").and(warp::fs::dir(theme_dir.clone()));
 
@@ -102,53 +96,15 @@ pub async fn start_http_server(
     let serve = static_theme
         .or(static_upload)
         .or(static_tmp)
-        .or(ccproxy_api_routes)
         .or(save_png) // Ensure save_png is distinct or correctly ordered if it might conflict
         .or(handle_not_found_errors) // Use the rejecting not_found handler
-        .with(cors)
+        .with(cors.clone())
         .recover(handle_proxy_rejection); // This single recover handles rejections from routes and CORS.
 
-    // Find an available port with retry mechanism
-    let (_port, addr) = {
-        let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 5;
-
-        loop {
-            attempts += 1;
-            let port = find_available_port(21912, 65535)?;
-            let addr: SocketAddr = format!("127.0.0.1:{}", port)
-                .parse()
-                .map_err(|e: AddrParseError| format!("Failed to parse address: {}", e))?;
-
-            log::info!("Found available port: {} (attempt {})", port, attempts);
-
-            // Verify the address is still bindable before proceeding
-            match std::net::TcpListener::bind(addr) {
-                Ok(test_listener) => {
-                    drop(test_listener);
-                    log::debug!("Port {} is confirmed available", port);
-                    break (port, addr);
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Port {} became unavailable: {} (attempt {})",
-                        port,
-                        e,
-                        attempts
-                    );
-                    if attempts >= MAX_ATTEMPTS {
-                        return Err(format!(
-                            "Failed to find stable port after {} attempts",
-                            MAX_ATTEMPTS
-                        ));
-                    }
-                    // Small delay before retry
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                    continue;
-                }
-            }
-        }
-    };
+    let addr = try_available_port("127.0.0.1", 21912).await.map_err(|e| {
+        log::error!("Failed to find available port: {}", e);
+        e
+    })?;
 
     log::info!("Serving static files at http://{}", addr);
 
@@ -179,6 +135,51 @@ pub async fn start_http_server(
         warp::serve(serve).run(addr).await;
     });
 
+    // Create chat completion proxy routes
+    // ccproxy routes are served independently on a separate port
+    let ccproxy_serve = ccproxy::routes(main_store.clone())
+        .with(cors)
+        .recover(handle_proxy_rejection);
+    let server_port = if let Ok(store) = main_store.lock() {
+        store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
+    } else {
+        CFG_CCPROXY_PORT_DEFAULT
+    };
+
+    // Start chat completion proxy server with retry mechanism
+    let ccproxy_handle = task::spawn(async move {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 5;
+
+        loop {
+            attempts += 1;
+
+            match try_available_port("0.0.0.0", server_port).await {
+                Ok(ccproxy_addr) => {
+                    log::info!("Serving chat completion proxy on http://{}", ccproxy_addr);
+                    // Try to start the server immediately
+                    warp::serve(ccproxy_serve.clone()).run(ccproxy_addr).await;
+                    break; // If we get here, server started successfully
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to start ccproxy server (attempt {}): {}",
+                        attempts,
+                        e
+                    );
+                    if attempts >= MAX_ATTEMPTS {
+                        log::error!(
+                            "Failed to start ccproxy server after {} attempts",
+                            MAX_ATTEMPTS
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+    });
+
     // Start a temporary file cleanup task
     let tx_clone = shutdown_tx.clone();
     let cleanup_handle = task::spawn(async move {
@@ -195,6 +196,7 @@ pub async fn start_http_server(
     // Wait for tasks to complete
     tokio::select! {
         _ = serve_handle => {},
+        _ = ccproxy_handle=>{},
         _ = cleanup_handle => {},
         _ = shutdown_handle => {},
     }
@@ -202,6 +204,44 @@ pub async fn start_http_server(
     Ok(())
 }
 
+async fn try_available_port(ip: &str, start_port: u16) -> Result<SocketAddr, String> {
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 3;
+
+    let mut start_port = start_port;
+    loop {
+        attempts += 1;
+        let port = find_available_port(ip, start_port, 65535)?;
+        let addr: SocketAddr = format!("{}:{}", ip, port)
+            .parse()
+            .map_err(|e: AddrParseError| format!("Failed to parse address: {}", e))?;
+
+        log::info!("Found available port: {} (attempt {})", port, attempts);
+
+        // Try to bind to verify the port is available
+        match std::net::TcpListener::bind(addr) {
+            Ok(listener) => {
+                drop(listener); // Release immediately to avoid holding the port
+                log::debug!("Port {} is confirmed available", port);
+                return Ok(addr);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Port {} became unavailable: {} (attempt {})",
+                    port,
+                    e,
+                    attempts
+                );
+                if attempts >= MAX_ATTEMPTS {
+                    start_port += 1;
+                }
+                // Small delay before retry
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                continue;
+            }
+        }
+    }
+}
 /// Attempts to find an available port starting from `start_port` up to `max_port`.
 ///
 /// # Arguments
@@ -210,11 +250,11 @@ pub async fn start_http_server(
 ///
 /// # Returns
 /// * `Result<u16, String>` - An available port number or an error message.
-fn find_available_port(start_port: u16, max_port: u16) -> Result<u16, String> {
+fn find_available_port(ip: &str, start_port: u16, max_port: u16) -> Result<u16, String> {
     use std::net::{SocketAddr, TcpListener};
 
     for port in start_port..=max_port {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port)
+        let addr: SocketAddr = format!("{}:{}", ip, port)
             .parse()
             .map_err(|e| format!("Invalid address format: {}", e))?;
 

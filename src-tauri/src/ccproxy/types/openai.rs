@@ -2,49 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Represents a target backend model for a proxy alias.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct BackendModelTarget {
-    /// The ID of the provider (corresponds to `modelStore.provider.id`).
-    pub id: i64,
-    /// The ID of the model within the provider (corresponds to `modelStore.provider.models[n].id`).
-    pub model: String,
-}
-
-/// Configuration for chat completion proxy.
-/// Maps a proxy alias (String key) to a list of backend model targets.
-pub type ChatCompletionProxyConfig = HashMap<String, Vec<BackendModelTarget>>;
-
-/// Represents an access key for the chat completion proxy.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ProxyAccessKey {
-    /// A descriptive name for the access key.
-    pub name: String,
-    /// The actual token string (e.g., "cs-xxxx").
-    pub token: String,
-}
-
-/// Configuration for chat completion proxy access keys.
-pub type ChatCompletionProxyKeysConfig = Vec<ProxyAccessKey>;
-
-/// Represents a model in the OpenAI-compatible list models response.
-#[derive(Serialize, Debug)]
-pub struct OpenAIModel {
-    pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub owned_by: String,
-}
-
-/// Represents the OpenAI-compatible list models response structure.
-#[derive(Serialize, Debug)]
-pub struct OpenAIListModelsResponse {
-    pub object: String,
-    pub data: Vec<OpenAIModel>,
-}
-
 /// Unified structure for chat messages, used in requests, non-stream responses, and stream deltas.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct UnifiedChatMessage {
@@ -158,10 +115,14 @@ pub struct OpenAIUsage {
 // For streaming
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize for consistency, though not directly causing the error
 pub struct OpenAIChatCompletionStreamResponse {
-    pub id: String,
-    pub object: String, // "chat.completion.chunk"
-    pub created: u64,
-    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>, // "chat.completion.chunk"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub choices: Vec<OpenAIStreamChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<OpenAIUsage>,
@@ -169,7 +130,8 @@ pub struct OpenAIChatCompletionStreamResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize for consistency
 pub struct OpenAIStreamChoice {
-    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     pub delta: UnifiedChatMessage, // Using the unified message structure for delta
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
@@ -325,18 +287,18 @@ impl OpenAIChatCompletionRequest {
         }
 
         // Validate stop sequences (max 4)
-        if let Some(ref stop) = self.stop {
-            if stop.len() > 4 {
-                return Err("Maximum 4 stop sequences allowed".to_string());
-            }
-        }
+        // if let Some(ref stop) = self.stop {
+        //     if stop.len() > 4 {
+        //         return Err("Maximum 4 stop sequences allowed".to_string());
+        //     }
+        // }
 
         // Validate max_tokens is positive
-        if let Some(max_tokens) = self.max_tokens {
-            if max_tokens <= 0 {
-                return Err("max_tokens must be positive".to_string());
-            }
-        }
+        // if let Some(max_tokens) = self.max_tokens {
+        //     if max_tokens <= 0 {
+        //         return Err("max_tokens must be positive".to_string());
+        //     }
+        // }
 
         // Validate top_logprobs range (0 to 20)
         if let Some(top_logprobs) = self.top_logprobs {

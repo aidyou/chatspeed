@@ -1,0 +1,263 @@
+//! A thread-safe proxy rotator for managing model targets and global API key rotation.
+//!
+//! This module provides the ProxyRotator struct, which manages:
+//! 1. Model target rotation for proxy aliases
+//! 2. Global API key rotation across ALL providers for a proxy alias
+//! 3. Ensures even distribution of key usage across all providers
+
+use dashmap::DashMap;
+use lazy_static::lazy_static;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Represents a single API key with its associated provider information
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalApiKey {
+    pub key: String,
+    pub provider_id: i64,
+    pub base_url: String,
+    pub model_name: String,
+}
+
+impl GlobalApiKey {
+    pub fn new(key: String, provider_id: i64, base_url: String, model_name: String) -> Self {
+        Self {
+            key,
+            provider_id,
+            base_url,
+            model_name,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ProxyRotator {
+    /// Counter for model target rotation per proxy alias
+    /// Key: Proxy Alias (e.g., "model-a")
+    /// Value: AtomicUsize for round-robin index
+    model_counters: Arc<DashMap<String, AtomicUsize>>,
+
+    /// Global key pool for each proxy alias
+    /// Key: Proxy Alias
+    /// Value: Vec<GlobalApiKey> - all keys from all providers for this alias
+    global_key_pools: Arc<RwLock<DashMap<String, Vec<GlobalApiKey>>>>,
+
+    /// Global counter for key rotation per proxy alias
+    /// Key: Proxy Alias
+    /// Value: AtomicUsize for round-robin index across all keys
+    global_key_counters: Arc<DashMap<String, AtomicUsize>>,
+
+    /// Mapping between provider ID and their keys for efficient update detection
+    /// Key: format!("{}:{}", proxy_alias, provider_id)
+    /// Value: (Vec<String>, base_url, model_name) - keys and metadata for this provider
+    provider_keys_mapping: Arc<RwLock<DashMap<String, (Vec<String>, String, String)>>>,
+}
+
+impl ProxyRotator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get the next round-robin index for specified proxy alias and update the counter.
+    ///
+    /// # Arguments
+    /// * `proxy_alias` - The alias of proxy model.
+    /// * `num_targets` - The number of backend targets configured for this proxy alias.
+    ///
+    /// # Returns
+    /// The index of next backend target to use. Returns 0 if `num_targets` is 0.
+    pub fn get_next_target_index(&self, proxy_alias: &str, num_targets: usize) -> usize {
+        if num_targets == 0 {
+            return 0;
+        }
+
+        let counter = self
+            .model_counters
+            .entry(proxy_alias.to_string())
+            .or_insert_with(|| AtomicUsize::new(0));
+
+        let current_index = counter.fetch_add(1, Ordering::SeqCst);
+        current_index % num_targets
+    }
+
+    /// Update keys for a specific provider with efficient change detection.
+    /// Only updates the global pool if the keys actually changed.
+    ///
+    /// # Arguments
+    /// * `proxy_alias` - The proxy alias
+    /// * `provider_id` - The provider ID
+    /// * `base_url` - The provider's base URL
+    /// * `model_name` - The model name
+    /// * `new_keys` - The new keys for this provider (Vec<String>)
+    pub async fn update_provider_keys_efficient(
+        &self,
+        proxy_alias: &str,
+        provider_id: i64,
+        base_url: &str,
+        model_name: &str,
+        new_keys: Vec<String>,
+    ) {
+        // 1. Exit directly if provider_id is empty (provider_id of 0 is considered invalid)
+        if provider_id == 0 {
+            log::debug!(
+                "Provider ID is 0, skipping update for alias '{}'",
+                proxy_alias
+            );
+            return;
+        }
+
+        let mapping_key = format!("{}:{}", proxy_alias, provider_id);
+
+        // Check if mapping relationship exists and if there are changes
+        let needs_update = {
+            let mapping = self.provider_keys_mapping.read().await;
+            let existing_keys_opt = mapping.get(&mapping_key).map(|entry| {
+                let (keys, _, _) = entry.value();
+                keys.clone()
+            });
+
+            match existing_keys_opt {
+                // 2. If mapping relationship doesn't exist, need to update
+                None => !new_keys.is_empty(),
+                // Only update when there are new keys
+                // 3. Exists but no update, exit directly;
+                // 4. Exists and updated, need to modify
+                Some(existing_keys) => {
+                    // 5. If keys are empty, need to remove mapping relationship
+                    if new_keys.is_empty() {
+                        true // Need to delete
+                    } else {
+                        // Compare if keys have changed (sort first to ensure consistent order)
+                        let mut existing_sorted = existing_keys.clone();
+                        existing_sorted.sort();
+                        let mut new_sorted = new_keys.clone();
+                        new_sorted.sort();
+                        existing_sorted != new_sorted
+                    }
+                }
+            }
+        };
+
+        // 3. If exists but no update, exit directly
+        if !needs_update {
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "No key changes for provider {} in alias '{}', skipping update",
+                provider_id,
+                proxy_alias
+            );
+            return;
+        }
+
+        // Update mapping relationship
+        {
+            let mapping = self.provider_keys_mapping.write().await;
+            if new_keys.is_empty() {
+                // 5. If keys are empty, remove the mapping between id and keys
+                mapping.remove(&mapping_key);
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "Removed mapping for provider {} in alias '{}'",
+                    provider_id,
+                    proxy_alias
+                );
+            } else {
+                // 2. Write id to key mapping relationship or 4. Modify mapping to latest
+                let mut sorted_keys = new_keys.clone();
+                sorted_keys.sort(); // Keep keys order consistent for round-robin
+                mapping.insert(
+                    mapping_key.clone(),
+                    (sorted_keys, base_url.to_string(), model_name.to_string()),
+                );
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "Updated mapping for provider {} in alias '{}': {} keys",
+                    provider_id,
+                    proxy_alias,
+                    new_keys.len()
+                );
+            }
+        }
+
+        // 6. Read all current keys from id-keys mapping and write to global keys
+        self.rebuild_global_keys_from_mapping(proxy_alias).await;
+    }
+
+    /// Rebuild the global key pool from the provider keys mapping
+    async fn rebuild_global_keys_from_mapping(&self, proxy_alias: &str) {
+        let mapping = self.provider_keys_mapping.read().await;
+        let mut global_keys = Vec::new();
+
+        // Collect all provider keys belonging to this proxy_alias
+        for entry in mapping.iter() {
+            let key = entry.key();
+            if key.starts_with(&format!("{}:", proxy_alias)) {
+                // Parse provider_id
+                if let Some(provider_id_str) = key.strip_prefix(&format!("{}:", proxy_alias)) {
+                    if let Ok(provider_id) = provider_id_str.parse::<i64>() {
+                        let (keys, base_url, model_name) = entry.value();
+
+                        // Create GlobalApiKey for each key
+                        for key_str in keys {
+                            global_keys.push(GlobalApiKey::new(
+                                key_str.clone(),
+                                provider_id,
+                                base_url.clone(),
+                                model_name.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort to ensure consistent order
+        global_keys.sort_by(|a, b| a.key.cmp(&b.key));
+
+        // Update global key pool
+        {
+            let pools = self.global_key_pools.write().await;
+            pools.insert(proxy_alias.to_string(), global_keys.clone());
+        }
+
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "Rebuilt global key pool for alias '{}': {} keys from mapping",
+            proxy_alias,
+            global_keys.len()
+        );
+    }
+
+    /// Get the next API key from the global pool for a proxy alias.
+    /// This ensures even distribution across ALL providers and ALL keys.
+    ///
+    /// # Arguments
+    /// * `proxy_alias` - The proxy alias to get a key for
+    ///
+    /// # Returns
+    /// The next GlobalApiKey to use, or None if no keys are available
+    pub async fn get_next_global_key(&self, proxy_alias: &str) -> Option<GlobalApiKey> {
+        let pools = self.global_key_pools.read().await;
+        let keys = pools.get(proxy_alias)?;
+
+        if keys.is_empty() {
+            return None;
+        }
+
+        // Get the next key using global round-robin
+        let counter = self
+            .global_key_counters
+            .entry(proxy_alias.to_string())
+            .or_insert_with(|| AtomicUsize::new(0));
+
+        let current_index = counter.fetch_add(1, Ordering::SeqCst);
+        let selected_key = &keys[current_index % keys.len()];
+
+        Some(selected_key.clone())
+    }
+}
+
+lazy_static! {
+    pub static ref CC_PROXY_ROTATOR: ProxyRotator = ProxyRotator::new();
+}

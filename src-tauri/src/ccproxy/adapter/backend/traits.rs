@@ -20,7 +20,7 @@ pub trait BackendAdapter: Send + Sync {
         client: &Client,
         unified_request: &UnifiedRequest,
         api_key: &str,
-        base_url: &str,
+        provider_full_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error>;
 

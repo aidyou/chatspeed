@@ -244,6 +244,16 @@ pub struct UnifiedUsage {
     pub thoughts_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content_tokens: Option<u64>,
+
+    // ollama
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_duration: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_duration: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_eval_duration: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval_duration: Option<u64>,
 }
 
 pub struct GeminiFunctionCallPart {
@@ -272,6 +282,9 @@ pub struct SseStatus {
     pub gemini_tools: HashMap<String, GeminiFunctionCallPart>,
     // For tracking tool_id to index mapping
     pub tool_id_to_index: HashMap<String, u32>,
+    // For ollama tools
+    pub tool_name: Option<String>,
+    pub tool_arguments: Option<String>,
 }
 
 impl Default for SseStatus {
@@ -294,6 +307,8 @@ impl Default for SseStatus {
             tool_compat_last_flush_time: std::time::Instant::now(),
             gemini_tools: HashMap::new(),
             tool_id_to_index: HashMap::new(),
+            tool_name: None,
+            tool_arguments: None,
         }
     }
 }

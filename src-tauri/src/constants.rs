@@ -28,6 +28,8 @@ pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 // chatspeed crawler api name
 pub const CFG_CHP_SERVER: &str = "chatspeed_crawler";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
+pub const CFG_CCPROXY_PORT: &str = "ccproxy_port";
+pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11434;
 
 // main window shortcuts
 pub const CFG_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "main_window_visible_shortcut";

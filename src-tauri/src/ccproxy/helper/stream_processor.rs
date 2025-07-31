@@ -1,12 +1,12 @@
+use bytes::BytesMut;
+use reqwest::Response;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-
-use super::StreamFormat;
-use bytes::BytesMut;
-use reqwest::Response;
 use tokio::sync::mpsc;
+
+use crate::ccproxy::types::StreamFormat;
 
 /// A processor for handling Server-Sent Events (SSE) streams
 ///

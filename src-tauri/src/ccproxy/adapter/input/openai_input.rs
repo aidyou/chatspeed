@@ -73,7 +73,9 @@ pub fn from_openai(
             // Clamp to OpenAI range first, then it will be adapted in backend adapters
             clamp_to_protocol_range(t, Protocol::OpenAI, Parameter::Temperature)
         }),
-        max_tokens: req.max_tokens,
+        max_tokens: req
+            .max_tokens
+            .and_then(|t| if t <= 0 { None } else { Some(t) }),
         top_p: req
             .top_p
             .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::TopP)),

@@ -1,5 +1,6 @@
 use super::OutputAdapter;
 use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::types::openai::{
     OpenAIChatCompletionChoice, OpenAIChatCompletionResponse, OpenAIMessageContent, OpenAIUsage,
     UnifiedChatMessage,
@@ -7,12 +8,17 @@ use crate::ccproxy::types::openai::{
 
 use serde_json::json;
 use std::convert::Infallible;
-use warp::{reply::json, sse::Event};
+use std::sync::{Arc, RwLock};
+use warp::reply::json;
 
 pub struct OpenAIOutputAdapter;
 
 impl OutputAdapter for OpenAIOutputAdapter {
-    fn adapt_response(&self, response: UnifiedResponse) -> Result<impl warp::Reply, anyhow::Error> {
+    fn adapt_response(
+        &self,
+        response: UnifiedResponse,
+        sse_status: Arc<RwLock<SseStatus>>,
+    ) -> Result<impl warp::Reply, anyhow::Error> {
         let mut text_content = String::new();
         let mut reasoning_content: Option<String> = None;
         let mut tool_calls: Vec<crate::ccproxy::types::openai::UnifiedToolCall> = Vec::new();
@@ -61,14 +67,25 @@ impl OutputAdapter for OpenAIOutputAdapter {
             logprobs: None, // Add missing logprobs field
         };
 
+        let model = if let Ok(status) = sse_status.read() {
+            status.model_id.clone()
+        } else {
+            response.model
+        };
+        let response_id = if let Ok(status) = sse_status.read() {
+            status.message_id.clone()
+        } else {
+            response.id.clone()
+        };
+
         let openai_response = OpenAIChatCompletionResponse {
-            id: response.id,
+            id: response_id,
             object: "chat.completion".to_string(),
             created: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| anyhow::anyhow!("Failed to get system time: {}", e))?
                 .as_secs(),
-            model: response.model,
+            model: model,
             choices: vec![choice],
             usage: Some(OpenAIUsage {
                 prompt_tokens: response.usage.input_tokens,
@@ -86,11 +103,20 @@ impl OutputAdapter for OpenAIOutputAdapter {
         sse_status: std::sync::Arc<std::sync::RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
         match chunk {
-            UnifiedStreamChunk::MessageStart { id, model, usage } => {
+            UnifiedStreamChunk::MessageStart {
+                id,
+                model,
+                usage: _,
+            } => {
+                let model_id = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    model
+                };
                 // Convert to OpenAI-compatible message_start event
                 let data = json!({
                     "id": id.clone(),
-                    "model": model,
+                    "model": model_id,
                     "object":"chat.completion.chunk",
                     "created": chrono::Utc::now().timestamp(),
                     "choices": [
@@ -98,16 +124,10 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         "index": 0,
                         "delta": {
                           "role": "assistant",
-                          "content": ""
+                          "content": "",
                         },
-                        "finish_reason": null
                       }
-                    ],
-                    "usage": {
-                        "prompt_tokens": usage.input_tokens,
-                        "completion_tokens": usage.output_tokens,
-                        "total_tokens": usage.input_tokens + usage.output_tokens
-                    }
+                    ]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
@@ -129,8 +149,9 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     "created": chrono::Utc::now().timestamp(),
                     "choices": [{
                         "index":0,
-                        "delta": { "reasoning_content": delta } ,
-                        "finish_reason": null
+                        "delta": {
+                            "reasoning_content": delta,
+                        }
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
@@ -153,8 +174,9 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     "created": chrono::Utc::now().timestamp(),
                     "choices": [{
                         "index":0,
-                        "delta": { "content": delta },
-                        "finish_reason": null,
+                        "delta": {
+                            "content": delta,
+                        }
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
@@ -196,7 +218,6 @@ impl OutputAdapter for OpenAIOutputAdapter {
                                 }
                             }]
                         },
-                        "finish_reason": null
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
@@ -232,7 +253,6 @@ impl OutputAdapter for OpenAIOutputAdapter {
                                 }
                             }]
                         },
-                        "finish_reason": null
                     }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
@@ -249,6 +269,22 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 } else {
                     String::new()
                 };
+                let input_tokens = if usage.input_tokens > 0 {
+                    usage.input_tokens
+                } else {
+                    99
+                };
+                let output_tokens = if usage.output_tokens > 0 {
+                    usage.output_tokens
+                } else {
+                    if let Ok(status) = sse_status.read() {
+                        (status.text_delta_count
+                            + status.tool_delta_count
+                            + status.thinking_delta_count) as u64
+                    } else {
+                        99
+                    }
+                };
                 let data = json!({
                     "id": message_id,
                     "model": model,
@@ -256,15 +292,23 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     "created": chrono::Utc::now().timestamp(),
                     "choices": [{
                         "index":0,
-                        "finish_reason": stop_reason
+                        "delta": {},
+                        "finish_reason": if stop_reason=="tool_use".to_string() {
+                            "tool_calls"
+                        } else {
+                            &stop_reason
+                        }
                     }],
                     "usage": {
-                        "prompt_tokens": usage.input_tokens,
-                        "completion_tokens": usage.output_tokens,
-                        "total_tokens": usage.input_tokens + usage.output_tokens
+                        "prompt_tokens": input_tokens,
+                        "completion_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens
                     }
                 });
-                Ok(vec![Event::default().data(data.to_string())])
+                Ok(vec![
+                    Event::default().data(data.to_string()),
+                    Event::default().data("[DONE]"),
+                ])
             }
             UnifiedStreamChunk::Error { message } => {
                 // Map internal errors to a data event for the client

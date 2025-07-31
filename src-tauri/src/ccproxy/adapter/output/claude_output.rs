@@ -1,9 +1,10 @@
 use super::OutputAdapter;
 use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::helper::sse::Event;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::{reply::json, sse::Event};
+use warp::reply::json;
 
 pub struct ClaudeOutputAdapter;
 
@@ -12,7 +13,11 @@ use crate::ccproxy::types::claude::{
 };
 
 impl OutputAdapter for ClaudeOutputAdapter {
-    fn adapt_response(&self, response: UnifiedResponse) -> Result<impl warp::Reply, anyhow::Error> {
+    fn adapt_response(
+        &self,
+        response: UnifiedResponse,
+        sse_status: Arc<RwLock<SseStatus>>,
+    ) -> Result<impl warp::Reply, anyhow::Error> {
         let content = response
             .content
             .into_iter()
@@ -49,13 +54,23 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 },
             })
             .collect();
+        let model = if let Ok(status) = sse_status.read() {
+            status.model_id.clone()
+        } else {
+            response.model
+        };
+        let response_id = if let Ok(status) = sse_status.read() {
+            status.message_id.clone()
+        } else {
+            response.id.clone()
+        };
 
         let claude_response = ClaudeNativeResponse {
-            id: response.id,
+            id: response_id,
             response_type: "message".to_string(),
             role: Some("assistant".to_string()),
             content,
-            model: Some(response.model),
+            model: Some(model),
             stop_reason: response.stop_reason,
             stop_sequence: None, // Add missing field
             usage: Some(ClaudeNativeUsage {

@@ -185,7 +185,11 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
         temperature: req
             .temperature
             .map(|t| clamp_to_protocol_range(t, Protocol::Claude, Parameter::Temperature)),
-        max_tokens: Some(req.max_tokens),
+        max_tokens: if req.max_tokens <= 0 {
+            None
+        } else {
+            Some(req.max_tokens)
+        },
         top_p: req
             .top_p
             .map(|p| clamp_to_protocol_range(p, Protocol::Claude, Parameter::TopP)),
