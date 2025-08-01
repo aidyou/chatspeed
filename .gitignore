@@ -53,7 +53,7 @@ test/
 src-tauri/src/plugins
 
 # temp copy files
-* copy.*
+**/*copy/*
 
 # the ide config file
 .windsurf
