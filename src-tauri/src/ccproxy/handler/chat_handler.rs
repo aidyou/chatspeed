@@ -28,6 +28,46 @@ use crate::ccproxy::{
 };
 use crate::db::MainStore;
 
+fn get_proxy_alias_from_body(
+    chat_protocol: &ChatProtocol,
+    client_request_body: &bytes::Bytes,
+    route_model_alias: &str,
+) -> Result<String, warp::reject::Rejection> {
+    match chat_protocol {
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+            let payload: OpenAIChatCompletionRequest = serde_json::from_slice(client_request_body)
+                .map_err(|e| {
+                    warp::reject::custom(CCProxyError::InternalError(format!(
+                        "Failed to deserialize OpenAI request: {}",
+                        e
+                    )))
+                })?;
+            Ok(payload.model)
+        }
+        ChatProtocol::Ollama => {
+            let payload: OllamaChatCompletionRequest = serde_json::from_slice(client_request_body)
+                .map_err(|e| {
+                    warp::reject::custom(CCProxyError::InternalError(format!(
+                        "Failed to deserialize Ollama request: {}",
+                        e
+                    )))
+                })?;
+            Ok(payload.model)
+        }
+        ChatProtocol::Claude => {
+            let payload: ClaudeNativeRequest = serde_json::from_slice(client_request_body)
+                .map_err(|e| {
+                    warp::reject::custom(CCProxyError::InternalError(format!(
+                        "Failed to deserialize Claude request: {}",
+                        e
+                    )))
+                })?;
+            Ok(payload.model)
+        }
+        ChatProtocol::Gemini => Ok(route_model_alias.to_string()),
+    }
+}
+
 fn build_unified_request(
     chat_protocol: ChatProtocol,
     client_request_body: bytes::Bytes,
@@ -181,9 +221,47 @@ pub async fn handle_openai_chat_completion(
         log::info!(target: "ccproxy_logger", "{} Request Body: \n{}\n---", &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
+    let proxy_alias =
+        get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)?;
+
+    let proxy_model =
+        ModelResolver::get_ai_model_by_alias(main_store_arc.clone(), proxy_alias.clone()).await?;
+
+    if chat_protocol == proxy_model.chat_protocol {
+        let is_streaming = match chat_protocol {
+            ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+                let req: OpenAIChatCompletionRequest =
+                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                req.stream.unwrap_or(false)
+            }
+            ChatProtocol::Claude => {
+                let req: Result<ClaudeNativeRequest, _> =
+                    serde_json::from_slice(&client_request_body);
+                req.map(|r| r.stream.unwrap_or(false)).unwrap_or(false)
+            }
+            ChatProtocol::Ollama => {
+                let req: OllamaChatCompletionRequest =
+                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                req.stream.unwrap_or(false)
+            }
+            ChatProtocol::Gemini => generate_action == "streamGenerateContent",
+        };
+
+        let result = super::handle_direct_forward(
+            client_headers,
+            client_request_body,
+            proxy_model,
+            is_streaming,
+            main_store_arc,
+            log_to_file,
+        )
+        .await?;
+        return Ok(result.into_response());
+    }
+
     let (unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),
-        client_request_body,
+        client_request_body.clone(),
         tool_compat_mode,
         route_model_alias,
         generate_action,
@@ -366,7 +444,7 @@ pub async fn handle_openai_chat_completion(
     )));
 
     if is_streaming_request {
-        handle_streamed_response(
+        let res = handle_streamed_response(
             &proxy_model.chat_protocol,
             target_response,
             backend_adapter,
@@ -374,7 +452,8 @@ pub async fn handle_openai_chat_completion(
             sse_status,
             log_to_file,
         )
-        .await
+        .await?;
+        Ok(res.into_response())
     } else {
         let body_bytes = target_response
             .bytes()

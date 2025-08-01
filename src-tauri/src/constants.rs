@@ -56,7 +56,7 @@ pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
 // They are initialized after the http server is initialized,
 // more details see `src-tauri/src/http/server.rs` `start_http_server()`
 lazy_static! {
-    // http server, like http://127.0.0.1:21914
+    // HTTP server, default: http://127.0.0.1:21912. If port 21912 is unavailable, it will find an available port.
     pub static ref HTTP_SERVER: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::new()));
     // http server dir: ${app_data}/static
     pub static ref HTTP_SERVER_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::new()));
@@ -72,6 +72,8 @@ lazy_static! {
     pub static ref SHARED_DATA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // log dir: ${app_data}/log, it will be initialized at startup in @src-tauri/src/logger.rs L108 `setup_logger`
     pub static ref LOG_DIR: Arc<PLRwLock<PathBuf>> = Arc::new(PLRwLock::new(PathBuf::new()));
+    // chat completion proxy
+    pub static ref CHAT_COMPLETION_PROXY: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("http://localhost:11434")));
 
     // Just for Development environment data directory
     pub static ref STORE_DIR: Arc<PLRwLock<PathBuf>> = {

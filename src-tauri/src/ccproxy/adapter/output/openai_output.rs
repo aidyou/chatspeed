@@ -285,6 +285,20 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         99
                     }
                 };
+                let has_tool = if let Ok(status) = sse_status.read() {
+                    if !status.tool_id.is_empty()
+                        || status.tool_delta_count > 0
+                        || stop_reason == "tool_use"
+                        || stop_reason == "tool_calls"
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 let data = json!({
                     "id": message_id,
                     "model": model,
@@ -293,7 +307,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     "choices": [{
                         "index":0,
                         "delta": {},
-                        "finish_reason": if stop_reason=="tool_use".to_string() {
+                        "finish_reason": if has_tool {
                             "tool_calls"
                         } else {
                             &stop_reason

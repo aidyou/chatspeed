@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// Claude API native request format
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ClaudeNativeRequest {
     pub model: String,
     pub messages: Vec<ClaudeNativeMessage>,

@@ -73,6 +73,17 @@ impl GeminiBackendAdapter {
                                 gemini_schema
                                     .insert(field.to_string(), Self::extract_gemini_schema(value));
                             }
+                            "type" => {
+                                if let Some(arr) = value.as_array() {
+                                    // Find the first non-null type
+                                    if let Some(first_type) = arr.iter().find(|v| !v.is_null()) {
+                                        gemini_schema.insert(field.to_string(), first_type.clone());
+                                    }
+                                } else {
+                                    // Directly copy if it's not an array
+                                    gemini_schema.insert(field.to_string(), value.clone());
+                                }
+                            }
                             "format" => {
                                 // According to Gemini official documentation, supported formats:
                                 // NUMBER: float, double
@@ -128,14 +139,13 @@ impl BackendAdapter for GeminiBackendAdapter {
         _model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         let mut gemini_contents = Vec::new();
-        let mut system_instruction_parts = Vec::new();
 
         for msg in &unified_request.messages {
             let role = match msg.role {
-                UnifiedRole::System => continue,
+                UnifiedRole::System => continue, // System prompts are handled by the top-level `system_instruction` field
                 UnifiedRole::User => "user",
                 UnifiedRole::Assistant => "model",
-                UnifiedRole::Tool => "function", // Gemini tool results are from the 'function' role
+                UnifiedRole::Tool => "user", // Gemini tool results are from the 'user' role with a function_response part
             };
 
             let mut parts = Vec::new();
@@ -166,15 +176,15 @@ impl BackendAdapter for GeminiBackendAdapter {
                         });
                     }
                     UnifiedContentBlock::ToolResult {
-                        tool_use_id: _,
+                        tool_use_id,
                         content,
                         is_error: _,
                     } => {
                         // Gemini expects tool results as a FunctionResponse part
                         parts.push(GeminiPart {
                             function_response: Some(GeminiFunctionResponse {
-                                name: "tool_code".to_string(), // Generic name, actual tool name might be needed if available
-                                response: json!({ "result": content.clone() }), // Wrap content in a JSON object
+                                name: tool_use_id.clone(), // Use tool_use_id as the function name
+                                response: json!({ "name": tool_use_id, "content": content.clone() }), // Wrap content in a JSON object
                             }),
                             ..Default::default()
                         });
@@ -190,23 +200,19 @@ impl BackendAdapter for GeminiBackendAdapter {
             });
         }
 
-        if let Some(sys_prompt_str) = unified_request.system_prompt.as_ref() {
-            if !sys_prompt_str.trim().is_empty() {
-                system_instruction_parts.push(GeminiPart {
-                    text: Some(sys_prompt_str.to_string()),
-                    ..Default::default()
-                });
+        let system_instruction = unified_request.system_prompt.as_ref().and_then(|prompt| {
+            if prompt.trim().is_empty() {
+                None
+            } else {
+                Some(GeminiContent {
+                    role: "system".to_string(),
+                    parts: vec![GeminiPart {
+                        text: Some(prompt.to_string()),
+                        ..Default::default()
+                    }],
+                })
             }
-        }
-
-        let system_instruction = if !system_instruction_parts.is_empty() {
-            Some(GeminiContent {
-                role: "system".to_string(),
-                parts: system_instruction_parts,
-            })
-        } else {
-            None
-        };
+        });
 
         let gemini_tools = unified_request.tools.as_ref().map(|tools| {
             vec![GeminiApiTool {
@@ -340,11 +346,6 @@ impl BackendAdapter for GeminiBackendAdapter {
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<UnifiedStreamChunk>, anyhow::Error> {
         let chunk_str = String::from_utf8_lossy(&chunk);
-        #[cfg(debug_assertions)]
-        {
-            log::debug!("gemini sse chunk: {}", chunk_str);
-        }
-
         let mut unified_chunks = Vec::new();
         for line in chunk_str.lines() {
             if line.starts_with("data:") {

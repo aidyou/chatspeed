@@ -44,17 +44,23 @@ pub async fn handle_streamed_response(
         log::info!(target: "ccproxy_logger", "{} Stream Response Chunk Start: \n-----\n", chat_protocol.to_string());
     }
 
+    let chat_protocol_str = chat_protocol.to_string();
     let sse_status_clone = sse_status.clone();
     let unified_stream = reassembled_stream
         .then(move |item| {
             let adapter = backend_adapter.clone();
             let status = sse_status_clone.clone();
+            let chat_protocol_str_clone = chat_protocol_str.clone();
             async move {
                 match item {
                     Ok(chunk) => {
                         #[cfg(debug_assertions)]
                         {
-                            log::debug!("recv: {}", String::from_utf8_lossy(&chunk));
+                            log::debug!(
+                                "{} recv: {}",
+                                chat_protocol_str_clone,
+                                String::from_utf8_lossy(&chunk)
+                            );
                         }
                         // Attempt to adapt the complete chunk
                         let result = adapter

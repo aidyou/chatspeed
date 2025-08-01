@@ -19,7 +19,7 @@ use warp::{http::StatusCode, reply::Response as WarpResponse, Filter, Rejection}
 
 use crate::{
     ccproxy::{self, handle_proxy_rejection},
-    constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT},
+    constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY},
     db::MainStore,
 };
 use crate::{
@@ -137,7 +137,7 @@ pub async fn start_http_server(
 
     // Create chat completion proxy routes
     // ccproxy routes are served independently on a separate port
-    let ccproxy_serve = ccproxy::routes(main_store.clone())
+    let ccproxy_serve = ccproxy::routes(app.clone(), main_store.clone())
         .with(cors)
         .recover(handle_proxy_rejection);
     let server_port = if let Ok(store) = main_store.lock() {
@@ -156,6 +156,9 @@ pub async fn start_http_server(
 
             match try_available_port("0.0.0.0", server_port).await {
                 Ok(ccproxy_addr) => {
+                    // save the chat completion proxy address
+                    *CHAT_COMPLETION_PROXY.write() =
+                        format!("http://127.0.0.1:{}", ccproxy_addr.port());
                     log::info!("Serving chat completion proxy on http://{}", ccproxy_addr);
                     // Try to start the server immediately
                     warp::serve(ccproxy_serve.clone()).run(ccproxy_addr).await;

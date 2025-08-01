@@ -5,9 +5,8 @@ use crate::ccproxy::{
     handle_ollama_tags, handle_openai_chat_completion, handle_openai_list_models,
 };
 use crate::db::MainStore;
-use std::net::SocketAddr;
-
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use warp::{filters::header::headers_cloned, Filter, Rejection, Reply};
 
@@ -41,15 +40,20 @@ fn is_loopback() -> impl Filter<Extract = (), Error = Rejection> + Clone {
 
 /// Defines all routes for the ccproxy module.
 pub fn routes(
+    app_handle: tauri::AppHandle,
     main_store_arc: Arc<Mutex<MainStore>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let ollama_root_route = warp::path::end()
         .and(warp::get())
         .map(|| warp::reply::json(&json!({ "message": "Chatspeed's ccproxy module now supports proxying requests between Ollama, OpenAI-compatible, Gemini, and Claude protocols." })));
 
+    let app_handle_clone = app_handle.clone();
     let ollama_version_route = warp::path!("api" / "version")
         .and(warp::get())
-        .map(|| warp::reply::json(&json!({ "version": "1.0.0" })));
+        .map(move || {
+            let version = app_handle_clone.package_info().version.to_string();
+            warp::reply::json(&json!({ "version": version }))
+        });
 
     let ollama_list_models_route = warp::path!("api" / "tags")
         .and(warp::get())
@@ -240,8 +244,8 @@ pub fn routes(
 
     log::info!("Registered Ollama route: GET /");
     log::info!("Registered Ollama route: GET /api/version");
-    log::info!("Registered Ollama route: GET /api/tags");
     log::info!("Registered Ollama route: POST /api/chat");
+    log::info!("Registered Ollama route: GET /api/tags");
     log::info!("Registered OpenAI route: POST /v1/chat/completions");
     log::info!("Registered OpenAI route: GET /v1/models");
     log::info!("Registered Claude route: POST /v1/messages");

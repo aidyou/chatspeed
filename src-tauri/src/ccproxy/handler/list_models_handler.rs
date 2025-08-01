@@ -1,10 +1,12 @@
+use lazy_static::*;
+use regex::Regex;
+use rust_i18n::t;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-
-use rust_i18n::t;
-use serde_json::{json, Value};
 use warp::reply::Reply;
 
 use crate::{
@@ -154,15 +156,33 @@ pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResul
             } else {
                 (-1, "ccproxy".to_string())
             };
+            // Generate SHA256 digest based on current timestamp and model info
+            let mut hasher = Sha256::new();
+            let timestamp = chrono::Utc::now().to_rfc3339();
+            hasher.update(format!("{}:{}:{}", alias, provider, timestamp));
+            let digest_bytes = hasher.finalize();
+            let digest = format!("{:x}", digest_bytes);
+
+            // Derive model family from model name
+            let family = derive_model_family(&alias);
+            let families = vec![family.clone(), provider.clone()];
+
+            // Determine appropriate quantization level
+            let quantization_level = determine_quantization_level(&alias, &provider);
+
             json!( {
                 "name": alias.clone(),
                 "model": alias.clone(),
-                "modified_at": chrono::Utc::now().to_rfc3339(),
+                "modified_at": timestamp,
+                "size": 4683075271_u64,
+                "digest": digest,
                 "details": {
                     "parent_model": "",
                     "format": "gguf",
-                    "family": provider,
-                    "families":[provider]
+                    "family": family,
+                    "families": families,
+                    "parameter_size": "480B",
+                    "quantization_level": quantization_level
                 },
                 "owned_by": "chatspeed ccproxy".to_string(),
                 "max_tokens": max_token,
@@ -180,4 +200,52 @@ pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResul
     });
 
     Ok(warp::reply::json(&response))
+}
+
+lazy_static! {
+    static ref MODEL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*").unwrap();
+    static ref QUANT_REGEX: Regex =
+        Regex::new(r"[_-](q[2-8](?:_[a-zA-Z0-9])?|[fF](?:16|32))").unwrap();
+}
+/// Derive model family from model name using regex for better accuracy.
+/// For example: "qwen2-7b-instruct" should belong to "qwen2" family.
+fn derive_model_family(model_name: &str) -> String {
+    // This regex aims to capture the base name of the model before any specifiers
+    // like size (7b), version (v1.5), or type (instruct).
+    // It looks for a pattern of (word-word-...) and captures that.
+    if let Some(mat) = MODEL_REGEX.find(model_name) {
+        // Further refinement to remove common suffixes that are not part of the family name
+        let family = mat.as_str();
+        return family
+            .trim_end_matches("-instruct")
+            .trim_end_matches("-chat")
+            .trim_end_matches("-base")
+            .to_string();
+    }
+
+    // Fallback for names that don't fit the pattern, e.g., "gemma"
+    model_name.to_string()
+}
+
+/// Determine appropriate quantization level based on model name using regex.
+fn determine_quantization_level(model_name: &str, provider: &str) -> String {
+    // For closed-source providers where we don't know the specifics
+    let closed_source_providers = ["openai", "anthropic", "google"];
+    if closed_source_providers.contains(&provider) {
+        return "N/A".to_string();
+    }
+
+    let model_lower = model_name.to_lowercase();
+
+    // Regex for quantization levels (e.g., q4_k_m, q8_0, f16)
+    // This looks for common quantization patterns like q2-q8 with optional suffixes, or f16/f32.
+
+    if let Some(mat) = QUANT_REGEX.find(&model_lower) {
+        // Extract the matched group and format it to uppercase standard
+        let matched_str = mat.as_str().trim_start_matches(|c| c == '-' || c == '_');
+        return matched_str.to_uppercase();
+    }
+
+    // Default quantization level if no specific pattern is found
+    "Unknown".to_string()
 }
