@@ -1,23 +1,24 @@
-use super::OutputAdapter;
-use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
-use crate::ccproxy::helper::sse::Event;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::reply::json;
+
+use super::OutputAdapter;
+use crate::ccproxy::{
+    adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    helper::sse::Event,
+    types::claude::{ClaudeNativeContentBlock, ClaudeNativeResponse, ClaudeNativeUsage},
+};
 
 pub struct ClaudeOutputAdapter;
-
-use crate::ccproxy::types::claude::{
-    ClaudeNativeContentBlock, ClaudeNativeResponse, ClaudeNativeUsage,
-};
 
 impl OutputAdapter for ClaudeOutputAdapter {
     fn adapt_response(
         &self,
         response: UnifiedResponse,
         sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<impl warp::Reply, anyhow::Error> {
+    ) -> Result<Response, anyhow::Error> {
         let content = response
             .content
             .into_iter()
@@ -84,7 +85,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
             error: None,
         };
 
-        Ok(json(&claude_response))
+        Ok(Json(claude_response).into_response())
     }
 
     fn adapt_stream_chunk(

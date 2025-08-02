@@ -10,15 +10,29 @@ use tauri::AppHandle;
 #[allow(unused_imports)]
 use tauri::Manager;
 use tokio::{
+    net::TcpListener,
     signal,
     sync::broadcast,
     task,
     time::{self, Duration},
 };
-use warp::{http::StatusCode, reply::Response as WarpResponse, Filter, Rejection};
+
+use axum::{
+    body::Bytes,
+    extract::DefaultBodyLimit,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Router,
+};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    services::ServeDir,
+};
 
 use crate::{
-    ccproxy::{self, handle_proxy_rejection},
+    ai::interaction::chat_completion::ChatState,
+    ccproxy,
     constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY},
     db::MainStore,
 };
@@ -40,7 +54,9 @@ static INIT: Once = Once::new();
 pub async fn start_http_server(
     app: &AppHandle,
     main_store: Arc<Mutex<MainStore>>,
+    chat_state: Arc<ChatState>,
 ) -> Result<(), String> {
+    log::info!("start_http_server function entered.");
     // plugins dir
     let app_data_dir = get_app_data_dir(app)?;
     let plugins_dir = app_data_dir.join("plugins");
@@ -63,47 +79,29 @@ pub async fn start_http_server(
     std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
 
-    // Set up static theme service
-    let static_theme = warp::path("theme").and(warp::fs::dir(theme_dir.clone()));
-
-    // Set up static upload service
-    let static_upload = warp::path("upload").and(warp::fs::dir(upload_dir.clone()));
-
-    // Set up static temporary service
-    let static_tmp = warp::path("tmp").and(warp::fs::dir(tmp_dir.clone()));
-
-    // add save png service
-    let save_png = warp::path!("save" / "png")
-        .and(warp::post())
-        .and(warp::body::bytes())
-        .and_then(handle_save_png);
-
-    // Define a filter that rejects with warp::reject::notFound()
-    // This allows the .recover() mechanism to handle 404 errors.
-    let handle_not_found_errors = warp::any()
-        .and_then(|| async { Err::<WarpResponse, Rejection>(warp::reject::not_found()) });
-
     // define cors config
-    let cors = warp::cors()
-        .allow_any_origin()
-        .allow_methods(vec!["GET", "POST", "OPTIONS"])
-        .allow_headers(vec!["Content-Type", "Authorization"])
-        .build();
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
-    // Combine all routes
-    // All branches of .or() should ideally have the same Error type (Rejection)
-    // before .recover() is applied.
-    let serve = static_theme
-        .or(static_upload)
-        .or(static_tmp)
-        .or(save_png) // Ensure save_png is distinct or correctly ordered if it might conflict
-        .or(handle_not_found_errors) // Use the rejecting not_found handler
-        .with(cors.clone())
-        .recover(handle_proxy_rejection); // This single recover handles rejections from routes and CORS.
+    // Main HTTP server routes
+    let app_routes = Router::new()
+        .route("/save/png", post(handle_save_png))
+        .nest_service("/theme", ServeDir::new(theme_dir.clone()))
+        .nest_service("/upload", ServeDir::new(upload_dir.clone()))
+        .nest_service("/tmp", ServeDir::new(tmp_dir.clone()))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit
+        .layer(cors.clone()); // Apply CORS to the main app routes
 
-    let addr = try_available_port("127.0.0.1", 21912).await.map_err(|e| {
+    let listener = try_available_port("127.0.0.1", 21912).await.map_err(|e| {
         log::error!("Failed to find available port: {}", e);
         e
+    })?;
+
+    let addr = listener.local_addr().map_err(|e| {
+        log::error!("Failed to get local address: {}", e);
+        e.to_string()
     })?;
 
     log::info!("Serving static files at http://{}", addr);
@@ -121,25 +119,34 @@ pub async fn start_http_server(
     });
 
     // Create a broadcast channel for signal transmission
-    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+    let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
 
     // Start the HTTP server
     let serve_handle = task::spawn(async move {
         log::info!("Starting HTTP server on {}", addr);
 
-        // Add a small delay to ensure port is fully released
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let mut shutdown_rx = shutdown_rx;
 
-        // Start the server - warp 0.3.7 doesn't have try_bind, so we use run
-        // The panic issue should be mitigated by our improved port checking above
-        warp::serve(serve).run(addr).await;
+        // Create server with graceful shutdown
+        let server = axum::serve(listener, app_routes).with_graceful_shutdown(async move {
+            let _ = shutdown_rx.recv().await;
+            log::info!("HTTP server received shutdown signal");
+        });
+
+        if let Err(e) = server.await {
+            log::error!("HTTP server error: {}", e);
+            return Err(e.to_string());
+        }
+
+        log::info!("HTTP server shut down gracefully");
+        Ok(())
     });
 
     // Create chat completion proxy routes
     // ccproxy routes are served independently on a separate port
-    let ccproxy_serve = ccproxy::routes(app.clone(), main_store.clone())
-        .with(cors)
-        .recover(handle_proxy_rejection);
+    let ccproxy_app = ccproxy::routes(app.clone(), main_store.clone(), chat_state.clone())
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
+        .layer(cors); // Apply CORS to the ccproxy routes
     let server_port = if let Ok(store) = main_store.lock() {
         store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
     } else {
@@ -147,6 +154,7 @@ pub async fn start_http_server(
     };
 
     // Start chat completion proxy server with retry mechanism
+    let ccproxy_shutdown_rx = shutdown_tx.subscribe();
     let ccproxy_handle = task::spawn(async move {
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 5;
@@ -155,13 +163,38 @@ pub async fn start_http_server(
             attempts += 1;
 
             match try_available_port("0.0.0.0", server_port).await {
-                Ok(ccproxy_addr) => {
+                Ok(ccproxy_listener) => {
+                    let ccproxy_addr = ccproxy_listener.local_addr().map_err(|e| {
+                        log::error!("Failed to get CCProxy local address: {}", e);
+                        e.to_string()
+                    })?;
+
                     // save the chat completion proxy address
                     *CHAT_COMPLETION_PROXY.write() =
                         format!("http://127.0.0.1:{}", ccproxy_addr.port());
+
                     log::info!("Serving chat completion proxy on http://{}", ccproxy_addr);
-                    // Try to start the server immediately
-                    warp::serve(ccproxy_serve.clone()).run(ccproxy_addr).await;
+
+                    let mut shutdown_rx = ccproxy_shutdown_rx;
+
+                    // Create server with graceful shutdown
+                    let server = axum::serve(
+                        ccproxy_listener,
+                        ccproxy_app
+                            .clone()
+                            .into_make_service_with_connect_info::<SocketAddr>(),
+                    )
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.recv().await;
+                        log::info!("CCProxy server received shutdown signal");
+                    });
+
+                    if let Err(e) = server.await {
+                        log::error!("CCProxy server error: {}", e);
+                        return Err(e.to_string());
+                    }
+
+                    log::info!("CCProxy server shut down gracefully");
                     break; // If we get here, server started successfully
                 }
                 Err(e) => {
@@ -175,12 +208,16 @@ pub async fn start_http_server(
                             "Failed to start ccproxy server after {} attempts",
                             MAX_ATTEMPTS
                         );
-                        break;
+                        return Err(format!(
+                            "Failed to start ccproxy server after {} attempts",
+                            MAX_ATTEMPTS
+                        ));
                     }
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
         }
+        Ok(())
     });
 
     // Start a temporary file cleanup task
@@ -198,16 +235,28 @@ pub async fn start_http_server(
 
     // Wait for tasks to complete
     tokio::select! {
-        _ = serve_handle => {},
-        _ = ccproxy_handle=>{},
-        _ = cleanup_handle => {},
-        _ = shutdown_handle => {},
+        result = serve_handle => {
+            if let Err(e) = result.unwrap_or_else(|e| Err(format!("HTTP server task panicked: {}", e))) {
+                log::error!("HTTP server failed: {}", e);
+            }
+        },
+        result = ccproxy_handle => {
+            if let Err(e) = result.unwrap_or_else(|e| Err(format!("CCProxy server task panicked: {}", e))) {
+                log::error!("CCProxy server failed: {}", e);
+            }
+        },
+        _ = cleanup_handle => {
+            log::info!("Cleanup task completed");
+        },
+        _ = shutdown_handle => {
+            log::info!("Shutdown signal received");
+        },
     }
 
     Ok(())
 }
 
-async fn try_available_port(ip: &str, start_port: u16) -> Result<SocketAddr, String> {
+async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, String> {
     let mut attempts = 0;
     const MAX_ATTEMPTS: u32 = 3;
 
@@ -221,12 +270,11 @@ async fn try_available_port(ip: &str, start_port: u16) -> Result<SocketAddr, Str
 
         log::info!("Found available port: {} (attempt {})", port, attempts);
 
-        // Try to bind to verify the port is available
-        match std::net::TcpListener::bind(addr) {
+        // Try to bind and return the listener directly to avoid race condition
+        match TcpListener::bind(addr).await {
             Ok(listener) => {
-                drop(listener); // Release immediately to avoid holding the port
                 log::debug!("Port {} is confirmed available", port);
-                return Ok(addr);
+                return Ok(listener);
             }
             Err(e) => {
                 log::warn!(
@@ -385,7 +433,7 @@ async fn perform_cleanup(tmp_dir: &PathBuf) -> Result<(), String> {
 }
 
 /// Handles saving PNG data to a file
-async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::Rejection> {
+async fn handle_save_png(body: Bytes) -> Response {
     // Generate a unique filename using current timestamp
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let filename = format!("image_{}.png", timestamp);
@@ -394,10 +442,11 @@ async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::R
     let download_dir = match dirs::download_dir() {
         Some(path) => path,
         None => {
-            return Ok(warp::reply::with_status(
-                t!("http.server_downloads_dir_not_found").to_string(),
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+                t!("http.server_downloads_dir_not_found").to_string(),
+            )
+                .into_response();
         }
     };
 
@@ -408,14 +457,12 @@ async fn handle_save_png(body: bytes::Bytes) -> Result<impl warp::Reply, warp::R
     if let Err(e) = tokio::fs::write(&file_path, body).await {
         let error_message =
             t!("http.server_failed_to_save_file", error = e.to_string()).to_string();
-        return Ok(warp::reply::with_status(
-            error_message,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
+        return (StatusCode::INTERNAL_SERVER_ERROR, error_message).into_response();
     }
 
-    Ok(warp::reply::with_status(
-        t!("http.server_file_saved_successfully").to_string(),
+    (
         StatusCode::OK,
-    ))
+        t!("http.server_file_saved_successfully").to_string(),
+    )
+        .into_response()
 }

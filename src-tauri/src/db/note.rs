@@ -77,11 +77,14 @@ impl MainStore {
         tags: Vec<&str>,
         metadata: Option<serde_json::Value>,
     ) -> Result<i64, StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let content_hash = format!("{:x}", xxh32(content.as_bytes(), 0));
 
         // 检查是否存在重复笔记
-        let exists = self
-            .conn
+        let exists = conn
             .query_row(
                 "SELECT id FROM notes
             WHERE content_hash = ?1
@@ -109,7 +112,7 @@ impl MainStore {
                 )
             })?;
         let now = Utc::now().timestamp();
-        let tx = self.conn.transaction()?;
+        let tx = conn.transaction()?;
 
         // 插入笔记
         tx.execute(
@@ -160,7 +163,11 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
     pub fn delete_note(&mut self, note_id: i64) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let tx = conn.transaction()?;
 
         // Handle stmt in a separate scope to ensure it gets dropped before the transaction is committed
         let tag_ids = {
@@ -208,7 +215,11 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
     pub fn get_note(&self, note_id: i64) -> Result<Note, StoreError> {
-        let mut stmt = self.conn.prepare("SELECT * FROM notes WHERE id = ?1")?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let mut stmt = conn.prepare("SELECT * FROM notes WHERE id = ?1")?;
         let note = stmt.query_row(params![note_id], |row| {
             let metadata_str: Option<String> = row.get("metadata")?;
             let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
@@ -247,6 +258,10 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
     pub fn get_notes(&self, tag_id: Option<i64>) -> Result<Vec<Note>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let sql = match tag_id {
             Some(_) => {
                 "
@@ -263,7 +278,7 @@ impl MainStore {
             }
         };
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = conn.prepare(sql)?;
 
         // 提取闭包到一个变量
         let map_fn = |row: &rusqlite::Row| -> SqliteResult<Note> {
@@ -319,8 +334,11 @@ impl MainStore {
     /// let notes = store.search_notes("keyword")?;
     /// ```
     pub fn search_notes(&self, kw: &str) -> Result<Vec<Note>, StoreError> {
-        let mut stmt = self
+        let conn = self
             .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let mut stmt = conn
             .prepare("SELECT n.* FROM notes n WHERE n.title LIKE ?1 ORDER BY n.updated_at DESC")?;
 
         let search_pattern = format!("%{}%", kw);
@@ -361,7 +379,11 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
     pub fn get_tags(&self) -> Result<Vec<NoteTag>, StoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let mut stmt = conn.prepare(
             "
             SELECT * FROM note_tag_items
             ORDER BY name ASC",

@@ -7,10 +7,11 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use warp::reply::Reply;
+use axum::Json;
 
 use crate::{
-    ccproxy::{errors::ProxyResult, types::BackendModelTarget},
+    ccproxy::errors::ProxyResult,
+    ccproxy::types::BackendModelTarget,
     db::MainStore,
 };
 
@@ -21,7 +22,7 @@ use crate::{
 /// Reads `chat_completion_proxy` from `MainStore`.
 pub async fn handle_openai_list_models(
     main_store: Arc<Mutex<MainStore>>,
-) -> ProxyResult<impl Reply> {
+) -> ProxyResult<Json<Value>> {
     let config: HashMap<String, Vec<BackendModelTarget>> = {
         if let Ok(store_guard) = main_store.lock() {
             let cfg: HashMap<String, Vec<BackendModelTarget>> =
@@ -97,12 +98,12 @@ pub async fn handle_openai_list_models(
         "data": models,
     });
 
-    Ok(warp::reply::json(&response))
+    Ok(Json(response))
 }
 
 /// List proxied models handler for ollama
 /// GET `/api/tags`
-pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResult<impl Reply> {
+pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResult<Json<Value>> {
     let config: HashMap<String, Vec<BackendModelTarget>> = {
         if let Ok(store_guard) = main_store.lock() {
             let cfg: HashMap<String, Vec<BackendModelTarget>> =
@@ -199,7 +200,7 @@ pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResul
         "models": models,
     });
 
-    Ok(warp::reply::json(&response))
+    Ok(Json(response))
 }
 
 lazy_static! {

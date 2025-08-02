@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::Reply;
+use axum::response::{IntoResponse, Response};
 
 use super::traits::OutputAdapter;
 use super::{
@@ -23,7 +23,7 @@ impl OutputAdapter for OutputAdapterEnum {
         &self,
         response: UnifiedResponse,
         sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<warp::http::Response<warp::hyper::Body>, anyhow::Error> {
+    ) -> Result<Response, anyhow::Error> {
         let reply = match self {
             Self::OpenAI(adapter) => adapter
                 .adapt_response(response, sse_status)?

@@ -1,24 +1,29 @@
 use crate::ai::interaction::ChatProtocol;
-use crate::ccproxy::errors::{CCProxyError, ProxyResult};
-use crate::ccproxy::helper::{get_provider_full_url, should_forward_header, ModelResolver};
-use crate::ccproxy::types::ProxyModel;
+use crate::ccproxy::{
+    errors::{CCProxyError, ProxyResult},
+    helper::{get_provider_full_url, should_forward_header, ModelResolver},
+    types::ProxyModel,
+};
 use crate::db::MainStore;
+
+use axum::body::Body;
+use axum::response::Response;
 use futures_util::stream::StreamExt;
+use http::HeaderMap;
 use reqwest::header::{HeaderName as ReqwestHeaderName, HeaderValue as ReqwestHeaderValue};
 use rust_i18n::t;
 use serde_json::Value;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use warp::{hyper::Body, Reply};
 
 pub async fn handle_direct_forward(
-    client_headers: warp::http::HeaderMap,
+    client_headers: HeaderMap,
     client_request_body: bytes::Bytes,
     proxy_model: ProxyModel,
     is_streaming_request: bool,
     main_store_arc: Arc<Mutex<MainStore>>,
     log_to_file: bool,
-) -> ProxyResult<impl Reply> {
+) -> ProxyResult<Response> {
     let http_client =
         ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())
             .await?;
@@ -107,10 +112,7 @@ pub async fn handle_direct_forward(
 
     // Modify the request body to replace the model alias
     let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
-        warp::reject::custom(CCProxyError::InternalError(format!(
-            "Failed to deserialize request body: {}",
-            e
-        )))
+        CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
 
     if let Some(model_field) = body_json.get_mut("model") {
@@ -118,10 +120,7 @@ pub async fn handle_direct_forward(
     }
 
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
-        warp::reject::custom(CCProxyError::InternalError(format!(
-            "Failed to serialize modified body: {}",
-            e
-        )))
+        CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
     })?;
 
     let onward_request_builder = http_client
@@ -130,12 +129,10 @@ pub async fn handle_direct_forward(
         .body(modified_body);
 
     // Send request
-    let target_response = onward_request_builder.send().await.map_err(|e| {
-        warp::reject::custom(CCProxyError::InternalError(format!(
-            "Request to backend failed: {}",
-            e
-        )))
-    })?;
+    let target_response = onward_request_builder
+        .send()
+        .await
+        .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
 
     // Handle response
     let status_code = target_response.status();
@@ -147,22 +144,25 @@ pub async fn handle_direct_forward(
                 t!("network.response_read_error", error = e.to_string()).to_string(),
             )
         })?;
-        let mut response = warp::reply::Response::new(Body::from(error_body_bytes));
-        *response.status_mut() = warp::http::StatusCode::from_u16(status_code.as_u16()).unwrap();
+        let mut response = Response::builder()
+            .status(status_code)
+            .body(Body::from(error_body_bytes))
+            .map_err(|e| {
+                CCProxyError::InternalError(format!("Failed to build error response: {}", e))
+            })?;
 
         for (name, value) in response_headers.iter() {
-            if let Ok(warp_name) = warp::http::header::HeaderName::from_bytes(name.as_ref()) {
-                if let Ok(warp_value) = warp::http::header::HeaderValue::from_bytes(value.as_ref())
-                {
-                    response.headers_mut().insert(warp_name, warp_value);
+            if let Ok(axum_name) = http::header::HeaderName::from_bytes(name.as_ref()) {
+                if let Ok(axum_value) = http::header::HeaderValue::from_bytes(value.as_ref()) {
+                    response.headers_mut().insert(axum_name, axum_value);
                 }
             }
         }
-        return Ok(response.into_response());
+        return Ok(response);
     }
 
-    let mut response_builder = warp::http::Response::builder()
-        .status(warp::http::StatusCode::from_u16(status_code.as_u16()).unwrap());
+    let mut response_builder = Response::builder().status(status_code);
+
     for (name, value) in response_headers.iter() {
         response_builder = response_builder.header(name.as_str(), value.as_bytes());
     }
@@ -177,18 +177,29 @@ pub async fn handle_direct_forward(
                 bytes
             })
         });
-        let body = Body::wrap_stream(stream);
-        let response = response_builder.body(body).unwrap();
-        Ok(response.into_response())
+        let body = Body::from_stream(stream);
+        if let Ok(rsp) = response_builder.body(body) {
+            Ok(rsp)
+        } else {
+            Err(CCProxyError::InternalError(
+                "Failed to build response".to_string(),
+            ))
+        }
     } else {
         let body_bytes = target_response
             .bytes()
             .await
-            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
         if log_to_file {
-            log::info!(target: "ccproxy_logger", "Direct Response Body: {}\n---", String::from_utf8_lossy(&body_bytes));
+            log::info!(target: "ccproxy_logger", "Direct Response Body: {}", String::from_utf8_lossy(&body_bytes));
         }
-        let response = response_builder.body(Body::from(body_bytes)).unwrap();
-        Ok(response.into_response())
+
+        if let Ok(response) = response_builder.body(Body::from(body_bytes)) {
+            Ok(response)
+        } else {
+            Err(CCProxyError::InternalError(
+                "Failed to build response".to_string(),
+            ))
+        }
     }
 }

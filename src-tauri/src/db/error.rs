@@ -19,6 +19,8 @@ pub enum StoreError {
     /// Error variant for JSON-related errors.
     #[error("{0}")]
     JsonError(String),
+    #[error("{}",t!("db.failed_to_lock_main_store",error = _0))]
+    FailedToLockMainStore(String),
 
     /// Error variant for I/O-related errors.
     #[error("{0}")]

@@ -58,6 +58,8 @@ impl StreamParser {
         // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
+
+        #[cfg(debug_assertions)]
         log::debug!("openai stream chunk- {}", chunk_str);
 
         for line in chunk_str.lines() {

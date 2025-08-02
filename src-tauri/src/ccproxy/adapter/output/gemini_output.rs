@@ -1,12 +1,17 @@
 use super::OutputAdapter;
-use crate::ccproxy::adapter::unified::{
-    GeminiFunctionCallPart, SseStatus, UnifiedResponse, UnifiedStreamChunk,
+use crate::ccproxy::{
+    adapter::unified::{GeminiFunctionCallPart, SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    gemini::{
+        GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
+        GeminiUsageMetadata,
+    },
+    helper::sse::Event,
 };
-use crate::ccproxy::gemini::{
-    GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
-    GeminiUsageMetadata,
+
+use axum::{
+    response::{IntoResponse, Response},
+    Json,
 };
-use crate::ccproxy::helper::sse::Event;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
@@ -18,7 +23,7 @@ impl OutputAdapter for GeminiOutputAdapter {
         &self,
         response: UnifiedResponse,
         sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<impl warp::Reply, anyhow::Error> {
+    ) -> Result<Response, anyhow::Error> {
         let mut gemini_parts = Vec::new();
         for block in response.content {
             match block {
@@ -92,7 +97,7 @@ impl OutputAdapter for GeminiOutputAdapter {
             response_id: Some(message_id), // Add missing field
         };
 
-        Ok(warp::reply::json(&gemini_response))
+        Ok(Json(gemini_response).into_response())
     }
 
     fn adapt_stream_chunk(

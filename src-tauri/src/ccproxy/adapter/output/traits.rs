@@ -1,5 +1,7 @@
 use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
 use crate::ccproxy::helper::Event;
+
+use axum::response::Response;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 
@@ -10,7 +12,7 @@ pub trait OutputAdapter: Send + Sync {
         &self,
         response: UnifiedResponse,
         sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<impl warp::Reply, anyhow::Error>;
+    ) -> Result<Response, anyhow::Error>;
 
     /// Converts a `UnifiedStreamChunk` into a `sse::Event`.
     fn adapt_stream_chunk(

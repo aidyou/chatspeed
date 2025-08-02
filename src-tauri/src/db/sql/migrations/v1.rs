@@ -175,6 +175,22 @@ pub const INIT_SQL: &[(&str, &str)] = &[
     (
         "mcp_name_key",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_name ON mcp (name)",
+    ),
+    (
+        "proxy_group",
+        "CREATE TABLE IF NOT EXISTS proxy_group (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            prompt_injection TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            tool_filter TEXT NOT NULL,
+            disabled BOOLEAN NOT NULL DEFAULT FALSE
+        )",
+    ),
+    (
+        "proxy_group_name_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_group_name ON proxy_group (name)",
     )
 ];
 

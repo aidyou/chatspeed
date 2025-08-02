@@ -636,6 +636,16 @@ impl ToolManager {
         Ok(())
     }
 
+    /// Get the registered MCP tools
+    pub async fn get_registered_mcp_tools(&self) -> Vec<MCPToolDeclaration> {
+        let mut mcp_tools = Vec::new();
+        {
+            let tools = self.mcp_tools.read().await;
+            mcp_tools.extend(tools.values().flatten().cloned());
+        }
+        mcp_tools
+    }
+
     /// unregisters a MCP server with the manager.
     /// This involves removing it from internal state and stopping the client.
     ///

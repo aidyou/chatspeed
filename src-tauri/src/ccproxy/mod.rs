@@ -10,7 +10,6 @@ mod helper;
 mod router;
 mod types;
 
-pub use errors::handle_proxy_rejection;
 pub use handler::{handle_ollama_tags, handle_openai_chat_completion, handle_openai_list_models};
 pub use helper::StreamProcessor;
 pub use router::routes;

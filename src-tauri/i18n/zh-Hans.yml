@@ -93,6 +93,7 @@ db:
   failed_to_insert_message_migration: "迁移数据时插入消息到新数据库失败: %{error}"
   failed_to_insert_message: "无法插入消息：%{error}"
   failed_to_lock_main_store: "锁定数据库失败: %{error}"
+  failed_to_lock_main_store: "锁定数据库失败: %{error}"
   failed_to_migrate_database: "无法迁移数据库: %{error}"
   failed_to_open_chat_db_for_migration: "无法打开用于迁移的旧聊天数据库 '%{path}': %{error}"
   failed_to_open_config_db_for_migration: "无法打开用于迁移的旧配置数据库 '%{path}': %{error}"
@@ -244,6 +245,7 @@ mcp:
     stdio_process_creation_failed: "创建 Stdio 进程失败 (命令: %{command})，原因: %{error}"
     stdio_service_start_failed: "启动 Stdio 服务失败 (命令: %{command})，原因: %{error}"
     stdio_uvx_not_found_help: "这可能意味着您的 Python 环境或 “%{command}” 工具没有正确设置，或者它不在系统的 PATH 环境变量中。请检查您的 Python 和 “%{command}” 设置。"
+  invalid_server_address: "无效的MCP服务器地址"
 
 network:
   client_build_error: "创建HTTP客户端失败: %{error}"
@@ -277,6 +279,8 @@ proxy:
     no_keys_configured: "服务器上未配置代理访问密钥。"
     store_lock_failed: "访问存储失败: %{error}"
     unexpected_error: "发生意外错误。"
+  group:
+    name_must_be_non_empty: "代理分组名称不能为空"
 
 setting:
   failed_to_create_upload_dir: "创建上传目录 '%{path}' 失败: %{error}"

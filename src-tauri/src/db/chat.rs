@@ -19,8 +19,8 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
     pub fn get_conversation_by_id(&self, id: i64) -> Result<Conversation, StoreError> {
-        let conversation = self
-            .conn
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conversation = conn
             .query_row(
                 "SELECT id, title, created_at, is_favorite FROM conversations WHERE id = ?",
                 [id],
@@ -54,7 +54,8 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn get_all_conversations(&self) -> Result<Vec<Conversation>, StoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let mut stmt = conn.prepare(
             "SELECT id, title, created_at, is_favorite FROM conversations order by id desc",
         )?;
         let conversations = stmt.query_map([], |row| {
@@ -87,7 +88,8 @@ impl MainStore {
         &self,
         conversation_id: i64,
     ) -> Result<Vec<Message>, StoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let mut stmt = conn.prepare(
             "SELECT id, conversation_id, role, content, timestamp, metadata
              FROM messages WHERE conversation_id = ? order by id asc",
         )?;
@@ -138,11 +140,12 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn add_conversation(&self, title: String) -> Result<i64, StoreError> {
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute(
             "INSERT INTO conversations (title,is_favorite, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
             [title],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Updates the favorite status of a conversation.
@@ -162,14 +165,15 @@ impl MainStore {
         title: Option<String>,
         is_favorite: Option<bool>,
     ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         if let Some(title) = title {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE conversations SET title = ? WHERE id = ?",
                 params![title, id],
             )?;
         }
         if let Some(is_favorite) = is_favorite {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE conversations SET is_favorite = ? WHERE id = ?",
                 params![if is_favorite { 1 } else { 0 }, id],
             )?;
@@ -189,8 +193,8 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_conversation(&self, id: i64) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM conversations WHERE id = ?", params![id])?;
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute("DELETE FROM conversations WHERE id = ?", params![id])?;
         Ok(())
     }
 
@@ -218,6 +222,7 @@ impl MainStore {
         content: String,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -227,13 +232,13 @@ impl MainStore {
                 )
             })?;
 
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO messages (conversation_id, role, content, metadata, timestamp)
              VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
             rusqlite::params![conversation_id, role, content, metadata_str],
         )?;
 
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Deletes a message from the database.
@@ -248,8 +253,8 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_message(&self, id: i64) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM messages WHERE id = ?", [id])?;
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute("DELETE FROM messages WHERE id = ?", [id])?;
         Ok(())
     }
 
@@ -268,6 +273,7 @@ impl MainStore {
         id: i64,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -277,7 +283,7 @@ impl MainStore {
                 )
             })?;
 
-        self.conn.execute(
+        conn.execute(
             "UPDATE messages SET metadata = ? WHERE id = ?",
             rusqlite::params![metadata_str, id],
         )?;

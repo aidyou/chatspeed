@@ -11,11 +11,12 @@ use crate::{
     },
 };
 
+use axum::body::Body;
+use axum::response::Response;
 use futures_util::{stream::iter, StreamExt};
+use http::StatusCode;
 use std::sync::{Arc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
-use warp::http::Response;
-use warp::{hyper::Body, reply, Reply};
 
 pub async fn handle_streamed_response(
     chat_protocol: &ChatProtocol,
@@ -24,7 +25,7 @@ pub async fn handle_streamed_response(
     output_adapter: impl OutputAdapter + Send + Sync + 'static,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
-) -> ProxyResult<reply::Response> {
+) -> ProxyResult<Response> {
     let stream_format = match chat_protocol {
         ChatProtocol::Gemini => StreamFormat::Gemini,
         ChatProtocol::Claude => StreamFormat::Claude,
@@ -108,25 +109,22 @@ pub async fn handle_streamed_response(
         futures_util::stream::iter(vec![Ok::<_, std::io::Error>(bytes)])
     });
 
-    let body = Body::wrap_stream(byte_stream);
+    let body = Body::from_stream(byte_stream);
     let response_builder = Response::builder()
         .header("Content-Type", "text/event-stream")
         .header("Cache-Control", "no-cache");
 
     let mut response = match response_builder.body(body) {
-        Ok(res) => res.into_response(),
+        Ok(res) => res,
         Err(e) => {
-            return Err(warp::reject::custom(CCProxyError::InternalError(
-                e.to_string(),
-            )));
+            return Err(CCProxyError::InternalError(e.to_string()));
         }
     };
 
     let sse_status_code = if status_code.is_client_error() || status_code.is_server_error() {
-        warp::http::StatusCode::from_u16(status_code.as_u16())
-            .unwrap_or(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
+        StatusCode::from_u16(status_code.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     } else {
-        warp::http::StatusCode::OK
+        StatusCode::OK
     };
     *response.status_mut() = sse_status_code;
 
@@ -139,18 +137,18 @@ pub async fn handle_streamed_response(
             || name_str.starts_with("x-ratelimit-")
             || name_str == "retry-after"
         {
-            if let (Ok(warp_name), Ok(warp_value)) = (
-                warp::http::header::HeaderName::from_bytes(reqwest_name.as_ref()),
-                warp::http::header::HeaderValue::from_bytes(reqwest_value.as_ref()),
+            if let (Ok(axum_name), Ok(axum_value)) = (
+                http::header::HeaderName::from_bytes(reqwest_name.as_ref()),
+                http::header::HeaderValue::from_bytes(reqwest_value.as_ref()),
             ) {
-                final_headers.insert(warp_name, warp_value);
+                final_headers.insert(axum_name, axum_value);
             }
         }
     }
-    if !final_headers.contains_key(warp::http::header::CONTENT_TYPE) {
+    if !final_headers.contains_key(http::header::CONTENT_TYPE) {
         final_headers.insert(
-            warp::http::header::CONTENT_TYPE,
-            warp::http::header::HeaderValue::from_static("text/event-stream"),
+            http::header::CONTENT_TYPE,
+            http::header::HeaderValue::from_static("text/event-stream"),
         );
     }
     Ok(response)

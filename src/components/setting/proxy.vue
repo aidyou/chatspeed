@@ -1,261 +1,304 @@
 <template>
   <div class="proxy-settings-container">
-    <div class="card">
-      <!-- 顶部标题和添加按钮 -->
-      <div class="title">
-        <span>{{ $t('settings.proxy.title') }}</span>
-        <el-tooltip :content="$t('settings.proxy.addProxy')" placement="top">
-          <span class="icon" @click="openAddDialog">
-            <cs name="add" />
-          </span>
-        </el-tooltip>
-      </div>
-
-      <!-- 代理配置列表/空状态 -->
-      <div class="list">
-        <template v-if="proxyList.length > 0">
-          <div v-for="proxy in proxyList" :key="proxy.alias" class="item">
-            <div class="label">
-              <Avatar :size="36" :text="proxy.alias" />
-              <div class="label-text">
-                {{ proxy.alias }}
-                <small>{{
-                  $t('settings.proxy.mapsToModels', { count: proxy.targets.length })
-                }}</small>
-              </div>
-            </div>
-
-            <div class="value">
-              <el-tooltip
-                :content="$t('settings.proxy.copyProxyAlias')"
-                placement="top"
-                :hide-after="0"
-                transition="none">
-                <span class="icon" @click="copyModelToClipboard(proxy.alias)">
-                  <cs name="copy" size="16px" color="secondary" />
-                </span>
-              </el-tooltip>
-              <el-tooltip
-                :content="$t('settings.proxy.editProxy')"
-                placement="top"
-                :hide-after="0"
-                transition="none">
-                <span class="icon" @click="openEditDialog(proxy)">
-                  <cs name="edit" size="16px" color="secondary" />
-                </span>
-              </el-tooltip>
-              <el-tooltip
-                :content="$t('settings.proxy.deleteProxy')"
-                placement="top"
-                :hide-after="0"
-                transition="none">
-                <span class="icon" @click="handleDeleteProxyConfirmation(proxy.alias)">
-                  <cs name="trash" size="16px" color="secondary" />
-                </span>
-              </el-tooltip>
-            </div>
-          </div>
-        </template>
-        <template v-else>
-          <div class="empty-state">
-            {{ $t('settings.proxy.noProxiesFound') }}
-            <el-button type="primary" @click="openAddDialog" size="small">
-              <cs name="add" />{{ $t('settings.proxy.addNow') }}
-            </el-button>
-          </div>
-        </template>
-      </div>
-
-      <!-- 添加/编辑代理配置对话框 -->
-      <el-dialog
-        v-model="dialogVisible"
-        :title="isEditing ? $t('settings.proxy.editTitle') : $t('settings.proxy.addTitle')"
-        width="600px"
-        align-center
-        @closed="resetForm"
-        class="proxy-edit-dialog"
-        :show-close="false"
-        :close-on-click-modal="false"
-        :close-on-press-escape="false">
-        <div class="form-container">
-          <el-form
-            :model="currentProxyConfig"
-            label-width="auto"
-            ref="proxyFormRef"
-            style="padding-top: 10px">
-            <el-form-item
-              :label="$t('settings.proxy.form.aliasName')"
-              prop="name"
-              :rules="[
-                { required: true, message: $t('settings.proxy.validation.aliasRequired') },
-                { validator: validateAliasUniqueness, trigger: 'blur' }
-              ]">
-              <el-input
-                v-model="currentProxyConfig.name"
-                :placeholder="$t('settings.proxy.form.aliasPlaceholder')" />
-            </el-form-item>
-
-            <el-divider>{{ $t('settings.proxy.form.targetModelsTitle') }}</el-divider>
-
-            <el-input
-              v-model="searchQuery"
-              :placeholder="$t('settings.proxy.form.searchModelsPlaceholder')"
-              clearable
-              class="search-input-dialog">
-              <template #prefix>
-                <cs name="search" />
-              </template>
-            </el-input>
-
-            <div class="providers-list-container">
-              <el-scrollbar height="400px">
-                <div v-if="filteredProviders.length === 0" class="no-models-found">
-                  {{ $t('settings.proxy.form.noMatchingModels') }}
-                </div>
-                <el-card
-                  v-for="provider in filteredProviders"
-                  :key="provider.id"
-                  class="provider-card"
-                  shadow="never">
-                  <template #header>
-                    <div class="card-header">
-                      <div class="provider-title">
-                        <img
-                          v-if="provider.providerLogo"
-                          :src="provider.providerLogo"
-                          class="provider-logo-small"
-                          alt="logo" />
-                        <Avatar
-                          v-else
-                          :text="provider.name"
-                          :size="20"
-                          class="provider-avatar-small" />
-                        <span>{{ provider.name }}</span>
-                      </div>
-
-                      <el-checkbox
-                        :model-value="areAllModelsFromProviderSelected(provider)"
-                        :indeterminate="
-                          isAnyModelFromProviderSelected(provider) &&
-                          !areAllModelsFromProviderSelected(provider)
-                        "
-                        @change="checked => handleSelectAllModelsFromProvider(provider, checked)">
-                        {{ $t('settings.proxy.form.selectAll') }}</el-checkbox
-                      >
-                    </div>
-                  </template>
-                  <div class="models-grid">
-                    <template v-for="model in provider.models" :key="model.id">
-                      <el-tooltip
-                        :content="model.name || model.id"
-                        placement="top"
-                        :hide-after="0"
-                        transition="none"
-                        ><el-checkbox
-                          :model-value="isTargetSelected(provider.id, model.id)"
-                          @change="
-                            checked => handleTargetSelectionChange(checked, provider.id, model.id)
-                          "
-                          :label="`${model.id}`"
-                          border
-                          class="model-checkbox">
-                          {{ model.id }}
-                        </el-checkbox></el-tooltip
-                      >
-                    </template>
-                  </div>
-                </el-card>
-              </el-scrollbar>
-            </div>
-            <el-form-item :label="$t('settings.proxy.form.selectedCount')">
-              <span>{{ currentProxyConfig.targets.length }}</span>
-            </el-form-item>
-          </el-form>
-        </div>
-        <template #footer>
-          <span class="dialog-footer">
-            <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-            <el-button type="primary" @click="handleSubmit" :loading="formLoading">
-              {{ $t('common.confirm') }}
-            </el-button>
-          </span>
-        </template>
-      </el-dialog>
-    </div>
-
-    <!-- 代理访问密钥管理 -->
-    <div class="card">
-      <div class="title" style="padding-top: 0">
-        <span>{{ $t('settings.proxy.proxyKey.title') }}</span>
-        <el-tooltip :content="$t('settings.proxy.proxyKey.addKey')" placement="top">
-          <span class="icon" @click="openAddKeyDialog">
-            <cs name="add" />
-          </span>
-        </el-tooltip>
-      </div>
-      <div class="list">
-        <template v-if="proxyKeysList.length > 0">
-          <div v-for="(keyItem, index) in proxyKeysList" :key="index" class="item">
-            <div class="label">
-              <Avatar :size="36" :text="keyItem.name" />
-              <div class="label-text">
-                {{ keyItem.name }}
-                <small>{{ maskToken(keyItem.token) }}</small>
-              </div>
-            </div>
-            <div class="value">
-              <el-tooltip
-                :content="$t('settings.proxy.proxyKey.copyKey')"
-                placement="top"
-                :hide-after="0"
-                transition="none">
-                <span class="icon" @click="copyKeyToClipboard(keyItem.token)">
-                  <cs name="copy" size="16px" color="secondary" />
-                </span>
-              </el-tooltip>
-              <el-tooltip
-                :content="$t('settings.proxy.proxyKey.deleteKey')"
-                placement="top"
-                :hide-after="0"
-                transition="none">
-                <span class="icon" @click="handleDeleteKeyConfirmation(index)">
-                  <cs name="trash" size="16px" color="secondary" />
-                </span>
-              </el-tooltip>
-            </div>
-          </div>
-        </template>
-        <template v-else>
-          <div class="empty-state">
-            {{ $t('settings.proxy.proxyKey.noKeysFound') }}
-            <el-button type="primary" @click="openAddKeyDialog" size="small">
-              <cs name="add" />{{ $t('settings.proxy.proxyKey.addNow') }}
-            </el-button>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <div class="tip">
-      <div class="openapi-access">
-        <h3>You can access chat completion proxy server via an OpenAI-compatible API</h3>
-        <ul>
-          <li @click="copyBaseUrlToClipboard">
-            <el-tooltip
-              :content="$t('settings.proxy.copyBaseUrl')"
-              placement="top"
-              :hide-after="0"
-              transition="none">
-              Base URL: {{ baseUrl }}
+    <el-tabs v-model="activeTab">
+      <el-tab-pane :label="$t('settings.proxy.tabs.servers')" name="servers">
+        <div class="card">
+          <!-- card title -->
+          <div class="title">
+            <span>{{ $t('settings.proxy.title') }}</span>
+            <el-tooltip :content="$t('settings.proxy.addProxy')" placement="top">
+              <span class="icon" @click="openAddDialog">
+                <cs name="add" />
+              </span>
             </el-tooltip>
-          </li>
-          <li>Model: The "Proxy Alias" you entered when adding the proxy</li>
-          <li>API Key: Copy it from the "Keys" list</li>
-        </ul>
-      </div>
-    </div>
+          </div>
 
-    <!-- 添加代理密钥对话框 -->
+          <div class="list">
+            <template v-if="groupedProxyList.length > 0">
+              <div v-for="group in groupedProxyList" :key="group.name">
+                <div class="title">{{ group.name }}</div>
+                <div v-for="proxy in group.proxies" :key="proxy.alias" class="item">
+                  <div class="label">
+                    <Avatar :size="36" :text="proxy.alias" />
+                    <div class="label-text">
+                      {{ proxy.alias }}
+                      <small>{{
+                        $t('settings.proxy.mapsToModels', { count: proxy.targets.length })
+                      }}</small>
+                    </div>
+                  </div>
+
+                  <div class="value">
+                    <el-tooltip
+                      :content="$t('settings.proxy.copyProxyAlias')"
+                      placement="top"
+                      :hide-after="0"
+                      transition="none">
+                      <span class="icon" @click="copyModelToClipboard(proxy.alias)">
+                        <cs name="copy" size="16px" color="secondary" />
+                      </span>
+                    </el-tooltip>
+                    <el-tooltip
+                      :content="$t('settings.proxy.editProxy')"
+                      placement="top"
+                      :hide-after="0"
+                      transition="none">
+                      <span class="icon" @click="openEditDialog(proxy)">
+                        <cs name="edit" size="16px" color="secondary" />
+                      </span>
+                    </el-tooltip>
+                    <el-tooltip
+                      :content="$t('settings.proxy.deleteProxy')"
+                      placement="top"
+                      :hide-after="0"
+                      transition="none">
+                      <span class="icon" @click="handleDeleteProxyConfirmation(proxy.alias)">
+                        <cs name="trash" size="16px" color="secondary" />
+                      </span>
+                    </el-tooltip>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <div class="empty-state">
+                {{ $t('settings.proxy.noProxiesFound') }}
+                <el-button type="primary" @click="openAddDialog" size="small">
+                  <cs name="add" />{{ $t('settings.proxy.addNow') }}
+                </el-button>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div class="card">
+          <div class="title">
+            <span>{{ $t('settings.proxy.proxyKey.title') }}</span>
+            <el-tooltip :content="$t('settings.proxy.proxyKey.addKey')" placement="top">
+              <span class="icon" @click="openAddKeyDialog">
+                <cs name="add" />
+              </span>
+            </el-tooltip>
+          </div>
+          <div class="list">
+            <template v-if="proxyKeysList.length > 0">
+              <div v-for="(keyItem, index) in proxyKeysList" :key="index" class="item">
+                <div class="label">
+                  <Avatar :size="36" :text="keyItem.name" />
+                  <div class="label-text">
+                    {{ keyItem.name }}
+                    <small>{{ maskToken(keyItem.token) }}</small>
+                  </div>
+                </div>
+                <div class="value">
+                  <el-tooltip
+                    :content="$t('settings.proxy.proxyKey.copyKey')"
+                    placement="top"
+                    :hide-after="0"
+                    transition="none">
+                    <span class="icon" @click="copyKeyToClipboard(keyItem.token)">
+                      <cs name="copy" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t('settings.proxy.proxyKey.deleteKey')"
+                    placement="top"
+                    :hide-after="0"
+                    transition="none">
+                    <span class="icon" @click="handleDeleteKeyConfirmation(index)">
+                      <cs name="trash" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <div class="empty-state">
+                {{ $t('settings.proxy.proxyKey.noKeysFound') }}
+                <el-button type="primary" @click="openAddKeyDialog" size="small">
+                  <cs name="add" />{{ $t('settings.proxy.proxyKey.addNow') }}
+                </el-button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane :label="$t('settings.proxy.tabs.groups')" name="groups">
+        <ProxyGroup />
+      </el-tab-pane>
+
+      <el-tab-pane :label="$t('settings.proxy.tabs.settings')" name="settings">
+        <div class="card">
+          <div class="title">
+            <span>{{ $t('settings.proxy.settings.title') }}</span>
+          </div>
+          <div class="list">
+            <div class="item">
+              <div class="label">
+                {{ $t('settings.proxy.settings.port') }}
+              </div>
+              <div class="value">
+                <el-input-number
+                  v-model="proxyPort"
+                  :min="1"
+                  :max="65535"
+                  @change="saveProxySettings" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tip">
+          <div class="openapi-access">
+            <h3>You can access chat completion proxy server via an OpenAI-compatible API</h3>
+            <ul>
+              <li @click="copyBaseUrlToClipboard">
+                <el-tooltip
+                  :content="$t('settings.proxy.copyBaseUrl')"
+                  placement="top"
+                  :hide-after="0"
+                  transition="none">
+                  Base URL: {{ baseUrl }}
+                </el-tooltip>
+              </li>
+              <li>Model: The "Proxy Alias" you entered when adding the proxy</li>
+              <li>API Key: Copy it from the "Keys" list</li>
+            </ul>
+          </div>
+        </div>
+      </el-tab-pane>
+    </el-tabs>
+
+    <!-- Dialogs and other elements from the original component -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="isEditing ? $t('settings.proxy.editTitle') : $t('settings.proxy.addTitle')"
+      width="600px"
+      align-center
+      @closed="resetForm"
+      class="proxy-edit-dialog"
+      :show-close="false"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false">
+      <div class="form-container">
+        <el-form
+          :model="currentProxyConfig"
+          label-width="auto"
+          ref="proxyFormRef"
+          style="padding-top: 10px">
+          <el-form-item
+            :label="$t('settings.proxy.form.aliasName')"
+            prop="name"
+            :rules="[
+              { required: true, message: $t('settings.proxy.validation.aliasRequired') },
+              { validator: validateAliasUniqueness, trigger: 'blur' }
+            ]">
+            <el-input
+              v-model="currentProxyConfig.name"
+              :placeholder="$t('settings.proxy.form.aliasPlaceholder')" />
+          </el-form-item>
+
+          <el-form-item :label="$t('settings.proxy.form.group')" prop="group">
+            <el-select
+              v-model="currentProxyConfig.group"
+              :placeholder="$t('settings.proxy.form.groupPlaceholder')">
+              <el-option :label="$t('settings.proxy.defaultGroup')" value="default" />
+              <el-option
+                v-for="group in proxyGroupStore.list"
+                :key="group.id"
+                :label="group.name"
+                :value="group.name" />
+            </el-select>
+          </el-form-item>
+
+          <el-divider>{{ $t('settings.proxy.form.targetModelsTitle') }}</el-divider>
+
+          <el-input
+            v-model="searchQuery"
+            :placeholder="$t('settings.proxy.form.searchModelsPlaceholder')"
+            clearable
+            class="search-input-dialog">
+            <template #prefix>
+              <cs name="search" />
+            </template>
+          </el-input>
+
+          <div class="providers-list-container">
+            <el-scrollbar height="400px">
+              <div v-if="filteredProviders.length === 0" class="no-models-found">
+                {{ $t('settings.proxy.form.noMatchingModels') }}
+              </div>
+              <el-card
+                v-for="provider in filteredProviders"
+                :key="provider.id"
+                class="provider-card"
+                shadow="never">
+                <template #header>
+                  <div class="card-header">
+                    <div class="provider-title">
+                      <img
+                        v-if="provider.providerLogo"
+                        :src="provider.providerLogo"
+                        class="provider-logo-small"
+                        alt="logo" />
+                      <Avatar
+                        v-else
+                        :text="provider.name"
+                        :size="20"
+                        class="provider-avatar-small" />
+                      <span>{{ provider.name }}</span>
+                    </div>
+
+                    <el-checkbox
+                      :model-value="areAllModelsFromProviderSelected(provider)"
+                      :indeterminate="
+                        isAnyModelFromProviderSelected(provider) &&
+                        !areAllModelsFromProviderSelected(provider)
+                      "
+                      @change="checked => handleSelectAllModelsFromProvider(provider, checked)">
+                      {{ $t('settings.proxy.form.selectAll') }}</el-checkbox
+                    >
+                  </div>
+                </template>
+                <div class="models-grid">
+                  <template v-for="model in provider.models" :key="model.id">
+                    <el-tooltip
+                      :content="model.name || model.id"
+                      placement="top"
+                      :hide-after="0"
+                      transition="none"
+                      ><el-checkbox
+                        :model-value="isTargetSelected(provider.id, model.id)"
+                        @change="
+                          checked => handleTargetSelectionChange(checked, provider.id, model.id)
+                        "
+                        :label="`${model.id}`"
+                        border
+                        class="model-checkbox">
+                        {{ model.id }}
+                      </el-checkbox></el-tooltip
+                    >
+                  </template>
+                </div>
+              </el-card>
+            </el-scrollbar>
+          </div>
+          <el-form-item :label="$t('settings.proxy.form.selectedCount')">
+            <span>{{ currentProxyConfig.targets.length }}</span>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
+          <el-button type="primary" @click="handleSubmit" :loading="formLoading">
+            {{ $t('common.confirm') }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- Key Management and other elements -->
     <el-dialog
       v-model="keyDialogVisible"
       :title="$t('settings.proxy.proxyKey.addTitle')"
@@ -296,30 +339,45 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
-import { ElMessageBox, ElScrollbar, ElCard, ElCheckbox, ElDivider } from 'element-plus'
-
+import { useProxyGroupStore } from '@/stores/proxy_group'
+import {
+  ElMessageBox,
+  ElScrollbar,
+  ElCard,
+  ElCheckbox,
+  ElDivider,
+  ElTabs,
+  ElTabPane,
+  ElInputNumber
+} from 'element-plus'
 import { showMessage, isEmpty } from '@/libs/util'
+import ProxyGroup from './ProxyGroup.vue'
+// import Avatar from '@/components/common/Avatar.vue'
 
 const { t } = useI18n()
 const settingStore = useSettingStore()
 const modelStore = useModelStore()
+const proxyGroupStore = useProxyGroupStore()
+
+const activeTab = ref('servers')
+const proxyPort = ref(11434)
 
 // Dialog state
 const dialogVisible = ref(false)
 const isEditing = ref(false)
 const formLoading = ref(false)
 const proxyFormRef = ref(null)
-const editingAliasName = ref('') // Store original alias name when editing
+const editingAliasName = ref('')
 
 const initialProxyFormState = () => ({
-  name: '', // Client-facing alias (the key in chatCompletionProxy)
-  targets: [] // Array of { id: providerId, model: modelIdString }
+  name: '',
+  targets: [],
+  group: 'default'
 })
-
 // Key Management State
 const keyDialogVisible = ref(false)
 const keyFormLoading = ref(false)
@@ -337,11 +395,32 @@ const baseUrl = computed(() => {
 
 const chatCompletionProxy = computed(() => settingStore.settings.chatCompletionProxy || {})
 
-const proxyList = computed(() => {
-  return Object.entries(chatCompletionProxy.value).map(([alias, targets]) => ({
-    alias,
-    targets: Array.isArray(targets) ? targets : [] // Ensure targets is always an array
-  }))
+const groupedProxyList = computed(() => {
+  const groups = {}
+  for (const alias in chatCompletionProxy.value) {
+    const rawProxy = chatCompletionProxy.value[alias]
+    let targets = []
+    let groupName = 'default'
+
+    if (Array.isArray(rawProxy)) {
+      // Old structure: rawProxy is directly the targets array
+      targets = rawProxy
+      groupName = 'default' // Default group for old data
+    } else if (typeof rawProxy === 'object' && rawProxy !== null) {
+      // New structure: rawProxy is an object { targets, group }
+      targets = rawProxy.targets || [] // Ensure targets is an array
+      groupName = rawProxy.group || 'default' // Ensure group is defined
+    }
+
+    if (!groups[groupName]) {
+      groups[groupName] = {
+        name: groupName === 'default' ? t('settings.proxy.defaultGroup') : groupName,
+        proxies: []
+      }
+    }
+    groups[groupName].proxies.push({ alias, targets, group: groupName })
+  }
+  return Object.values(groups)
 })
 
 const proxyKeysList = computed(() => {
@@ -402,9 +481,23 @@ const openAddDialog = () => {
 const openEditDialog = proxy => {
   isEditing.value = true
   editingAliasName.value = proxy.alias
+  let targets = []
+  let group = 'default'
+
+  // Compatibility for old data structure
+  if (Array.isArray(proxy.targets)) {
+    targets = proxy.targets
+    group = proxy.group || 'default'
+  } else if (typeof proxy === 'object' && proxy !== null) {
+    // New structure: proxy is an object { targets, group }
+    targets = proxy.targets || []
+    group = proxy.group || 'default'
+  }
+
   currentProxyConfig.value = {
     name: proxy.alias,
-    targets: JSON.parse(JSON.stringify(proxy.targets)) // Deep copy
+    targets: JSON.parse(JSON.stringify(targets)), // Deep copy
+    group: group
   }
   dialogVisible.value = true
 }
@@ -487,7 +580,10 @@ const handleSubmit = async () => {
         ) {
           delete newProxies[editingAliasName.value]
         }
-        newProxies[currentProxyConfig.value.name] = currentProxyConfig.value.targets
+        newProxies[currentProxyConfig.value.name] = {
+          targets: currentProxyConfig.value.targets,
+          group: currentProxyConfig.value.group
+        }
         await settingStore.setSetting('chatCompletionProxy', newProxies)
         showMessage(
           isEditing.value ? t('settings.proxy.updateSuccess') : t('settings.proxy.addSuccess'),
@@ -625,9 +721,20 @@ const handleDeleteKey = async indexToDelete => {
     )
   }
 }
+
 // =================================================
 // Copy
 // =================================================
+
+const saveProxySettings = async () => {
+  try {
+    await settingStore.setSetting('proxyPort', proxyPort.value)
+    showMessage(t('settings.proxy.settings.saveSuccess'), 'success')
+  } catch (error) {
+    showMessage(t('settings.proxy.settings.saveFailed', { error: error.message || error }), 'error')
+  }
+}
+
 const copyModelToClipboard = async model => {
   try {
     await navigator.clipboard.writeText(model)
@@ -652,7 +759,7 @@ const copyBaseUrlToClipboard = async () => {
 .proxy-settings-container {
   display: flex;
   flex-direction: column;
-  gap: var(--cs-space-lg); // Add space between cards
+  gap: var(--cs-space-lg);
 }
 
 .card {
@@ -689,7 +796,7 @@ const copyBaseUrlToClipboard = async () => {
   justify-content: center;
   gap: var(--cs-space-sm);
   color: var(--cs-text-color-secondary);
-  margin: var(--cs-space-lg) auto; // Give it some space if it's the only thing in .list
+  margin: var(--cs-space-lg) auto;
   text-align: center;
 
   .el-button {
@@ -704,7 +811,7 @@ const copyBaseUrlToClipboard = async () => {
 }
 
 .form-container {
-  max-height: calc(70vh - 120px); // Adjust based on dialog padding/footer
+  max-height: calc(70vh - 120px);
 }
 
 .search-input-dialog {
@@ -724,7 +831,7 @@ const copyBaseUrlToClipboard = async () => {
 
 .provider-card {
   margin-bottom: var(--cs-space-sm);
-  background-color: var(--cs-primary-bg-color); // Use a slightly different bg for cards in dialog
+  background-color: var(--cs-primary-bg-color);
   border: 1px solid var(--cs-border-color-light);
   &:last-child {
     margin-bottom: 0;
@@ -732,7 +839,7 @@ const copyBaseUrlToClipboard = async () => {
 
   :deep(.el-card__header) {
     padding: var(--cs-space-sm) var(--cs-space-md);
-    background-color: var(--cs-secondary-bg-color); // Header distinct from body
+    background-color: var(--cs-secondary-bg-color);
   }
   :deep(.el-card__body) {
     padding: var(--cs-space-sm) var(--cs-space-md);
@@ -756,21 +863,20 @@ const copyBaseUrlToClipboard = async () => {
     object-fit: contain;
   }
   .provider-avatar-small {
-    // For when logo is not available
-    font-size: 10px; // Adjust size of text in avatar if needed
+    font-size: 10px;
   }
 }
 
 .models-grid {
-  display: flex; // Changed from grid to flex for wrapping
-  flex-wrap: wrap; // Allow items to wrap
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--cs-space-xs);
   padding-top: var(--cs-space-xs);
 }
 
 .model-checkbox {
-  margin-right: var(--cs-space-xs) !important; // Keep some margin for wrapped items
-  margin-bottom: var(--cs-space-xs); // Add bottom margin for wrapped items
+  margin-right: var(--cs-space-xs) !important;
+  margin-bottom: var(--cs-space-xs);
   padding: var(--cs-space-xxs) var(--cs-space-sm) !important;
 
   :deep(.el-checkbox__label) {
@@ -778,13 +884,10 @@ const copyBaseUrlToClipboard = async () => {
     text-overflow: ellipsis;
     white-space: nowrap;
     padding-left: var(--cs-space-xxs);
-    // max-width: 120px; // Optional: if you want to enforce a max-width for the label text
   }
 }
 
-// Dialog specific styles
-.proxy-edit-dialog,
-.proxy-key-dialog {
+.proxy-edit-dialog {
   :deep(.el-dialog__body) {
     padding-top: 0px;
     padding-bottom: 0px;

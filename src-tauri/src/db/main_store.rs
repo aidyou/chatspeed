@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
 // DO NOT REMOVE: This trait import is necessary for the Manager trait to be in scope
@@ -158,7 +158,7 @@ impl Config {
 
 /// Manages unified storage for the application, including chat history and configuration.
 pub struct MainStore {
-    pub(crate) conn: Connection,
+    pub(crate) conn: Mutex<Connection>,
     pub(crate) config: Config,
 }
 
@@ -195,8 +195,13 @@ impl MainStore {
             StoreError::DatabaseError(err)
         })?;
 
-        // let conn = Arc::new(Mutex::new(conn));
-        let config = Self::load_config(&conn)?;
+        let conn = Mutex::new(conn);
+        let config = {
+            let locked_conn = conn
+                .lock()
+                .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            Self::load_config(&locked_conn)?
+        };
 
         Ok(Self { conn, config })
     }
@@ -232,7 +237,11 @@ impl MainStore {
     /// # Returns
     /// Returns a `Result` containing `()` if successful, or a `StoreError` if an error occurs.
     pub fn reload_config(&mut self) -> Result<(), StoreError> {
-        match Self::load_config(&self.conn) {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        match Self::load_config(&conn) {
             Ok(config) => {
                 self.config = config;
                 Ok(())

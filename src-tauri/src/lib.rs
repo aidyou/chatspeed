@@ -41,6 +41,7 @@ use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
 use commands::os::*;
+use commands::proxy_group::*;
 use commands::setting::*;
 use commands::update::*;
 use commands::window::*;
@@ -158,6 +159,11 @@ pub async fn run() -> Result<()> {
             restart_mcp_server,
             get_mcp_server_tools,
             update_mcp_tool_status,
+            // proxy group
+            proxy_group_list,
+            proxy_group_add,
+            proxy_group_update,
+            proxy_group_delete,
             // message
             get_conversation_by_id,
             get_all_conversations,
@@ -511,11 +517,22 @@ pub async fn run() -> Result<()> {
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             // Start the HTTP server using Tauri's asynchronous runtime
+            let chat_state_for_http = chat_state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_http_server(&handle, main_store_clone).await {
+                if let Err(e) = start_http_server(&handle, main_store_clone, chat_state_for_http).await {
                     error!("Failed to start HTTP server: {}", e);
                 }
             });
+
+            // Start the MCP server
+            // let chat_state_for_mcp = chat_state.clone();
+            // let mcp_server = mcp::server::McpServer::new(chat_state_for_mcp);
+            // tauri::async_runtime::spawn(async move {
+            //     let addr = "127.0.0.1:8081".parse().expect(&t!("mcp.invalid_server_address").to_string());
+            //     if let Err(e) = mcp_server.start(addr).await {
+            //         error!("Failed to start MCP server: {}", e);
+            //     }
+            // });
 
             // 启动自动更新检查
             let auto_update = if let Ok(c) = main_store.clone().lock() {

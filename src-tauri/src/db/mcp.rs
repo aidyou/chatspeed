@@ -94,19 +94,20 @@ impl MainStore {
         config: McpServerConfig,
         disabled: bool,
     ) -> Result<Mcp, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
             )
         })?;
 
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO mcp (name, description, config, disabled) VALUES (?1, ?2, ?3, ?4)",
             params![name, description, config_json, disabled],
         )?;
 
-        let id = self.conn.last_insert_rowid();
-        if let Ok(mcp) = Self::get_all_mcps(&self.conn) {
+        let id = conn.last_insert_rowid();
+        if let Ok(mcp) = Self::get_all_mcps(&conn) {
             self.config.set_mcps(mcp);
         }
 
@@ -137,13 +138,14 @@ impl MainStore {
         config: McpServerConfig,
         disable: bool,
     ) -> Result<Mcp, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
             )
         })?;
 
-        self.conn.execute(
+        conn.execute(
             "UPDATE mcp SET
                 name = ?,
                 description = ?,
@@ -153,7 +155,7 @@ impl MainStore {
             params![name, description, config_json, disable, id],
         )?;
 
-        if let Ok(mcp) = Self::get_all_mcps(&self.conn) {
+        if let Ok(mcp) = Self::get_all_mcps(&conn) {
             self.config.set_mcps(mcp);
         }
 
@@ -173,10 +175,10 @@ impl MainStore {
     /// - SQL execution fails
     /// - Transaction commit fails
     pub fn delete_mcp(&mut self, id: i64) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM mcp WHERE id = ?", params![id])?;
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute("DELETE FROM mcp WHERE id = ?", params![id])?;
 
-        if let Ok(mcp) = Self::get_all_mcps(&self.conn) {
+        if let Ok(mcp) = Self::get_all_mcps(&conn) {
             self.config.set_mcps(mcp);
         }
         Ok(())
@@ -191,12 +193,13 @@ impl MainStore {
     /// # Returns
     /// Returns `Result` with unit type `()` on success, or `StoreError` on failure
     pub fn change_mcp_status(&mut self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute(
             "UPDATE mcp SET disabled =? WHERE id =?",
             params![disabled, id],
         )?;
 
-        if let Ok(mcp) = Self::get_all_mcps(&self.conn) {
+        if let Ok(mcp) = Self::get_all_mcps(&conn) {
             self.config.set_mcps(mcp);
         }
 

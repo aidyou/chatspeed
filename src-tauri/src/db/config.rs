@@ -25,7 +25,8 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn set_config(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
-        if let Err(e) = self.conn.execute(
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
             [key, &value.to_string()],
         ) {
@@ -72,8 +73,8 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
-        let max_sort_index: i32 = self
-            .conn
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let max_sort_index: i32 = conn
             .query_row(
                 "SELECT COALESCE(MAX(sort_index), -1) FROM ai_model",
                 [],
@@ -94,8 +95,7 @@ impl MainStore {
                 )
             })?;
 
-        self.conn
-            .execute(
+        conn.execute(
                 "INSERT INTO ai_model (
                     name, models, default_model, api_protocol, base_url, api_key,
                     max_tokens, temperature, top_p, top_k, sort_index, disabled,
@@ -130,10 +130,10 @@ impl MainStore {
                 e
             })?;
 
-        if let Ok(models) = Self::get_all_ai_models(&self.conn) {
+        if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
         }
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Updates an existing AI model in the database.
@@ -163,6 +163,7 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -172,7 +173,7 @@ impl MainStore {
                 )
             })?;
 
-        self.conn.execute(
+        conn.execute(
             "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_protocol = ?,
              base_url = ?, api_key = ?, max_tokens = ?, temperature = ?, top_p = ?,
              top_k = ?, disabled = ?, metadata = ? WHERE id = ?",
@@ -197,7 +198,7 @@ impl MainStore {
                 id,
             ),
         )?;
-        if let Ok(models) = Self::get_all_ai_models(&self.conn) {
+        if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
         }
         Ok(())
@@ -215,13 +216,14 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_model_order(&mut self, model_ids: Vec<i64>) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         for (index, id) in model_ids.iter().enumerate() {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE ai_model SET sort_index = ? WHERE id = ?",
                 (index as i64, id),
             )?;
         }
-        if let Ok(models) = Self::get_all_ai_models(&self.conn) {
+        if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
         }
         Ok(())
@@ -239,9 +241,9 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_ai_model(&mut self, id: i64) -> Result<(), StoreError> {
-        self.conn
-            .execute("DELETE FROM ai_model WHERE id = ?", [id])?;
-        if let Ok(models) = Self::get_all_ai_models(&self.conn) {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
+        if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
         }
         Ok(())
@@ -272,8 +274,9 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<AiSkill, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         // Get the current maximum sort_index
-        let max_sort_index: i32 = self.conn.query_row(
+        let max_sort_index: i32 = conn.query_row(
             "SELECT COALESCE(MAX(sort_index), -1) FROM ai_skill",
             [],
             |row| row.get(0),
@@ -289,7 +292,7 @@ impl MainStore {
                 )
             })?;
 
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO ai_skill ( name, icon, logo, prompt, sort_index, disabled, metadata)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -303,8 +306,8 @@ impl MainStore {
             ),
         )?;
 
-        let last_id = self.conn.last_insert_rowid();
-        if let Ok(skills) = Self::get_all_ai_skills(&self.conn) {
+        let last_id = conn.last_insert_rowid();
+        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);
         }
 
@@ -357,6 +360,7 @@ impl MainStore {
             }
         }
 
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -366,12 +370,12 @@ impl MainStore {
                 )
             })?;
 
-        self.conn.execute(
+        conn.execute(
             "UPDATE ai_skill SET name = ?, icon = ?, logo = ?, prompt = ?, disabled = ?, metadata = ?
              WHERE id = ?",
             (name,icon, logo,  prompt, disabled, metadata_str, id),
         )?;
-        if let Ok(skills) = Self::get_all_ai_skills(&self.conn) {
+        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);
         }
         self.config.get_ai_skill_by_id(id)
@@ -389,13 +393,14 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_skill_order(&mut self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         for (index, id) in skill_ids.iter().enumerate() {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE ai_skill SET sort_index = ? WHERE id = ?",
                 (index as i64, id),
             )?;
         }
-        if let Ok(skills) = Self::get_all_ai_skills(&self.conn) {
+        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);
         }
         Ok(())
@@ -409,8 +414,8 @@ impl MainStore {
     /// # Returns
     /// The logo of the AI skill.
     pub fn get_skill_logo(&mut self, id: i64) -> Result<String, StoreError> {
-        return self
-            .conn
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        return conn
             .query_row("SELECT logo FROM ai_skill WHERE id = ?", [id], |row| {
                 row.get::<_, String>(0)
             })
@@ -447,9 +452,9 @@ impl MainStore {
             }
         }
 
-        self.conn
-            .execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
-        if let Ok(skills) = Self::get_all_ai_skills(&self.conn) {
+        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        conn.execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
+        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);
         }
         Ok(())

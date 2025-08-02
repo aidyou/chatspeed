@@ -1,246 +1,300 @@
+use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::interaction::ChatProtocol;
-use crate::ccproxy::auth::authenticate_request;
-use crate::ccproxy::helper::CcproxyQuery;
 use crate::ccproxy::{
-    handle_ollama_tags, handle_openai_chat_completion, handle_openai_list_models,
+    auth::authenticate_request, handle_ollama_tags, handle_openai_chat_completion,
+    handle_openai_list_models, helper::CcproxyQuery,
 };
 use crate::db::MainStore;
+
+use axum::{
+    extract::{ConnectInfo, Path, Query, State},
+    http::{self, HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
+use bytes::Bytes;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use warp::{filters::header::headers_cloned, Filter, Rejection, Reply};
 
 const TOOL_COMPAT_MODE: &str = "compat_mode";
-
-/// Helper function to inject MainStore into Warp filters.
-fn with_main_store(
-    main_store_arc: Arc<Mutex<MainStore>>,
-) -> impl Filter<Extract = (Arc<Mutex<MainStore>>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || main_store_arc.clone())
-}
-
-/// Filter to check if the remote address is a loopback address.
-fn is_loopback() -> impl Filter<Extract = (), Error = Rejection> + Clone {
-    warp::addr::remote()
-        .and_then(|addr: Option<SocketAddr>| async move {
-            match addr {
-                Some(addr) if addr.ip().is_loopback() => {
-                    log::debug!("{} connected", addr.ip());
-                    Ok(())
-                }
-                _ => Err(warp::reject::custom(
-                    crate::ccproxy::errors::CCProxyError::Forbidden(
-                        "Access denied: Only local connections are allowed.".to_string(),
-                    ),
-                )),
-            }
-        })
-        .untuple_one()
-}
 
 /// Defines all routes for the ccproxy module.
 pub fn routes(
     app_handle: tauri::AppHandle,
     main_store_arc: Arc<Mutex<MainStore>>,
-) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let ollama_root_route = warp::path::end()
-        .and(warp::get())
-        .map(|| warp::reply::json(&json!({ "message": "Chatspeed's ccproxy module now supports proxying requests between Ollama, OpenAI-compatible, Gemini, and Claude protocols." })));
-
-    let app_handle_clone = app_handle.clone();
-    let ollama_version_route = warp::path!("api" / "version")
-        .and(warp::get())
-        .map(move || {
-            let version = app_handle_clone.package_info().version.to_string();
-            warp::reply::json(&json!({ "version": version }))
-        });
-
-    let ollama_list_models_route = warp::path!("api" / "tags")
-        .and(warp::get())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|store| handle_ollama_tags(store))
-        .map(|reply| (reply,));
-
-    // Ollama routes (IP-based auth)
-    let auth_filter_ip = is_loopback();
-    let ollama_chat_route = warp::path!("api" / "chat")
-        .and(warp::post())
-        .and(auth_filter_ip.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::Ollama,
-                headers,
-                query,
-                body,
-                false,
-                "".to_string(),
-                "".to_string(),
-                store,
-            )
-        })
-        .map(|reply| (reply,));
-
-    let auth_filter = headers_cloned()
-        .and(warp::query::<CcproxyQuery>())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(authenticate_request)
-        .untuple_one();
-
-    let list_models_route = warp::path!("v1" / "models")
-        .and(warp::get())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|store| handle_openai_list_models(store))
-        .map(|reply| (reply,));
-
-    // OpenAI routes (API key auth)
-    let chat_completions_route = warp::path!("v1" / "chat" / "completions")
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::OpenAI,
-                headers,
-                query,
-                body,
-                false,
-                "".to_string(),
-                "".to_string(),
-                store,
-            )
-        })
-        .map(|reply| (reply,));
-
-    // Claude routes (API key auth)
-    let claude_messages_route = warp::path!("v1" / "messages")
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::Claude,
-                headers,
-                query,
-                body,
-                false,
-                "".to_string(),
-                "".to_string(),
-                store,
-            )
-        })
-        .map(|reply| (reply,));
-
-    // Gemini routes (API key auth)
-    let gemini_generate_content_route = warp::path!("v1beta" / "models" / String / ..)
-        .and(warp::path::param::<String>()) // action
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|model, action, headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::Gemini,
-                headers,
-                query,
-                body,
-                false,
-                model,
-                action,
-                store,
-            )
-        })
-        .map(|reply| (reply,));
-
-    // Tool Compatibility Mode Routes
-    let compat_mode_path = warp::path::param::<String>().and_then(|mode: String| async move {
-        if mode == TOOL_COMPAT_MODE {
-            Ok((true,))
-        } else {
-            Err(warp::reject::not_found())
-        }
+    chat_state: Arc<ChatState>, //keep this
+) -> Router {
+    let shared_state = Arc::new(SharedState {
+        app_handle,
+        main_store: main_store_arc,
+        chat_state,
     });
 
-    let openai_compat_chat_completions_route = compat_mode_path
-        .clone()
-        .and(warp::path!("v1" / "chat" / "completions"))
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|(compat,), headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::OpenAI,
-                headers,
-                query,
-                body,
-                compat,
-                "".to_string(),
-                "".to_string(),
-                store,
-            )
-        })
-        .map(|reply| (reply,));
+    // Router for unauthenticated routes (e.g., root path)
+    let unauthenticated_router = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                "Chatspeed's ccproxy module now supports proxying requests between Ollama, OpenAI-compatible, Gemini, and Claude protocols."
+            }),
+        )
+        .route(
+            "/favicon.ico",
+            get(|| async {
+                // Return 404 for favicon requests to avoid authentication warnings
+                (StatusCode::NOT_FOUND, "")
+            }),
+        );
 
-    let claude_compat_chat_completions_route = compat_mode_path
-        .clone()
-        .and(warp::path!("v1" / "messages"))
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|(compat,), headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::Claude,
-                headers,
-                query,
-                body,
-                compat,
-                "".to_string(),
-                "".to_string(),
-                store,
-            )
-        })
-        .map(|reply| (reply,));
+    // Router for Ollama routes with conditional authentication
+    let ollama_routes_inner = Router::new()
+        .route(
+            "/api/version",
+            get(|State(state): State<Arc<SharedState>>| async move {
+                let version = state.app_handle.package_info().version.to_string();
+                (StatusCode::OK, axum::Json(json!({ "version": version }))).into_response()
+            }),
+        )
+        .route(
+            "/api/tags",
+            get(|State(state): State<Arc<SharedState>>| async move {
+                handle_ollama_tags(state.main_store.clone())
+                    .await
+                    .into_response()
+            }),
+        )
+        .route(
+            "/api/chat",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::Ollama,
+                        headers,
+                        query,
+                        body,
+                        false,
+                        "".to_string(),
+                        "".to_string(),
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        );
 
-    let gemini_compat_chat_completions_route = compat_mode_path
-        .clone()
-        .and(warp::path!("v1beta" / "models" / String / ..))
-        .and(warp::path::param::<String>()) // action
-        .and(warp::post())
-        .and(auth_filter.clone())
-        .and(headers_cloned())
-        .and(warp::query::<CcproxyQuery>())
-        .and(warp::body::bytes())
-        .and(with_main_store(main_store_arc.clone()))
-        .and_then(|(compat,), model, action, headers, query, body, store| {
-            handle_openai_chat_completion(
-                ChatProtocol::Gemini,
-                headers,
-                query,
-                body,
-                compat,
-                model,
-                action,
-                store,
+    // Middleware for Ollama routes: check if local, otherwise authenticate
+    let ollama_auth_middleware = middleware::from_fn_with_state(
+        shared_state.clone(),
+        |State(state): State<Arc<SharedState>>,
+         ConnectInfo(addr): ConnectInfo<SocketAddr>,
+         req: http::Request<axum::body::Body>,
+         next: Next| async move {
+            // Check if the request is from a local address
+            let is_local = addr.ip().is_loopback();
+
+            if is_local {
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "Ollama local access: {} connected, bypassing authentication",
+                    addr.ip()
+                );
+                let response = next.run(req).await;
+                #[cfg(debug_assertions)]
+                log::debug!("Ollama local access: request completed successfully");
+                return Ok(response);
+            }
+
+            // If not local, then authenticate
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "Ollama non-local access: {} requires authentication",
+                addr.ip()
+            );
+            authenticate_request_middleware(
+                State(state),
+                req.headers().clone(),
+                Query(CcproxyQuery {
+                    key: None,
+                    debug: None,
+                }),
+                req,
+                next,
+                is_local, // Pass is_local to the authentication middleware
             )
-        })
-        .map(|reply| (reply,));
+            .await
+        },
+    );
+
+    let ollama_router = ollama_routes_inner.layer(ollama_auth_middleware);
+
+    // Create reusable authentication middleware
+    let auth_middleware = middleware::from_fn_with_state(
+        shared_state.clone(),
+        |State(state): State<Arc<SharedState>>,
+         headers: HeaderMap,
+         query: Query<CcproxyQuery>,
+         req: http::Request<axum::body::Body>,
+         next: Next| async move {
+            authenticate_request_middleware(State(state), headers, query, req, next, false).await
+        },
+    );
+
+    // Router for authenticated routes (OpenAI, Claude, Gemini)
+    let authenticated_router = Router::new()
+        .route(
+            "/v1/models",
+            get(|State(state): State<Arc<SharedState>>| async move {
+                handle_openai_list_models(state.main_store.clone())
+                    .await
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::OpenAI,
+                        headers,
+                        query,
+                        body,
+                        false,
+                        "".to_string(),
+                        "".to_string(),
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .route(
+            "/v1/messages",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::Claude,
+                        headers,
+                        query,
+                        body,
+                        false,
+                        "".to_string(),
+                        "".to_string(),
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .route(
+            "/v1beta/models/{model_id}/{action}",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 Path((model_id, action)): Path<(String, String)>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::Gemini,
+                        headers,
+                        query,
+                        body,
+                        false,
+                        model_id,
+                        action,
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .layer(auth_middleware.clone());
+
+    // Compatibility mode routes (always authenticated)
+    let compat_mode_routes = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::OpenAI,
+                        headers,
+                        query,
+                        body,
+                        true,
+                        "".to_string(),
+                        "".to_string(),
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .route(
+            "/v1/messages",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::Claude,
+                        headers,
+                        query,
+                        body,
+                        true,
+                        "".to_string(),
+                        "".to_string(),
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .route(
+            "/v1beta/models/{model_id}/{action}",
+            post(
+                |State(state): State<Arc<SharedState>>,
+                 Path((model_id, action)): Path<(String, String)>,
+                 headers: HeaderMap,
+                 Query(query): Query<CcproxyQuery>,
+                 body: Bytes| async move {
+                    handle_openai_chat_completion(
+                        ChatProtocol::Gemini,
+                        headers,
+                        query,
+                        body,
+                        true,
+                        model_id,
+                        action,
+                        state.main_store.clone(),
+                    )
+                    .await
+                    .into_response()
+                },
+            ),
+        )
+        .layer(auth_middleware);
 
     log::info!("Registered Ollama route: GET /");
     log::info!("Registered Ollama route: GET /api/version");
@@ -251,16 +305,46 @@ pub fn routes(
     log::info!("Registered Claude route: POST /v1/messages");
     log::info!("Registered Gemini route: POST /v1beta/models/...");
 
-    ollama_root_route
-        .or(ollama_version_route)
-        .or(ollama_chat_route)
-        .or(ollama_list_models_route)
-        .or(list_models_route)
-        .or(chat_completions_route)
-        .or(claude_messages_route)
-        .or(gemini_generate_content_route)
-        .or(openai_compat_chat_completions_route)
-        .or(claude_compat_chat_completions_route)
-        .or(gemini_compat_chat_completions_route)
-        .map(|reply| reply)
+    Router::new()
+        .merge(unauthenticated_router) // Merge unauthenticated routes
+        .merge(ollama_router) // Merge Ollama routes at root level
+        .merge(authenticated_router) // Merge other authenticated routes
+        .nest(&format!("/{}", TOOL_COMPAT_MODE), compat_mode_routes) // Nest compatibility mode routes
+        .with_state(shared_state)
+}
+
+// A struct to hold the shared state
+pub struct SharedState {
+    pub app_handle: tauri::AppHandle,
+    pub main_store: Arc<Mutex<MainStore>>,
+    pub chat_state: Arc<ChatState>,
+}
+
+// Middleware for authentication
+async fn authenticate_request_middleware(
+    State(state): State<Arc<SharedState>>,
+    headers: HeaderMap,
+    Query(query): Query<CcproxyQuery>,
+    req: http::Request<axum::body::Body>,
+    next: Next,
+    is_local: bool, // Add is_local parameter
+) -> Result<Response, StatusCode> {
+    #[cfg(debug_assertions)]
+    log::debug!(
+        "authenticate_request_middleware called for path: {}, is_local: {}",
+        req.uri().path(),
+        is_local
+    );
+
+    match authenticate_request(headers, query, state.main_store.clone(), is_local).await {
+        Ok(_) => Ok(next.run(req).await),
+        Err(e) => {
+            log::warn!(
+                "Authentication failed for path {}: {:?}",
+                req.uri().path(),
+                e
+            );
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
 }

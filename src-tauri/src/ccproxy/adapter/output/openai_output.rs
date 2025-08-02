@@ -6,10 +6,11 @@ use crate::ccproxy::types::openai::{
     UnifiedChatMessage,
 };
 
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::reply::json;
 
 pub struct OpenAIOutputAdapter;
 
@@ -18,7 +19,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
         &self,
         response: UnifiedResponse,
         sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<impl warp::Reply, anyhow::Error> {
+    ) -> Result<Response, anyhow::Error> {
         let mut text_content = String::new();
         let mut reasoning_content: Option<String> = None;
         let mut tool_calls: Vec<crate::ccproxy::types::openai::UnifiedToolCall> = Vec::new();
@@ -94,7 +95,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
             }),
         };
 
-        Ok(json(&openai_response))
+        Ok(Json(openai_response).into_response())
     }
 
     fn adapt_stream_chunk(

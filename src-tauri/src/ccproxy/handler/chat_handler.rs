@@ -1,30 +1,31 @@
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use reqwest::header::HeaderMap;
 use rust_i18n::t;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
-use warp::{http::header::HeaderMap, Reply};
 
 use crate::ai::interaction::ChatProtocol;
-use crate::ccproxy::adapter::backend;
-use crate::ccproxy::adapter::input::{from_claude, from_gemini, from_ollama};
-use crate::ccproxy::adapter::output::{
-    ClaudeOutputAdapter, GeminiOutputAdapter, OllamaOutputAdapter, OutputAdapterEnum,
-};
-use crate::ccproxy::adapter::unified::UnifiedRequest;
-use crate::ccproxy::claude::ClaudeNativeRequest;
-use crate::ccproxy::gemini::GeminiRequest;
-use crate::ccproxy::types::ollama::OllamaChatCompletionRequest;
 use crate::ccproxy::{
     adapter::{
-        backend::BackendAdapter,
-        input::from_openai,
-        output::{OpenAIOutputAdapter, OutputAdapter},
-        unified::SseStatus,
+        backend::{self, BackendAdapter},
+        input::{from_claude, from_gemini, from_ollama, from_openai},
+        output::{
+            ClaudeOutputAdapter, GeminiOutputAdapter, OllamaOutputAdapter, OpenAIOutputAdapter,
+            OutputAdapter, OutputAdapterEnum,
+        },
+        unified::{SseStatus, UnifiedRequest},
     },
+    claude::ClaudeNativeRequest,
     errors::{CCProxyError, ProxyResult},
-    helper::stream_handler::handle_streamed_response,
-    helper::{get_provider_full_url, CcproxyQuery, ModelResolver},
+    gemini::GeminiRequest,
+    helper::{
+        get_provider_full_url, stream_handler::handle_streamed_response, CcproxyQuery,
+        ModelResolver,
+    },
     openai::OpenAIChatCompletionRequest,
+    types::ollama::OllamaChatCompletionRequest,
 };
 use crate::db::MainStore;
 
@@ -32,35 +33,35 @@ fn get_proxy_alias_from_body(
     chat_protocol: &ChatProtocol,
     client_request_body: &bytes::Bytes,
     route_model_alias: &str,
-) -> Result<String, warp::reject::Rejection> {
+) -> Result<String, CCProxyError> {
     match chat_protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
             let payload: OpenAIChatCompletionRequest = serde_json::from_slice(client_request_body)
                 .map_err(|e| {
-                    warp::reject::custom(CCProxyError::InternalError(format!(
+                    CCProxyError::InternalError(format!(
                         "Failed to deserialize OpenAI request: {}",
                         e
-                    )))
+                    ))
                 })?;
             Ok(payload.model)
         }
         ChatProtocol::Ollama => {
             let payload: OllamaChatCompletionRequest = serde_json::from_slice(client_request_body)
                 .map_err(|e| {
-                    warp::reject::custom(CCProxyError::InternalError(format!(
+                    CCProxyError::InternalError(format!(
                         "Failed to deserialize Ollama request: {}",
                         e
-                    )))
+                    ))
                 })?;
             Ok(payload.model)
         }
         ChatProtocol::Claude => {
             let payload: ClaudeNativeRequest = serde_json::from_slice(client_request_body)
                 .map_err(|e| {
-                    warp::reject::custom(CCProxyError::InternalError(format!(
+                    CCProxyError::InternalError(format!(
                         "Failed to deserialize Claude request: {}",
                         e
-                    )))
+                    ))
                 })?;
             Ok(payload.model)
         }
@@ -74,7 +75,7 @@ fn build_unified_request(
     tool_compat_mode: bool,
     route_model_alias: String,
     generate_action: String,
-) -> Result<(UnifiedRequest, String, bool), warp::reject::Rejection> {
+) -> Result<(UnifiedRequest, String, bool), CCProxyError> {
     match chat_protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
             // Manually deserialize the request body
@@ -87,10 +88,10 @@ fn build_unified_request(
                             e,
                             String::from_utf8_lossy(&client_request_body)
                         );
-                        return Err(warp::reject::custom(CCProxyError::InternalError(
+                        return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
-                        )));
+                        ));
                     }
                 };
 
@@ -116,10 +117,10 @@ fn build_unified_request(
                             e,
                             String::from_utf8_lossy(&client_request_body)
                         );
-                        return Err(warp::reject::custom(CCProxyError::InternalError(
+                        return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
-                        )));
+                        ));
                     }
                 };
 
@@ -145,10 +146,10 @@ fn build_unified_request(
                             e,
                             String::from_utf8_lossy(&client_request_body)
                         );
-                        return Err(warp::reject::custom(CCProxyError::InternalError(
+                        return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
-                        )));
+                        ));
                     }
                 };
 
@@ -175,10 +176,10 @@ fn build_unified_request(
                             e,
                             String::from_utf8_lossy(&client_request_body)
                         );
-                        return Err(warp::reject::custom(CCProxyError::InternalError(
+                        return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
-                        )));
+                        ));
                     }
                 };
 
@@ -210,7 +211,7 @@ pub async fn handle_openai_chat_completion(
     route_model_alias: String,
     generate_action: String,
     main_store_arc: Arc<Mutex<MainStore>>,
-) -> ProxyResult<impl Reply> {
+) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
 
     let log_to_file = client_query
@@ -227,7 +228,7 @@ pub async fn handle_openai_chat_completion(
     let proxy_model =
         ModelResolver::get_ai_model_by_alias(main_store_arc.clone(), proxy_alias.clone()).await?;
 
-    if chat_protocol == proxy_model.chat_protocol {
+    if chat_protocol == proxy_model.chat_protocol && !tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                 let req: OpenAIChatCompletionRequest =
@@ -303,7 +304,7 @@ pub async fn handle_openai_chat_completion(
             &proxy_model.model,
         )
         .await
-        .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
+        .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
     // Set common headers
     onward_request_builder = onward_request_builder.header("Content-Type", "application/json");
@@ -330,12 +331,10 @@ pub async fn handle_openai_chat_completion(
         }
     }
 
-    let target_response = onward_request_builder.send().await.map_err(|e| {
-        warp::reject::custom(CCProxyError::InternalError(format!(
-            "Request to backend failed: {}",
-            e
-        )))
-    })?;
+    let target_response = onward_request_builder
+        .send()
+        .await
+        .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
 
     // Handle error response
     if !target_response.status().is_success() {
@@ -346,7 +345,7 @@ pub async fn handle_openai_chat_completion(
             Err(e) => {
                 log::error!("Failed to read backend error response: {}", e);
                 let err_msg = t!("network.response_read_error", error = e.to_string()).to_string();
-                return Err(warp::reject::custom(CCProxyError::InternalError(err_msg)));
+                return Err(CCProxyError::InternalError(err_msg));
             }
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
@@ -393,12 +392,8 @@ pub async fn handle_openai_chat_completion(
             "code": status_code.as_u16().to_string()
         });
 
-        let warp_status_code = warp::http::StatusCode::from_u16(status_code.as_u16())
-            .unwrap_or(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
-
         let mut response =
-            warp::reply::json(&serde_json::json!({ "error": final_error_json })).into_response();
-        *response.status_mut() = warp_status_code;
+            (status_code, Json(json!({ "error": final_error_json }))).into_response();
 
         let final_headers = response.headers_mut();
         for (reqwest_name, reqwest_value) in headers_from_target.iter() {
@@ -407,21 +402,21 @@ pub async fn handle_openai_chat_completion(
                 || name_str == "retry-after"
                 || name_str == "content-type"
             {
-                if let Ok(warp_name) =
-                    warp::http::header::HeaderName::from_bytes(reqwest_name.as_ref())
+                if let Ok(axum_name) =
+                    reqwest::header::HeaderName::from_bytes(reqwest_name.as_ref())
                 {
-                    if let Ok(warp_value) =
-                        warp::http::header::HeaderValue::from_bytes(reqwest_value.as_ref())
+                    if let Ok(axum_value) =
+                        reqwest::header::HeaderValue::from_bytes(reqwest_value.as_ref())
                     {
-                        final_headers.insert(warp_name, warp_value);
+                        final_headers.insert(axum_name, axum_value);
                     }
                 }
             }
         }
-        if !final_headers.contains_key(warp::http::header::CONTENT_TYPE) {
+        if !final_headers.contains_key(reqwest::header::CONTENT_TYPE) {
             final_headers.insert(
-                warp::http::header::CONTENT_TYPE,
-                warp::http::header::HeaderValue::from_static("application/json"),
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_static("application/json"),
             );
         }
         return Ok(response);
@@ -458,7 +453,7 @@ pub async fn handle_openai_chat_completion(
         let body_bytes = target_response
             .bytes()
             .await
-            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
         if log_to_file {
             log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Body: \n{}\n---", String::from_utf8_lossy(&body_bytes));
@@ -471,11 +466,11 @@ pub async fn handle_openai_chat_completion(
         let unified_response = backend_adapter
             .adapt_response(backend_response)
             .await
-            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
         let response = output_adapter
             .adapt_response(unified_response, sse_status)
-            .map_err(|e| warp::reject::custom(CCProxyError::InternalError(e.to_string())))?;
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
         Ok(response.into_response())
     }
 }

@@ -1,15 +1,19 @@
 use super::OutputAdapter;
-use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
-use crate::ccproxy::helper::sse::Event;
-use crate::ccproxy::types::ollama::{
-    OllamaChatCompletionResponse, OllamaFunctionCall, OllamaMessage, OllamaStreamResponse,
-    OllamaToolCall,
+use crate::ccproxy::{
+    adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    helper::sse::Event,
+    types::ollama::{
+        OllamaChatCompletionResponse, OllamaFunctionCall, OllamaMessage, OllamaStreamResponse,
+        OllamaToolCall,
+    },
 };
+
 use anyhow::Result;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde_json::json;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use warp::reply::json;
 
 pub struct OllamaOutputAdapter;
 
@@ -18,7 +22,7 @@ impl OutputAdapter for OllamaOutputAdapter {
         &self,
         response: UnifiedResponse,
         _sse_status: Arc<RwLock<SseStatus>>,
-    ) -> Result<impl warp::Reply, anyhow::Error> {
+    ) -> Result<Response, anyhow::Error> {
         let mut text_content = String::new();
         let mut tool_calls = Vec::new();
 
@@ -68,7 +72,7 @@ impl OutputAdapter for OllamaOutputAdapter {
             eval_duration: response.usage.eval_duration,
         };
 
-        Ok(json(&ollama_response))
+        Ok(Json(ollama_response).into_response())
     }
 
     fn adapt_stream_chunk(

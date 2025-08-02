@@ -7,16 +7,22 @@ use crate::{
     db::MainStore,
 };
 
+use http::HeaderMap;
 use rust_i18n::t;
 use std::sync::{Arc, Mutex};
 
 /// Authenticates the request based on the Authorization Bearer token or x-api-key.
 /// Reads `chat_completion_proxy_keys` from `MainStore`.
 pub async fn authenticate_request(
-    headers: warp::http::header::HeaderMap,
+    headers: HeaderMap,
     query: CcproxyQuery,
     main_store: Arc<Mutex<MainStore>>,
+    is_local: bool,
 ) -> ProxyResult<()> {
+    if is_local {
+        log::debug!("Skipping authentication for local request.");
+        return Ok(());
+    }
     // In order of priority, we check for an API key in:
     // 1. "Authorization: Bearer <token>" header (OpenAI format)
     // 2. "x-api-key: <token>" header (Claude format)
@@ -51,12 +57,12 @@ pub async fn authenticate_request(
             log::warn!(
                 "Proxy authentication: Missing token from 'Authorization' header, 'x-api-key' header, or 'key' query param."
             );
-            warp::reject::custom(CCProxyError::MissingToken)
+            CCProxyError::MissingToken
         })?;
 
     if token_to_check.is_empty() {
         log::warn!("Proxy authentication: Bearer token, x-api-key header, or query parameter `key` is missing or empty.");
-        return Err(warp::reject::custom(CCProxyError::MissingToken));
+        return Err(CCProxyError::MissingToken);
     }
 
     let proxy_keys: ChatCompletionProxyKeysConfig = {
@@ -75,7 +81,7 @@ pub async fn authenticate_request(
 
     if proxy_keys.is_empty() {
         log::warn!("Proxy authentication: 'chat_completion_proxy_keys' is configured but the list is empty.");
-        return Err(warp::reject::custom(CCProxyError::NoKeysConfigured));
+        return Err(CCProxyError::NoKeysConfigured);
     }
 
     if proxy_keys.iter().any(|k| k.token == token_to_check) {
@@ -90,6 +96,6 @@ pub async fn authenticate_request(
             token_to_check.get(..5).unwrap_or(&token_to_check)
         );
 
-        Err(warp::reject::custom(CCProxyError::InvalidToken))
+        Err(CCProxyError::InvalidToken)
     }
 }
