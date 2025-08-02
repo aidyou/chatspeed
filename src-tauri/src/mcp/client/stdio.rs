@@ -30,6 +30,7 @@
 
 use std::sync::Arc;
 
+use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam};
 use rmcp::{service::RunningService, transport::TokioChildProcess, RoleClient, ServiceExt as _};
 use rust_i18n::t;
 use tokio::{process::Command, sync::RwLock};
@@ -112,7 +113,9 @@ impl McpClient for StdioClient {
     /// # Returns
     /// `McpClientResult<RunningService<RoleClient, ()>>` - The running service instance
     /// on success, or an error.
-    async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
+    async fn perform_connect(
+        &self,
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>> {
         let config = self.core.get_config().await;
         let original_cmd_str = config
             .command
@@ -221,7 +224,15 @@ impl McpClient for StdioClient {
             }
         })?;
 
-        ().serve(process).await.map_err(|e| {
+        let client_info = ClientInfo {
+            protocol_version: Default::default(),
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation {
+                name: "Chatspeed MCP Client".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        };
+        client_info.serve(process).await.map_err(|e| {
             // Optional: Wrap with t!
             let detailed_error = e.to_string();
             log::error!("Start StdioClient error: {}", detailed_error);
@@ -236,7 +247,7 @@ impl McpClient for StdioClient {
         })
     }
 
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>> {
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>> {
         self.core.get_client_instance_arc()
     }
 

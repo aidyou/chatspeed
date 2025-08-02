@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use super::types::{McpClientInternal, McpServerConfig, McpStatus, StatusChangeCallback};
-use rmcp::{service::RunningService, RoleClient};
+use rmcp::{model::InitializeRequestParam, service::RunningService, RoleClient};
 use tokio::sync::RwLock;
 
 /// Core structure holding shared state and logic for McpClient implementations.
 pub struct McpClientCore {
     pub config: Arc<RwLock<McpServerConfig>>,
-    pub client_instance: Arc<RwLock<Option<RunningService<RoleClient, ()>>>>,
+    pub client_instance: Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>>,
     pub status: RwLock<McpStatus>,
     pub status_callback: Arc<RwLock<Option<StatusChangeCallback>>>,
 }
@@ -34,7 +34,9 @@ impl McpClientCore {
     }
 
     /// Gets the Arc for the client instance.
-    pub fn get_client_instance_arc(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>> {
+    pub fn get_client_instance_arc(
+        &self,
+    ) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>> {
         self.client_instance.clone()
     }
 

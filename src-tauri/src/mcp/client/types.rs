@@ -1,4 +1,4 @@
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::{CallToolRequestParam, InitializeRequestParam};
 use rmcp::service::RunningService;
 use rmcp::RoleClient;
 use rust_i18n::t;
@@ -199,7 +199,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
 
     /// Gets the running service instance
     /// Implementors should return a clone of their `Arc<RwLock<Option<RunningService<...>>>>`.
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>>;
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>>;
 
     async fn status(&self) -> McpStatus;
 
@@ -210,7 +210,9 @@ pub trait McpClient: Send + Sync + McpClientInternal {
     /// This method should establish the connection and return the running service instance
     /// upon success, or an error upon failure. It should NOT set McpStatus itself,
     /// nor should it store the running service in the shared client field.
-    async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>>;
+    async fn perform_connect(
+        &self,
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>>;
 
     /// Starts the MCP client connection.
     /// This default implementation calls `perform_connect` and manages status updates
@@ -265,7 +267,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
             let timeout_secs = self.config().await.timeout.unwrap_or(60);
             match timeout(
                 Duration::from_secs(timeout_secs),
-                service_instance.list_tools(Default::default()),
+                service_instance.peer().list_tools(Default::default()),
             )
             .await
             {
@@ -303,6 +305,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
         let guard = client_arc.read().await; // Use read lock
         if let Some(service_instance) = guard.as_ref() {
             let call_tool_result = service_instance
+                .peer()
                 .call_tool(CallToolRequestParam {
                     name: tool_name.to_string().into(),
                     arguments: self.arg_parser(args),

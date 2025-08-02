@@ -6,7 +6,11 @@
       "request": "launch",
       "name": "🚀 Tauri Development (Full Stack)",
       "cargo": {
-        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml", "--no-default-features"],
+        "args": [
+          "build",
+          "--manifest-path=./src-tauri/Cargo.toml",
+          "--no-default-features"
+        ],
         "filter": {
           "name": "chatspeed",
           "kind": "bin"
@@ -14,10 +18,12 @@
       },
       "args": [],
       "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"],
+      "sourceLanguages": [
+        "rust"
+      ],
       "env": {
         "RUST_BACKTRACE": "1",
-        "RUST_LOG": "debug",
+        "RUST_LOG": "trace",
         "TAURI_DEV": "1"
       },
       "preLaunchTask": "start-frontend-dev-server"
@@ -27,7 +33,11 @@
       "request": "launch",
       "name": "🔧 Tauri Backend Only",
       "cargo": {
-        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml", "--no-default-features"],
+        "args": [
+          "build",
+          "--manifest-path=./src-tauri/Cargo.toml",
+          "--no-default-features"
+        ],
         "filter": {
           "name": "chatspeed",
           "kind": "bin"
@@ -35,7 +45,9 @@
       },
       "args": [],
       "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"],
+      "sourceLanguages": [
+        "rust"
+      ],
       "env": {
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "debug",
@@ -48,7 +60,11 @@
       "request": "launch",
       "name": "🏗️ Tauri Production Debug",
       "cargo": {
-        "args": ["build", "--release", "--manifest-path=./src-tauri/Cargo.toml"],
+        "args": [
+          "build",
+          "--release",
+          "--manifest-path=./src-tauri/Cargo.toml"
+        ],
         "filter": {
           "name": "chatspeed",
           "kind": "bin"
@@ -56,7 +72,9 @@
       },
       "args": [],
       "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"],
+      "sourceLanguages": [
+        "rust"
+      ],
       "env": {
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "info"
@@ -68,7 +86,11 @@
       "request": "launch",
       "name": "🧪 Debug Tests",
       "cargo": {
-        "args": ["test", "--manifest-path=./src-tauri/Cargo.toml", "--no-run"],
+        "args": [
+          "test",
+          "--manifest-path=./src-tauri/Cargo.toml",
+          "--no-run"
+        ],
         "filter": {
           "name": "chatspeed",
           "kind": "test"
@@ -76,7 +98,9 @@
       },
       "args": [],
       "cwd": "${workspaceFolder}",
-      "sourceLanguages": ["rust"],
+      "sourceLanguages": [
+        "rust"
+      ],
       "env": {
         "RUST_BACKTRACE": "full",
         "RUST_LOG": "debug"

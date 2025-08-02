@@ -1,10 +1,10 @@
 [package]
-name = "chatspeed"
-version = "1.0.0"
+name        = "chatspeed"
+version     = "1.0.0"
 description = "Quickly solve problems with the help of AI"
-authors = ["Ezool Network"]
-edition = "2021"
-build = "build.rs"
+authors     = ["Ezool Network"]
+edition     = "2021"
+build       = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,52 +12,47 @@ build = "build.rs"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "chatspeed_lib"
+name       = "chatspeed_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
-doctest = false
+doctest    = false
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
-walkdir = "2"
+walkdir     = "2"
 
 [dependencies]
-anyhow = "1.0.97"
-arboard = "3.3"
-async-stream = "0.3"
-async-trait = "0.1.88"
-axum = "0.8.4"
-base64 = "0.22.1"
-bytes = "1.10.1"
-chrono = { version = "0.4.40", features = ["serde"] }
-dashmap = "6.1.0"
-dirs = "6.0"
-fern = "0.7.1"
-futures = { version = "0.3", features = ["std"] }
-futures-util = "0.3"
-global-hotkey = "0.7.0"
-http = "1.3.1"
-humantime = "2.2.0"
-image = "0.25.6"
-is_executable = "1.0"
-jieba-rs = "0.7.2"
+anyhow           = "1.0.97"
+arboard          = "3.3"
+async-stream     = "0.3"
+async-trait      = "0.1.88"
+axum             = "0.8.4"
+base64           = "0.22.1"
+bytes            = "1.10.1"
+chrono           = { version = "0.4.40", features = ["serde"] }
+dashmap          = "6.1.0"
+dirs             = "6.0"
+fern             = "0.7.1"
+futures          = { version = "0.3", features = ["std"] }
+futures-util     = "0.3"
+global-hotkey    = "0.7.0"
+http             = "1.3.1"
+humantime        = "2.2.0"
+image            = "0.25.6"
+is_executable    = "1.0"
+jieba-rs         = "0.8.0"
 json_value_merge = "2.0.1"
-lazy_static = "1.4"
-locale_config = "0.3.0"
-log = "0.4.27"
-lru = "0.16.0"
-memchr = "2.7"
-once_cell = "1.21.3"
-parking_lot = "0.12"
-phf = { version = "0.12.1", features = ["macros"] }
-quick-xml = { version = "0.31.0", features = ["serialize"] }
-regex = "1.10.3"
+lazy_static      = "1.4"
+locale_config    = "0.3.0"
+log              = "0.4.27"
+lru              = "0.16.0"
+memchr           = "2.7"
+once_cell        = "1.21.3"
+parking_lot      = "0.12"
+phf              = { version = "0.12.1", features = ["macros"] }
+quick-xml        = { version = "0.38.0", features = ["serialize"] }
+regex            = "1.10.3"
 
-reqwest = { version = "0.12.15", features = [
-    "blocking",
-    "stream",
-    "multipart",
-    "cookies",
-] }
+reqwest = { version = "0.12.15", features = ["blocking", "stream", "multipart", "cookies"] }
 rmcp = { version = "0.3.2", features = [
     "client",
     "reqwest",
@@ -67,39 +62,39 @@ rmcp = { version = "0.3.2", features = [
     "tower",
 ] }
 
-rusqlite = { version = "0.37.0", features = ["bundled", "backup"] }
-rust-i18n = "3.1.3"
-scraper = "0.23.1"
-seahash = "4.1.0"
-semver = "1.0.26"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_yaml = "0.9.34-deprecated"
-sha2 = "0.10"
-tauri = { version = "2.3.1", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-dialog = "2.2"
-tauri-plugin-fs = "2.2"
+rusqlite                     = { version = "0.37.0", features = ["bundled", "backup"] }
+rust-i18n                    = "3.1.3"
+scraper                      = "0.23.1"
+seahash                      = "4.1.0"
+semver                       = "1.0.26"
+serde                        = { version = "1.0.219", features = ["derive"] }
+serde_json                   = "1.0.140"
+serde_yaml                   = "0.9.34-deprecated"
+sha2                         = "0.10"
+tauri                        = { version = "2.3.1", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-dialog          = "2.2"
+tauri-plugin-fs              = "2.2"
 tauri-plugin-global-shortcut = "2.2"
-tauri-plugin-opener = "2.2.6"
-tauri-plugin-shell = "2.2"
-tauri-plugin-updater = "2.5"
-thiserror = "2.0.12"
-time = { version = "0.3.38", features = ["formatting"] }
-tinysegmenter = "0.1.0"
-tokio = { version = "1.44.1", features = ["full"] }
-tokio-stream = "0.1.11"
-tokio-util = "0.7.15"
-tower-http = { version = "0.6.6", features = ["cors", "fs"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-unicode-script = "0.5.7"
-unicode-segmentation = "1.9.0"
-url = "2.5.4"
-uuid = { version = "1.16.0", features = ["v4", "serde"] }
-walkdir = "2.4.0"
-whatlang = "0.16.4"
-xxhash-rust = { version = "0.8.15", features = ["xxh32"] }
-zip = "4.0.0"
+tauri-plugin-opener          = "2.2.6"
+tauri-plugin-shell           = "2.2"
+tauri-plugin-updater         = "2.5"
+thiserror                    = "2.0.12"
+time                         = { version = "0.3.38", features = ["formatting"] }
+tinysegmenter                = "0.1.0"
+tokio                        = { version = "1.44.1", features = ["full"] }
+tokio-stream                 = "0.1.11"
+tokio-util                   = "0.7.15"
+tower-http                   = { version = "0.6.6", features = ["cors", "fs"] }
+tracing                      = "0.1.41"
+tracing-subscriber           = { version = "0.3.19", features = ["env-filter"] }
+unicode-script               = "0.5.7"
+unicode-segmentation         = "1.9.0"
+url                          = "2.5.4"
+uuid                         = { version = "1.16.0", features = ["v4", "serde"] }
+walkdir                      = "2.4.0"
+whatlang                     = "0.16.4"
+xxhash-rust                  = { version = "0.8.15", features = ["xxh32"] }
+zip                          = "4.0.0"
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
@@ -107,9 +102,7 @@ zip = "4.0.0"
 # v8                           = { version = "130.0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60.2", features = [
-    "Win32_UI_WindowsAndMessaging",
-] }
+windows-sys = { version = "0.60.2", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(unix)'.dependencies]
 # Linux/macOS 特定依赖
@@ -132,19 +125,19 @@ tauri-plugin-autostart = "2.2.0"
 # wayland = ["snap_rs/wayland"]
 
 [target.'cfg(windows)'.build-dependencies]
-vcpkg = "0.2"
+vcpkg  = "0.2"
 vswhom = "0.1.0"
 
 [dev-dependencies]
-tempfile = "3.19.1"
+tempfile   = "3.19.1"
 small_ctor = "0.1.2"
 
 [profile.dev]
-debug = true
+debug            = true
 debug-assertions = true
-overflow-checks = true
-lto = false
-panic = 'unwind'
-incremental = true
-codegen-units = 256
-rpath = false
+overflow-checks  = true
+lto              = false
+panic            = 'unwind'
+incremental      = true
+codegen-units    = 256
+rpath            = false

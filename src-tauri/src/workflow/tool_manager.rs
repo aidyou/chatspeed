@@ -256,7 +256,7 @@ impl ToolManager {
         names
     }
 
-    /// Get the calling spec of all registered tools
+    /// Get the calling spec of all registered tools, it's contained all native tools and MCP tools.
     ///
     /// # Returns
     /// * `Result<String, WorkflowError>` - The calling spec of all registered tools
@@ -423,6 +423,7 @@ impl ToolManager {
         #[cfg(debug_assertions)]
         {
             log::debug!("Register MCP server {} ... ", &mcp_server_config.name,);
+            log::debug!("MCP server config: {:?}", &mcp_server_config);
         }
 
         // Clone for logging in case of early error
@@ -634,16 +635,6 @@ impl ToolManager {
             log::debug!("MCP server {} inner registration process completed.", name);
         }
         Ok(())
-    }
-
-    /// Get the registered MCP tools
-    pub async fn get_registered_mcp_tools(&self) -> Vec<MCPToolDeclaration> {
-        let mut mcp_tools = Vec::new();
-        {
-            let tools = self.mcp_tools.read().await;
-            mcp_tools.extend(tools.values().flatten().cloned());
-        }
-        mcp_tools
     }
 
     /// unregisters a MCP server with the manager.

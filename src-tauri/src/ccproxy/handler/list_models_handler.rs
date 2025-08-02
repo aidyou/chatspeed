@@ -250,3 +250,78 @@ fn determine_quantization_level(model_name: &str, provider: &str) -> String {
     // Default quantization level if no specific pattern is found
     "Unknown".to_string()
 }
+
+/// Handles the `/v1beta/models` (list models) request for gemini.
+pub async fn handle_gemini_list_models(
+    main_store: Arc<Mutex<MainStore>>,
+) -> ProxyResult<Json<Value>> {
+    let config: HashMap<String, Vec<BackendModelTarget>> = {
+        if let Ok(store_guard) = main_store.lock() {
+            let cfg: HashMap<String, Vec<BackendModelTarget>> =
+                store_guard.get_config("chat_completion_proxy", HashMap::new());
+            drop(store_guard);
+            cfg
+        } else {
+            log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
+            HashMap::new()
+        }
+    };
+
+    let keys = config.keys().cloned().collect::<Vec<String>>();
+    let mut models: HashMap<String, (i32, String)> = HashMap::new();
+    for (alias, target) in config.into_iter() {
+        if models.contains_key(&alias) {
+            continue;
+        }
+
+        if let Ok(store) = main_store.lock() {
+            for t in target.into_iter() {
+                if t.id > 0 {
+                    if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
+                        models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut sorted_keys = keys.clone();
+    sorted_keys.sort();
+    let models: Vec<Value> = sorted_keys
+        .into_iter()
+        .map(|alias| {
+            let (max_token, _provider) = if let Some(m) = models.get(&alias) {
+                m.clone()
+            } else {
+                (-1, "ccproxy".to_string())
+            };
+            json!({
+                "name": format!("models/{}", alias),
+                "version": "1.0.0",
+                "displayName": alias.clone(),
+                "description": format!("ChatSpeed proxied model for {}", alias),
+                "inputTokenLimit": max_token,
+                "outputTokenLimit": max_token,
+                "supportedGenerationMethods": [
+                    "generateContent",
+                    "streamGenerateContent"
+                ],
+                "temperature": 1.0,
+                "topP": 1.0,
+                "topK": 1,
+                "powered_by": "chatspeed ccproxy",
+            })
+        })
+        .collect();
+
+    if models.is_empty() {
+        log::info!("'chat_completion_proxy' configuration is empty or not found. Returning empty model list.");
+    };
+
+    let response = json!({
+        "models": models,
+    });
+
+    Ok(Json(response))
+}

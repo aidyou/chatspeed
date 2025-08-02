@@ -43,6 +43,7 @@ use std::{sync::Arc, time::Duration};
 
 use reqwest::{header, Client};
 use rmcp::{
+    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam},
     service::RunningService,
     transport::{
         common::client_side_sse::FixedInterval, sse_client::SseClientConfig, SseClientTransport,
@@ -116,8 +117,16 @@ impl SseClient {
     /// - Proxy configuration is invalid
     async fn build_http_client_async(&self) -> McpClientResult<reqwest::Client> {
         // Renamed and made async
-        let mut client_builder = Client::builder().timeout(Duration::from_secs(30));
+        let mut client_builder = Client::builder();
         let current_config = self.core.get_config().await;
+        let timeout = current_config
+            .timeout
+            .map(|t| Duration::from_secs(t))
+            .unwrap_or(Duration::from_secs(15));
+        if !timeout.is_zero() {
+            client_builder = client_builder.connect_timeout(timeout);
+        }
+
         if let Some(token) = current_config.bearer_token.as_ref() {
             if !token.trim().is_empty() {
                 let mut headers = header::HeaderMap::new();
@@ -171,7 +180,9 @@ impl McpClient for SseClient {
     /// Returns `McpClientError::StartError` if:
     /// - Connection establishment fails
     /// - Transport initialization fails
-    async fn perform_connect(&self) -> McpClientResult<RunningService<RoleClient, ()>> {
+    async fn perform_connect(
+        &self,
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>> {
         let config = self.core.get_config().await; // Use the async getter
         let url_str = config.url.as_deref().filter(|s| !s.is_empty());
 
@@ -189,6 +200,7 @@ impl McpClient for SseClient {
             duration: Duration::from_secs(3),
         };
         let transport_config = SseClientConfig {
+            sse_endpoint: url.into(),
             retry_policy: Arc::new(retry_config),
             ..SseClientConfig::default()
         };
@@ -209,7 +221,19 @@ impl McpClient for SseClient {
             }
         };
 
-        let client_service_result = ().serve(transport).await;
+        let client_info = ClientInfo {
+            protocol_version: Default::default(),
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation {
+                name: "Chatspeed MCP Client".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        };
+        let client_service_result = client_info
+            .serve(transport)
+            .await
+            .inspect_err(|e| log::error!("MCP SSE client error: {}", e.to_string()));
+
         let client_service = match client_service_result {
             Ok(cs) => cs,
             Err(e) => {
@@ -233,7 +257,7 @@ impl McpClient for SseClient {
     ///
     /// # Returns
     /// Thread-safe reference to the running service
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, ()>>>> {
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>> {
         self.core.get_client_instance_arc()
     }
 
@@ -276,7 +300,7 @@ mod test {
     async fn sse_test() -> Result<(), McpClientError> {
         let client = SseClient::new(McpServerConfig {
             protocol_type: McpProtocolType::Sse,
-            url: Some("https://mcp.api-inference.modelscope.cn/sse/56e15cc0adab45".to_string()),
+            url: Some("https://mcp.api-inference.modelscope.net/3527390d48954e/sse".to_string()),
             ..Default::default()
         })?;
         client.start().await?;

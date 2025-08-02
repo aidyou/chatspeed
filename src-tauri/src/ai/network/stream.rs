@@ -59,8 +59,8 @@ impl StreamParser {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
 
-        #[cfg(debug_assertions)]
-        log::debug!("openai stream chunk- {}", chunk_str);
+        // #[cfg(debug_assertions)]
+        // log::debug!("openai stream chunk- {}", chunk_str);
 
         for line in chunk_str.lines() {
             // log::debug!("openai stream line- {}", line);

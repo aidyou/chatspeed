@@ -33,8 +33,12 @@ use tower_http::{
 use crate::{
     ai::interaction::chat_completion::ChatState,
     ccproxy,
-    constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY},
+    constants::{
+        CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CFG_MCP_PROXY_PORT, CFG_MCP_PROXY_PORT_DEFAULT,
+        CHAT_COMPLETION_PROXY,
+    },
     db::MainStore,
+    mcp::server::start_standalone_mcp_server,
 };
 use crate::{
     HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
@@ -145,6 +149,7 @@ pub async fn start_http_server(
     // Create chat completion proxy routes
     // ccproxy routes are served independently on a separate port
     let ccproxy_app = ccproxy::routes(app.clone(), main_store.clone(), chat_state.clone())
+        .await
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
         .layer(cors); // Apply CORS to the ccproxy routes
     let server_port = if let Ok(store) = main_store.lock() {
@@ -220,6 +225,80 @@ pub async fn start_http_server(
         Ok(())
     });
 
+    // Start MCP proxy server on separate port (due to router state type incompatibility)
+    let mcp_port = if let Ok(store) = main_store.lock() {
+        store.get_config(CFG_MCP_PROXY_PORT, CFG_MCP_PROXY_PORT_DEFAULT)
+    } else {
+        CFG_MCP_PROXY_PORT_DEFAULT
+    };
+
+    let mcp_shutdown_rx = shutdown_tx.subscribe();
+    let mcp_chat_state = chat_state.clone();
+    let mcp_handle = task::spawn(async move {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 5;
+
+        loop {
+            attempts += 1;
+
+            match try_available_port("0.0.0.0", mcp_port).await {
+                Ok(mcp_listener) => {
+                    let mcp_addr = mcp_listener.local_addr().map_err(|e| {
+                        log::error!("Failed to get MCP proxy local address: {}", e);
+                        e.to_string()
+                    })?;
+
+                    log::info!("Serving MCP proxy on http://{}", mcp_addr);
+
+                    let mut shutdown_rx = mcp_shutdown_rx;
+                    let cancellation_token = tokio_util::sync::CancellationToken::new();
+                    let ct_clone = cancellation_token.clone();
+
+                    // Start shutdown listener
+                    tokio::spawn(async move {
+                        let _ = shutdown_rx.recv().await;
+                        log::info!("MCP proxy server received shutdown signal");
+                        ct_clone.cancel();
+                    });
+
+                    // Start the MCP server
+                    if let Err(e) = start_standalone_mcp_server(
+                        mcp_chat_state,
+                        mcp_listener,
+                        cancellation_token,
+                    )
+                    .await
+                    {
+                        log::error!("MCP proxy server error: {}", e);
+                        return Err(e.to_string());
+                    }
+
+                    log::info!("MCP proxy server shut down gracefully");
+                    break; // If we get here, server started successfully
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to start MCP proxy server (attempt {}): {}",
+                        attempts,
+                        e
+                    );
+                    if attempts >= MAX_ATTEMPTS {
+                        log::error!(
+                            "Failed to start MCP proxy server after {} attempts",
+                            MAX_ATTEMPTS
+                        );
+                        return Err(format!(
+                            "Failed to start MCP proxy server after {} attempts",
+                            MAX_ATTEMPTS
+                        ));
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+        Ok(())
+    });
+
     // Start a temporary file cleanup task
     let tx_clone = shutdown_tx.clone();
     let cleanup_handle = task::spawn(async move {
@@ -243,6 +322,11 @@ pub async fn start_http_server(
         result = ccproxy_handle => {
             if let Err(e) = result.unwrap_or_else(|e| Err(format!("CCProxy server task panicked: {}", e))) {
                 log::error!("CCProxy server failed: {}", e);
+            }
+        },
+        result = mcp_handle => {
+            if let Err(e) = result.unwrap_or_else(|e| Err(format!("MCP proxy server task panicked: {}", e))) {
+                log::error!("MCP proxy server failed: {}", e);
             }
         },
         _ = cleanup_handle => {

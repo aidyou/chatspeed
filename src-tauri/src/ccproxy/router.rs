@@ -1,8 +1,9 @@
-use crate::ai::interaction::chat_completion::ChatState;
-use crate::ai::interaction::ChatProtocol;
+use crate::ai::interaction::{chat_completion::ChatState, ChatProtocol};
 use crate::ccproxy::{
-    auth::authenticate_request, handle_ollama_tags, handle_openai_chat_completion,
-    handle_openai_list_models, helper::CcproxyQuery,
+    auth::authenticate_request,
+    handle_ollama_tags, handle_openai_chat_completion, handle_openai_list_models,
+    handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
+    helper::CcproxyQuery,
 };
 use crate::db::MainStore;
 
@@ -12,7 +13,7 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use bytes::Bytes;
 use serde_json::json;
@@ -22,7 +23,7 @@ use std::sync::{Arc, Mutex};
 const TOOL_COMPAT_MODE: &str = "compat_mode";
 
 /// Defines all routes for the ccproxy module.
-pub fn routes(
+pub async fn routes(
     app_handle: tauri::AppHandle,
     main_store_arc: Arc<Mutex<MainStore>>,
     chat_state: Arc<ChatState>, //keep this
@@ -65,6 +66,16 @@ pub fn routes(
                     .await
                     .into_response()
             }),
+        )
+        .route(
+            "/api/show",
+            post(
+                |State(state): State<Arc<SharedState>>, body: Json<ShowRequest>| async move {
+                    handle_ollama_show(state.main_store.clone(), body)
+                        .await
+                        .into_response()
+                },
+            ),
         )
         .route(
             "/api/chat",
@@ -152,6 +163,14 @@ pub fn routes(
             "/v1/models",
             get(|State(state): State<Arc<SharedState>>| async move {
                 handle_openai_list_models(state.main_store.clone())
+                    .await
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1beta/models",
+            get(|State(state): State<Arc<SharedState>>| async move {
+                handle_gemini_list_models(state.main_store.clone())
                     .await
                     .into_response()
             }),
@@ -300,10 +319,16 @@ pub fn routes(
     log::info!("Registered Ollama route: GET /api/version");
     log::info!("Registered Ollama route: POST /api/chat");
     log::info!("Registered Ollama route: GET /api/tags");
+    log::info!("Registered Ollama route: POST /api/show");
     log::info!("Registered OpenAI route: POST /v1/chat/completions");
     log::info!("Registered OpenAI route: GET /v1/models");
     log::info!("Registered Claude route: POST /v1/messages");
     log::info!("Registered Gemini route: POST /v1beta/models/...");
+    log::info!("Registered Gemini route: GET /v1beta/models");
+
+    // MCP will be available on a separate port for now due to router state type incompatibility
+    // TODO: Future improvement could integrate MCP into ccproxy with proper state handling
+    log::info!("MCP service will be available on a separate port with endpoints /sse and /message");
 
     Router::new()
         .merge(unauthenticated_router) // Merge unauthenticated routes

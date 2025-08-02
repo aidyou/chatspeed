@@ -93,7 +93,6 @@ db:
   failed_to_insert_message_migration: "迁移数据时插入消息到新数据库失败: %{error}"
   failed_to_insert_message: "无法插入消息：%{error}"
   failed_to_lock_main_store: "锁定数据库失败: %{error}"
-  failed_to_lock_main_store: "锁定数据库失败: %{error}"
   failed_to_migrate_database: "无法迁移数据库: %{error}"
   failed_to_open_chat_db_for_migration: "无法打开用于迁移的旧聊天数据库 '%{path}': %{error}"
   failed_to_open_config_db_for_migration: "无法打开用于迁移的旧配置数据库 '%{path}': %{error}"
@@ -246,6 +245,13 @@ mcp:
     stdio_service_start_failed: "启动 Stdio 服务失败 (命令: %{command})，原因: %{error}"
     stdio_uvx_not_found_help: "这可能意味着您的 Python 环境或 “%{command}” 工具没有正确设置，或者它不在系统的 PATH 环境变量中。请检查您的 Python 和 “%{command}” 设置。"
   invalid_server_address: "无效的MCP服务器地址"
+  proxy:
+    server_started: "MCP 代理服务已启动，监听地址: %{address}"
+    server_stopped: "MCP 代理服务已停止"
+    server_start_failed: "启动 MCP 代理服务失败: %{error}"
+    tool_execution_error: "工具执行错误: %{error}"
+    service_description: "MCP 代理服务器 - 提供对所有已启用 MCP 工具的统一访问接口"
+
 
 network:
   client_build_error: "创建HTTP客户端失败: %{error}"
