@@ -2,6 +2,7 @@
   <div class="proxy-settings-container">
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="$t('settings.proxy.tabs.servers')" name="servers">
+        <!-- proxy list -->
         <div class="card">
           <!-- card title -->
           <div class="title">
@@ -12,64 +13,65 @@
               </span>
             </el-tooltip>
           </div>
-
-          <div class="list">
-            <template v-if="groupedProxyList.length > 0">
-              <div v-for="group in groupedProxyList" :key="group.name">
-                <div class="title">{{ group.name }}</div>
-                <div v-for="proxy in group.proxies" :key="proxy.alias" class="item">
-                  <div class="label">
-                    <Avatar :size="36" :text="proxy.alias" />
-                    <div class="label-text">
-                      {{ proxy.alias }}
-                      <small>{{
-                        $t('settings.proxy.mapsToModels', { count: proxy.targets.length })
-                      }}</small>
-                    </div>
-                  </div>
-
-                  <div class="value">
-                    <el-tooltip
-                      :content="$t('settings.proxy.copyProxyAlias')"
-                      placement="top"
-                      :hide-after="0"
-                      transition="none">
-                      <span class="icon" @click="copyModelToClipboard(proxy.alias)">
-                        <cs name="copy" size="16px" color="secondary" />
-                      </span>
-                    </el-tooltip>
-                    <el-tooltip
-                      :content="$t('settings.proxy.editProxy')"
-                      placement="top"
-                      :hide-after="0"
-                      transition="none">
-                      <span class="icon" @click="openEditDialog(proxy)">
-                        <cs name="edit" size="16px" color="secondary" />
-                      </span>
-                    </el-tooltip>
-                    <el-tooltip
-                      :content="$t('settings.proxy.deleteProxy')"
-                      placement="top"
-                      :hide-after="0"
-                      transition="none">
-                      <span class="icon" @click="handleDeleteProxyConfirmation(proxy.alias)">
-                        <cs name="trash" size="16px" color="secondary" />
-                      </span>
-                    </el-tooltip>
+          <template v-if="chatCompletionProxy">
+            <div
+              class="list"
+              v-for="(groupProxies, groupName) in chatCompletionProxy"
+              :key="groupName">
+              <div class="title">{{ groupName }}</div>
+              <div v-for="(proxyTargets, alias) in groupProxies" :key="alias" class="item">
+                <div class="label">
+                  <Avatar :size="36" :text="alias" />
+                  <div class="label-text">
+                    {{ alias }}
+                    <small>{{
+                      $t('settings.proxy.mapsToModels', { count: proxyTargets.length })
+                    }}</small>
                   </div>
                 </div>
+
+                <div class="value">
+                  <el-tooltip
+                    :content="$t('settings.proxy.copyProxyAlias')"
+                    placement="top"
+                    :hide-after="0"
+                    transition="none">
+                    <span class="icon" @click="copyModelToClipboard(alias)">
+                      <cs name="copy" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t('settings.proxy.editProxy')"
+                    placement="top"
+                    :hide-after="0"
+                    transition="none">
+                    <span class="icon" @click="openEditDialog(groupName, alias, proxyTargets)">
+                      <cs name="edit" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t('settings.proxy.deleteProxy')"
+                    placement="top"
+                    :hide-after="0"
+                    transition="none">
+                    <span class="icon" @click="handleDeleteProxyConfirmation(groupName, alias)">
+                      <cs name="trash" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+                </div>
               </div>
-            </template>
-            <template v-else>
-              <div class="empty-state">
-                {{ $t('settings.proxy.noProxiesFound') }}
-                <el-button type="primary" @click="openAddDialog" size="small">
-                  <cs name="add" />{{ $t('settings.proxy.addNow') }}
-                </el-button>
-              </div>
-            </template>
-          </div>
+            </div>
+          </template>
+          <list v-else>
+            <div class="empty-state">
+              {{ $t('settings.proxy.noProxiesFound') }}
+              <el-button type="primary" @click="openAddDialog" size="small">
+                <cs name="add" />{{ $t('settings.proxy.addNow') }}
+              </el-button>
+            </div>
+          </list>
         </div>
+        <!-- Proxy auth key -->
         <div class="card">
           <div class="title">
             <span>{{ $t('settings.proxy.proxyKey.title') }}</span>
@@ -199,9 +201,7 @@
           </el-form-item>
 
           <el-form-item :label="$t('settings.proxy.form.group')" prop="group">
-            <el-select
-              v-model="currentProxyConfig.group"
-              :placeholder="$t('settings.proxy.form.groupPlaceholder')">
+            <el-select v-model="currentProxyConfig.group">
               <el-option :label="$t('settings.proxy.defaultGroup')" value="default" />
               <el-option
                 v-for="group in proxyGroupStore.list"
@@ -213,15 +213,20 @@
 
           <el-divider>{{ $t('settings.proxy.form.targetModelsTitle') }}</el-divider>
 
-          <el-input
-            v-model="searchQuery"
-            :placeholder="$t('settings.proxy.form.searchModelsPlaceholder')"
-            clearable
-            class="search-input-dialog">
-            <template #prefix>
-              <cs name="search" />
-            </template>
-          </el-input>
+          <div style="display: flex; flex-direction: row; gap: 10px">
+            <el-input
+              v-model="searchQuery"
+              :placeholder="$t('settings.proxy.form.searchModelsPlaceholder')"
+              clearable
+              class="search-input-dialog">
+              <template #prefix>
+                <cs name="search" />
+              </template>
+            </el-input>
+            <el-checkbox type="primary" @click="handleFilterByChecked">
+              {{ $t('settings.proxy.form.checked') }}
+            </el-checkbox>
+          </div>
 
           <div class="providers-list-container">
             <el-scrollbar height="400px">
@@ -241,7 +246,7 @@
                         :src="provider.providerLogo"
                         class="provider-logo-small"
                         alt="logo" />
-                      <Avatar
+                      <avatar
                         v-else
                         :text="provider.name"
                         :size="20"
@@ -262,39 +267,35 @@
                 </template>
                 <div class="models-grid">
                   <template v-for="model in provider.models" :key="model.id">
-                    <el-tooltip
-                      :content="model.name || model.id"
-                      placement="top"
-                      :hide-after="0"
-                      transition="none"
-                      ><el-checkbox
-                        :model-value="isTargetSelected(provider.id, model.id)"
-                        @change="
-                          checked => handleTargetSelectionChange(checked, provider.id, model.id)
-                        "
-                        :label="`${model.id}`"
-                        border
-                        class="model-checkbox">
-                        {{ model.id }}
-                      </el-checkbox></el-tooltip
-                    >
+                    <el-checkbox
+                      :model-value="isTargetSelected(provider.id, model.id)"
+                      @change="
+                        checked => handleTargetSelectionChange(checked, provider.id, model.id)
+                      "
+                      :label="`${model.id}`"
+                      border
+                      class="model-checkbox">
+                      {{ model.id }}
+                    </el-checkbox>
                   </template>
                 </div>
               </el-card>
             </el-scrollbar>
           </div>
-          <el-form-item :label="$t('settings.proxy.form.selectedCount')">
-            <span>{{ currentProxyConfig.targets.length }}</span>
-          </el-form-item>
         </el-form>
       </div>
       <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-          <el-button type="primary" @click="handleSubmit" :loading="formLoading">
-            {{ $t('common.confirm') }}
-          </el-button>
-        </span>
+        <div class="dialog-footer-wrap">
+          <el-form-item :label="$t('settings.proxy.form.selectedCount')">
+            <span>{{ currentProxyConfig.targets.length }}</span>
+          </el-form-item>
+          <span class="dialog-footer">
+            <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
+            <el-button type="primary" @click="handleProxyConfigSubmit" :loading="formLoading">
+              {{ $t('common.confirm') }}
+            </el-button>
+          </span>
+        </div>
       </template>
     </el-dialog>
 
@@ -372,6 +373,8 @@ const isEditing = ref(false)
 const formLoading = ref(false)
 const proxyFormRef = ref(null)
 const editingAliasName = ref('')
+const editingGroupName = ref('')
+const filterByChecked = ref(false)
 
 const initialProxyFormState = () => ({
   name: '',
@@ -395,32 +398,8 @@ const baseUrl = computed(() => {
 
 const chatCompletionProxy = computed(() => settingStore.settings.chatCompletionProxy || {})
 
-const groupedProxyList = computed(() => {
-  const groups = {}
-  for (const alias in chatCompletionProxy.value) {
-    const rawProxy = chatCompletionProxy.value[alias]
-    let targets = []
-    let groupName = 'default'
-
-    if (Array.isArray(rawProxy)) {
-      // Old structure: rawProxy is directly the targets array
-      targets = rawProxy
-      groupName = 'default' // Default group for old data
-    } else if (typeof rawProxy === 'object' && rawProxy !== null) {
-      // New structure: rawProxy is an object { targets, group }
-      targets = rawProxy.targets || [] // Ensure targets is an array
-      groupName = rawProxy.group || 'default' // Ensure group is defined
-    }
-
-    if (!groups[groupName]) {
-      groups[groupName] = {
-        name: groupName === 'default' ? t('settings.proxy.defaultGroup') : groupName,
-        proxies: []
-      }
-    }
-    groups[groupName].proxies.push({ alias, targets, group: groupName })
-  }
-  return Object.values(groups)
+onMounted(() => {
+  // console.log('proxy setting', settingStore.settings.chatCompletionProxy.length)
 })
 
 const proxyKeysList = computed(() => {
@@ -434,13 +413,27 @@ const allProviders = computed(() =>
 )
 
 const filteredProviders = computed(() => {
+  const result = []
+  let currentProviders = [...allProviders.value]
+
+  if (filterByChecked.value) {
+    currentProviders = currentProviders.filter(provider => {
+      // Return true if any model within the provider has its 'checked' property set to true
+      return (
+        provider.models &&
+        provider.models.some(model =>
+          currentProxyConfig.value.targets.some(config => config.model === model.id)
+        )
+      )
+    })
+  }
+
   if (!searchQuery.value) {
-    return allProviders.value
+    return currentProviders
   }
   const query = searchQuery.value.toLowerCase()
-  const result = []
 
-  allProviders.value.forEach(provider => {
+  currentProviders.forEach(provider => {
     const providerNameMatch = provider.name.toLowerCase().includes(query)
     let matchingModels = []
 
@@ -475,29 +468,18 @@ const openAddDialog = () => {
   isEditing.value = false
   currentProxyConfig.value = initialProxyFormState()
   editingAliasName.value = ''
+  editingGroupName.value = ''
   dialogVisible.value = true
 }
 
-const openEditDialog = proxy => {
+const openEditDialog = (groupName, alias, proxyTargets) => {
   isEditing.value = true
-  editingAliasName.value = proxy.alias
-  let targets = []
-  let group = 'default'
-
-  // Compatibility for old data structure
-  if (Array.isArray(proxy.targets)) {
-    targets = proxy.targets
-    group = proxy.group || 'default'
-  } else if (typeof proxy === 'object' && proxy !== null) {
-    // New structure: proxy is an object { targets, group }
-    targets = proxy.targets || []
-    group = proxy.group || 'default'
-  }
-
+  editingAliasName.value = alias
+  editingGroupName.value = groupName
   currentProxyConfig.value = {
-    name: proxy.alias,
-    targets: JSON.parse(JSON.stringify(targets)), // Deep copy
-    group: group
+    name: alias,
+    targets: JSON.parse(JSON.stringify(proxyTargets)), // Deep copy
+    group: groupName
   }
   dialogVisible.value = true
 }
@@ -506,6 +488,7 @@ const resetForm = () => {
   currentProxyConfig.value = initialProxyFormState()
   isEditing.value = false
   editingAliasName.value = ''
+  editingGroupName.value = ''
   searchQuery.value = ''
   if (proxyFormRef.value) {
     proxyFormRef.value.resetFields()
@@ -518,12 +501,18 @@ const validateAliasUniqueness = (rule, value, callback) => {
   if (!value) {
     return callback(new Error(t('settings.proxy.validation.aliasRequired')))
   }
-  const existingAliases = Object.keys(chatCompletionProxy.value)
-  if (isEditing.value && editingAliasName.value === value) {
-    return callback()
-  }
-  if (existingAliases.includes(value)) {
-    return callback(new Error(t('settings.proxy.validation.aliasUnique')))
+  // Check uniqueness across all groups
+  for (const groupName in chatCompletionProxy.value) {
+    if (Object.prototype.hasOwnProperty.call(chatCompletionProxy.value, groupName)) {
+      const groupProxies = chatCompletionProxy.value[groupName]
+      if (Object.keys(groupProxies).includes(value)) {
+        // If editing, allow the current alias to be the same
+        if (isEditing.value && editingAliasName.value === value) {
+          return callback()
+        }
+        return callback(new Error(t('settings.proxy.validation.aliasUnique')))
+      }
+    }
   }
   return callback()
 }
@@ -562,7 +551,11 @@ const handleSelectAllModelsFromProvider = (provider, checked) => {
   })
 }
 
-const handleSubmit = async () => {
+const handleFilterByChecked = () => {
+  filterByChecked.value = !filterByChecked.value
+}
+
+const handleProxyConfigSubmit = async () => {
   if (!proxyFormRef.value) return
   await proxyFormRef.value.validate(async valid => {
     if (valid) {
@@ -573,17 +566,36 @@ const handleSubmit = async () => {
       formLoading.value = true
       try {
         const newProxies = { ...chatCompletionProxy.value }
-        if (
-          isEditing.value &&
-          editingAliasName.value &&
-          editingAliasName.value !== currentProxyConfig.value.name
-        ) {
-          delete newProxies[editingAliasName.value]
+
+        // If editing and alias or group changed, remove old entry
+        if (isEditing.value && editingAliasName.value) {
+          // Check if the alias or group has changed
+          const oldGroup = editingGroupName.value
+          const oldAlias = editingAliasName.value
+
+          if (
+            oldGroup !== currentProxyConfig.value.group ||
+            oldAlias !== currentProxyConfig.value.name
+          ) {
+            if (newProxies[oldGroup] && newProxies[oldGroup][oldAlias]) {
+              delete newProxies[oldGroup][oldAlias]
+              // If the group becomes empty, delete the group
+              if (Object.keys(newProxies[oldGroup]).length === 0) {
+                delete newProxies[oldGroup]
+              }
+            }
+          }
         }
-        newProxies[currentProxyConfig.value.name] = {
-          targets: currentProxyConfig.value.targets,
-          group: currentProxyConfig.value.group
+
+        // Ensure the target group exists
+        if (!newProxies[currentProxyConfig.value.group]) {
+          newProxies[currentProxyConfig.value.group] = {}
         }
+
+        // Add or update the proxy in the new structure
+        newProxies[currentProxyConfig.value.group][currentProxyConfig.value.name] =
+          currentProxyConfig.value.targets
+
         await settingStore.setSetting('chatCompletionProxy', newProxies)
         showMessage(
           isEditing.value ? t('settings.proxy.updateSuccess') : t('settings.proxy.addSuccess'),
@@ -600,7 +612,7 @@ const handleSubmit = async () => {
   })
 }
 
-const handleDeleteProxyConfirmation = alias => {
+const handleDeleteProxyConfirmation = (groupName, alias) => {
   ElMessageBox.confirm(
     t('settings.proxy.deleteConfirmText', { alias }),
     t('settings.proxy.deleteConfirmTitle'),
@@ -611,15 +623,21 @@ const handleDeleteProxyConfirmation = alias => {
     }
   )
     .then(async () => {
-      await handleDeleteProxy(alias)
+      await handleDeleteProxy(groupName, alias)
     })
     .catch(() => {})
 }
 
-const handleDeleteProxy = async aliasToDelete => {
+const handleDeleteProxy = async (groupName, aliasToDelete) => {
   try {
     const newProxies = { ...chatCompletionProxy.value }
-    delete newProxies[aliasToDelete]
+    if (newProxies[groupName] && newProxies[groupName][aliasToDelete]) {
+      delete newProxies[groupName][aliasToDelete]
+      // If the group becomes empty after deletion, remove the group
+      if (Object.keys(newProxies[groupName]).length === 0) {
+        delete newProxies[groupName]
+      }
+    }
     await settingStore.setSetting('chatCompletionProxy', newProxies)
     showMessage(t('settings.proxy.deleteSuccess'), 'success')
   } catch (error) {
@@ -641,9 +659,7 @@ const copyKeyToClipboard = async token => {
 
 const maskToken = token => {
   if (!token || token.length < 8) return '********'
-  return `${token.substring(0, 10)}****************************************${token.substring(
-    token.length - 10
-  )}`
+  return `${token.substring(0, 10)}******${token.substring(token.length - 10)}`
 }
 
 const openAddKeyDialog = () => {
@@ -898,6 +914,12 @@ const copyBaseUrlToClipboard = async () => {
   :deep(.el-divider__text) {
     font-size: var(--cs-font-size-sm);
     color: var(--cs-text-color-secondary);
+  }
+  .dialog-footer-wrap {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
   }
 }
 

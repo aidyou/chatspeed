@@ -16,6 +16,7 @@ pub struct ProxyGroup {
     pub prompt_injection: String,
     pub prompt_text: String,
     pub tool_filter: String,
+    pub temperature: Option<f32>,
     pub disabled: bool,
 }
 
@@ -26,18 +27,19 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, name, description, prompt_injection, prompt_text, tool_filter, disabled FROM {} ORDER BY id DESC",
+            "SELECT id, name, description, prompt_injection, prompt_text, tool_filter, temperature, disabled FROM {} ORDER BY id DESC",
             PROXY_GROUP_TABLE
         ))?;
         let rows = stmt.query_map([], |row| {
             Ok(ProxyGroup {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                prompt_injection: row.get(3)?,
-                prompt_text: row.get(4)?,
-                tool_filter: row.get(5)?,
-                disabled: row.get(6)?,
+                id: row.get("id")?,
+                name: row.get("name")?,
+                description: row.get("description")?,
+                prompt_injection: row.get("prompt_injection")?,
+                prompt_text: row.get("prompt_text")?,
+                tool_filter: row.get("tool_filter")?,
+                temperature: Some(row.get("temperature").unwrap_or(-1.0)),
+                disabled: row.get("disabled")?,
             })
         })?;
 
@@ -55,7 +57,7 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let mut stmt = conn.prepare(&format!(
-            "INSERT INTO {} (name, description, prompt_injection, prompt_text, tool_filter, disabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO {} (name, description, prompt_injection, prompt_text, tool_filter, temperature, disabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             PROXY_GROUP_TABLE
         ))?;
         let id = stmt.insert(params![
@@ -64,6 +66,7 @@ impl MainStore {
             item.prompt_injection,
             item.prompt_text,
             item.tool_filter,
+            item.temperature.unwrap_or(-1.0),
             item.disabled
         ])?;
         Ok(id)
@@ -75,7 +78,7 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let mut stmt = conn.prepare(&format!(
-            "UPDATE {} SET name = ?1, description = ?2, prompt_injection = ?3, prompt_text = ?4, tool_filter = ?5, disabled = ?6 WHERE id = ?7",
+            "UPDATE {} SET name = ?1, description = ?2, prompt_injection = ?3, prompt_text = ?4, tool_filter = ?5, temperature = ?6, disabled = ?7 WHERE id = ?8",
             PROXY_GROUP_TABLE
         ))?;
         stmt.execute(params![
@@ -84,6 +87,7 @@ impl MainStore {
             item.prompt_injection,
             item.prompt_text,
             item.tool_filter,
+            item.temperature.unwrap_or(-1.0),
             item.disabled,
             item.id
         ])?;

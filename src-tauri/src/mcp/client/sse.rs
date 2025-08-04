@@ -46,7 +46,8 @@ use rmcp::{
     model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam},
     service::RunningService,
     transport::{
-        common::client_side_sse::FixedInterval, sse_client::SseClientConfig, SseClientTransport,
+        common::client_side_sse::ExponentialBackoff, sse_client::SseClientConfig,
+        SseClientTransport,
     },
     RoleClient, ServiceExt as _,
 };
@@ -119,12 +120,14 @@ impl SseClient {
         // Renamed and made async
         let mut client_builder = Client::builder();
         let current_config = self.core.get_config().await;
-        let timeout = current_config
+
+        // set the connect timeout
+        let connect_timeout = current_config
             .timeout
             .map(|t| Duration::from_secs(t))
             .unwrap_or(Duration::from_secs(15));
-        if !timeout.is_zero() {
-            client_builder = client_builder.connect_timeout(timeout);
+        if !connect_timeout.is_zero() {
+            client_builder = client_builder.connect_timeout(connect_timeout);
         }
 
         if let Some(token) = current_config.bearer_token.as_ref() {
@@ -195,9 +198,9 @@ impl McpClient for SseClient {
         };
 
         let http_client = self.build_http_client_async().await?; // Call the async version
-        let retry_config = FixedInterval {
+        let retry_config = ExponentialBackoff {
             max_times: Some(10),
-            duration: Duration::from_secs(3),
+            base_duration: Duration::from_secs(2),
         };
         let transport_config = SseClientConfig {
             sse_endpoint: url.into(),

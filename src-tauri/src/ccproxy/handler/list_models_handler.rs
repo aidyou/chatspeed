@@ -1,3 +1,4 @@
+use axum::Json;
 use lazy_static::*;
 use regex::Regex;
 use rust_i18n::t;
@@ -7,11 +8,12 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use axum::Json;
 
 use crate::{
-    ccproxy::errors::ProxyResult,
-    ccproxy::types::BackendModelTarget,
+    ccproxy::{
+        errors::{CCProxyError, ProxyResult},
+        types::BackendModelTarget,
+    },
     db::MainStore,
 };
 
@@ -21,14 +23,23 @@ use crate::{
 /// Handles the `/v1/models` (list models) request.
 /// Reads `chat_completion_proxy` from `MainStore`.
 pub async fn handle_openai_list_models(
+    group_name: Option<String>,
     main_store: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<Json<Value>> {
+    let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
         if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, Vec<BackendModelTarget>> =
+            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
                 store_guard.get_config("chat_completion_proxy", HashMap::new());
             drop(store_guard);
-            cfg
+
+            cfg.get(group)
+                .cloned()
+                .ok_or_else(|| {
+                    log::warn!("Proxy group '{}' not found.", group);
+                    CCProxyError::ModelAliasNotFound(group.to_string())
+                })
+                .unwrap_or(HashMap::new())
         } else {
             log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
             HashMap::new()
@@ -103,13 +114,23 @@ pub async fn handle_openai_list_models(
 
 /// List proxied models handler for ollama
 /// GET `/api/tags`
-pub async fn handle_ollama_tags(main_store: Arc<Mutex<MainStore>>) -> ProxyResult<Json<Value>> {
+pub async fn handle_ollama_tags(
+    group_name: Option<String>,
+    main_store: Arc<Mutex<MainStore>>,
+) -> ProxyResult<Json<Value>> {
+    let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
         if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, Vec<BackendModelTarget>> =
+            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
                 store_guard.get_config("chat_completion_proxy", HashMap::new());
             drop(store_guard);
-            cfg
+            cfg.get(group)
+                .cloned()
+                .ok_or_else(|| {
+                    log::warn!("Proxy group '{}' not found.", group);
+                    CCProxyError::ModelAliasNotFound(group.to_string())
+                })
+                .unwrap_or(HashMap::new())
         } else {
             log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
             HashMap::new()
@@ -253,14 +274,23 @@ fn determine_quantization_level(model_name: &str, provider: &str) -> String {
 
 /// Handles the `/v1beta/models` (list models) request for gemini.
 pub async fn handle_gemini_list_models(
+    group_name: Option<String>,
     main_store: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<Json<Value>> {
+    let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
         if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, Vec<BackendModelTarget>> =
+            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
                 store_guard.get_config("chat_completion_proxy", HashMap::new());
             drop(store_guard);
-            cfg
+
+            cfg.get(group)
+                .cloned()
+                .ok_or_else(|| {
+                    log::warn!("Proxy group '{}' not found.", group);
+                    CCProxyError::ModelAliasNotFound(group.to_string())
+                })
+                .unwrap_or(HashMap::new())
         } else {
             log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
             HashMap::new()

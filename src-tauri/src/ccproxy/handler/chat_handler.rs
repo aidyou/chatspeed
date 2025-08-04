@@ -202,11 +202,12 @@ fn build_unified_request(
     }
 }
 
-pub async fn handle_openai_chat_completion(
+pub async fn handle_chat_completion(
     chat_protocol: ChatProtocol,
     client_headers: HeaderMap,
     client_query: CcproxyQuery,
     client_request_body: bytes::Bytes,
+    group_name: Option<String>,
     tool_compat_mode: bool,
     route_model_alias: String,
     generate_action: String,
@@ -225,8 +226,14 @@ pub async fn handle_openai_chat_completion(
     let proxy_alias =
         get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)?;
 
-    let proxy_model =
-        ModelResolver::get_ai_model_by_alias(main_store_arc.clone(), proxy_alias.clone()).await?;
+    let group_name = group_name.as_deref();
+
+    let proxy_model = ModelResolver::get_ai_model_by_alias(
+        main_store_arc.clone(),
+        proxy_alias.clone(),
+        group_name,
+    )
+    .await?;
 
     if chat_protocol == proxy_model.chat_protocol && !tool_compat_mode {
         let is_streaming = match chat_protocol {
@@ -269,8 +276,12 @@ pub async fn handle_openai_chat_completion(
     )?;
 
     // 2. Resolve model and get backend adapter
-    let proxy_model =
-        ModelResolver::get_ai_model_by_alias(main_store_arc.clone(), proxy_alias.clone()).await?;
+    let proxy_model = ModelResolver::get_ai_model_by_alias(
+        main_store_arc.clone(),
+        proxy_alias.clone(),
+        group_name,
+    )
+    .await?;
 
     let full_url = get_provider_full_url(
         proxy_model.chat_protocol.clone(),

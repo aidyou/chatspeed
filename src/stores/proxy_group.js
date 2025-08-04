@@ -12,6 +12,7 @@ export const useProxyGroupStore = defineStore('proxy_group', () => {
   }
 
   const add = async item => {
+    item.id = 0
     const id = await invoke('proxy_group_add', { item })
     await getList()
     return id

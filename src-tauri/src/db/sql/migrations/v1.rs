@@ -185,6 +185,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             prompt_injection TEXT NOT NULL,
             prompt_text TEXT NOT NULL,
             tool_filter TEXT NOT NULL,
+            temperature FLOAT NOT NULL,
             disabled BOOLEAN NOT NULL DEFAULT FALSE
         )",
     ),

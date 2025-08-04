@@ -6,11 +6,13 @@ use crate::{
         types::{BackendModelTarget, ChatCompletionProxyConfig, ProxyModel},
     },
     commands::chat::setup_chat_proxy,
+    constants::CFG_CHAT_COMPLETION_PROXY,
     db::{AiModel, MainStore},
 };
 use reqwest::Client;
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     str::FromStr,
     sync::{Arc, Mutex},
     vec,
@@ -45,9 +47,10 @@ impl ModelResolver {
     pub async fn get_ai_model_by_alias(
         main_store_arc: Arc<Mutex<MainStore>>,
         proxy_alias: String,
+        proxy_group: Option<&str>,
     ) -> ProxyResult<ProxyModel> {
         // First, ensure the global key pool is up to date
-        Self::update_global_key_pool(&main_store_arc, &proxy_alias).await?;
+        Self::update_global_key_pool(&main_store_arc, &proxy_alias, proxy_group).await?;
 
         // Get the next key from the global pool
         let global_key = CC_PROXY_ROTATOR
@@ -100,8 +103,9 @@ impl ModelResolver {
     async fn update_global_key_pool(
         main_store_arc: &Arc<Mutex<MainStore>>,
         proxy_alias: &str,
+        proxy_group: Option<&str>,
     ) -> ProxyResult<()> {
-        let backend_targets = Self::get_backend_targets(main_store_arc, proxy_alias)?;
+        let backend_targets = Self::get_backend_targets(main_store_arc, proxy_alias, proxy_group)?;
         // get next target index
         let index = CC_PROXY_ROTATOR.get_next_target_index(proxy_alias, backend_targets.len());
         let target = &backend_targets[index];
@@ -150,6 +154,7 @@ impl ModelResolver {
     fn get_backend_targets(
         main_store_arc: &Arc<Mutex<MainStore>>,
         proxy_alias: &str,
+        proxy_group: Option<&str>,
     ) -> ProxyResult<Vec<BackendModelTarget>> {
         let store_guard = main_store_arc.lock().map_err(|e| {
             let err_msg = format!("Failed to lock MainStore: {}", e);
@@ -157,12 +162,21 @@ impl ModelResolver {
         })?;
 
         let proxy_config: ChatCompletionProxyConfig =
-            store_guard.get_config("chat_completion_proxy", std::collections::HashMap::new());
+            store_guard.get_config(CFG_CHAT_COMPLETION_PROXY, HashMap::new());
+        let group = proxy_group.unwrap_or("default");
 
-        proxy_config.get(proxy_alias).cloned().ok_or_else(|| {
-            log::warn!("Proxy alias '{}' not found in configuration.", proxy_alias);
-            CCProxyError::ModelAliasNotFound(proxy_alias.to_string())
-        })
+        proxy_config
+            .get(group)
+            .and_then(|group_config| group_config.get(proxy_alias))
+            .cloned()
+            .ok_or_else(|| {
+                log::warn!(
+                    "Proxy alias '{}' not found in group '{}'.",
+                    proxy_alias,
+                    group
+                );
+                CCProxyError::ModelAliasNotFound(proxy_alias.to_string())
+            })
     }
 
     /// Get AI model details by provider_id
@@ -179,10 +193,7 @@ impl ModelResolver {
             .config
             .get_ai_model_by_id(provider_id)
             .map_err(|e| {
-                CCProxyError::ModelDetailsFetchError(format!(
-                    "Failed to get model details: {}",
-                    e
-                ))
+                CCProxyError::ModelDetailsFetchError(format!("Failed to get model details: {}", e))
             })
     }
 

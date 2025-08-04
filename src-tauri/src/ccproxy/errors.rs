@@ -64,7 +64,7 @@ impl IntoResponse for CCProxyError {
             ),
             CCProxyError::ModelAliasNotFound(alias) => (
                 StatusCode::NOT_FOUND,
-                "Not Found",
+                "Model Not Found",
                 t!("proxy.error.model_alias_not_found", alias = alias).to_string(),
             ),
             CCProxyError::ModelDetailsFetchError(id_str) => (

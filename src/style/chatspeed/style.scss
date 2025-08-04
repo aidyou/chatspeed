@@ -36,6 +36,11 @@
     border: 1px solid var(--cs-border-color);
     background: var(--cs-bg-color-light);
     box-sizing: border-box;
+    margin-top: var(--cs-space);
+
+    &:nth-child(2) {
+      margin-top: 0;
+    }
 
     .title {
       background: none;

@@ -109,12 +109,34 @@
                 :rows="3"
                 :placeholder="$t('settings.proxyGroup.form.toolFilterPlaceholder')" />
             </el-form-item>
+            <el-form-item :label="$t('settings.proxyGroup.form.temperature')" prop="temperature">
+              <div class="temperature-wrap">
+                <el-tooltip
+                  :content="$t('settings.proxyGroup.form.temperaturePlaceholder')"
+                  placement="top">
+                  <el-input-number
+                    v-model="currentGroup.temperature"
+                    :min="-1"
+                    :max="1"
+                    :step="0.1" />
+                </el-tooltip>
+                <el-slider
+                  v-model="currentGroup.temperature"
+                  :min="-1"
+                  :max="1"
+                  :step="0.1"
+                  style="width: 65%" />
+              </div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.proxyGroup.form.disabled')" prop="disabled">
+              <el-switch v-model="currentGroup.disabled" />
+            </el-form-item>
           </el-form>
         </div>
         <template #footer>
           <span class="dialog-footer">
             <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-            <el-button type="primary" @click="handleSubmit" :loading="formLoading">
+            <el-button type="primary" @click="handleGroupConfigSubmit" :loading="formLoading">
               {{ $t('common.confirm') }}
             </el-button>
           </span>
@@ -146,6 +168,7 @@ const initialGroupState = () => ({
   prompt_injection: 'off',
   prompt_text: '',
   tool_filter: '',
+  temperature: -1,
   disabled: false
 })
 
@@ -176,7 +199,7 @@ const resetForm = () => {
   formLoading.value = false
 }
 
-const handleSubmit = async () => {
+const handleGroupConfigSubmit = async () => {
   if (!proxyGroupFormRef.value) return
   await proxyGroupFormRef.value.validate(async valid => {
     if (valid) {
@@ -265,6 +288,15 @@ const handleDeleteGroup = id => {
 
 .form-container {
   max-height: calc(70vh - 120px);
+
+  .temperature-wrap {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    gap: var(--cs-space-md);
+    box-sizing: border-box;
+    padding-right: var(--cs-space-sm);
+  }
 }
 
 .proxy-group-edit-dialog {

@@ -1,6 +1,6 @@
-import { defineStore } from 'pinia';
+import { defineStore } from 'pinia'
 
-import { ref } from 'vue';
+import { ref } from 'vue'
 
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -53,25 +53,24 @@ const defaultSettings = {
     model: ''
   },
   // chat completion proxy settings
-  // This allows mapping a client-facing model alias (key) to one or more
-  // actual backend model configurations (value as an array).
-  // This enables features like load balancing or model fallback for a given alias.
+  // Allows defining grouped model aliases.
+  // Each top-level key is a “group name”; within that group lives the usual
+  // alias->targets mapping described below.
   //
-  // Example:
-  // "client-model-alias": [
-  //   { "id": 1, "model": "provider-specific-model-name-A" }, // Target model A from provider 1
-  //   { "id": 2, "model": "provider-specific-model-name-B" }  // Target model B from provider 2
-  // ]
+  // Structure:
+  //   "group-name": {
+  //     "client-model-alias": [
+  //       { "id": 1, "model": "provider-specific-model-name-A" },
+  //       { "id": 2, "model": "provider-specific-model-name-B" }
+  //     ],
+  //     ...
+  //   }
   //
-  // - The `key` (e.g., "client-model-alias") is the identifier the application uses
-  //   when requesting a chat completion through the proxy.
-  // - The `value` is an array, where each object specifies a target backend model:
-  //   - `id`: Refers to the ID of an AI model provider configuration
-  //           (e.g., an entry in your `ai_model` database table or store).
-  //           This provider configuration contains the API endpoint, key, etc.
-  //   - `model`: The specific model string (e.g., "gpt-4-turbo", "claude-3-opus")
-  //              to be used with the provider identified by `id`. This string should
-  //              correspond to a model supported by that provider.
+  // - The outer key (group name) is just a namespace to keep aliases organized.
+  // - The inner key (alias) is the public identifier the client uses.
+  // - Each object in the array specifies:
+  //     id    – an AI provider configuration id (endpoint, key, etc.)
+  //     model – the exact model name that provider should call
   chatCompletionProxy: {},
   // Chat completion proxy authentication keys.
   // This array stores a list of keys that can be used by clients
@@ -100,7 +99,7 @@ export const useSettingStore = defineStore('setting', () => {
   /**
    * settings is a key-value pair object
    */
-  const settings = ref({ ...defaultSettings });
+  const settings = ref({ ...defaultSettings })
 
   /**
    * Submits configuration to the database and updates local configuration cache upon success.
@@ -117,9 +116,11 @@ export const useSettingStore = defineStore('setting', () => {
       //
       // IMPORTANT:
       //  We must ensure the shortcut binding is successful before updating the database
-      if (key === 'mainWindowVisibleShortcut' ||
+      if (
+        key === 'mainWindowVisibleShortcut' ||
         key === 'assistantWindowVisibleShortcut' ||
-        key === 'noteWindowVisibleShortcut') {
+        key === 'noteWindowVisibleShortcut'
+      ) {
         try {
           await invoke('update_shortcut', { key: dbKey, value })
         } catch (error) {
@@ -151,10 +152,10 @@ export const useSettingStore = defineStore('setting', () => {
   const updateSettingStore = () => {
     return new Promise((resolve, reject) => {
       invoke('get_all_config')
-        .then((result) => {
+        .then(result => {
           // Update the entire object reactively
           settings.value = {
-            ...defaultSettings,
+            ...defaultSettings
           }
           if (!isEmpty(result)) {
             Object.keys(result).forEach(x => {
@@ -168,7 +169,7 @@ export const useSettingStore = defineStore('setting', () => {
     })
   }
 
-  const setTextMonitor = (start) => {
+  const setTextMonitor = start => {
     return new Promise((resolve, reject) => {
       if (start) {
         invoke('start_text_monitor', { force: true })
@@ -178,7 +179,9 @@ export const useSettingStore = defineStore('setting', () => {
           .catch(err => {
             settings.value.wordSelectionToolbar = false
             invoke('open_text_selection_permission_settings')
-            reject(i18n.global.t('settings.general.startWordSelectionToolbarFailed', { error: err }))
+            reject(
+              i18n.global.t('settings.general.startWordSelectionToolbarFailed', { error: err })
+            )
           })
       } else {
         invoke('stop_text_monitor')
@@ -221,5 +224,5 @@ export const useSettingStore = defineStore('setting', () => {
     setTextMonitor,
     reloadConfig,
     updateTray
-  };
-});
+  }
+})

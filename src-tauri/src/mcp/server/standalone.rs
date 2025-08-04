@@ -7,7 +7,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::mcp::server::handler::McpProxyHandler;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use rust_i18n::t;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 /// Starts a standalone MCP proxy server
@@ -33,7 +33,7 @@ pub async fn start_standalone_mcp_server(
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
         ct: cancellation_token.clone(),
-        sse_keep_alive: None,
+        sse_keep_alive: Some(Duration::from_secs(30)),
     };
 
     // Create SSE server

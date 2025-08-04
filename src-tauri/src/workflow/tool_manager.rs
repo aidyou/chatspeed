@@ -499,10 +499,10 @@ impl ToolManager {
                 let tools_result = client_arc_for_task.list_tools().await;
                 match tools_result {
                     Ok(tools) => {
-                        #[cfg(debug_assertions)]
-                        {
-                            log::debug!("MCP server {} tools: {:?}", server_name_for_task, tools);
-                        }
+                        // #[cfg(debug_assertions)]
+                        // {
+                        //     log::debug!("MCP server {} tools: {:?}", server_name_for_task, tools);
+                        // }
 
                         // Get the set of disabled tool names from the config
                         let disabled_tool_names: HashSet<String> =

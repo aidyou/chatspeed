@@ -28,6 +28,7 @@ pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 // chatspeed crawler api name
 pub const CFG_CHP_SERVER: &str = "chatspeed_crawler";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
+pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
 pub const CFG_CCPROXY_PORT: &str = "ccproxy_port";
 pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11434;
 pub const CFG_MCP_PROXY_PORT: &str = "mcp_proxy_port";
