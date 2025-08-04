@@ -710,11 +710,6 @@ impl BackendAdapter for OpenAIBackendAdapter {
             .map(|u| UnifiedUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-                tool_use_prompt_tokens: None,
-                thoughts_tokens: None,
-                cached_content_tokens: None,
                 ..Default::default()
             })
             .unwrap_or_default();

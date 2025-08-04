@@ -12,7 +12,7 @@ use futures_util::stream::StreamExt;
 use http::HeaderMap;
 use reqwest::header::{HeaderName as ReqwestHeaderName, HeaderValue as ReqwestHeaderValue};
 use rust_i18n::t;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -114,6 +114,7 @@ pub async fn handle_direct_forward(
     let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
+    body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
 
     if let Some(model_field) = body_json.get_mut("model") {
         *model_field = Value::String(proxy_model.model.clone());
@@ -202,4 +203,166 @@ pub async fn handle_direct_forward(
             ))
         }
     }
+}
+
+/// Enhances the request body sent directly to the AI provider.
+///
+/// Applies proxy-level transformations before forwarding:
+///   - **temperature scaling**: If `proxy_model.temperature` is not `1.0`,
+///     multiplies any existing `"temperature"` value in the body by the proxy setting.
+///   - **tool filtering**: Removes any function/tool whose name appears in
+///     `proxy_model.tool_filter`.
+///   - **prompt injection**: When tools are present (`"tools"` array is non-empty)
+///     and `proxy_model.prompt_injection` is not `"off"`, inserts or overwrites
+///     the system prompt with `proxy_model.prompt_text`.
+///     - `"enhance"` appends it.
+///     - `"replace"` wholly replaces the original system prompt.
+///     Protocol-specific locations:
+///       - **Claude**: `"system"` key.
+///       - **Gemini**: `"system_instruction"` object with `"parts"`.
+///       - **OpenAI / Ollama / HuggingFace**: `"messages"` array, inserting a new
+///         `"system"` message at position 0 if none exists.
+///
+/// Args:
+/// - `body`: Original request body as JSON.
+/// - `proxy_model`: Proxy settings influencing transformations.
+/// - `chat_protocol`: The target provider protocol clarifying field semantics.
+///
+/// Returns the updated JSON body ready for forwarding.
+fn enhance_direct_request_body(
+    mut body: Value,
+    proxy_model: &ProxyModel,
+    chat_protocol: &ChatProtocol,
+) -> Value {
+    if proxy_model.temperature != 1.0 {
+        if let Some(temperature) = body.get("temperature").and_then(|t| t.as_f64()) {
+            if let Some(body_map) = body.as_object_mut() {
+                body_map.insert(
+                    "temperature".to_string(),
+                    json!((proxy_model.temperature as f64) * temperature),
+                );
+            }
+        }
+    }
+
+    if !proxy_model.tool_filter.is_empty() {
+        if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
+            tools.retain(|tool| {
+                let tool_name = match chat_protocol {
+                    ChatProtocol::Claude => tool.get("name").and_then(|n| n.as_str()),
+                    ChatProtocol::Gemini => tool
+                        .get("function_declarations")
+                        .and_then(|f| f.as_array())
+                        .and_then(|f| f.first())
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str()),
+                    _ => tool
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str()),
+                };
+
+                if let Some(name) = tool_name {
+                    return !proxy_model.tool_filter.contains_key(name);
+                }
+                true
+            });
+        }
+    }
+
+    let has_tools = body
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map_or(false, |t| !t.is_empty());
+
+    if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
+        if let Some(body_map) = body.as_object_mut() {
+            match chat_protocol {
+                ChatProtocol::Claude => {
+                    let system_prompt_field = "system";
+                    let original_prompt = body_map
+                        .get(system_prompt_field)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    if proxy_model.prompt_injection == "enhance" {
+                        body_map.insert(
+                            system_prompt_field.to_string(),
+                            json!(format!(
+                                "{}\n\n{}",
+                                original_prompt, proxy_model.prompt_text
+                            )),
+                        );
+                    } else if proxy_model.prompt_injection == "replace" {
+                        body_map.insert(
+                            system_prompt_field.to_string(),
+                            json!(proxy_model.prompt_text.clone()),
+                        );
+                    }
+                }
+                ChatProtocol::Gemini => {
+                    let system_prompt_field = "system_instruction";
+                    let original_prompt = body_map
+                        .get(system_prompt_field)
+                        .and_then(|v| v.get("parts"))
+                        .and_then(|p| p.as_array())
+                        .and_then(|p| p.first())
+                        .and_then(|p| p.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    let new_prompt = if proxy_model.prompt_injection == "enhance" {
+                        format!("{}\n\n{}", original_prompt, proxy_model.prompt_text)
+                    } else {
+                        proxy_model.prompt_text.clone()
+                    };
+
+                    body_map.insert(
+                        system_prompt_field.to_string(),
+                        json!({ "parts": [{ "text": new_prompt }] }),
+                    );
+                }
+                ChatProtocol::OpenAI | ChatProtocol::Ollama | ChatProtocol::HuggingFace => {
+                    if let Some(messages) =
+                        body_map.get_mut("messages").and_then(|m| m.as_array_mut())
+                    {
+                        let mut system_message_found = false;
+                        if let Some(system_message) = messages
+                            .iter_mut()
+                            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+                        {
+                            if let Some(content) =
+                                system_message.get("content").and_then(|c| c.as_str())
+                            {
+                                let new_content = if proxy_model.prompt_injection == "enhance" {
+                                    format!("{}\n\n{}", content, proxy_model.prompt_text)
+                                } else {
+                                    // replace
+                                    proxy_model.prompt_text.clone()
+                                };
+                                if let Some(msg_obj) = system_message.as_object_mut() {
+                                    msg_obj.insert("content".to_string(), json!(new_content));
+                                }
+                                system_message_found = true;
+                            }
+                        }
+
+                        if !system_message_found {
+                            messages.insert(
+                                0,
+                                json!({
+                                    "role": "system",
+                                    "content": proxy_model.prompt_text.clone()
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    body
 }

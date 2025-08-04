@@ -62,14 +62,14 @@
               </div>
             </div>
           </template>
-          <list v-else>
+          <div v-else class="list">
             <div class="empty-state">
               {{ $t('settings.proxy.noProxiesFound') }}
               <el-button type="primary" @click="openAddDialog" size="small">
                 <cs name="add" />{{ $t('settings.proxy.addNow') }}
               </el-button>
             </div>
-          </list>
+          </div>
         </div>
         <!-- Proxy auth key -->
         <div class="card">
@@ -188,6 +188,17 @@
           label-width="auto"
           ref="proxyFormRef"
           style="padding-top: 10px">
+          <el-form-item :label="$t('settings.proxy.form.group')" prop="group">
+            <el-select v-model="currentProxyConfig.group">
+              <el-option :label="$t('settings.proxy.defaultGroup')" value="default" />
+              <el-option
+                v-for="group in proxyGroupStore.list"
+                :key="group.id"
+                :label="group.name"
+                :value="group.name" />
+            </el-select>
+          </el-form-item>
+
           <el-form-item
             :label="$t('settings.proxy.form.aliasName')"
             prop="name"
@@ -198,17 +209,6 @@
             <el-input
               v-model="currentProxyConfig.name"
               :placeholder="$t('settings.proxy.form.aliasPlaceholder')" />
-          </el-form-item>
-
-          <el-form-item :label="$t('settings.proxy.form.group')" prop="group">
-            <el-select v-model="currentProxyConfig.group">
-              <el-option :label="$t('settings.proxy.defaultGroup')" value="default" />
-              <el-option
-                v-for="group in proxyGroupStore.list"
-                :key="group.id"
-                :label="group.name"
-                :value="group.name" />
-            </el-select>
           </el-form-item>
 
           <el-divider>{{ $t('settings.proxy.form.targetModelsTitle') }}</el-divider>
@@ -497,21 +497,20 @@ const resetForm = () => {
   formLoading.value = false
 }
 
-const validateAliasUniqueness = (rule, value, callback) => {
+const validateAliasUniqueness = (_rule, value, callback) => {
   if (!value) {
     return callback(new Error(t('settings.proxy.validation.aliasRequired')))
   }
+  const groupName = currentProxyConfig.value || 'default'
   // Check uniqueness across all groups
-  for (const groupName in chatCompletionProxy.value) {
-    if (Object.prototype.hasOwnProperty.call(chatCompletionProxy.value, groupName)) {
-      const groupProxies = chatCompletionProxy.value[groupName]
-      if (Object.keys(groupProxies).includes(value)) {
-        // If editing, allow the current alias to be the same
-        if (isEditing.value && editingAliasName.value === value) {
-          return callback()
-        }
-        return callback(new Error(t('settings.proxy.validation.aliasUnique')))
+  if (Object.prototype.hasOwnProperty.call(chatCompletionProxy.value, groupName)) {
+    const groupProxies = chatCompletionProxy.value[groupName]
+    if (Object.keys(groupProxies).includes(value)) {
+      // If editing, allow the current alias to be the same
+      if (isEditing.value && editingAliasName.value === value) {
+        return callback()
       }
+      return callback(new Error(t('settings.proxy.validation.aliasUnique')))
     }
   }
   return callback()

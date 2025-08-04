@@ -64,4 +64,9 @@ pub struct ProxyModel {
     pub model: String,
     pub api_key: String,
     pub metadata: Option<Value>,
+    pub prompt_injection: String,
+    pub prompt_text: String,
+    pub tool_filter: HashMap<String, i8>,
+    pub temperature: f32,
+    // pub max_context: usize,
 }

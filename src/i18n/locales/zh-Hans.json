@@ -452,14 +452,16 @@
         "description": "描述",
         "disabled": "禁用",
         "descriptionPlaceholder": "请输入描述",
+        "maxContext": "最大上下文长度",
+        "maxContextPlaceholder": "请参考各模型的发布信息或者接口信息，0 值将不设置",
         "promptInjection": "提示词注入",
         "promptInjectionPlaceholder": "请选择提示词注入方式",
         "promptText": "提示词文本",
         "promptTextPlaceholder": "请输入提示词文本",
         "toolFilter": "工具过滤",
         "toolFilterPlaceholder": "请输入要过滤的工具名称，每行一个",
-        "temperature": "温度",
-        "temperaturePlaceholder": "模型输出的随机性。较高的值（如 0.8）会使输出更随机，而较低的值（如 0.2）会使其更集中和确定，负数表示不设置。"
+        "temperatureRatio": "温度比例",
+        "temperatureRatioPlaceholder": "真实温度 = 请求温度 * 温度比例"
       },
       "validation": {
         "nameRequired": "分组名称不能为空。"

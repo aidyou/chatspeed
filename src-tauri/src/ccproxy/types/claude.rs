@@ -299,7 +299,7 @@ where
                 .into_iter()
                 .map(|x| x.text.clone())
                 .collect::<Vec<String>>()
-                .join("\n"),
+                .join("\n\n"),
         )),
         None => Ok(None),
     }

@@ -69,6 +69,12 @@ fn get_proxy_alias_from_body(
     }
 }
 
+/// build unified request from http post
+///
+/// # Return
+///     - UnifiedRequest: The unified request object.
+///     - String: The route model alias.
+///     - bool: The tool compatibility mode.
 fn build_unified_request(
     chat_protocol: ChatProtocol,
     client_request_body: bytes::Bytes,
@@ -267,13 +273,44 @@ pub async fn handle_chat_completion(
         return Ok(result.into_response());
     }
 
-    let (unified_request, proxy_alias, is_streaming_request) = build_unified_request(
+    let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),
         client_request_body.clone(),
         tool_compat_mode,
         route_model_alias,
         generate_action,
     )?;
+
+    if proxy_model.temperature != 1.0 && unified_request.temperature.is_some() {
+        unified_request.temperature =
+            Some(proxy_model.temperature * unified_request.temperature.unwrap_or(0.0));
+    }
+
+    if proxy_model.tool_filter.len() > 0 {
+        unified_request.tools = unified_request.tools.map(|tools| {
+            tools
+                .into_iter()
+                .filter(|tool| !proxy_model.tool_filter.contains_key(&tool.name))
+                .collect()
+        });
+    }
+
+    let has_tools = unified_request
+        .tools
+        .as_ref()
+        .map_or(false, |t| t.len() > 0);
+
+    if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
+        if proxy_model.prompt_injection == "enhance" {
+            unified_request.system_prompt = Some(format!(
+                "{}\n\n{}",
+                unified_request.system_prompt.unwrap_or_default(),
+                proxy_model.prompt_text,
+            ));
+        } else if proxy_model.prompt_injection == "replace" {
+            unified_request.system_prompt = Some(proxy_model.prompt_text);
+        }
+    }
 
     // 2. Resolve model and get backend adapter
     let proxy_model = ModelResolver::get_ai_model_by_alias(

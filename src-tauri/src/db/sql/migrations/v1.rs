@@ -180,12 +180,13 @@ pub const INIT_SQL: &[(&str, &str)] = &[
         "proxy_group",
         "CREATE TABLE IF NOT EXISTS proxy_group (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
+            name TEXT NOT NULL UNIQUE,
             description TEXT NOT NULL,
             prompt_injection TEXT NOT NULL,
             prompt_text TEXT NOT NULL,
             tool_filter TEXT NOT NULL,
             temperature FLOAT NOT NULL,
+            metadata TEXT,
             disabled BOOLEAN NOT NULL DEFAULT FALSE
         )",
     ),

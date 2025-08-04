@@ -7,7 +7,7 @@ use crate::{
     },
     commands::chat::setup_chat_proxy,
     constants::CFG_CHAT_COMPLETION_PROXY,
-    db::{AiModel, MainStore},
+    db::{AiModel, MainStore, ProxyGroup},
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -88,6 +88,36 @@ impl ModelResolver {
         let backend_chat_protocol = ChatProtocol::from_str(&ai_model_details.api_protocol)
             .map_err(|e| CCProxyError::InvalidProtocolError(e.to_string()))?;
 
+        // Get the proxy group detail
+        let group_config = Self::get_proxy_group(&main_store_arc, proxy_group.unwrap_or("default"));
+        let prompt_injection = group_config
+            .as_ref()
+            .map_or("off".to_string(), |g| g.prompt_injection.clone());
+        let prompt_text = group_config
+            .as_ref()
+            .map_or("".to_string(), |g| g.prompt_text.clone());
+        let tool_filter = group_config.as_ref().map_or(HashMap::new(), |g| {
+            let mut map = HashMap::new();
+            for it in g.tool_filter.split("\n").into_iter() {
+                if it.trim().is_empty() {
+                    continue;
+                }
+                map.insert(it.trim().to_string(), 1_i8);
+            }
+            map
+        });
+        let temperature = group_config
+            .as_ref()
+            .map_or(1.0, |g| g.temperature.unwrap_or(1.0));
+        // let max_context = group_config.as_ref().map_or(0, |g| {
+        //     g.metadata
+        //         .as_ref()
+        //         .and_then(|m| m.as_object())
+        //         .and_then(|obj| obj.get("maxContext"))
+        //         .and_then(|v| v.as_u64())
+        //         .unwrap_or(0) as usize
+        // });
+
         Ok(ProxyModel {
             provider: ai_model_details.name.clone(),
             chat_protocol: backend_chat_protocol,
@@ -95,6 +125,11 @@ impl ModelResolver {
             model: global_key.model_name,
             api_key: global_key.key,
             metadata: ai_model_details.metadata.clone(),
+            prompt_injection,
+            prompt_text,
+            tool_filter,
+            temperature,
+            // max_context,
         })
     }
 
@@ -194,6 +229,23 @@ impl ModelResolver {
             .get_ai_model_by_id(provider_id)
             .map_err(|e| {
                 CCProxyError::ModelDetailsFetchError(format!("Failed to get model details: {}", e))
+            })
+    }
+
+    fn get_proxy_group(
+        main_store_arc: &Arc<Mutex<MainStore>>,
+        group_name: &str,
+    ) -> ProxyResult<ProxyGroup> {
+        let store_guard = main_store_arc.lock().map_err(|e| {
+            let err_msg = format!("Failed to lock MainStore: {}", e);
+            CCProxyError::StoreLockError(err_msg)
+        })?;
+
+        store_guard
+            .config
+            .get_proxy_group_by_name(group_name)
+            .map_err(|e| {
+                CCProxyError::ModelDetailsFetchError(format!("Failed to get proxy group: {}", e))
             })
     }
 

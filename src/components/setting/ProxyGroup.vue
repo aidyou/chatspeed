@@ -109,23 +109,44 @@
                 :rows="3"
                 :placeholder="$t('settings.proxyGroup.form.toolFilterPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="$t('settings.proxyGroup.form.temperature')" prop="temperature">
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.temperatureRatio')"
+              prop="temperature">
               <div class="temperature-wrap">
                 <el-tooltip
-                  :content="$t('settings.proxyGroup.form.temperaturePlaceholder')"
+                  :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')"
                   placement="top">
                   <el-input-number
                     v-model="currentGroup.temperature"
-                    :min="-1"
-                    :max="1"
+                    :min="0"
+                    :max="1.0"
                     :step="0.1" />
                 </el-tooltip>
                 <el-slider
                   v-model="currentGroup.temperature"
-                  :min="-1"
-                  :max="1"
+                  :min="0"
+                  :max="1.0"
                   :step="0.1"
                   style="width: 65%" />
+              </div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.proxyGroup.form.maxContext')" prop="maxContext">
+              <div class="temperature-wrap">
+                <el-tooltip
+                  :content="$t('settings.proxyGroup.form.maxContextPlaceholder')"
+                  placement="top">
+                  <el-input-number
+                    v-model="currentGroup.metadata.maxContext"
+                    :min="0"
+                    :max="100000000"
+                    :step="1000" />
+                  <el-slider
+                    v-model="currentGroup.metadata.maxContext"
+                    :min="0"
+                    :max="100000000"
+                    :step="1000"
+                    style="width: 65%" />
+                </el-tooltip>
               </div>
             </el-form-item>
             <el-form-item :label="$t('settings.proxyGroup.form.disabled')" prop="disabled">
@@ -168,7 +189,8 @@ const initialGroupState = () => ({
   prompt_injection: 'off',
   prompt_text: '',
   tool_filter: '',
-  temperature: -1,
+  temperature: 1.0,
+  metadata: { maxContext: 0 },
   disabled: false
 })
 
@@ -187,6 +209,10 @@ const openAddDialog = () => {
 const openEditDialog = group => {
   isEditing.value = true
   currentGroup.value = { ...group }
+  if (!currentGroup.value.metadata) {
+    currentGroup.value.metadata = { maxContext: 0 }
+  }
+  console.log(currentGroup.value)
   dialogVisible.value = true
 }
 
@@ -204,12 +230,14 @@ const handleGroupConfigSubmit = async () => {
   await proxyGroupFormRef.value.validate(async valid => {
     if (valid) {
       formLoading.value = true
+      const newGroup = { ...currentGroup.value }
+      console.log(newGroup)
       try {
         if (isEditing.value) {
-          await proxyGroupStore.update(currentGroup.value)
+          await proxyGroupStore.update(newGroup)
           showMessage(t('settings.proxyGroup.updateSuccess'), 'success')
         } else {
-          await proxyGroupStore.add(currentGroup.value)
+          await proxyGroupStore.add(newGroup)
           showMessage(t('settings.proxyGroup.addSuccess'), 'success')
         }
         dialogVisible.value = false

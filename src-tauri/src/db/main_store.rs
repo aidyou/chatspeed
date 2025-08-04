@@ -1,4 +1,4 @@
-use crate::db::error::StoreError;
+use crate::db::{error::StoreError, ProxyGroup};
 
 use log::error;
 use rusqlite::{params, Connection, Result};
@@ -154,6 +154,26 @@ impl Config {
     pub fn set_mcps(&mut self, mcps: Vec<Mcp>) {
         self.mcps = mcps;
     }
+
+    pub fn get_proxy_groups(&self) -> Vec<ProxyGroup> {
+        self.proxy_groups.clone()
+    }
+
+    pub fn get_proxy_group_by_name(&self, name: &str) -> Result<ProxyGroup, StoreError> {
+        self.proxy_groups
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .ok_or_else(|| {
+                StoreError::NotFound(
+                    t!("db.proxy_group_not_found_by_name", name = name).to_string(),
+                )
+            })
+    }
+
+    pub fn set_proxy_groups(&mut self, proxy_groups: Vec<ProxyGroup>) {
+        self.proxy_groups = proxy_groups;
+    }
 }
 
 /// Manages unified storage for the application, including chat history and configuration.
@@ -223,12 +243,14 @@ impl MainStore {
         let ai_models = Self::get_all_ai_models(conn)?;
         let ai_skills = Self::get_all_ai_skills(conn)?;
         let mcps = Self::get_all_mcps(conn)?;
+        let proxy_groups = Self::proxy_group_list(conn)?;
 
         Ok(Config {
             settings,
             ai_models,
             ai_skills,
             mcps,
+            proxy_groups,
         })
     }
 

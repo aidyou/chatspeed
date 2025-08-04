@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::db::ProxyGroup;
+
 use super::mcp::Mcp;
 
 // use crate::plugins::traits::PluginType;
@@ -143,6 +145,7 @@ pub struct Config {
     pub ai_skills: Vec<AiSkill>,
     /// Mcp server configurations.
     pub mcps: Vec<Mcp>,
+    pub proxy_groups: Vec<ProxyGroup>,
 }
 
 // =================================================
