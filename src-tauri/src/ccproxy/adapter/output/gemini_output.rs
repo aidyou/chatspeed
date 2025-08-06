@@ -105,7 +105,7 @@ impl OutputAdapter for GeminiOutputAdapter {
         chunk: UnifiedStreamChunk,
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
-        let event = Event::default();
+        let event = Event::default().set_gemini();
         match chunk {
             UnifiedStreamChunk::MessageStart {
                 id: _,

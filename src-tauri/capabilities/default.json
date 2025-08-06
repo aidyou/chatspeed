@@ -35,7 +35,19 @@
     "fs:allow-download-write",
     "fs:allow-write-file",
     "opener:allow-open-url",
-    "opener:allow-default-urls"
+    "opener:allow-default-urls",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$APPLOG/ccproxy.log"
+        },
+        {
+          "path": "$APPLOG/chatspeed.log"
+        }
+      ]
+    }
   ],
   "plugins": {
     "fs": {

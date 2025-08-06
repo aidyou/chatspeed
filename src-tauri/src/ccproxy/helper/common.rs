@@ -18,7 +18,7 @@ use std::{
     vec,
 };
 
-pub const DEFAULT_LOG_TO_FILE: bool = true;
+pub const DEFAULT_LOG_TO_FILE: bool = false;
 
 #[derive(Deserialize)]
 pub struct CcproxyQuery {
@@ -50,16 +50,47 @@ impl ModelResolver {
         proxy_group: Option<&str>,
     ) -> ProxyResult<ProxyModel> {
         // First, ensure the global key pool is up to date
-        Self::update_global_key_pool(&main_store_arc, &proxy_alias, proxy_group).await?;
+        let (backend_target, ai_model_detail) =
+            Self::update_global_key_pool(&main_store_arc, &proxy_alias, proxy_group).await?;
+
+        // Ollama hasn't api key
+        if ai_model_detail.api_protocol == ChatProtocol::Ollama.to_string() {
+            let group = Self::get_proxy_group(&main_store_arc, proxy_group.unwrap_or("default"))?;
+
+            return Ok(ProxyModel {
+                provider: ai_model_detail.name.clone(),
+                chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
+                base_url: ai_model_detail.base_url,
+                model: backend_target.model.clone(),
+                api_key: ai_model_detail.api_key.clone(),
+                metadata: ai_model_detail.metadata.clone(),
+                prompt_injection: group.prompt_injection.clone(),
+                prompt_text: group.prompt_text.clone(),
+                tool_filter: {
+                    let mut map = HashMap::new();
+                    for it in group.tool_filter.split('\n').into_iter() {
+                        if it.trim().is_empty() {
+                            continue;
+                        }
+                        map.insert(it.trim().to_string(), 1_i8);
+                    }
+                    map
+                },
+                temperature: group.temperature.unwrap_or(1.0),
+            });
+        }
+
+        let group_name = proxy_group.unwrap_or("default");
+        let composite_key = format!("{}/{}", group_name, proxy_alias);
 
         // Get the next key from the global pool
         let global_key = CC_PROXY_ROTATOR
-            .get_next_global_key(&proxy_alias)
+            .get_next_global_key(&composite_key)
             .await
             .ok_or_else(|| {
                 log::warn!(
-                    "No keys available in global pool for alias '{}'",
-                    proxy_alias
+                    "No keys available in global pool for composite key '{}'",
+                    composite_key
                 );
                 CCProxyError::NoBackendTargets(proxy_alias.clone())
             })?;
@@ -98,7 +129,7 @@ impl ModelResolver {
             .map_or("".to_string(), |g| g.prompt_text.clone());
         let tool_filter = group_config.as_ref().map_or(HashMap::new(), |g| {
             let mut map = HashMap::new();
-            for it in g.tool_filter.split("\n").into_iter() {
+            for it in g.tool_filter.split('\n').into_iter() {
                 if it.trim().is_empty() {
                     continue;
                 }
@@ -139,14 +170,23 @@ impl ModelResolver {
         main_store_arc: &Arc<Mutex<MainStore>>,
         proxy_alias: &str,
         proxy_group: Option<&str>,
-    ) -> ProxyResult<()> {
+    ) -> ProxyResult<(BackendModelTarget, AiModel)> {
         let backend_targets = Self::get_backend_targets(main_store_arc, proxy_alias, proxy_group)?;
+        let group_name = proxy_group.unwrap_or("default");
+        let composite_key = format!("{}/{}", group_name, proxy_alias);
+
         // get next target index
-        let index = CC_PROXY_ROTATOR.get_next_target_index(proxy_alias, backend_targets.len());
+        let index = CC_PROXY_ROTATOR.get_next_target_index(&composite_key, backend_targets.len());
         let target = &backend_targets[index];
 
         // Get AI model details for this target
         let ai_model = Self::get_ai_model_details(main_store_arc, target.id)?;
+
+        // Ollama hasn't keys
+        if ai_model.api_protocol == ChatProtocol::Ollama.to_string() && ai_model.api_key.is_empty()
+        {
+            return Ok((target.clone(), ai_model));
+        }
 
         // Parse all keys for this provider
         let keys: Vec<String> = if ai_model.api_key.contains('\n') {
@@ -166,15 +206,15 @@ impl ModelResolver {
         };
 
         log::info!(
-            "Updated global key pool for alias '{}': {} keys from {} providers",
-            proxy_alias,
+            "Updated global key pool for composite key '{}': {} keys from {} providers",
+            composite_key,
             keys.len(),
             backend_targets.len()
         );
 
         CC_PROXY_ROTATOR
             .update_provider_keys_efficient(
-                proxy_alias,
+                &composite_key,
                 ai_model.id.unwrap_or_default(),
                 &ai_model.base_url,
                 &target.model,
@@ -182,7 +222,7 @@ impl ModelResolver {
             )
             .await;
 
-        Ok(())
+        Ok((target.clone(), ai_model))
     }
 
     /// Get the list of backend targets corresponding to the model alias
@@ -205,6 +245,10 @@ impl ModelResolver {
             .and_then(|group_config| group_config.get(proxy_alias))
             .cloned()
             .ok_or_else(|| {
+                log::debug!(
+                    "proxy configs: {}",
+                    serde_json::to_string_pretty(&proxy_config).unwrap_or_default()
+                );
                 log::warn!(
                     "Proxy alias '{}' not found in group '{}'.",
                     proxy_alias,
@@ -333,18 +377,21 @@ pub fn get_provider_full_url(
             }),
         ChatProtocol::Claude => format!("{}/messages", base_url.trim_end_matches('/')),
         ChatProtocol::Gemini => {
-            let action = if is_streaming_request {
-                "streamGenerateContent"
+            if is_streaming_request {
+                format!(
+                    "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+                    base_url.trim_end_matches('/'),
+                    model_id,
+                    api_key
+                )
             } else {
-                "generateContent"
-            };
-            format!(
-                "{}/models/{}:{}?alt=sse&key={}",
-                base_url.trim_end_matches('/'),
-                model_id,
-                action,
-                api_key,
-            )
+                format!(
+                    "{}/models/{}:generateContent?key={}",
+                    base_url.trim_end_matches('/'),
+                    model_id,
+                    api_key
+                )
+            }
         }
     }
 }

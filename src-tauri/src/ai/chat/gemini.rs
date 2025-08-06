@@ -882,7 +882,11 @@ impl AiChatTrait for GeminiChat {
 
         if api_key.is_none() || api_key.as_deref().unwrap_or("").is_empty() {
             return Err(AiError::InvalidInput(
-                t!("api_key_is_require_for_list_models", provider = "Gemini").to_string(),
+                t!(
+                    "chat.api_key_is_require_for_list_models",
+                    provider = "Gemini"
+                )
+                .to_string(),
             ));
         }
         let endpoint_with_key = format!("/models?key={}", api_key.unwrap_or_default());

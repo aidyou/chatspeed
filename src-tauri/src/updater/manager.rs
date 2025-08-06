@@ -11,14 +11,15 @@
 use super::error::{Result, UpdateError};
 use super::types::VersionInfo;
 use log::{info, warn};
-use rust_i18n::t;
 use semver::Version;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 
 const EVENT_UPDATE_PROGRESS: &str = "update://download-progress";
 const EVENT_UPDATE_READY: &str = "update://ready";
 const EVENT_UPDATE_AVAILABLE: &str = "update://available";
+const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Manages the update process
 pub struct UpdateManager {
@@ -46,24 +47,16 @@ impl UpdateManager {
     /// * `Ok(false)` if the version should not be installed
     /// * `Err(UpdateError)` if there was an error during the check
     pub fn should_install(&self, version_info: &VersionInfo) -> Result<bool> {
-        let current_version = self.app.package_info().version.clone().to_string();
+        let current_version_str = self.app.package_info().version.to_string();
+        let new_version_str = &version_info.version;
 
-        let new_version = Version::parse(&version_info.version).map_err(|e| {
-            UpdateError::VersionCheckError(
-                t!("updater.invalid_version_format", error = e.to_string()).to_string(),
-            )
+        let new_version = Version::parse(new_version_str).map_err(|e| {
+            UpdateError::VersionParseError(new_version_str.to_string(), e.to_string())
         })?;
-        let current = Version::parse(&current_version).map_err(|e| {
-            UpdateError::VersionCheckError(
-                t!(
-                    "updater.invalid_current_version_format",
-                    error = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
+        let current_version = Version::parse(&current_version_str)
+            .map_err(|e| UpdateError::VersionParseError(current_version_str, e.to_string()))?;
 
-        Ok(new_version > current)
+        Ok(new_version > current_version)
     }
 
     /// Checks for available updates
@@ -71,11 +64,10 @@ impl UpdateManager {
     /// Returns Some(VersionInfo) if an update is available, None if no update is available.
     /// The version info includes the new version number, download URL, and release notes.
     pub async fn check_update(&self) -> Result<Option<VersionInfo>> {
-        let updater = self.app.updater().map_err(|e| {
-            UpdateError::CheckError(
-                t!("updater.updater_init_failed", error = e.to_string()).to_string(),
-            )
-        })?;
+        let updater = self
+            .app
+            .updater()
+            .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
 
         match updater.check().await {
             Ok(Some(update)) => {
@@ -98,9 +90,7 @@ impl UpdateManager {
             }
             Err(e) => {
                 warn!("Failed to check for updates: {}", e);
-                Err(UpdateError::CheckError(
-                    t!("updater.check_update_request_failed", error = e.to_string()).to_string(),
-                ))
+                Err(UpdateError::UpdateRequestError(e.to_string()))
             }
         }
     }
@@ -114,42 +104,40 @@ impl UpdateManager {
     /// * `Ok(())` if the update was successfully downloaded and installed
     /// * `Err(UpdateError)` if there was an error during the process
     pub async fn download_and_install(&self, version_info: &VersionInfo) -> Result<()> {
-        let updater = self.app.updater().map_err(|e| {
-            UpdateError::CheckError(
-                t!("updater.updater_init_failed", error = e.to_string()).to_string(),
-            )
-        })?;
+        let updater = self
+            .app
+            .updater()
+            .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
 
-        // 检查更新
+        // Check for updates again to get the latest update details
         let update = updater
             .check()
             .await
-            .map_err(|e| {
-                UpdateError::CheckError(
-                    t!("updater.check_update_request_failed", error = e.to_string()).to_string(),
-                )
-            })?
-            .ok_or_else(|| UpdateError::UpdateNotFound)?;
+            .map_err(|e| UpdateError::UpdateRequestError(e.to_string()))?
+            .ok_or(UpdateError::UpdateNotFound)?;
 
-        // 验证版本信息
-        if update.version.to_string() != version_info.version {
+        // Verify that the version from the server matches the one we intend to install
+        if update.version != version_info.version {
             return Err(UpdateError::VersionMismatch);
         }
 
         let app_handle = self.app.clone();
         let app_handle2 = app_handle.clone();
+        let mut last_report_time = Instant::now();
 
-        // 下载并安装更新
+        // Download and install the update
         update
             .download_and_install(
                 move |current, total| {
-                    if let Some(total) = total {
-                        let progress = (current as f64 / total as f64) * 100.0;
-                        if progress.floor() % 10.0 == 0.0 {
+                    let now = Instant::now();
+                    if now.duration_since(last_report_time) >= PROGRESS_REPORT_INTERVAL {
+                        if let Some(total) = total {
+                            let progress = (current as f64 / total as f64) * 100.0;
                             info!("Download progress: {:.0}%", progress);
                             let _ =
                                 app_handle.emit(EVENT_UPDATE_PROGRESS, format!("{:.0}", progress));
                         }
+                        last_report_time = now;
                     }
                 },
                 move || {
@@ -158,11 +146,7 @@ impl UpdateManager {
                 },
             )
             .await
-            .map_err(|e| {
-                UpdateError::DownloadError(
-                    t!("updater.download_install_failed", error = e.to_string()).to_string(),
-                )
-            })?;
+            .map_err(|e| UpdateError::DownloadError(e.to_string()))?;
 
         info!("Update installation completed");
         Ok(())

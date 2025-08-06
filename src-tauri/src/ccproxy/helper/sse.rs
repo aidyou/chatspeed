@@ -25,12 +25,18 @@ use std::fmt;
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct Event {
+    nl: Option<String>,
     event: Option<String>,
     data: Option<String>,
     text: Option<String>,
 }
 
 impl Event {
+    pub fn set_gemini(mut self) -> Self {
+        self.nl = Some("\r".to_string());
+        self
+    }
+
     /// Sets the `event` field (the event type).
     pub fn event<T: Into<String>>(mut self, event: T) -> Self {
         self.event = Some(event.into());
@@ -59,23 +65,25 @@ impl Event {
 /// and terminates the event with two newline characters.
 impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nl = self.nl.as_deref().unwrap_or("\n");
+
         if let Some(event) = &self.event {
-            writeln!(f, "event: {}", event)?;
+            write!(f, "event: {}{}", event, nl)?;
         }
         if let Some(data) = &self.data {
             if data.is_empty() {
                 // 根据 SSE 规范，即使数据为空，也应发送 'data:' 行
-                writeln!(f, "data: ")?;
+                write!(f, "data: {}", nl)?;
             } else {
                 for line in data.lines() {
                     // 每一行都加上 "data: "
-                    writeln!(f, "data: {}", line)?;
+                    write!(f, "data: {}{}", line, nl)?;
                 }
             }
         }
         if let Some(text) = &self.text {
             if !text.is_empty() {
-                writeln!(f, "{}", text)?;
+                write!(f, "{}{}", text, nl)?;
             }
         }
 

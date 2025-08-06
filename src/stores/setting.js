@@ -88,7 +88,9 @@ const defaultSettings = {
   //              must provide to use the proxy service.
   //   - `name`: A human-readable name or description for the token,
   //             useful for managing multiple keys (e.g., "WebApp Client Key", "Mobile App Key").
-  chatCompletionProxyKeys: []
+  chatCompletionProxyKeys: [],
+  chatCompletionProxyPort: 11434,
+  chatCompletionProxyLogToFile: false,
 }
 
 /**
@@ -100,6 +102,11 @@ export const useSettingStore = defineStore('setting', () => {
    * settings is a key-value pair object
    */
   const settings = ref({ ...defaultSettings })
+  const env = ref({
+    httpServer: '',
+    logDir: '',
+    chatCompletionProxy: ''
+  })
 
   /**
    * Submits configuration to the database and updates local configuration cache upon success.
@@ -216,6 +223,17 @@ export const useSettingStore = defineStore('setting', () => {
     })
   }
 
+  const getEnv = () => {
+    return new Promise((resolve, reject) => {
+      invoke('get_env')
+        .then(result => {
+          env.value = { ...env.value, ...result }
+          resolve()
+        })
+        .catch(reject)
+    })
+  }
+
   return {
     windowLabel,
     settings,
@@ -223,6 +241,8 @@ export const useSettingStore = defineStore('setting', () => {
     updateSettingStore,
     setTextMonitor,
     reloadConfig,
-    updateTray
+    updateTray,
+    env,
+    getEnv
   }
 })

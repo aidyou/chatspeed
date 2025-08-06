@@ -190,6 +190,9 @@ impl StreamParser {
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut stream_chunks = Vec::new();
 
+        #[cfg(debug_assertions)]
+        log::debug!("gemini stream chunk- {}", chunk_str);
+
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
                 let data = line["data:".len()..].trim();

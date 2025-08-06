@@ -27,6 +27,7 @@ use crate::ccproxy::{
     openai::OpenAIChatCompletionRequest,
     types::ollama::OllamaChatCompletionRequest,
 };
+use crate::constants::CFG_CCPROXY_LOG_TO_FILE;
 use crate::db::MainStore;
 
 fn get_proxy_alias_from_body(
@@ -221,9 +222,14 @@ pub async fn handle_chat_completion(
 ) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
 
-    let log_to_file = client_query
-        .debug
-        .unwrap_or(crate::ccproxy::helper::DEFAULT_LOG_TO_FILE);
+    let log_to_file = if let Ok(store) = main_store_arc.lock() {
+        store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
+    } else {
+        client_query
+            .debug
+            .unwrap_or(crate::ccproxy::helper::DEFAULT_LOG_TO_FILE)
+    };
+
     if log_to_file {
         // Log the raw request body
         log::info!(target: "ccproxy_logger", "{} Request Body: \n{}\n---", &protocol_string, String::from_utf8_lossy(&client_request_body));

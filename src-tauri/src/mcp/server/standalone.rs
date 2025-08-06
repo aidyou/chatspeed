@@ -5,63 +5,42 @@
 
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::mcp::server::handler::McpProxyHandler;
+use axum::Router;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use rust_i18n::t;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
-/// Starts a standalone MCP proxy server
+/// Creates a router for the MCP proxy server.
 ///
 /// # Arguments
 /// * `chat_state` - Chat state instance for accessing the tool manager
-/// * `listener` - Pre-bound TCP listener
-/// * `cancellation_token` - Token to cancel the server
 ///
 /// # Returns
-/// Returns Ok(()) on success, or an error on failure
-pub async fn start_standalone_mcp_server(
-    chat_state: Arc<ChatState>,
-    listener: tokio::net::TcpListener,
-    cancellation_token: CancellationToken,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Get the bound address from the listener
-    let bind_addr = listener.local_addr()?;
+/// Returns an Axum Router configured for the MCP service.
+pub fn create_mcp_router(chat_state: Arc<ChatState>) -> Router {
+    // Create a dummy cancellation token, as it's required by SseServerConfig,
+    // but the actual server lifecycle will be managed by the main ccproxy server.
+    let cancellation_token = CancellationToken::new();
 
-    // Create SSE server configuration
+    // The SseServerConfig no longer needs a bind address, as it's not binding a port itself.
+    // The paths are kept at the root, as the main router will handle nesting.
     let sse_config = SseServerConfig {
-        bind: bind_addr,
+        bind: "0.0.0.0:0".parse().unwrap(), // Dummy address
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
-        ct: cancellation_token.clone(),
+        ct: cancellation_token,
         sse_keep_alive: Some(Duration::from_secs(30)),
     };
 
-    // Create SSE server
+    // Create SSE server and get the router
     let (sse_server, router) = SseServer::new(sse_config);
 
-    // Start the service with our handler
-    let service_ct = sse_server.with_service(move || McpProxyHandler::new(chat_state.clone()));
+    // The service (handler) is now attached directly.
+    // The state management will be implicitly handled by the closure capturing `chat_state`.
+    let _service_ct = sse_server.with_service(move || McpProxyHandler::new(chat_state.clone()));
 
-    log::info!(
-        "{}",
-        t!("mcp.proxy.server_started", address = bind_addr.to_string())
-    );
-
-    // Start the HTTP server in a separate task
-    let server_ct = cancellation_token.clone();
-    tokio::spawn(async move {
-        let server = axum::serve(listener, router).with_graceful_shutdown(async move {
-            server_ct.cancelled().await;
-            log::info!("{}", t!("mcp.proxy.server_stopped"));
-        });
-
-        if let Err(e) = server.await {
-            log::error!("MCP server error: {}", e);
-        }
-    });
-
-    // Wait for service cancellation
-    service_ct.cancelled().await;
-
-    Ok(())
+    // Return the configured router, ready to be nested.
+    // Note: The state here is managed within the McpProxyHandler,
+    // so the router itself doesn't need a top-level state.
+    router
 }

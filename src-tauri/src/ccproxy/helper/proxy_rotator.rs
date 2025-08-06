@@ -1,9 +1,9 @@
 //! A thread-safe proxy rotator for managing model targets and global API key rotation.
 //!
 //! This module provides the ProxyRotator struct, which manages:
-//! 1. Model target rotation for proxy aliases
-//! 2. Global API key rotation across ALL providers for a proxy alias
-//! 3. Ensures even distribution of key usage across all providers
+//! 1. Model target rotation for proxy aliases within a specific group.
+//! 2. Global API key rotation across ALL providers for a proxy alias within a specific group.
+//! 3. Ensures even distribution of key usage across all providers.
 
 use dashmap::DashMap;
 use lazy_static::lazy_static;
@@ -33,23 +33,23 @@ impl GlobalApiKey {
 
 #[derive(Clone, Default)]
 pub struct ProxyRotator {
-    /// Counter for model target rotation per proxy alias
-    /// Key: Proxy Alias (e.g., "model-a")
+    /// Counter for model target rotation per composite key.
+    /// Key: Composite Key (e.g., "group_name/model-a")
     /// Value: AtomicUsize for round-robin index
     model_counters: Arc<DashMap<String, AtomicUsize>>,
 
-    /// Global key pool for each proxy alias
-    /// Key: Proxy Alias
-    /// Value: Vec<GlobalApiKey> - all keys from all providers for this alias
+    /// Global key pool for each composite key.
+    /// Key: Composite Key
+    /// Value: Vec<GlobalApiKey> - all keys from all providers for this composite key
     global_key_pools: Arc<RwLock<DashMap<String, Vec<GlobalApiKey>>>>,
 
-    /// Global counter for key rotation per proxy alias
-    /// Key: Proxy Alias
+    /// Global counter for key rotation per composite key.
+    /// Key: Composite Key
     /// Value: AtomicUsize for round-robin index across all keys
     global_key_counters: Arc<DashMap<String, AtomicUsize>>,
 
-    /// Mapping between provider ID and their keys for efficient update detection
-    /// Key: format!("{}:{}", proxy_alias, provider_id)
+    /// Mapping between provider ID and their keys for efficient update detection.
+    /// Key: format!("{}:{}", composite_key, provider_id)
     /// Value: (Vec<String>, base_url, model_name) - keys and metadata for this provider
     provider_keys_mapping: Arc<RwLock<DashMap<String, (Vec<String>, String, String)>>>,
 }
@@ -59,22 +59,22 @@ impl ProxyRotator {
         Self::default()
     }
 
-    /// Get the next round-robin index for specified proxy alias and update the counter.
+    /// Get the next round-robin index for a specified composite key and update the counter.
     ///
     /// # Arguments
-    /// * `proxy_alias` - The alias of proxy model.
+    /// * `composite_key` - The composite key ("group_name/proxy_alias").
     /// * `num_targets` - The number of backend targets configured for this proxy alias.
     ///
     /// # Returns
-    /// The index of next backend target to use. Returns 0 if `num_targets` is 0.
-    pub fn get_next_target_index(&self, proxy_alias: &str, num_targets: usize) -> usize {
+    /// The index of the next backend target to use. Returns 0 if `num_targets` is 0.
+    pub fn get_next_target_index(&self, composite_key: &str, num_targets: usize) -> usize {
         if num_targets == 0 {
             return 0;
         }
 
         let counter = self
             .model_counters
-            .entry(proxy_alias.to_string())
+            .entry(composite_key.to_string())
             .or_insert_with(|| AtomicUsize::new(0));
 
         let current_index = counter.fetch_add(1, Ordering::SeqCst);
@@ -85,14 +85,14 @@ impl ProxyRotator {
     /// Only updates the global pool if the keys actually changed.
     ///
     /// # Arguments
-    /// * `proxy_alias` - The proxy alias
+    /// * `composite_key` - The composite key ("group_name/proxy_alias").
     /// * `provider_id` - The provider ID
     /// * `base_url` - The provider's base URL
     /// * `model_name` - The model name
     /// * `new_keys` - The new keys for this provider (Vec<String>)
     pub async fn update_provider_keys_efficient(
         &self,
-        proxy_alias: &str,
+        composite_key: &str,
         provider_id: i64,
         base_url: &str,
         model_name: &str,
@@ -101,13 +101,13 @@ impl ProxyRotator {
         // 1. Exit directly if provider_id is empty (provider_id of 0 is considered invalid)
         if provider_id == 0 {
             log::debug!(
-                "Provider ID is 0, skipping update for alias '{}'",
-                proxy_alias
+                "Provider ID is 0, skipping update for composite key '{}'",
+                composite_key
             );
             return;
         }
 
-        let mapping_key = format!("{}:{}", proxy_alias, provider_id);
+        let mapping_key = format!("{}:{}", composite_key, provider_id);
 
         // Check if mapping relationship exists and if there are changes
         let needs_update = {
@@ -143,24 +143,24 @@ impl ProxyRotator {
         if !needs_update {
             #[cfg(debug_assertions)]
             log::debug!(
-                "No key changes for provider {} in alias '{}', skipping update",
+                "No key changes for provider {} in composite key '{}', skipping update",
                 provider_id,
-                proxy_alias
+                composite_key
             );
             return;
         }
 
         // Update mapping relationship
         {
-            let mapping = self.provider_keys_mapping.write().await;
+            let mut mapping = self.provider_keys_mapping.write().await;
             if new_keys.is_empty() {
                 // 5. If keys are empty, remove the mapping between id and keys
                 mapping.remove(&mapping_key);
                 #[cfg(debug_assertions)]
                 log::debug!(
-                    "Removed mapping for provider {} in alias '{}'",
+                    "Removed mapping for provider {} in composite key '{}'",
                     provider_id,
-                    proxy_alias
+                    composite_key
                 );
             } else {
                 // 2. Write id to key mapping relationship or 4. Modify mapping to latest
@@ -172,29 +172,29 @@ impl ProxyRotator {
                 );
                 #[cfg(debug_assertions)]
                 log::debug!(
-                    "Updated mapping for provider {} in alias '{}': {} keys",
+                    "Updated mapping for provider {} in composite key '{}': {} keys",
                     provider_id,
-                    proxy_alias,
+                    composite_key,
                     new_keys.len()
                 );
             }
         }
 
         // 6. Read all current keys from id-keys mapping and write to global keys
-        self.rebuild_global_keys_from_mapping(proxy_alias).await;
+        self.rebuild_global_keys_from_mapping(composite_key).await;
     }
 
-    /// Rebuild the global key pool from the provider keys mapping
-    async fn rebuild_global_keys_from_mapping(&self, proxy_alias: &str) {
+    /// Rebuild the global key pool from the provider keys mapping for a specific composite key.
+    async fn rebuild_global_keys_from_mapping(&self, composite_key: &str) {
         let mapping = self.provider_keys_mapping.read().await;
         let mut global_keys = Vec::new();
 
-        // Collect all provider keys belonging to this proxy_alias
+        // Collect all provider keys belonging to this composite_key
         for entry in mapping.iter() {
             let key = entry.key();
-            if key.starts_with(&format!("{}:", proxy_alias)) {
+            if key.starts_with(&format!("{}:", composite_key)) {
                 // Parse provider_id
-                if let Some(provider_id_str) = key.strip_prefix(&format!("{}:", proxy_alias)) {
+                if let Some(provider_id_str) = key.strip_prefix(&format!("{}:", composite_key)) {
                     if let Ok(provider_id) = provider_id_str.parse::<i64>() {
                         let (keys, base_url, model_name) = entry.value();
 
@@ -217,29 +217,29 @@ impl ProxyRotator {
 
         // Update global key pool
         {
-            let pools = self.global_key_pools.write().await;
-            pools.insert(proxy_alias.to_string(), global_keys.clone());
+            let mut pools = self.global_key_pools.write().await;
+            pools.insert(composite_key.to_string(), global_keys.clone());
         }
 
         #[cfg(debug_assertions)]
         log::debug!(
-            "Rebuilt global key pool for alias '{}': {} keys from mapping",
-            proxy_alias,
+            "Rebuilt global key pool for composite key '{}': {} keys from mapping",
+            composite_key,
             global_keys.len()
         );
     }
 
-    /// Get the next API key from the global pool for a proxy alias.
-    /// This ensures even distribution across ALL providers and ALL keys.
+    /// Get the next API key from the global pool for a composite key.
+    /// This ensures even distribution across ALL providers and ALL keys for the given group/alias.
     ///
     /// # Arguments
-    /// * `proxy_alias` - The proxy alias to get a key for
+    /// * `composite_key` - The composite key ("group_name/proxy_alias") to get a key for.
     ///
     /// # Returns
-    /// The next GlobalApiKey to use, or None if no keys are available
-    pub async fn get_next_global_key(&self, proxy_alias: &str) -> Option<GlobalApiKey> {
+    /// The next GlobalApiKey to use, or None if no keys are available.
+    pub async fn get_next_global_key(&self, composite_key: &str) -> Option<GlobalApiKey> {
         let pools = self.global_key_pools.read().await;
-        let keys = pools.get(proxy_alias)?;
+        let keys = pools.get(composite_key)?;
 
         if keys.is_empty() {
             return None;
@@ -248,7 +248,7 @@ impl ProxyRotator {
         // Get the next key using global round-robin
         let counter = self
             .global_key_counters
-            .entry(proxy_alias.to_string())
+            .entry(composite_key.to_string())
             .or_insert_with(|| AtomicUsize::new(0));
 
         let current_index = counter.fetch_add(1, Ordering::SeqCst);

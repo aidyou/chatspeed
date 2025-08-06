@@ -106,10 +106,6 @@ pub struct SharedState {
 // These handlers contain the actual business logic. They are called by the
 // axum handlers below and are agnostic of the routing layer.
 
-// TODO: All `*_logic` functions call `handle_openai_chat_completion`.
-// You need to update its signature to accept `group_name: String` as a new argument.
-// I have added it to the call sites with a placeholder.
-
 async fn openai_chat_logic(
     state: Arc<SharedState>,
     query: CcproxyQuery,
@@ -284,10 +280,20 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
         (
             post(
                 move |State(state): State<Arc<SharedState>>,
-                      Path((group_name, model_id, action)): Path<(String, String, String)>,
+                      Path((group_name, model_and_action)): Path<(String, String)>,
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
+                    let (model_id, action) = match model_and_action.rsplit_once(':') {
+                        Some((m, a)) => (m.to_string(), a.to_string()),
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                "Invalid model and action format. Expected 'model:action'.",
+                            )
+                                .into_response()
+                        }
+                    };
                     gemini_chat_logic(
                         state,
                         query,
@@ -311,10 +317,20 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
         (
             post(
                 move |State(state): State<Arc<SharedState>>,
-                      Path((model_id, action)): Path<(String, String)>,
+                      Path(model_and_action): Path<String>,
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
+                    let (model_id, action) = match model_and_action.rsplit_once(':') {
+                        Some((m, a)) => (m.to_string(), a.to_string()),
+                        None => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                "Invalid model and action format. Expected 'model:action'.",
+                            )
+                                .into_response()
+                        }
+                    };
                     gemini_chat_logic(
                         state,
                         query,
@@ -337,7 +353,7 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
     };
 
     Router::new()
-        .route("/v1beta/models/{model_id}/{action}", chat_handler)
+        .route("/v1beta/models/{model_and_action}", chat_handler)
         .route("/v1beta/models", list_model_handler)
 }
 
@@ -509,6 +525,8 @@ pub async fn routes(
     log_registered_routes();
 
     // 4. Combine all routers into the final application router.
+    let mcp_router = crate::mcp::server::create_mcp_router(shared_state.chat_state.clone());
+
     Router::new()
         .merge(unauthenticated_router)
         // Standalone Ollama API routes (no grouping/compat)
@@ -550,6 +568,7 @@ pub async fn routes(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
             ollama_grouped_compat_chat.layer(ollama_auth_middleware),
         )
+        .fallback_service(mcp_router)
         .with_state(shared_state)
 }
 
@@ -594,5 +613,8 @@ fn log_registered_routes() {
     log::info!("  - Grouped:           /{{group_name}}/{{path}}");
     log::info!("  - Tool Compat:       /compat_mode/{{path}}");
     log::info!("  - Grouped + Compat:  /{{group_name}}/compat_mode/{{path}}");
+    log::info!("-------------------------------------");
+    log::info!("[MCP]");
+    log::info!("  - MCP Proxy: /sse");
     log::info!("-------------------------------------");
 }

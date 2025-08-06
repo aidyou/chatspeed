@@ -6,4 +6,4 @@
 mod handler;
 mod standalone;
 
-pub use standalone::start_standalone_mcp_server;
+pub use standalone::create_mcp_router;

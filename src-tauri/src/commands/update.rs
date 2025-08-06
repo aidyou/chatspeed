@@ -20,23 +20,28 @@ pub enum Error {
 impl From<UpdateError> for Error {
     fn from(err: UpdateError) -> Self {
         match err {
-            UpdateError::VersionCheckError(msg) => Error::CheckFailed(
-                t!("updater.version_check_error_detail", error = msg).to_string(),
+            UpdateError::VersionParseError(version, error) => Error::CheckFailed(
+                t!(
+                    "updater.errors.version_parse",
+                    version = version,
+                    error = error
+                )
+                .to_string(),
             ),
-            UpdateError::ConfigError(msg) => {
-                Error::CheckFailed(t!("updater.config_error_detail", error = msg).to_string())
+            UpdateError::UpdateRequestError(error) => {
+                Error::CheckFailed(t!("updater.errors.update_request", error = error).to_string())
             }
-            UpdateError::CheckError(msg) => {
-                Error::CheckFailed(t!("updater.check_error_detail", error = msg).to_string())
+            UpdateError::DownloadError(error) => {
+                Error::InstallFailed(t!("updater.errors.download", error = error).to_string())
             }
-            UpdateError::DownloadError(msg) => {
-                Error::InstallFailed(t!("updater.download_error_detail", error = msg).to_string())
+            UpdateError::ConfigError(error) => {
+                Error::CheckFailed(t!("updater.errors.config", error = error).to_string())
             }
             UpdateError::VersionMismatch => {
-                Error::InstallFailed(t!("updater.version_mismatch").into())
+                Error::InstallFailed(t!("updater.errors.version_mismatch").into())
             }
             UpdateError::UpdateNotFound => {
-                Error::InstallFailed(t!("updater.update_not_found").into())
+                Error::InstallFailed(t!("updater.errors.update_not_found").into())
             }
         }
     }
@@ -58,7 +63,7 @@ pub async fn confirm_update(app: AppHandle, version_info: VersionInfo) -> Result
     update_manager
         .download_and_install(&version_info)
         .await
-        .map_err(|e| Error::InstallFailed(e.to_string()))
+        .map_err(Into::into)
 }
 
 /// Command to download and install an update

@@ -31,7 +31,6 @@ chat:
   empty_messages: "消息列表不能为空"
   empty_model: "模型名称不能为空"
   failed_to_convert_language_code: "转换语言代码失败: %{error}"
-  failed_to_create_file: "无法创建文件: %{error}"
   failed_to_detect_language: "检测语言失败"
   failed_to_extract_text: "无法提取生成的文本内容"
   failed_to_find_user_message_content: "未能找到用户消息内容"
@@ -308,17 +307,13 @@ tray:
   skill: "技能"
 
 updater:
-  check_error_detail: "检查错误: %{error}"
-  check_update_request_failed: "检查更新请求失败: %{error}"
-  config_error_detail: "配置错误: %{error}"
-  download_error_detail: "下载错误: %{error}"
-  download_install_failed: "下载或安装更新失败: %{error}"
-  invalid_current_version_format: "无效的当前版本号格式: %{error}"
-  invalid_version_format: "无效的版本号格式: %{error}"
-  update_not_found: "未找到可用更新"
-  updater_init_failed: "更新器初始化失败: %{error}"
-  version_check_error_detail: "版本检查错误: %{error}"
-  version_mismatch: "版本不匹配，期望安装的版本与可用更新版本不同"
+  errors:
+    update_not_found: "未找到可用更新"
+    version_mismatch: "版本不匹配，期望安装的版本与可用更新版本不同"
+    version_parse: "版本解析错误: 期望版本 '%{version}', 错误: %{error}"
+    update_request: "更新请求失败: %{error}"
+    download: "下载或安装更新失败: %{error}"
+    config: "更新器配置错误: %{error}"
 
 workflow:
   array_index_out_of_bounds: "数组索引越界: %{index}"

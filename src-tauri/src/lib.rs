@@ -36,11 +36,11 @@ use tauri::Manager;
 use ai::interaction::chat_completion::ChatState;
 use commands::chat::*;
 use commands::clipboard::*;
+use commands::env::*;
 use commands::fs::*;
 use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
-use commands::os::*;
 use commands::proxy_group::*;
 use commands::setting::*;
 use commands::update::*;
@@ -184,6 +184,7 @@ pub async fn run() -> Result<()> {
             search_notes,
             // os
             get_os_info,
+            get_env,
             // fs
             image_preview,
             // window

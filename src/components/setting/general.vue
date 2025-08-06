@@ -190,7 +190,7 @@
           </el-select>
         </div>
       </div>
-      <div class="item">
+      <!-- <div class="item">
         <div class="label">
           <div class="label-text">
             {{ $t('settings.general.websearchModel') }}
@@ -268,12 +268,12 @@
             @input="onChatspeedCrawlerChange"
             placeholder="http://localhost:12321" />
         </div>
-      </div>
+      </div> -->
     </div>
   </div>
 
   <!-- workflow settings -->
-  <div class="card">
+  <!-- <div class="card">
     <div class="title">{{ $t('settings.general.workflowSettings') }}</div>
     <div class="list">
       <div class="item">
@@ -345,7 +345,7 @@
         </div>
       </div>
     </div>
-  </div>
+  </div> -->
 
   <!-- network settings -->
   <div class="card">

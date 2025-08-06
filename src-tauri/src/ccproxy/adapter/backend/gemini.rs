@@ -31,98 +31,66 @@ impl GeminiBackendAdapter {
             serde_json::Value::Object(obj) => {
                 let mut gemini_schema = serde_json::Map::new();
 
-                // Gemini API 支持的 JSON Schema 字段
-                let supported_fields = [
-                    "type",
-                    "description",
-                    "enum",
-                    "properties",
-                    "required",
-                    "items",
-                    "format",
-                    "minimum",
-                    "maximum",
-                    "minLength",
-                    "maxLength",
-                    "pattern",
-                    "minItems",
-                    "maxItems",
-                ];
-
-                for field in supported_fields {
-                    if let Some(value) = obj.get(field) {
-                        match field {
-                            "properties" => {
-                                // Recursively process each property in properties
-                                if let serde_json::Value::Object(props) = value {
-                                    let mut cleaned_props = serde_json::Map::new();
-                                    for (prop_name, prop_schema) in props {
-                                        cleaned_props.insert(
-                                            prop_name.clone(),
-                                            Self::extract_gemini_schema(prop_schema),
-                                        );
-                                    }
-                                    gemini_schema.insert(
-                                        field.to_string(),
-                                        serde_json::Value::Object(cleaned_props),
+                for (key, value) in obj {
+                    match key.as_str() {
+                        "properties" => {
+                            if let serde_json::Value::Object(props) = value {
+                                let mut cleaned_props = serde_json::Map::new();
+                                for (prop_name, prop_schema) in props {
+                                    cleaned_props.insert(
+                                        prop_name.clone(),
+                                        Self::extract_gemini_schema(prop_schema),
                                     );
                                 }
-                            }
-                            "items" => {
-                                // Recursively process array items schema
                                 gemini_schema
-                                    .insert(field.to_string(), Self::extract_gemini_schema(value));
-                            }
-                            "type" => {
-                                if let Some(arr) = value.as_array() {
-                                    // Find the first non-null type
-                                    if let Some(first_type) = arr.iter().find(|v| !v.is_null()) {
-                                        gemini_schema.insert(field.to_string(), first_type.clone());
-                                    }
-                                } else {
-                                    // Directly copy if it's not an array
-                                    gemini_schema.insert(field.to_string(), value.clone());
-                                }
-                            }
-                            "format" => {
-                                // According to Gemini official documentation, supported formats:
-                                // NUMBER: float, double
-                                // INTEGER: int32, int64
-                                // STRING: enum, date-time
-                                if let serde_json::Value::String(format_str) = value {
-                                    match format_str.as_str() {
-                                        "float" | "double" | "int32" | "int64" | "enum"
-                                        | "date-time" => {
-                                            gemini_schema.insert(field.to_string(), value.clone());
-                                        }
-                                        "uint" | "uint32" | "uint64" => {
-                                            gemini_schema.insert(field.to_string(), json!("int64"));
-                                        }
-                                        _ => {
-                                            // Skip unsupported format values like "uri", "email", etc.
-                                            log::debug!(
-                                                "Skipping unsupported format '{}' for Gemini API",
-                                                format_str
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Directly copy other supported fields
-                                gemini_schema.insert(field.to_string(), value.clone());
+                                    .insert(key.clone(), serde_json::Value::Object(cleaned_props));
                             }
                         }
+                        "items" => {
+                            gemini_schema.insert(key.clone(), Self::extract_gemini_schema(value));
+                        }
+                        "type" => {
+                            if let Some(arr) = value.as_array() {
+                                if let Some(first_type) = arr.iter().find(|v| !v.is_null()) {
+                                    gemini_schema.insert(key.clone(), first_type.clone());
+                                }
+                            } else {
+                                gemini_schema.insert(key.clone(), value.clone());
+                            }
+                        }
+                        "format" => {
+                            if let serde_json::Value::String(format_str) = value {
+                                match format_str.as_str() {
+                                    "float" | "double" | "int32" | "int64" => {
+                                        gemini_schema.insert(key.clone(), value.clone());
+                                    }
+                                    "uint" | "uint32" | "uint64" => {
+                                        gemini_schema.insert(key.clone(), json!("int64"));
+                                    }
+                                    _ => {
+                                        // For unsupported formats like "uri", "email", etc.,
+                                        // we just ignore the format keyword but keep the parameter
+                                        // by not adding the format field to the cleaned schema.
+                                        log::debug!(
+                                            "Ignoring unsupported format '{}' for Gemini API, treating as plain string.",
+                                            format_str
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Include other supported fields directly
+                        "description" | "enum" | "required" | "minimum" | "maximum"
+                        | "minLength" | "maxLength" | "pattern" | "minItems" | "maxItems" => {
+                            gemini_schema.insert(key.clone(), value.clone());
+                        }
+                        // Ignore unsupported fields like "$schema", "additionalProperties", etc.
+                        _ => {}
                     }
                 }
 
                 serde_json::Value::Object(gemini_schema)
             }
-            serde_json::Value::Array(arr) => serde_json::Value::Array(
-                arr.iter()
-                    .map(|item| Self::extract_gemini_schema(item))
-                    .collect(),
-            ),
             _ => schema.clone(),
         }
     }
@@ -138,27 +106,49 @@ impl BackendAdapter for GeminiBackendAdapter {
         full_provider_url: &str,
         _model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
-        let mut gemini_contents = Vec::new();
+        let mut gemini_contents: Vec<GeminiContent> = Vec::new();
+        let mut current_parts: Vec<GeminiPart> = Vec::new();
+        let mut current_role: Option<UnifiedRole> = None;
+
+        let flush_message = |contents: &mut Vec<GeminiContent>,
+                             role: &Option<UnifiedRole>,
+                             parts: &mut Vec<GeminiPart>| {
+            if parts.is_empty() {
+                return;
+            }
+            let gemini_role = match role {
+                Some(UnifiedRole::User) => "user".to_string(),
+                Some(UnifiedRole::Assistant) => "model".to_string(),
+                Some(UnifiedRole::System) => return, // System prompts are handled separately
+                Some(UnifiedRole::Tool) => "user".to_string(),
+                None => return, // Should not happen
+            };
+            contents.push(GeminiContent {
+                role: gemini_role,
+                parts: std::mem::take(parts),
+            });
+        };
 
         for msg in &unified_request.messages {
-            let role = match msg.role {
-                UnifiedRole::System => continue, // System prompts are handled by the top-level `system_instruction` field
-                UnifiedRole::User => "user",
-                UnifiedRole::Assistant => "model",
-                UnifiedRole::Tool => "user", // Gemini tool results are from the 'user' role with a function_response part
-            };
+            if current_role.is_some() && current_role.as_ref() != Some(&msg.role) {
+                flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                current_role = None;
+            }
 
-            let mut parts = Vec::new();
+            if current_role.is_none() {
+                current_role = Some(msg.role.clone());
+            }
+
             for block in &msg.content {
                 match block {
                     UnifiedContentBlock::Text { text } => {
-                        parts.push(GeminiPart {
+                        current_parts.push(GeminiPart {
                             text: Some(text.clone()),
                             ..Default::default()
                         });
                     }
                     UnifiedContentBlock::Image { media_type, data } => {
-                        parts.push(GeminiPart {
+                        current_parts.push(GeminiPart {
                             inline_data: Some(GeminiInlineData {
                                 mime_type: media_type.clone(),
                                 data: data.clone(),
@@ -167,7 +157,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                         });
                     }
                     UnifiedContentBlock::ToolUse { id: _, name, input } => {
-                        parts.push(GeminiPart {
+                        current_parts.push(GeminiPart {
                             function_call: Some(GeminiFunctionCall {
                                 name: name.clone(),
                                 args: input.clone(),
@@ -180,31 +170,35 @@ impl BackendAdapter for GeminiBackendAdapter {
                         content,
                         is_error: _,
                     } => {
-                        // Gemini expects tool results as a FunctionResponse part
-                        parts.push(GeminiPart {
+                        // A tool result must start a new user message
+                        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                        current_role = Some(UnifiedRole::User);
+
+                        current_parts.push(GeminiPart {
                             function_response: Some(GeminiFunctionResponse {
-                                name: tool_use_id.clone(), // Use tool_use_id as the function name
-                                response: json!({ "name": tool_use_id, "content": content.clone() }), // Wrap content in a JSON object
+                                name: tool_use_id.clone(),
+                                response: json!({ "name": tool_use_id, "content": content.clone() }),
                             }),
                             ..Default::default()
                         });
+
+                        // Flush immediately as a tool response is a self-contained message
+                        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                        current_role = None;
                     }
-                    UnifiedContentBlock::Thinking { .. } => {
-                        // ignore the thinking and reasoning field, the input hasn't there field
-                    }
+                    _ => {} // Ignore other block types
                 }
             }
-            gemini_contents.push(GeminiContent {
-                role: role.to_string(),
-                parts,
-            });
         }
+        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
 
         let system_instruction = unified_request.system_prompt.as_ref().and_then(|prompt| {
             if prompt.trim().is_empty() {
                 None
             } else {
                 Some(GeminiContent {
+                    // The role for system instructions is not explicitly defined in the same way as user/model.
+                    // It's a top-level field in the request.
                     role: "system".to_string(),
                     parts: vec![GeminiPart {
                         text: Some(prompt.to_string()),
@@ -232,7 +226,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                 UnifiedToolChoice::None => "NONE".to_string(),
                 UnifiedToolChoice::Auto => "AUTO".to_string(),
                 UnifiedToolChoice::Required => "ANY".to_string(),
-                UnifiedToolChoice::Tool { name: _ } => "ANY".to_string(), // Gemini doesn't have specific tool choice by name in config
+                UnifiedToolChoice::Tool { name: _ } => "ANY".to_string(),
             };
             GeminiToolConfig {
                 function_calling_config: GeminiFunctionCallingConfig { mode },
@@ -242,10 +236,9 @@ impl BackendAdapter for GeminiBackendAdapter {
         let gemini_request = GeminiRequest {
             contents: gemini_contents,
             generation_config: Some(GeminiGenerationConfig {
-                temperature: unified_request.temperature.map(|t| {
-                    // Adapt temperature from source protocol to Gemini range
-                    adapt_temperature(t, Protocol::OpenAI, Protocol::Gemini)
-                }),
+                temperature: unified_request
+                    .temperature
+                    .map(|t| adapt_temperature(t, Protocol::OpenAI, Protocol::Gemini)),
                 top_p: unified_request.top_p,
                 top_k: unified_request.top_k.map(|v| v as i32),
                 max_output_tokens: unified_request.max_tokens.map(|v| v as i32),
@@ -277,7 +270,6 @@ impl BackendAdapter for GeminiBackendAdapter {
                 }
                 Err(e) => {
                     log::error!("Failed to serialize Gemini request: {}", e);
-                    // Try to serialize individual parts to identify the issue
                     if let Some(tools) = &gemini_request.tools {
                         for (i, tool) in tools.iter().enumerate() {
                             if let Err(tool_err) = serde_json::to_string(&tool) {

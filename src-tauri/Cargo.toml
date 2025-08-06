@@ -75,7 +75,7 @@ tauri                        = { version = "2.3.1", features = ["macos-private-a
 tauri-plugin-dialog          = "2.2"
 tauri-plugin-fs              = "2.2"
 tauri-plugin-global-shortcut = "2.2"
-tauri-plugin-opener          = "2.2.6"
+tauri-plugin-opener          = "2"
 tauri-plugin-shell           = "2.2"
 tauri-plugin-updater         = "2.5"
 thiserror                    = "2.0.12"
