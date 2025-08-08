@@ -38,7 +38,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
         }
         _ => {
             let error_message =
-                t!("unknown_database_version", version = current_version).to_string();
+                t!("db.unknown_database_version", version = current_version).to_string();
             log::error!("{}", error_message);
             return Err(StoreError::DatabaseError(error_message));
         }

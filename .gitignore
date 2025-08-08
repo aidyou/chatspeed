@@ -44,7 +44,7 @@ plugin_review.md
 
 # temp files or folder
 *.bak
-test/
+# test/
 
 # 本地文档和品牌相关文件
 /archive/docs/

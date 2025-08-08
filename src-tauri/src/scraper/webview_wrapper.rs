@@ -82,7 +82,11 @@ impl WebviewScraper {
             r#"
             {turndown_js}
             {scrape_logic_js}
-            executeScrape({selector_value});
+
+            // Wait a bit for the page to fully render, then execute scrape
+            setTimeout(() => {{
+                executeScrape({selector_value});
+            }}, 1000);
             "#,
             selector_value = selector
                 .map(|s| format!("'{}'", s))
@@ -106,10 +110,16 @@ impl WebviewScraper {
     /// Creates a new hidden webview window navigated to the specified URL.
     fn create_webview(&self, url: &str) -> Result<WebviewWindow<Wry>> {
         let window_label = format!("scraper-{}", Uuid::new_v4());
-        WebviewWindowBuilder::new(&self.app_handle, &window_label, WebviewUrl::App(url.into()))
-            .title("Hidden Scraper")
-            .visible(false)
-            .build()
-            .map_err(|e| anyhow!("Failed to create webview window: {}", e))
+        let webview = WebviewWindowBuilder::new(
+            &self.app_handle,
+            &window_label,
+            WebviewUrl::External(url.parse()?),
+        )
+        .title("Hidden Scraper")
+        .visible(false)
+        .build()
+        .map_err(|e| anyhow!("Failed to create webview window: {}", e))?;
+
+        Ok(webview)
     }
 }

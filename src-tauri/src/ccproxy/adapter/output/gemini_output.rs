@@ -1,6 +1,6 @@
 use super::OutputAdapter;
 use crate::ccproxy::{
-    adapter::unified::{GeminiFunctionCallPart, SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    adapter::unified::{SseStatus, UnifiedFunctionCallPart, UnifiedResponse, UnifiedStreamChunk},
     gemini::{
         GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
         GeminiUsageMetadata,
@@ -145,7 +145,7 @@ impl OutputAdapter for GeminiOutputAdapter {
                     status
                         .gemini_tools
                         .entry(id)
-                        .or_insert(GeminiFunctionCallPart {
+                        .or_insert(UnifiedFunctionCallPart {
                             name,
                             args: "".to_string(),
                         });

@@ -13,6 +13,7 @@ mod scraper;
 mod search;
 mod shortcut;
 mod test;
+mod tools;
 mod tray;
 mod updater;
 mod window;
@@ -42,6 +43,7 @@ use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
 use commands::proxy_group::*;
+use commands::scraper_test::*;
 use commands::setting::*;
 use commands::update::*;
 use commands::window::*;
@@ -52,6 +54,7 @@ use http::server::start_http_server;
 use libs::window_channels::WindowChannels;
 use logger::setup_logger;
 use shortcut::register_desktop_shortcut;
+use tools::*;
 use tray::create_tray;
 use updater::*;
 use window::*;
@@ -212,6 +215,9 @@ pub async fn run() -> Result<()> {
             // workflow
             run_dag_workflow,
             run_react_workflow,
+            // scraper test
+            test_webview_scraper,
+            test_webview_scraper_with_selector,
         ])
         .plugin(tauri_plugin_opener::init())
                 .on_window_event(|window, event| match event {

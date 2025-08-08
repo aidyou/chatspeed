@@ -26,6 +26,8 @@ pub struct OllamaMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>, // List of base64-encoded images
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OllamaToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,

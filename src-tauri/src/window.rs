@@ -441,7 +441,7 @@ pub async fn create_or_focus_setting_window(
     } else {
         let mut max_height: f64 = 1024.0;
         let mut height: f64 = 1024.0;
-        let width = 650.0;
+        let width = 700.0;
         if let Ok(Some(monitor)) = app_handle.primary_monitor() {
             let logical_size = monitor.size().to_logical(monitor.scale_factor());
             max_height = logical_size.height;

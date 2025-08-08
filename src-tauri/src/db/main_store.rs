@@ -160,14 +160,21 @@ impl Config {
     }
 
     pub fn get_proxy_group_by_name(&self, name: &str) -> Result<ProxyGroup, StoreError> {
+        if name.is_empty() || name == "default" {
+            return Ok(ProxyGroup {
+                id: 0,
+                name: "default".to_string(),
+                temperature: Some(-1.0),
+                disabled: false,
+                ..Default::default()
+            });
+        }
         self.proxy_groups
             .iter()
             .find(|p| p.name == name)
             .cloned()
             .ok_or_else(|| {
-                StoreError::NotFound(
-                    t!("db.proxy_group_not_found_by_name", name = name).to_string(),
-                )
+                StoreError::NotFound(t!("proxy.group.not_found_by_name", name = name).to_string())
             })
     }
 

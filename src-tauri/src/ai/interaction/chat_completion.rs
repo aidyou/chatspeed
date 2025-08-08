@@ -13,7 +13,7 @@ use crate::ai::traits::chat::{
     ChatCompletionResult, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration, Usage,
 };
 use crate::http::chp::SearchResult;
-use crate::workflow::ToolManager;
+use crate::tools::ToolManager;
 use crate::{
     ai::{
         chat::{claude::ClaudeChat, gemini::GeminiChat, openai::OpenAIChat},

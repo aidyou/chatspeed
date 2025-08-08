@@ -21,7 +21,7 @@ use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
     gemini::GeminiRequest,
     helper::{
-        get_provider_full_url, stream_handler::handle_streamed_response, CcproxyQuery,
+        get_provider_chat_full_url, stream_handler::handle_streamed_response, CcproxyQuery,
         ModelResolver,
     },
     openai::OpenAIChatCompletionRequest,
@@ -232,7 +232,7 @@ pub async fn handle_chat_completion(
 
     if log_to_file {
         // Log the raw request body
-        log::info!(target: "ccproxy_logger", "{} Request Body: \n{}\n---", &protocol_string, String::from_utf8_lossy(&client_request_body));
+        log::info!(target: "ccproxy_logger", "{} Request Body: \n{}\n----------------\n", &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
     let proxy_alias =
@@ -326,7 +326,7 @@ pub async fn handle_chat_completion(
     )
     .await?;
 
-    let full_url = get_provider_full_url(
+    let full_url = get_provider_chat_full_url(
         proxy_model.chat_protocol.clone(),
         &proxy_model.base_url,
         &proxy_model.model,
@@ -494,7 +494,7 @@ pub async fn handle_chat_completion(
 
     if is_streaming_request {
         let res = handle_streamed_response(
-            &proxy_model.chat_protocol,
+            Arc::new(proxy_model.chat_protocol),
             target_response,
             backend_adapter,
             output_adapter,
@@ -510,7 +510,7 @@ pub async fn handle_chat_completion(
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
         if log_to_file {
-            log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Body: \n{}\n---", String::from_utf8_lossy(&body_bytes));
+            log::info!(target: "ccproxy_logger", "[Proxy] {} Response Body: \n{}\n================\n\n",chat_protocol.to_owned(), String::from_utf8_lossy(&body_bytes));
         }
 
         let backend_response = crate::ccproxy::adapter::backend::BackendResponse {

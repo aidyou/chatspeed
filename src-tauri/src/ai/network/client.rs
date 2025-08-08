@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::ccproxy::StreamFormat;
 use crate::libs::util::urlencode;
 
@@ -271,7 +273,7 @@ impl DefaultApiClient {
 #[async_trait]
 impl ApiClient for DefaultApiClient {
     async fn create_client(&self, proxy_type: &ProxyType) -> Result<Client, String> {
-        let mut client_builder = Client::builder();
+        let mut client_builder = Client::builder().connect_timeout(Duration::from_secs(15));
 
         match proxy_type {
             ProxyType::None => {

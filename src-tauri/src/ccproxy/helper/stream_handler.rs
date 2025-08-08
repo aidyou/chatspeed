@@ -4,7 +4,7 @@ use crate::{
         adapter::{
             backend::BackendAdapter,
             output::OutputAdapter,
-            unified::{SseStatus, UnifiedStreamChunk},
+            unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart, UnifiedStreamChunk},
         },
         errors::{CCProxyError, ProxyResult},
         StreamFormat, StreamProcessor,
@@ -15,18 +15,18 @@ use axum::body::Body;
 use axum::response::Response;
 use futures_util::{stream::iter, StreamExt};
 use http::StatusCode;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
 pub async fn handle_streamed_response(
-    chat_protocol: &ChatProtocol,
+    chat_protocol: Arc<ChatProtocol>,
     target_response: reqwest::Response,
     backend_adapter: Arc<dyn BackendAdapter>,
     output_adapter: impl OutputAdapter + Send + Sync + 'static,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
 ) -> ProxyResult<Response> {
-    let stream_format = match chat_protocol {
+    let stream_format = match chat_protocol.as_ref() {
         ChatProtocol::Gemini => StreamFormat::Gemini,
         ChatProtocol::Claude => StreamFormat::Claude,
         _ => StreamFormat::OpenAI,
@@ -41,12 +41,20 @@ pub async fn handle_streamed_response(
 
     let reassembled_stream = ReceiverStream::new(reassembled_receiver);
 
-    if log_to_file {
-        log::info!(target: "ccproxy_logger", "{} Stream Response Chunk Start: \n-----\n", chat_protocol.to_string());
-    }
-
     let chat_protocol_str = chat_protocol.to_string();
     let sse_status_clone = sse_status.clone();
+    let message_id = if let Ok(state) = sse_status.read() {
+        state.message_id.clone()
+    } else {
+        "".to_string()
+    };
+    let model_id = if let Ok(state) = sse_status.read() {
+        state.model_id.clone()
+    } else {
+        "".to_string()
+    };
+    let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(message_id, model_id)));
+
     let unified_stream = reassembled_stream
         .then(move |item| {
             let adapter = backend_adapter.clone();
@@ -89,24 +97,39 @@ pub async fn handle_streamed_response(
         })
         .flat_map(iter);
 
-    let byte_stream = unified_stream.flat_map(move |unified_chunk| {
-        let events = output_adapter
-            .adapt_stream_chunk(unified_chunk, sse_status.clone())
-            .unwrap_or_else(|_| {
-                log::error!(
-                    "adapt_stream_chunk failed unexpectedly despite Infallible error type"
+    let chat_protocol_outer = chat_protocol.clone();
+    let output_adapter = Arc::new(output_adapter);
+    let log_recorder_clone = log_recorder.clone();
+    let byte_stream = unified_stream.then(move |unified_chunk| {
+        let chat_protocol_inner = chat_protocol_outer.clone();
+        let output_adapter = output_adapter.clone();
+        let sse_status = sse_status.clone();
+        let inner_log_recorder = log_recorder_clone.clone();
+        async move {
+            if let Ok(mut log_recorder) = inner_log_recorder.lock() {
+                adapt_stream_chunk_to_log(
+                    chat_protocol_inner,
+                    &unified_chunk,
+                    &mut log_recorder,
+                    log_to_file,
                 );
-                Vec::new()
-            });
+            }
 
-        if log_to_file && !events.is_empty() {
-            log::info!(target:"ccproxy_logger","{}", events.iter().map(|event| event.to_string()).collect::<Vec<String>>().join(""));
+            let events = output_adapter
+                .adapt_stream_chunk(unified_chunk, sse_status)
+                .unwrap_or_else(|_| {
+                    log::error!(
+                        "adapt_stream_chunk failed unexpectedly despite Infallible error type"
+                    );
+                    Vec::new()
+                });
+
+            let bytes: Vec<u8> = events
+                .iter()
+                .flat_map(|event| event.to_string().into_bytes())
+                .collect();
+            Ok::<_, std::io::Error>(bytes)
         }
-        let bytes: Vec<u8> = events
-            .iter()
-            .flat_map(|event| event.to_string().into_bytes())
-            .collect();
-        futures_util::stream::iter(vec![Ok::<_, std::io::Error>(bytes)])
     });
 
     let body = Body::from_stream(byte_stream);
@@ -151,5 +174,63 @@ pub async fn handle_streamed_response(
             http::header::HeaderValue::from_static("text/event-stream"),
         );
     }
+
     Ok(response)
+}
+
+pub fn adapt_stream_chunk_to_log(
+    chat_protocol: Arc<ChatProtocol>,
+    chunk: &UnifiedStreamChunk,
+    recorder: &mut StreamLogRecorder,
+    log_to_file: bool,
+) {
+    match chunk {
+        UnifiedStreamChunk::MessageStart { id, .. } => {
+            recorder.chat_id = id.clone();
+        }
+        UnifiedStreamChunk::Thinking { delta } => {
+            if !delta.trim().is_empty() {
+                if let Some(reasoning) = &mut recorder.thinking {
+                    reasoning.push_str(delta);
+                } else {
+                    recorder.thinking = Some(delta.clone());
+                }
+            }
+        }
+        UnifiedStreamChunk::Text { delta } => {
+            if !delta.trim().is_empty() {
+                recorder.content.push_str(delta);
+            }
+        }
+        UnifiedStreamChunk::ToolUseStart { id, name, .. } => {
+            if recorder.tool_calls.is_none() {
+                recorder.tool_calls = Some(Default::default());
+            }
+            if let Some(tool_calls) = &mut recorder.tool_calls {
+                tool_calls.insert(
+                    id.clone(),
+                    UnifiedFunctionCallPart {
+                        name: name.clone(),
+                        args: "".to_string(),
+                    },
+                );
+            }
+        }
+        UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+            if let Some(tool_calls) = &mut recorder.tool_calls {
+                if let Some(tool) = tool_calls.get_mut(id) {
+                    tool.args.push_str(delta);
+                }
+            }
+        }
+        UnifiedStreamChunk::MessageStop { usage, .. } => {
+            recorder.input_tokens = Some(usage.input_tokens);
+            recorder.output_tokens = Some(usage.output_tokens);
+
+            if log_to_file {
+                log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", chat_protocol, serde_json::to_string_pretty(&recorder).unwrap_or_default());
+            }
+        }
+        _ => {}
+    }
 }

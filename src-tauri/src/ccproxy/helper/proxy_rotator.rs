@@ -152,7 +152,7 @@ impl ProxyRotator {
 
         // Update mapping relationship
         {
-            let mut mapping = self.provider_keys_mapping.write().await;
+            let mapping = self.provider_keys_mapping.write().await;
             if new_keys.is_empty() {
                 // 5. If keys are empty, remove the mapping between id and keys
                 mapping.remove(&mapping_key);
@@ -217,7 +217,7 @@ impl ProxyRotator {
 
         // Update global key pool
         {
-            let mut pools = self.global_key_pools.write().await;
+            let pools = self.global_key_pools.write().await;
             pools.insert(composite_key.to_string(), global_keys.clone());
         }
 

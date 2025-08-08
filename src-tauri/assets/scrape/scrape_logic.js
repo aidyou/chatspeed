@@ -47,8 +47,16 @@ function executeScrape(selector) {
 }
 
 // Notify the backend that the page has loaded and then execute the scrape
-window.addEventListener('load', () => {
+// Use both DOMContentLoaded and load events to ensure compatibility
+function notifyPageLoaded() {
     const { emit } = window.__TAURI__.event;
     emit('page_loaded');
-    // The actual call to executeScrape will be injected from Rust.
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', notifyPageLoaded);
+    window.addEventListener('load', notifyPageLoaded);
+} else {
+    // Document is already loaded
+    notifyPageLoaded();
+}

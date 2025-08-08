@@ -18,9 +18,9 @@ pub enum AiError {
     #[error("{}", t!("chat.error.tool_call_serialization_failed", details = .details))]
     ToolCallSerializationFailed { details: String },
 
-    #[error("{}", t!("ai.error.deserialization_failed", context = .context, details = .details))]
+    #[error("{}", t!("chat.error.deserialization_failed", context = .context, details = .details))]
     DeserializationFailed { context: String, details: String },
 
-    #[error("{}", t!("ai.error.upstream_chat_error", message = .message))]
+    #[error("{}", t!("chat.error.upstream_chat_error", message = .message))]
     UpstreamChatError { message: String },
 }

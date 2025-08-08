@@ -1,7 +1,8 @@
 use crate::ai::interaction::ChatProtocol;
+use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
-    helper::{get_provider_full_url, should_forward_header, ModelResolver},
+    helper::{get_provider_chat_full_url, should_forward_header, ModelResolver},
     types::ProxyModel,
 };
 use crate::db::MainStore;
@@ -14,7 +15,7 @@ use reqwest::header::{HeaderName as ReqwestHeaderName, HeaderValue as ReqwestHea
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn handle_direct_forward(
     client_headers: HeaderMap,
@@ -28,7 +29,7 @@ pub async fn handle_direct_forward(
         ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())
             .await?;
 
-    let full_url = get_provider_full_url(
+    let full_url = get_provider_chat_full_url(
         proxy_model.chat_protocol.clone(),
         &proxy_model.base_url,
         &proxy_model.model,
@@ -169,15 +170,31 @@ pub async fn handle_direct_forward(
     }
 
     if is_streaming_request {
-        let log_to_file_clone = log_to_file.clone();
+        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
+            format!("cid_{}", uuid::Uuid::new_v4().simple()),
+            proxy_model.model.clone(),
+        )));
+        let chat_protocol = proxy_model.chat_protocol.clone();
+        let log_recorder_clone = log_recorder.clone();
+
         let stream = target_response.bytes_stream().map(move |chunk| {
-            chunk.map(|bytes| {
-                if log_to_file_clone.clone(){
-                    log::info!(target: "ccproxy_logger", "Direct Stream Response Chunk: {}", String::from_utf8_lossy(&bytes));
+            let sse_status = Arc::new(RwLock::new(SseStatus::default()));
+            let log_recorder = log_recorder_clone.clone();
+            let chat_protocol = chat_protocol.clone();
+            chunk.map(move |bytes| {
+                if log_to_file {
+                    chunk_parser_and_log(
+                        &bytes,
+                        log_recorder.clone(),
+                        &chat_protocol,
+                        sse_status.clone(),
+                    );
                 }
+
                 bytes
             })
         });
+
         let body = Body::from_stream(stream);
         if let Ok(rsp) = response_builder.body(body) {
             Ok(rsp)
@@ -192,7 +209,7 @@ pub async fn handle_direct_forward(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
         if log_to_file {
-            log::info!(target: "ccproxy_logger", "Direct Response Body: {}", String::from_utf8_lossy(&body_bytes));
+            log::info!(target: "ccproxy_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 
         if let Ok(response) = response_builder.body(Body::from(body_bytes)) {
@@ -289,10 +306,7 @@ fn enhance_direct_request_body(
                     if proxy_model.prompt_injection == "enhance" {
                         body_map.insert(
                             system_prompt_field.to_string(),
-                            json!(format!(
-                                "{}\n\n{}",
-                                original_prompt, proxy_model.prompt_text
-                            )),
+                            json!(format!("{}\n{}", original_prompt, proxy_model.prompt_text)),
                         );
                     } else if proxy_model.prompt_injection == "replace" {
                         body_map.insert(
@@ -314,7 +328,7 @@ fn enhance_direct_request_body(
                         .to_string();
 
                     let new_prompt = if proxy_model.prompt_injection == "enhance" {
-                        format!("{}\n\n{}", original_prompt, proxy_model.prompt_text)
+                        format!("{}\n\nருங்கள்{}", original_prompt, proxy_model.prompt_text)
                     } else {
                         proxy_model.prompt_text.clone()
                     };
@@ -365,4 +379,410 @@ fn enhance_direct_request_body(
     }
 
     body
+}
+
+fn chunk_parser_and_log(
+    bytes: &bytes::Bytes,
+    log_recorder: Arc<Mutex<StreamLogRecorder>>,
+    chat_protocol: &ChatProtocol,
+    sse_status: Arc<RwLock<SseStatus>>,
+) {
+    let chunk_str = String::from_utf8_lossy(bytes);
+    let mut is_finished = false;
+
+    for line in chunk_str.lines() {
+        if line.starts_with("data:") {
+            let data = &line["data:".len()..].trim();
+            if data.is_empty() || *data == "[DONE]" {
+                continue;
+            }
+
+            if let Ok(json_data) = serde_json::from_str::<Value>(data) {
+                let mut recorder = log_recorder.lock().unwrap();
+
+                // Update chat_id if it's still the initial generated one
+                if recorder.chat_id.starts_with("cid_") {
+                    let api_chat_id = json_data
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|x| x.trim());
+                    if let Some(id) = api_chat_id {
+                        if !id.is_empty() {
+                            recorder.chat_id = id.to_string();
+                        }
+                    }
+                }
+
+                match chat_protocol {
+                    ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+                        if let Some(detlta) = json_data
+                            .get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("delta"))
+                        {
+                            if let Some(text) = detlta.get("content").and_then(|c| c.as_str()) {
+                                if !text.is_empty() {
+                                    recorder.content.push_str(text.trim());
+                                }
+                            }
+
+                            if let Some(text) =
+                                detlta.get("reasoning_content").and_then(|c| c.as_str())
+                            {
+                                if !text.is_empty() {
+                                    match recorder.thinking {
+                                        Some(ref mut reasoning) => reasoning.push_str(text),
+                                        None => recorder.thinking = Some(text.to_string()),
+                                    }
+                                }
+                            }
+                        }
+
+                        // tool call
+                        if let Some(tool_calls) = json_data
+                            .get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("delta"))
+                            .and_then(|d| d.get("tool_calls"))
+                            .and_then(|t| t.as_array())
+                        {
+                            if recorder.tool_calls.is_none() {
+                                recorder.tool_calls = Some(Default::default());
+                            }
+
+                            if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                for tc in tool_calls {
+                                    let tool_id = tc
+                                        .get("id")
+                                        .and_then(|i| i.as_str())
+                                        .map(|x| x.to_string())
+                                        .unwrap_or(format!(
+                                            "tool_{}",
+                                            uuid::Uuid::new_v4().simple()
+                                        ));
+
+                                    if let Some(func) = tc.get("function") {
+                                        if let Some(name) =
+                                            func.get("name").and_then(|n| n.as_str())
+                                        {
+                                            recorder_tool_calls
+                                                .entry(tool_id.to_string())
+                                                .or_insert_with(|| UnifiedFunctionCallPart {
+                                                    name: name.to_string(),
+                                                    args: "".to_string(),
+                                                });
+                                        }
+
+                                        if let Some(args) =
+                                            func.get("arguments").and_then(|a| a.as_str())
+                                        {
+                                            if let Some(tool) =
+                                                recorder_tool_calls.get_mut(&tool_id)
+                                            {
+                                                tool.args.push_str(args);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // usage
+                        if let Some(usage) = json_data.get("usage") {
+                            if let Some(prompt_tokens) =
+                                usage.get("prompt_tokens").and_then(|t| t.as_u64())
+                            {
+                                recorder.input_tokens = Some(prompt_tokens);
+                            }
+                            if let Some(completion_tokens) =
+                                usage.get("completion_tokens").and_then(|t| t.as_u64())
+                            {
+                                recorder.output_tokens = Some(completion_tokens);
+                            }
+                        }
+
+                        if let Some(reason) = json_data
+                            .get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("finish_reason"))
+                            .and_then(|r| r.as_str())
+                        {
+                            if !reason.is_empty() {
+                                is_finished = true;
+                            }
+                        }
+                    }
+                    ChatProtocol::Claude => {
+                        if let Ok(claude_event) =
+                            serde_json::from_str::<crate::ccproxy::claude::ClaudeStreamEvent>(data)
+                        {
+                            match claude_event.event_type.as_str() {
+                                "message_start" => {
+                                    if let Some(msg) = claude_event.message {
+                                        if recorder.model.is_empty() {
+                                            recorder.model = msg.model;
+                                        }
+                                        recorder.input_tokens =
+                                            Some(msg.usage.input_tokens.unwrap_or(0));
+                                    }
+                                }
+                                "content_block_start" => {
+                                    if let Some(block) = claude_event.content_block {
+                                        match block.block_type.as_str() {
+                                            "tool_use" => {
+                                                let tool_name = block.name.unwrap_or_default();
+                                                let tool_id = block.id.clone().unwrap_or(
+                                                    format!("tool_{}", uuid::Uuid::new_v4())
+                                                        .to_string(),
+                                                );
+                                                if let Ok(mut status) = sse_status.write() {
+                                                    status.tool_id = tool_id.clone();
+                                                }
+
+                                                if !tool_name.is_empty() {
+                                                    if recorder.tool_calls.is_none() {
+                                                        recorder.tool_calls =
+                                                            Some(Default::default());
+                                                    }
+                                                    if let Some(tool_calls) =
+                                                        &mut recorder.tool_calls
+                                                    {
+                                                        tool_calls
+                                                            .entry(tool_id.clone())
+                                                            .or_insert_with(|| {
+                                                                UnifiedFunctionCallPart {
+                                                                    name: tool_name,
+                                                                    args: "".to_string(),
+                                                                }
+                                                            });
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                "content_block_delta" => {
+                                    if let Some(delta) = claude_event.delta {
+                                        match delta.delta_type.as_deref() {
+                                            Some("text_delta") => {
+                                                if let Some(text) = delta.text {
+                                                    if !text.is_empty() {
+                                                        recorder.content.push_str(&text);
+                                                    }
+                                                }
+                                            }
+                                            Some("thinking_delta") => {
+                                                if let Some(text) = delta.text {
+                                                    if !text.is_empty() {
+                                                        if let Some(thinking) =
+                                                            &mut recorder.thinking
+                                                        {
+                                                            thinking.push_str(&text);
+                                                        } else {
+                                                            recorder.thinking =
+                                                                Some(text.to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Some("input_json_delta") => {
+                                                if let Some(partial_json) = delta.partial_json {
+                                                    if !partial_json.is_empty() {
+                                                        if let Ok(status) = sse_status.read() {
+                                                            let tool_id = status.tool_id.clone();
+
+                                                            if let Some(tool_calls) =
+                                                                &mut recorder.tool_calls
+                                                            {
+                                                                if let Some(tool) =
+                                                                    tool_calls.get_mut(&tool_id)
+                                                                {
+                                                                    tool.args
+                                                                        .push_str(&partial_json);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                "message_delta" => {
+                                    if let Some(usage) = claude_event.usage {
+                                        recorder.output_tokens =
+                                            Some(usage.output_tokens.unwrap_or(0));
+                                    }
+                                    if let Some(delta) = claude_event.delta {
+                                        if delta.stop_reason.is_some() {
+                                            is_finished = true;
+                                        }
+                                    }
+                                }
+                                "message_stop" => {
+                                    is_finished = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    ChatProtocol::Gemini => {
+                        if let Some(text) = json_data
+                            .get("candidates")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("content"))
+                            .and_then(|c| c.get("parts"))
+                            .and_then(|p| p.get(0))
+                            .and_then(|p| p.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            if !text.is_empty() {
+                                recorder.content.push_str(text);
+                            }
+                        }
+                        if let Some(tool_calls) = json_data
+                            .get("candidates")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("content"))
+                            .and_then(|c| c.get("parts"))
+                            .and_then(|p| p.as_array())
+                        {
+                            if recorder.tool_calls.is_none() {
+                                recorder.tool_calls = Some(Default::default());
+                            }
+                            if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                for tc in tool_calls {
+                                    if let Some(name) = tc
+                                        .get("functionCall")
+                                        .and_then(|f| f.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
+                                        let id = format!("tool_{}", uuid::Uuid::new_v4().simple());
+                                        recorder_tool_calls.entry(id.to_string()).or_insert_with(
+                                            || UnifiedFunctionCallPart {
+                                                name: name.to_string(),
+                                                args: "".to_string(),
+                                            },
+                                        );
+                                        if let Some(args) =
+                                            tc.get("functionCall").and_then(|f| f.get("args"))
+                                        {
+                                            if let Some(tool) = recorder_tool_calls.get_mut(&id) {
+                                                tool.args.push_str(&args.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(usage_metadata) = json_data.get("usage_metadata") {
+                            if let Some(prompt_token_count) = usage_metadata
+                                .get("prompt_token_count")
+                                .and_then(|t| t.as_u64())
+                            {
+                                recorder.input_tokens = Some(prompt_token_count);
+                            }
+                            if let Some(candidates_token_count) = usage_metadata
+                                .get("candidates_token_count")
+                                .and_then(|t| t.as_u64())
+                            {
+                                recorder.output_tokens = Some(candidates_token_count);
+                            }
+                        }
+                        if let Some(reason) = json_data
+                            .get("candidates")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("finishReason"))
+                            .and_then(|r| r.as_str())
+                        {
+                            if !reason.is_empty() {
+                                is_finished = true;
+                            }
+                        }
+                    }
+                    ChatProtocol::Ollama => {
+                        if let Some(message) = json_data.get("message") {
+                            if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
+                                if !text.is_empty() {
+                                    recorder.content.push_str(text);
+                                }
+                            }
+
+                            if let Some(thinking) = message.get("thinking").and_then(|t| t.as_str())
+                            {
+                                if !thinking.is_empty() {
+                                    if let Some(reasoning) = &mut recorder.thinking {
+                                        reasoning.push_str(thinking);
+                                    } else {
+                                        recorder.thinking = Some(thinking.to_string());
+                                    }
+                                }
+                            }
+
+                            if let Some(tool_calls) =
+                                message.get("tool_calls").and_then(|t| t.as_array())
+                            {
+                                if recorder.tool_calls.is_none() {
+                                    recorder.tool_calls = Some(Default::default());
+                                }
+                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                    for tc in tool_calls {
+                                        if let Some(name) = tc
+                                            .get("function")
+                                            .and_then(|f| f.get("name"))
+                                            .and_then(|n| n.as_str())
+                                        {
+                                            let id =
+                                                format!("tool_{}", uuid::Uuid::new_v4().simple());
+                                            recorder_tool_calls
+                                                .entry(id.to_string())
+                                                .or_insert_with(|| UnifiedFunctionCallPart {
+                                                    name: name.to_string(),
+                                                    args: "".to_string(),
+                                                });
+                                            if let Some(args) =
+                                                tc.get("function").and_then(|f| f.get("arguments"))
+                                            {
+                                                if let Some(tool) = recorder_tool_calls.get_mut(&id)
+                                                {
+                                                    tool.args.push_str(&args.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(prompt_eval_count) =
+                            json_data.get("prompt_eval_count").and_then(|t| t.as_u64())
+                        {
+                            recorder.input_tokens = Some(prompt_eval_count);
+                        }
+                        if let Some(eval_count) =
+                            json_data.get("eval_count").and_then(|t| t.as_u64())
+                        {
+                            recorder.output_tokens = Some(eval_count);
+                        }
+                        if let Some(done) = json_data.get("done").and_then(|d| d.as_bool()) {
+                            if done {
+                                is_finished = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if is_finished {
+        if let Ok(final_log) = log_recorder.clone().lock() {
+            log::info!(target: "ccproxy_logger",
+                "[Direct]{} Stream Response: \n{}\n================\n\n",
+                chat_protocol.to_string(),
+                serde_json::to_string_pretty(&*final_log).unwrap_or_default()
+            );
+        }
+    }
 }

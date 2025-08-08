@@ -54,8 +54,7 @@ use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::db::MainStore;
 use crate::http::chp::{Chp, SearchProvider};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
-use crate::workflow::tools::{DeepSearch, ModelName};
-use crate::workflow::ToolManager;
+use crate::tools::{DeepSearch, ModelName, ToolManager};
 
 use rust_i18n::t;
 use serde_json::{json, Value};

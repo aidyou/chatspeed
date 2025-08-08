@@ -137,12 +137,8 @@ const checkInitialFullscreen = async () => {
 }
 
 // Use debounce to handle state changes
-let fullscreenTimeout
 const handleFullscreenChange = isFullscreenState => {
-  clearTimeout(fullscreenTimeout)
-  fullscreenTimeout = setTimeout(() => {
-    isFullscreen.value = isFullscreenState
-  }, 100)
+  isFullscreen.value = isFullscreenState
 }
 
 // Modify the implementation to listen for fullscreen state changes
@@ -198,31 +194,14 @@ const minimizeWindow = async () => {
 // Toggle maximize/unmaximize
 const toggleMaximize = async () => {
   try {
-    const currentFullscreen = await appWindow.isFullscreen()
-
-    if (!currentFullscreen) {
-      document.documentElement.style.transition = 'all 0.3s ease-in-out'
-      document.documentElement.style.transform = 'scale(0.98)'
-      await new Promise(resolve => setTimeout(resolve, 50))
-
-      await appWindow.setFullscreen(true)
-
-      setTimeout(() => {
-        document.documentElement.style.transform = 'scale(1)'
-        setTimeout(() => {
-          document.documentElement.style.transition = ''
-          document.documentElement.style.transform = ''
-        }, 300)
-      }, 50)
+    const isMaximized = await appWindow.isMaximized()
+    if (isMaximized) {
+      await appWindow.unmaximize()
     } else {
-      await appWindow.setFullscreen(false)
+      await appWindow.maximize()
     }
-
-    isFullscreen.value = !currentFullscreen
   } catch (error) {
     console.error('Failed to toggle maximize:', error)
-    document.documentElement.style.transition = ''
-    document.documentElement.style.transform = ''
   }
 }
 

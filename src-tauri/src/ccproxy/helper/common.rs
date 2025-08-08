@@ -350,7 +350,7 @@ pub fn should_forward_header(name_str: &str) -> bool {
             || (name_str.starts_with("x-") && !name_str.starts_with("x-api-"));
 }
 
-pub fn get_provider_full_url(
+pub fn get_provider_chat_full_url(
     protocol: ChatProtocol,
     base_url: &str,
     model_id: &str,
@@ -358,8 +358,11 @@ pub fn get_provider_full_url(
     is_streaming_request: bool,
 ) -> String {
     match protocol {
-        ChatProtocol::OpenAI | ChatProtocol::Ollama => {
+        ChatProtocol::OpenAI => {
             format!("{}/chat/completions", base_url.trim_end_matches('/'))
+        }
+        ChatProtocol::Ollama => {
+            format!("{}/api/chat", base_url.trim_end_matches('/'))
         }
         ChatProtocol::HuggingFace => base_url
             .split_once("/hf-inference/models")

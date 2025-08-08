@@ -319,7 +319,7 @@ body {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-radius: var(--cs-border-radius-md);
-  transition: all 0.2s ease-in-out;
+  
   border: 0.5px solid var(--cs-border-color);
   box-sizing: border-box;
 

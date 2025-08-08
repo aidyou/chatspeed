@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::ccproxy::gemini::SafetySetting;
@@ -124,6 +124,7 @@ pub enum UnifiedContentBlock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedTool {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
 }
@@ -256,9 +257,56 @@ pub struct UnifiedUsage {
     pub eval_duration: Option<u64>,
 }
 
-pub struct GeminiFunctionCallPart {
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct UnifiedFunctionCallPart {
     pub name: String,
     pub args: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct StreamLogRecorder {
+    pub chat_id: String,
+    pub model: String,
+    pub content: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_option_map_tools"
+    )]
+    pub tool_calls: Option<HashMap<String, UnifiedFunctionCallPart>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+impl StreamLogRecorder {
+    pub fn new(chat_id: String, model: String) -> Self {
+        Self {
+            chat_id,
+            model,
+            ..Default::default()
+        }
+    }
+}
+
+fn serialize_option_map_tools<S>(
+    tools: &Option<HashMap<String, UnifiedFunctionCallPart>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if let Some(tools) = tools {
+        let formatted_values: Vec<_> = tools
+            .values()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .collect();
+        formatted_values.serialize(serializer)
+    } else {
+        serializer.serialize_none()
+    }
 }
 
 pub struct SseStatus {
@@ -279,7 +327,7 @@ pub struct SseStatus {
     pub tool_compat_fragment_count: u32,
     pub tool_compat_last_flush_time: std::time::Instant,
     // For gemini tools: tool_id -> tool define
-    pub gemini_tools: HashMap<String, GeminiFunctionCallPart>,
+    pub gemini_tools: HashMap<String, UnifiedFunctionCallPart>,
     // For tracking tool_id to index mapping
     pub tool_id_to_index: HashMap<String, u32>,
     // For ollama tools

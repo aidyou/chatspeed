@@ -25,11 +25,15 @@ impl OutputAdapter for OllamaOutputAdapter {
     ) -> Result<Response, anyhow::Error> {
         let mut text_content = String::new();
         let mut tool_calls = Vec::new();
+        let mut reasoning_content = String::new();
 
         for block in response.content {
             match block {
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::Text { text } => {
                     text_content.push_str(&text);
+                }
+                crate::ccproxy::adapter::unified::UnifiedContentBlock::Thinking { thinking } => {
+                    reasoning_content.push_str(&thinking);
                 }
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolUse {
                     id: _, // Ollama does not use tool ID
@@ -51,6 +55,11 @@ impl OutputAdapter for OllamaOutputAdapter {
             role: "assistant".to_string(),
             content: text_content,
             images: None,
+            thinking: if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(reasoning_content)
+            },
             tool_calls: if tool_calls.is_empty() {
                 None
             } else {

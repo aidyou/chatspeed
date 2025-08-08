@@ -110,6 +110,31 @@ To use a tool, respond with an XML block formatted as follows:
     </params>
 </ccp:tool_use>
 
+CRITICAL FORMATTING RULES - READ CAREFULLY:
+1. NEVER use markdown code blocks (```xml, ```, or any ``` delimiters)
+2. NEVER wrap the XML in any formatting
+3. Output the XML tags directly as plain text in your response
+4. Do NOT treat the XML as code - treat it as regular response text
+5. The <ccp:tool_use> tags should appear directly in your message, not in a code block
+
+WRONG (DO NOT DO THIS):
+```xml
+<ccp:tool_use>
+    <name>get_weather</name>
+    <params>
+        <param name="city" type="string">Tokyo</param>
+    </params>
+</ccp:tool_use>
+```
+
+CORRECT (DO THIS):
+<ccp:tool_use>
+    <name>get_weather</name>
+    <params>
+        <param name="city" type="string">Tokyo</param>
+    </params>
+</ccp:tool_use>
+
 IMPORTANT: When performing the same operation multiple times with different parameters (e.g., checking weather for multiple cities, querying different dates, etc.), YOU MUST use separate tool calls for each instance. Provide one <ccp:tool_use> block per operation, even if the operations are similar.
 
 Example: If asked to read two files, make two separate tool calls:
@@ -125,6 +150,8 @@ Example: If asked to read two files, make two separate tool calls:
         <param name=\"file_path\" type=\"string\">/path/to/b.txt</param>
     </params>
 </ccp:tool_use>
+
+Remember: The XML tool calls are part of your normal response text, not code blocks. Output them directly without any markdown formatting.
 
 ---
 

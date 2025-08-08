@@ -1,6 +1,6 @@
+use axum::response::{IntoResponse, Response};
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
-use axum::response::{IntoResponse, Response};
 
 use super::traits::OutputAdapter;
 use super::{

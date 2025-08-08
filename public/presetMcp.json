@@ -46,5 +46,468 @@
         }
       }
     }
+  },
+  {
+    "name": "github",
+    "description": "Provides tools for interacting with GitHub repositories, including code search, issue management, and pull request operations.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+    "config": {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-github"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "filesystem",
+    "description": "Provides file system operations including reading, writing, editing, and searching files and directories.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "config": {
+      "mcpServers": {
+        "filesystem": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "git",
+    "description": "Provides Git version control operations including repository management, commits, branches, and diffs.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+    "config": {
+      "mcpServers": {
+        "git": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-git"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "postgres",
+    "description": "Provides read-only access to PostgreSQL databases, enabling schema inspection and data querying.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+    "config": {
+      "mcpServers": {
+        "postgres": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-postgres"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "http-api",
+    "description": "Provides tools for making HTTP requests to REST APIs and web services.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/http",
+    "config": {
+      "mcpServers": {
+        "http-api": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-http"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "notion",
+    "description": "Provides tools for interacting with Notion workspace, including page management, database operations, and content creation for collaborative documentation.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/notion",
+    "config": {
+      "mcpServers": {
+        "notion": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-notion"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "google-drive",
+    "description": "Enables access to Google Drive files and documents, allowing AI assistants to manage, search, and process cloud-based documents and files.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/google-drive",
+    "config": {
+      "mcpServers": {
+        "google-drive": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-google-drive"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "slack",
+    "description": "Provides Slack messaging and channel management capabilities, enabling team communication and collaboration workflows.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+    "config": {
+      "mcpServers": {
+        "slack": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-slack"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "confluence",
+    "description": "Atlassian Confluence integration for document management, knowledge base access, and collaborative content creation.",
+    "website": "https://github.com/atlassian-labs/confluence-mcp-server",
+    "config": {
+      "mcpServers": {
+        "confluence": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@atlassian-labs/confluence-mcp-server"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "jira",
+    "description": "Jira project management integration for issue tracking, task management, and agile workflow automation.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/jira",
+    "config": {
+      "mcpServers": {
+        "jira": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-jira"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "pandoc",
+    "description": "Seamless document format conversion using Pandoc, supporting Markdown, HTML, PDF, and various other document formats.",
+    "website": "https://github.com/vivekVells/mcp-pandoc",
+    "config": {
+      "mcpServers": {
+        "pandoc": {
+          "command": "uvx",
+          "args": [
+            "mcp-pandoc"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "textin",
+    "description": "Advanced OCR and document processing tools including text recognition, ID recognition, and invoice processing with Markdown conversion support.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/textin",
+    "config": {
+      "mcpServers": {
+        "textin": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-textin"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "paperless",
+    "description": "Integration with Paperless-NGX API for document management, tagging, and organization of digital documents.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/paperless",
+    "config": {
+      "mcpServers": {
+        "paperless": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-paperless"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "markitdown",
+    "description": "Universal document converter that transforms files and web content into markdown format for AI processing and documentation.",
+    "website": "https://github.com/microsoft/markitdown",
+    "config": {
+      "mcpServers": {
+        "markitdown": {
+          "command": "uvx",
+          "args": [
+            "markitdown-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "unstructured",
+    "description": "Open-source ETL solution for transforming complex documents into clean, structured formats suitable for language models and AI processing.",
+    "website": "https://github.com/Unstructured-IO/unstructured",
+    "config": {
+      "mcpServers": {
+        "unstructured": {
+          "command": "uvx",
+          "args": [
+            "unstructured-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "gotenberg",
+    "description": "Developer-friendly API for converting numerous document formats into PDF files and other formats with high quality output.",
+    "website": "https://github.com/gotenberg/gotenberg",
+    "config": {
+      "mcpServers": {
+        "gotenberg": {
+          "command": "docker",
+          "args": [
+            "run",
+            "--rm",
+            "-p",
+            "3000:3000",
+            "gotenberg/gotenberg:8"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "tesseract-ocr",
+    "description": "Open-source Optical Character Recognition engine for extracting text from images, scanned documents, and PDF files with high accuracy.",
+    "website": "https://github.com/tesseract-ocr/tesseract",
+    "config": {
+      "mcpServers": {
+        "tesseract-ocr": {
+          "command": "uvx",
+          "args": [
+            "tesseract-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "paddleocr",
+    "description": "Multilingual OCR and document parsing toolkit supporting 80+ languages recognition with practical ultra-lightweight OCR system.",
+    "website": "https://github.com/PaddlePaddle/PaddleOCR",
+    "config": {
+      "mcpServers": {
+        "paddleocr": {
+          "command": "uvx",
+          "args": [
+            "paddleocr-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "easyocr",
+    "description": "Ready-to-use OCR with 80+ supported languages and all popular writing scripts including Latin, Chinese, Arabic, Devanagari, Cyrillic and etc.",
+    "website": "https://github.com/JaidedAI/EasyOCR",
+    "config": {
+      "mcpServers": {
+        "easyocr": {
+          "command": "uvx",
+          "args": [
+            "easyocr-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "monday",
+    "description": "Monday.com project management system integration - a complete Work OS designed to help teams complete projects efficiently and collaborate effectively.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/monday",
+    "config": {
+      "mcpServers": {
+        "monday": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-monday"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "notion-advanced",
+    "description": "Advanced Notion API integration providing enhanced capabilities for workspace management, database operations, and collaborative documentation.",
+    "website": "https://github.com/makenotion/notion-mcp-server",
+    "config": {
+      "mcpServers": {
+        "notion-advanced": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@notionhq/notion-mcp-server"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "google-sheets",
+    "description": "Google Sheets API integration with comprehensive reading, writing, formatting, and sheet management capabilities for spreadsheet automation.",
+    "website": "https://github.com/freema/mcp-gsheets",
+    "config": {
+      "mcpServers": {
+        "google-sheets": {
+          "command": "uvx",
+          "args": [
+            "mcp-gsheets"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "microsoft-365",
+    "description": "Comprehensive Microsoft 365 suite integration using Graph API, including Outlook, mail, files, Excel, calendar, and Office applications.",
+    "website": "https://github.com/softeria/ms-365-mcp-server",
+    "config": {
+      "mcpServers": {
+        "microsoft-365": {
+          "command": "uvx",
+          "args": [
+            "ms-365-mcp-server"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "onlyoffice",
+    "description": "ONLYOFFICE document processing integration for real-time collaborative editing of texts, spreadsheets, presentations, and PDF documents.",
+    "website": "https://github.com/ONLYOFFICE",
+    "config": {
+      "mcpServers": {
+        "onlyoffice": {
+          "command": "docker",
+          "args": [
+            "run",
+            "--rm",
+            "-i",
+            "onlyoffice/documentserver"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "nextcloud",
+    "description": "Nextcloud content collaboration platform integration for file sharing, document collaboration, and team communication tools.",
+    "website": "https://github.com/nextcloud",
+    "config": {
+      "mcpServers": {
+        "nextcloud": {
+          "command": "uvx",
+          "args": [
+            "nextcloud-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "amap-maps",
+    "description": "高德地图MCP服务提供全场景覆盖的地图服务，包括地理编码、逆地理编码、IP定位、天气查询、路径规划、距离测量、关键词搜索等12大核心服务接口。",
+    "website": "https://lbs.amap.com/api/mcp-server/summary",
+    "config": {
+      "mcpServers": {
+        "amap-maps": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@amap/amap-maps-mcp-server"
+          ],
+          "env": {
+            "AMAP_MAPS_API_KEY": "您在高德官网上申请的key"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "firecrawl",
+    "description": "Firecrawl MCP服务提供网页爬取能力，支持将网页内容转换为结构化数据，适用于信息收集和数据提取场景。",
+    "website": "https://github.com/mendableai/firecrawl",
+    "config": {
+      "mcpServers": {
+        "firecrawl": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@mendableai/firecrawl-mcp"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "sequential-thinking",
+    "description": "Sequential Thinking MCP服务帮助智能体进行逐步思考和逻辑推理，适用于解决复杂数学问题和逻辑推理任务。",
+    "website": "https://modelscope.cn/brand/view/MCP",
+    "config": {
+      "mcpServers": {
+        "sequential-thinking": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-sequential-thinking"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "quickchart",
+    "description": "QuickChart MCP服务提供图表生成和数据可视化能力，支持生成各种类型的图表用于数据展示和分析。",
+    "website": "https://quickchart.io/",
+    "config": {
+      "mcpServers": {
+        "quickchart": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-quickchart"
+          ]
+        }
+      }
+    }
   }
 ]
