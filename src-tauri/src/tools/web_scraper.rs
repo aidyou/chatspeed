@@ -6,10 +6,7 @@ use tauri::AppHandle;
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     scraper::webview_wrapper::WebviewScraper,
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{error::ToolError, ToolDefinition, ToolResult},
 };
 
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
@@ -62,20 +59,20 @@ impl ToolDefinition for WebScraperTool {
     async fn call(&self, params: Value) -> ToolResult {
         // Get the URL from parameters
         let url = params["url"].as_str().ok_or_else(|| {
-            WorkflowError::FunctionParamError(t!("workflow.url_must_be_string").to_string())
+            ToolError::FunctionParamError(t!("tools.url_must_be_string").to_string())
         })?;
 
         // Check if URL is empty
         if url.is_empty() {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.url_must_not_be_empty").to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.url_must_not_be_empty").to_string(),
             ));
         }
 
         // Validate URL format
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.url_invalid", url = url).to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.url_invalid", url = url).to_string(),
             ));
         }
 
@@ -87,9 +84,9 @@ impl ToolDefinition for WebScraperTool {
 
         // Perform scraping
         let content = scraper.scrape_url(url, selector).await.map_err(|e| {
-            WorkflowError::Execution(
+            ToolError::Execution(
                 t!(
-                    "workflow.web_scraper_failed",
+                    "tools.web_scraper_failed",
                     url = url,
                     details = e.to_string()
                 )

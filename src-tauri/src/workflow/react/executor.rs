@@ -9,6 +9,7 @@ use crate::{
     db::MainStore,
     http::chp::SearchResult,
     libs::util::format_json_str,
+    tools::{ModelName, Search, ToolManager},
     workflow::{
         error::WorkflowError,
         react::{
@@ -19,8 +20,6 @@ use crate::{
             },
             types::{FunctionCall, Plan, PlanStatus, StepError, StepResult, StepStatus},
         },
-        tool_manager::ToolManager,
-        tools::ModelName,
     },
 };
 
@@ -661,71 +660,76 @@ impl ReactExecutor {
         let mut result_message = StepResult::default();
 
         // Try to parse JSON response
-        if let Ok(json_response) =
-            serde_json::from_str::<serde_json::Value>(&format_json_str(assistant_message))
-        {
-            let status = json_response
-                .get("status")
-                .and_then(|s| s.as_str())
-                .unwrap_or("unknown");
-            result_message.status = StepStatus::from(status);
-            result_message.reasoning = json_response
-                .get("reasoning")
-                .and_then(|s| s.as_str().map(|s| s.to_string()));
+        match serde_json::from_str::<serde_json::Value>(&format_json_str(assistant_message)) {
+            Ok(json_response) => {
+                let status = json_response
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("unknown");
+                result_message.status = StepStatus::from(status);
+                result_message.reasoning = json_response
+                    .get("reasoning")
+                    .and_then(|s| s.as_str().map(|s| s.to_string()));
 
-            match result_message.status {
-                StepStatus::Running => {
-                    // Handle tool call
-                    if let Some(tool) = json_response.get("tool") {
-                        if let (Some(function_name), Some(params)) = (
-                            tool.get("name").and_then(|n| n.as_str()),
-                            tool.get("arguments"),
-                        ) {
-                            debug!(
-                                "🔨 决定使用工具: {}, 推理：{}",
-                                function_name,
-                                result_message.reasoning.clone().unwrap_or_default()
-                            );
+                match result_message.status {
+                    StepStatus::Running => {
+                        // Handle tool call
+                        if let Some(tool) = json_response.get("tool") {
+                            if let (Some(function_name), Some(params)) = (
+                                tool.get("name").and_then(|n| n.as_str()),
+                                tool.get("arguments"),
+                            ) {
+                                debug!(
+                                    "🔨 决定使用工具: {}, 推理：{}",
+                                    function_name,
+                                    result_message.reasoning.clone().unwrap_or_default()
+                                );
 
-                            // Create function call
-                            result_message.function_call = Some(FunctionCall::new(
-                                function_name.to_string(),
-                                Some(params.clone()),
-                            ));
+                                // Create function call
+                                result_message.function_call = Some(FunctionCall::new(
+                                    function_name.to_string(),
+                                    Some(params.clone()),
+                                ));
+                            }
                         }
                     }
-                }
-                StepStatus::Failed => {
-                    result_message.status = StepStatus::Failed;
-                    result_message.error_message = json_response
-                        .get("error")
-                        .and_then(|s| s.as_str().map(|s| s.to_string()));
-                    error!(
-                        "❌ Failed to execute step: {}",
-                        result_message.error_message.clone().unwrap_or_default()
-                    );
-                }
-                StepStatus::Completed => {
-                    info!("✅ Step completed");
-                    result_message.status = StepStatus::Completed;
-                }
-                _ => {
-                    warn!(
-                        "Unknown response status: {}, assistant message: {}",
-                        status, assistant_message
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    StepStatus::Failed => {
+                        result_message.status = StepStatus::Failed;
+                        result_message.error_message = json_response
+                            .get("error")
+                            .and_then(|s| s.as_str().map(|s| s.to_string()));
+                        error!(
+                            "❌ Failed to execute step: {}",
+                            result_message.error_message.clone().unwrap_or_default()
+                        );
+                    }
+                    StepStatus::Completed => {
+                        info!("✅ Step completed");
+                        result_message.status = StepStatus::Completed;
+                    }
+                    _ => {
+                        warn!(
+                            "Unknown response status: {}, assistant message: {}",
+                            status, assistant_message
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
                 }
             }
-        } else {
-            log::error!(
-                "Error in the JSON configuration format generated during the reasoning phase: {}",
-                assistant_message
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            return Err(WorkflowError::Config(
-                t!("workflow.react.reasoning_json_format_error").to_string(),
-            ));
+            Err(e) => {
+                log::error!(
+                    "Error in the JSON configuration format generated during the reasoning phase: {}, error: {}",
+                    assistant_message, e
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                return Err(WorkflowError::Config(
+                    t!(
+                        "workflow.react.reasoning_json_format_error",
+                        error = e.to_string()
+                    )
+                    .to_string(),
+                ));
+            }
         }
 
         // Add assistant message to context
@@ -859,7 +863,7 @@ impl ReactExecutor {
                     }
 
                     // Determine if this is a fatal error that requires updating the entire plan status
-                    if self.is_fatal_error(&e) {
+                    if self.is_fatal_error(&(e.clone().into())) {
                         // Update plan status
                         let updated_plan = self
                             .plan_manager
@@ -977,9 +981,7 @@ impl ReactExecutor {
                         match function_call.name.as_str() {
                             "web_search" => {
                                 if let Some(arguments) = &function_call.arguments {
-                                    let kw = crate::workflow::tools::Search::extract_keywords(
-                                        arguments,
-                                    )?;
+                                    let kw = Search::extract_keywords(arguments)?;
                                     let dedup_tool = self
                                         .context
                                         .function_manager
@@ -1236,7 +1238,7 @@ impl ReactExecutor {
         params.insert("top_p".to_string(), json!(0.9));
 
         // Execute function
-        function.call(Value::Object(params)).await
+        Ok(function.call(Value::Object(params)).await?)
     }
 
     /// Generate a plan based on user request, retry up to 3 times

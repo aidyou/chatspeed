@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::workflow::{
-    react::types::{Message, Plan, StepState},
-    tool_manager::ToolManager,
+use crate::{
+    tools::ToolManager,
+    workflow::react::types::{Message, Plan, StepState},
 };
 
 use super::{

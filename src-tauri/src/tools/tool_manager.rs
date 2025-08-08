@@ -13,7 +13,7 @@ use crate::db::{AiModel, MainStore};
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, SseClient, StdioClient,
 };
-use crate::workflow::error::WorkflowError;
+use crate::tools::error::ToolError;
 
 // use super::tools::Crawler;
 // use super::tools::Plot;
@@ -21,11 +21,11 @@ use crate::workflow::error::WorkflowError;
 // use super::tools::SearchDedup;
 // use super::tools::{ChatCompletion, ModelName};
 
-pub const MCP_TOOL_NAME_SPLIT: &str = "__SP__";
+pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
 
 /// The result type of a function call.
-pub type ToolResult = Result<Value, WorkflowError>;
+pub type ToolResult = Result<Value, ToolError>;
 
 /// A trait defining the characteristics of a function.
 #[async_trait]
@@ -58,7 +58,6 @@ pub trait ToolDefinition: Send + Sync {
 /// Manages the registration and execution of workflow functions.
 ///
 /// This struct is responsible for maintaining a collection of functions
-/// that can be executed within a workflow.
 pub struct ToolManager {
     /// A map of registered functions.
     tools: RwLock<HashMap<String, Arc<dyn ToolDefinition>>>,
@@ -90,12 +89,19 @@ impl ToolManager {
     /// * `main_store` - The main store.
     ///
     /// # Returns
-    /// * `Result<(), WorkflowError>` - The result of the registration.
+    /// * `Result<(), ToolError>` - The result of the registration.
     pub async fn register_available_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
         _chat_state: Arc<ChatState>,
         main_store: Arc<std::sync::Mutex<MainStore>>,
-    ) -> Result<(), WorkflowError> {
+    ) -> Result<(), ToolError> {
+        // =================================================
+        // Built-in tools
+        // =================================================
+        // Register time tool
+        self.register_tool(Arc::new(crate::tools::TimeTool::new()))
+            .await?;
+
         // =================================================
         // Chat completion
         // =================================================
@@ -145,7 +151,7 @@ impl ToolManager {
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {
             let main_store_guard = main_store.lock().map_err(|e| {
-                WorkflowError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
+                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
             })?;
             main_store_guard
                 .config
@@ -180,21 +186,21 @@ impl ToolManager {
     /// * `tool` - The tool to register.
     ///
     /// # Returns
-    /// * `Result<(), WorkflowError>` - The result of the registration.
-    // pub async fn register_tool(
-    //     &self, // This can remain &self as it doesn't spawn long tasks
-    //     tool: Arc<dyn ToolDefinition>,
-    // ) -> Result<(), WorkflowError> {
-    //     let name = tool.name().to_string();
-    //     let mut tools = self.tools.write().await;
+    /// * `Result<(), ToolError>` - The result of the registration.
+    pub async fn register_tool(
+        &self, // This can remain &self as it doesn't spawn long tasks
+        tool: Arc<dyn ToolDefinition>,
+    ) -> Result<(), ToolError> {
+        let name = tool.name().to_string();
+        let mut tools = self.tools.write().await;
 
-    //     if tools.contains_key(&name) {
-    //         return Err(WorkflowError::FunctionAlreadyExists(name));
-    //     }
+        if tools.contains_key(&name) {
+            return Err(ToolError::FunctionAlreadyExists(name));
+        }
 
-    //     tools.insert(name, tool);
-    //     Ok(())
-    // }
+        tools.insert(name, tool);
+        Ok(())
+    }
 
     /// Gets a tool by its name.
     ///
@@ -202,14 +208,14 @@ impl ToolManager {
     /// * `name` - The name of the tool to get.
     ///
     /// # Returns
-    /// * `Result<Arc<dyn FunctionDefinition>, WorkflowError>` - The result of the function retrieval.
-    pub async fn get_tool(&self, name: &str) -> Result<Arc<dyn ToolDefinition>, WorkflowError> {
+    /// * `Result<Arc<dyn FunctionDefinition>, ToolError>` - The result of the function retrieval.
+    pub async fn get_tool(&self, name: &str) -> Result<Arc<dyn ToolDefinition>, ToolError> {
         let tools = self.tools.read().await;
 
         tools
             .get(name)
             .cloned()
-            .ok_or_else(|| WorkflowError::FunctionNotFound(name.to_string()))
+            .ok_or_else(|| ToolError::FunctionNotFound(name.to_string()))
     }
 
     /// Call a native tool by its name.
@@ -237,7 +243,7 @@ impl ToolManager {
     /// * `ToolResult` - The result of the function execution.
     pub async fn tool_call(&self, name: &str, params: Value) -> ToolResult {
         if name.contains(MCP_TOOL_NAME_SPLIT) {
-            self.mcp_tool_call(name, params).await
+            self.call_mcp_tool_by_combined_name(name, params).await
         } else {
             self.native_tool_call(name, params).await
         }
@@ -259,11 +265,11 @@ impl ToolManager {
     /// Get the calling spec of all registered tools, it's contained all native tools and MCP tools.
     ///
     /// # Returns
-    /// * `Result<String, WorkflowError>` - The calling spec of all registered tools
+    /// * `Result<String, ToolError>` - The calling spec of all registered tools
     pub async fn get_tool_calling_spec(
         &self,
         exclude: Option<HashSet<String>>,
-    ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
+    ) -> Result<Vec<MCPToolDeclaration>, ToolError> {
         let mut specs = Vec::new();
         let excluded: HashSet<String> = exclude.unwrap_or_default();
         for tool_names in self.get_registered_tools().await {
@@ -273,6 +279,7 @@ impl ToolManager {
                 }
             }
         }
+
         // Collect MCP tool specs *after* getting core function specs
         // This involves reading mcp_tools, which is fine after releasing the tools lock
         // The MCP tool will be remove after the MCP server is disabled. So we don't need to filter it here.
@@ -310,30 +317,30 @@ impl ToolManager {
     /// * `model_type` - The type of the AI model to retrieve
     ///
     /// # Returns
-    /// * `Result<AiModel, WorkflowError>` - The AI model or an error
+    /// * `Result<AiModel, ToolError>` - The AI model or an error
     pub fn get_model(
         main_store: &Arc<std::sync::Mutex<MainStore>>,
         model_type: &str,
-    ) -> Result<AiModel, WorkflowError> {
+    ) -> Result<AiModel, ToolError> {
         let model_name = format!("workflow_{}_model", model_type);
         // Get the model configured for the workflow
         let reasoning_model = main_store
             .lock()
             .map_err(|e| {
-                WorkflowError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
+                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
             })?
             .get_config(&model_name, Value::Null);
         if reasoning_model.is_null() {
-            return Err(WorkflowError::Config(
-                t!("workflow.failed_to_get_model", model_type = model_type).to_string(),
+            return Err(ToolError::Config(
+                t!("tools.failed_to_get_model", model_type = model_type).to_string(),
             ));
         }
 
         let model_id = reasoning_model["id"].as_i64().unwrap_or_default();
         if model_id < 1 {
-            return Err(WorkflowError::Config(
+            return Err(ToolError::Config(
                 t!(
-                    "workflow.model_type_not_found",
+                    "tools.model_type_not_found",
                     model_type = model_type,
                     id = model_id,
                     error = ""
@@ -346,14 +353,14 @@ impl ToolManager {
         let mut ai_model = main_store
             .lock()
             .map_err(|e| {
-                WorkflowError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
+                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
             })?
             .config
             .get_ai_model_by_id(model_id)
             .map_err(|e| {
-                WorkflowError::Config(
+                ToolError::Config(
                     t!(
-                        "workflow.model_type_not_found",
+                        "tools.model_type_not_found",
                         model_type = model_type,
                         id = model_id,
                         error = e
@@ -369,7 +376,8 @@ impl ToolManager {
                 m
             })?;
 
-        setup_chat_proxy(&main_store, &mut ai_model.metadata)?;
+        setup_chat_proxy(&main_store, &mut ai_model.metadata)
+            .map_err(|e| ToolError::Initialization(e.to_string()))?;
 
         Ok(ai_model)
     }
@@ -381,7 +389,7 @@ impl ToolManager {
     pub async fn start_mcp_server(
         self: Arc<Self>, // Changed to take Arc<Self>
         config: McpServerConfig,
-    ) -> Result<(), WorkflowError> {
+    ) -> Result<(), ToolError> {
         // Check if the server is already registered and running *without* holding the main lock
         // This avoids holding the main lock while potentially waiting for status()
         // Note: self.get_mcp_server doesn't need Arc<Self> if it only reads.
@@ -401,7 +409,7 @@ impl ToolManager {
     }
 
     /// Alias for `unregister_mcp_server`
-    pub async fn stop_mcp_server(&self, name: &str) -> Result<(), WorkflowError> {
+    pub async fn stop_mcp_server(&self, name: &str) -> Result<(), ToolError> {
         self.unregister_mcp_server(name).await
     }
 
@@ -419,7 +427,7 @@ impl ToolManager {
     pub async fn register_mcp_server(
         self: Arc<Self>, // Changed to take Arc<Self>
         mcp_server_config: McpServerConfig,
-    ) -> Result<(), WorkflowError> {
+    ) -> Result<(), ToolError> {
         #[cfg(debug_assertions)]
         {
             log::debug!("Register MCP server {} ... ", &mcp_server_config.name,);
@@ -442,7 +450,7 @@ impl ToolManager {
             }
         }
         .map_err(|e_mcp| {
-            WorkflowError::Config(
+            ToolError::Config(
                 t!(
                     "mcp.client.config_error_for_server",
                     server_name = &server_name_for_log, // Use cloned name
@@ -481,7 +489,7 @@ impl ToolManager {
         client_arc
             .start()
             .await
-            .map_err(|e_mcp_start| WorkflowError::Initialization(e_mcp_start.to_string()))?;
+            .map_err(|e_mcp_start| ToolError::Initialization(e_mcp_start.to_string()))?;
         log::info!("MCP client {} started successfully.", &name);
 
         // 3. Spawn a task to wait for status, list tools, and register
@@ -579,12 +587,12 @@ impl ToolManager {
     /// * `tools_declarations` - An optional vector of tool declarations fetched from the client.
     ///
     /// # Returns
-    /// * `Result<(), WorkflowError>` - The result of the registration.
+    /// * `Result<(), ToolError>` - The result of the registration.
     async fn register_mcp_server_inner(
         &self, // This function's signature remains &self as it's called by the Arc<Self> holding task
         client: Arc<dyn McpClient>,
         tools_declarations: Option<Vec<MCPToolDeclaration>>,
-    ) -> Result<(), WorkflowError> {
+    ) -> Result<(), ToolError> {
         let name = client.name().await;
         #[cfg(debug_assertions)]
         {
@@ -644,8 +652,8 @@ impl ToolManager {
     /// * `name` - The name of the MCP server to unregister.
     ///
     /// # Returns
-    /// * `Result<(), WorkflowError>` - The result of the unregistration.
-    pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), WorkflowError> {
+    /// * `Result<(), ToolError>` - The result of the unregistration.
+    pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), ToolError> {
         // Remove MCP tools from internal state first
         let mut mcp_tools = self.mcp_tools.write().await;
         mcp_tools.remove(name);
@@ -667,9 +675,9 @@ impl ToolManager {
                 log::error!("Failed to stop MCP server {}: {}", name, e);
                 // Construct the full message here, as StateChangeFailed is now #[error("{0}")]
                 // McpClientError's Display impl is already clean.
-                WorkflowError::StateChangeFailed(
+                ToolError::StateChangeFailed(
                     t!(
-                        "workflow.mcp_stop_failed_details",
+                        "tools.mcp_stop_failed_details",
                         server_name = name,
                         details = e.to_string()
                     )
@@ -690,12 +698,12 @@ impl ToolManager {
     /// Gets the status of all registered MCP servers.
     ///
     /// # Returns
-    /// * `Result<HashMap<String, McpStatus>, WorkflowError>` - The result of the status retrieval.
+    /// * `Result<HashMap<String, McpStatus>, ToolError>` - The result of the status retrieval.
     ///   The key is the name of the MCP server, and the value is its status.
     ///   If no MCP servers are registered, an empty map is returned.
     ///   If an error occurs during the status retrieval, an error is returned.
     ///   The error message will indicate the specific error that occurred.
-    pub async fn get_mcp_serves_status(&self) -> Result<HashMap<String, McpStatus>, WorkflowError> {
+    pub async fn get_mcp_serves_status(&self) -> Result<HashMap<String, McpStatus>, ToolError> {
         let mut status = HashMap::new();
 
         // Step 1: Collect the Arcs of the McpClient while holding the read lock.
@@ -722,8 +730,8 @@ impl ToolManager {
     /// * `name` - The name of the MCP server to get.
     ///
     /// # Returns
-    /// * `Result<Arc<dyn McpClient>, WorkflowError>` - The result of the server retrieval.
-    pub async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, WorkflowError> {
+    /// * `Result<Arc<dyn McpClient>, ToolError>` - The result of the server retrieval.
+    pub async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
         let servers_guard: tokio::sync::RwLockReadGuard<
             '_,
             HashMap<String, Arc<dyn McpClient + 'static>>,
@@ -731,7 +739,7 @@ impl ToolManager {
         servers_guard
             .get(name)
             .cloned()
-            .ok_or_else(|| WorkflowError::McpServerNotFound(name.to_string()))
+            .ok_or_else(|| ToolError::McpServerNotFound(name.to_string()))
     }
 
     /// Gets the list of tools declared by a specified MCP server.
@@ -740,16 +748,16 @@ impl ToolManager {
     /// * `name` - The name of the MCP server whose tools are to be retrieved.
     ///
     /// # Returns
-    /// * `Result<Vec<MCPToolDeclaration>, WorkflowError>` - The result of the tool retrieval.
+    /// * `Result<Vec<MCPToolDeclaration>, ToolError>` - The result of the tool retrieval.
     pub async fn get_mcp_server_tools(
         &self,
         name: &str,
-    ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
+    ) -> Result<Vec<MCPToolDeclaration>, ToolError> {
         let tools_guard = self.mcp_tools.read().await;
         tools_guard
             .get(name)
             .cloned()
-            .ok_or_else(|| WorkflowError::McpServerNotFound(name.to_string()))
+            .ok_or_else(|| ToolError::McpServerNotFound(name.to_string()))
     }
 
     /// Disables or enables a specific MCP tool in the in-memory cache.
@@ -766,20 +774,20 @@ impl ToolManager {
     /// * `is_disabled` - `true` to disable the tool, `false` to enable it.
     ///
     /// # Returns
-    /// * `Result<(), WorkflowError>` - Ok on success, or an error if the server or tool is not found in the cache.
+    /// * `Result<(), ToolError>` - Ok on success, or an error if the server or tool is not found in the cache.
     pub async fn disable_mcp_tool(
         &self,
         mcp_server_name: &str,
         mcp_tool_name: &str,
         is_disabled: bool,
-    ) -> Result<(), WorkflowError> {
+    ) -> Result<(), ToolError> {
         // Phase 1: Update the McpClient's internal config copy
         {
             // Scope for mcp_servers read lock
             let mcp_servers_read_guard = self.mcp_servers.read().await;
             if let Some(server_client) = mcp_servers_read_guard.get(mcp_server_name) {
                 server_client.update_disabled_tools(mcp_tool_name, is_disabled).await
-                    .map_err(|e| WorkflowError::Config(format!("Failed to update McpClient internal config for tool {} on server {}: {}", mcp_tool_name, mcp_server_name, e)))?;
+                    .map_err(|e| ToolError::Config(format!("Failed to update McpClient internal config for tool {} on server {}: {}", mcp_tool_name, mcp_server_name, e)))?;
                 log::debug!(
                     "Internal McpClient config updated for tool {} on server {}, disabled={}",
                     mcp_tool_name,
@@ -807,18 +815,42 @@ impl ToolManager {
                 Ok(())
             } else {
                 // tool not found in the list
-                Err(WorkflowError::FunctionNotFound(format!(
+                Err(ToolError::FunctionNotFound(format!(
                     "Tool {} not found on server {} in mcp_tools cache.",
                     mcp_tool_name, mcp_server_name
                 )))
             }
         } else {
             // server not found in the cache
-            Err(WorkflowError::McpServerNotFound(format!(
+            Err(ToolError::McpServerNotFound(format!(
                 "Server {} not found in mcp_tools cache.",
                 mcp_server_name
             )))
         }
+    }
+
+    pub async fn mcp_tool_call(
+        &self,
+        mcp_name: &str,
+        tool_name: &str,
+        params: Value,
+    ) -> ToolResult {
+        let client_arc = self.get_mcp_server(mcp_name).await?;
+        client_arc
+            .call(tool_name, params.clone())
+            .await
+            .map_err(|e| {
+                ToolError::Execution(
+                    t!(
+                        "mcp.client.failed_to_call_tool",
+                        server_name = mcp_name,
+                        tool_name = tool_name,
+                        args = params.to_string(),
+                        error = e
+                    )
+                    .to_string(),
+                )
+            })
     }
 
     /// Calls a tool on a specified MCP (Model Control Protocol) server.
@@ -839,14 +871,18 @@ impl ToolManager {
     /// * `ToolResult` - `Ok(Value)` containing the result of the tool execution on success.
     ///
     /// # Errors
-    /// * `WorkflowError::Execution`:
+    /// * `ToolError::Execution`:
     ///   - If `name_with_split` is improperly formatted (e.g., cannot be split correctly, or parts are empty),
     ///     an error with a message like "mcp.client.invalid_tool_name" is returned.
     ///   - If the underlying `McpClient::call` method fails (e.g., network issues, tool execution error on the server),
     ///     an error with a message like "mcp.client.failed_to_call_tool" is returned. This error message
     ///     will include the server name, tool name, parameters, and the underlying error details.
-    /// * `WorkflowError::FunctionNotFound` - If the specified `mcp_server_name` cannot be found.
-    pub async fn mcp_tool_call(&self, name_with_split: &str, params: Value) -> ToolResult {
+    /// * `ToolError::FunctionNotFound` - If the specified `mcp_server_name` cannot be found.
+    async fn call_mcp_tool_by_combined_name(
+        &self,
+        name_with_split: &str,
+        params: Value,
+    ) -> ToolResult {
         // Unlike regular functions that are directly looked up and invoked by name,
         // MCP (Model Control Protocol) tool calls require a two-step process:
         // 1. Locate the MCP server within the FunctionManager.
@@ -861,30 +897,12 @@ impl ToolManager {
             .split_once(MCP_TOOL_NAME_SPLIT)
             .filter(|(server_part, tool_part)| !server_part.is_empty() && !tool_part.is_empty())
             .ok_or_else(|| {
-                WorkflowError::Execution(
+                ToolError::Execution(
                     t!("mcp.client.invalid_tool_name", name = name_with_split).to_string(),
                 )
             })?;
 
-        // Get the server Arc *before* calling the tool
-        let client_arc = self.get_mcp_server(mcp_server_name).await?; // Renamed to client_arc for clarity
-
-        // Call the tool on the server Arc *without* holding FunctionManager's locks
-        client_arc
-            .call(tool_name, params.clone())
-            .await
-            .map_err(|e| {
-                WorkflowError::Execution(
-                    t!(
-                        "mcp.client.failed_to_call_tool",
-                        server_name = mcp_server_name,
-                        tool_name = tool_name,
-                        args = params.to_string(),
-                        error = e
-                    )
-                    .to_string(),
-                )
-            })
+        self.mcp_tool_call(mcp_server_name, tool_name, params).await
     }
 
     /// Subscribes to MCP status events.

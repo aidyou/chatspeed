@@ -6,10 +6,7 @@ use crate::{
     ai::traits::chat::MCPToolDeclaration,
     http::chp::SearchResult,
     libs::dedup::dedup_and_rank_results,
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{error::ToolError, ToolDefinition, ToolResult},
 };
 
 pub struct SearchDedup;
@@ -62,18 +59,17 @@ impl ToolDefinition for SearchDedup {
     /// # Returns
     /// Returns a `FunctionResult` containing the deduplicated and ranked search results.
     async fn call(&self, params: Value) -> ToolResult {
-        let results: Vec<SearchResult> = serde_json::from_value(params["results"].clone())?;
+        let results: Vec<SearchResult> = serde_json::from_value(params["results"].clone())
+            .map_err(|e| ToolError::Serialization(e.to_string()))?;
         let query = params["query"]
             .as_str()
             .ok_or_else(|| {
-                WorkflowError::FunctionParamError(
-                    t!("workflow.query_must_not_be_empty").to_string(),
-                )
+                ToolError::FunctionParamError(t!("tools.query_must_not_be_empty").to_string())
             })?
             .to_string();
         if query.is_empty() {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.query_must_not_be_empty").to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.query_must_not_be_empty").to_string(),
             ));
         }
 

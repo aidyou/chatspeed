@@ -24,10 +24,7 @@ use crate::{
     db::AiModel,
     http::chp::{Chp, SearchProvider, SearchResult},
     libs::{dedup::dedup_and_rank_results, util::format_json_str},
-    workflow::{
-        tool_manager::{ToolDefinition, ToolResult},
-        tools::ModelName,
-    },
+    tools::{ModelName, ToolDefinition, ToolResult},
 };
 
 pub struct DeepSearch {
@@ -92,7 +89,7 @@ impl DeepSearch {
     /// * `Result<()>` - Ok if the flag is not set, otherwise an error message
     fn check_stop(&self) -> Result<(), String> {
         if self.stop_flag.load(Ordering::Acquire) {
-            Err(t!("workflow.deep_search.search_stopped_by_user").into())
+            Err(t!("tools.deep_search.search_stopped_by_user").into())
         } else {
             Ok(())
         }
@@ -153,7 +150,7 @@ impl DeepSearch {
                 }
                 Err(_) => {
                     if self.should_stop() {
-                        return Err(t!("workflow.deep_search.search_stopped_by_user").into());
+                        return Err(t!("tools.deep_search.search_stopped_by_user").into());
                     }
                 }
             }
@@ -228,7 +225,7 @@ impl DeepSearch {
         // Send
         self.send_process_message(
             chat_id,
-            t!("workflow.deep_search.generating_query_plan").to_string(),
+            t!("tools.deep_search.generating_query_plan").to_string(),
             MessageType::Step,
             metadata.clone(),
         );
@@ -250,7 +247,7 @@ impl DeepSearch {
         let query_value: Value = serde_json::from_str(&json_str).unwrap_or_default();
         if let Some(error) = query_value["error"].as_str() {
             let err = t!(
-                "workflow.deep_search.failed_to_generate_queries",
+                "tools.deep_search.failed_to_generate_queries",
                 error = error
             )
             .to_string();
@@ -272,7 +269,7 @@ impl DeepSearch {
             self.send_process_message(
                 chat_id,
                 t!(
-                    "workflow.deep_search.query_plan_generated",
+                    "tools.deep_search.query_plan_generated",
                     plan = queries.join("\n")
                 )
                 .to_string(),
@@ -280,7 +277,7 @@ impl DeepSearch {
                 metadata.clone(),
             );
         } else {
-            let err = t!("workflow.deep_search.failed_to_generate_queries").to_string();
+            let err = t!("tools.deep_search.failed_to_generate_queries").to_string();
             self.send_process_message(chat_id, err.clone(), MessageType::Error, metadata.clone());
             return Err(err);
         }
@@ -361,7 +358,7 @@ impl DeepSearch {
             .replace("{{search_results}}", &content.join("\n\n"));
         let model = self.get_model(ModelName::Reasoning).await.ok_or_else(|| {
             let err = t!(
-                "workflow.model_not_found",
+                "tools.model_not_found",
                 model_name = ModelName::Reasoning.to_string()
             )
             .to_string();
@@ -462,7 +459,7 @@ impl DeepSearch {
         self.check_stop()?;
         self.send_process_message(
             chat_id,
-            t!("workflow.deep_search.searching", keyword = question).to_string(),
+            t!("tools.deep_search.searching", keyword = question).to_string(),
             MessageType::Step,
             metadata.clone(),
         );
@@ -472,7 +469,7 @@ impl DeepSearch {
         if search_results.is_empty() {
             self.send_process_message(
                 chat_id,
-                t!("workflow.deep_search.no_search_result", keyword = question).to_string(),
+                t!("tools.deep_search.no_search_result", keyword = question).to_string(),
                 MessageType::Log,
                 metadata.clone(),
             );
@@ -481,7 +478,7 @@ impl DeepSearch {
             self.send_process_message(
                 chat_id,
                 t!(
-                    "workflow.deep_search.search_success",
+                    "tools.deep_search.search_success",
                     count = search_results.len(),
                     keyword = question,
                 )
@@ -495,7 +492,7 @@ impl DeepSearch {
         self.check_stop()?;
         self.send_process_message(
             chat_id,
-            t!("workflow.deep_search.search_analysing", keyword = question).to_string(),
+            t!("tools.deep_search.search_analysing", keyword = question).to_string(),
             MessageType::Step,
             metadata.clone(),
         );
@@ -509,7 +506,7 @@ impl DeepSearch {
         if search_results.is_empty() {
             self.send_process_message(
                 chat_id,
-                t!("workflow.deep_search.no_related_result", keyword = question).to_string(),
+                t!("tools.deep_search.no_related_result", keyword = question).to_string(),
                 MessageType::Log,
                 metadata.clone(),
             );
@@ -518,7 +515,7 @@ impl DeepSearch {
             self.send_process_message(
                 chat_id,
                 t!(
-                    "workflow.deep_search.related_result_found",
+                    "tools.deep_search.related_result_found",
                     count = search_results.len(),
                     keyword = question,
                 )
@@ -531,7 +528,7 @@ impl DeepSearch {
         // Step 4, crawl results
         self.send_process_message(
             chat_id,
-            t!("workflow.deep_search.crawling").to_string(),
+            t!("tools.deep_search.crawling").to_string(),
             MessageType::Step,
             metadata.clone(),
         );
@@ -544,7 +541,7 @@ impl DeepSearch {
                     self.send_process_message(
                         chat_id,
                         t!(
-                            "workflow.deep_search.search_results_crawler_failed",
+                            "tools.deep_search.search_results_crawler_failed",
                             keyword = question
                         )
                         .to_string(),
@@ -559,7 +556,7 @@ impl DeepSearch {
                 self.send_process_message(
                     chat_id,
                     t!(
-                        "workflow.deep_search.search_results_crawler_failed",
+                        "tools.deep_search.search_results_crawler_failed",
                         keyword = question
                     )
                     .to_string(),
@@ -573,7 +570,7 @@ impl DeepSearch {
         // Step 5: Summarize results
         self.send_process_message(
             chat_id,
-            t!("workflow.deep_search.summarizing").to_string(),
+            t!("tools.deep_search.summarizing").to_string(),
             MessageType::Step,
             metadata.clone(),
         );
@@ -601,7 +598,7 @@ impl DeepSearch {
         time_period: Option<String>,
     ) -> Result<Vec<SearchResult>, String> {
         if self.crawler_url.is_empty() {
-            return Err(t!("workflow.deep_search.crawler_url_not_found").to_string());
+            return Err(t!("tools.deep_search.crawler_url_not_found").to_string());
         }
 
         // Create crawler instance
@@ -666,7 +663,7 @@ impl DeepSearch {
 
         // If no valid search engines, return error
         if handles.is_empty() {
-            return Err(t!("workflow.deep_search.search_provider_not_found").to_string());
+            return Err(t!("tools.deep_search.search_provider_not_found").to_string());
         }
 
         // Wait for all searches to complete and merge results
@@ -678,11 +675,11 @@ impl DeepSearch {
                 Ok(Ok(items)) => all_results.extend(items),
                 Ok(Err(e)) => eprintln!(
                     "{}",
-                    t!("workflow.deep_search.search_failed", error = e).to_string()
+                    t!("tools.deep_search.search_failed", error = e).to_string()
                 ),
                 Err(e) => eprintln!(
                     "{}",
-                    t!("workflow.deep_search.search_failed", error = e).to_string()
+                    t!("tools.deep_search.search_failed", error = e).to_string()
                 ),
             }
         }
@@ -751,7 +748,7 @@ impl DeepSearch {
 
         let result: Vec<SearchResult> = serde_json::from_str(&queries).map_err(|e| {
             t!(
-                "workflow.deep_search.failed_to_parse_related_results",
+                "tools.deep_search.failed_to_parse_related_results",
                 error = e.to_string()
             )
             .to_string()
@@ -833,7 +830,7 @@ impl DeepSearch {
 
                     self.send_process_message(
                         chat_id,
-                        t!("workflow.deep_search.crawling_web", url = url.clone()).to_string(),
+                        t!("tools.deep_search.crawling_web", url = url.clone()).to_string(),
                         MessageType::Log,
                         metadata_clone.clone(),
                     );
@@ -856,7 +853,7 @@ impl DeepSearch {
                         self.send_process_message(
                             chat_id,
                             t!(
-                                "workflow.deep_search.crawler_success",
+                                "tools.deep_search.crawler_success",
                                 title = title,
                                 url = url.clone()
                             )
@@ -876,7 +873,7 @@ impl DeepSearch {
                         self.send_process_message(
                             chat_id,
                             t!(
-                                "workflow.deep_search.crawler_failed",
+                                "tools.deep_search.crawler_failed",
                                 title = title,
                                 url = url.clone()
                             )
@@ -951,7 +948,7 @@ impl DeepSearch {
             self.send_process_message(
                 chat_id,
                 t!(
-                    "workflow.deep_search.summarizing_webpage",
+                    "tools.deep_search.summarizing_webpage",
                     title = result.title.clone()
                 )
                 .to_string(),
@@ -975,7 +972,7 @@ impl DeepSearch {
                     self.send_process_message(
                         chat_id,
                         t!(
-                            "workflow.deep_search.summarization_success",
+                            "tools.deep_search.summarization_success",
                             title = result.title.clone()
                         )
                         .to_string(),
@@ -994,7 +991,7 @@ impl DeepSearch {
                     self.send_process_message(
                         chat_id,
                         t!(
-                            "workflow.deep_search.summarization_failed",
+                            "tools.deep_search.summarization_failed",
                             title = result.title.clone(),
                             error = e
                         )
@@ -1026,11 +1023,7 @@ impl DeepSearch {
         is_json: bool,
     ) -> Result<ChatCompletionResult, String> {
         let model = self.get_model(model_name.clone()).await.ok_or_else(|| {
-            let err = t!(
-                "workflow.model_not_found",
-                model_name = model_name.to_string()
-            )
-            .to_string();
+            let err = t!("tools.model_not_found", model_name = model_name.to_string()).to_string();
             log::error!("{}", err);
             err
         })?;
@@ -1054,11 +1047,8 @@ impl DeepSearch {
                     if chat_result.content.trim().is_empty() {
                         if i >= 2 {
                             log::error!("Failed to complete chat after 3 retries");
-                            return Err(t!(
-                                "workflow.max_retries_exceeded",
-                                node = "chat_completion"
-                            )
-                            .to_string());
+                            return Err(t!("tools.max_retries_exceeded", node = "chat_completion")
+                                .to_string());
                         }
                         match self.check_stop() {
                             Ok(_) => {}
@@ -1097,8 +1087,7 @@ impl DeepSearch {
                     if i == 2 {
                         log::error!("Failed to complete chat after 3 retries: {}", e.to_string());
                         return Err(
-                            t!("workflow.max_retries_exceeded", node = "chat_completion")
-                                .to_string(),
+                            t!("tools.max_retries_exceeded", node = "chat_completion").to_string()
                         );
                     }
                     match self.check_stop() {
@@ -1226,10 +1215,10 @@ mod test {
     use crate::{
         ai::traits::chat::ChatResponse,
         http::chp::SearchProvider,
-        workflow::{tool_manager, tools::ModelName},
+        tools::{DeepSearch, ModelName, ToolManager},
     };
 
-    async fn setup_search_tool() -> crate::workflow::tools::DeepSearch {
+    async fn setup_search_tool() -> DeepSearch {
         let db_path = {
             let dev_dir = &*crate::STORE_DIR.read();
             dev_dir.join("chatspeed.db")
@@ -1245,7 +1234,7 @@ mod test {
             println!("{}", serde_json::to_string(&s).unwrap());
         });
 
-        let ds = crate::workflow::tools::DeepSearch::new(
+        let ds = DeepSearch::new(
             chat_state,
             None,
             "http://127.0.0.1:12321".to_string(),
@@ -1253,14 +1242,13 @@ mod test {
             process_callback,
         );
         ds.add_model(
-            crate::workflow::tools::ModelName::Reasoning,
-            tool_manager::ToolManager::get_model(&main_store, ModelName::General.as_ref()).unwrap(),
+            ModelName::Reasoning,
+            ToolManager::get_model(&main_store, ModelName::General.as_ref()).unwrap(),
         )
         .await;
         ds.add_model(
-            crate::workflow::tools::ModelName::Reasoning,
-            tool_manager::ToolManager::get_model(&main_store, ModelName::Reasoning.as_ref())
-                .unwrap(),
+            ModelName::Reasoning,
+            ToolManager::get_model(&main_store, ModelName::Reasoning.as_ref()).unwrap(),
         )
         .await;
 

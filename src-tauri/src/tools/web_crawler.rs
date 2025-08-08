@@ -5,10 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     http::chp::Chp,
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{error::ToolError, ToolDefinition, ToolResult},
 };
 
 /// A function implementation for fetching data from a remote URL.
@@ -70,20 +67,20 @@ impl ToolDefinition for Crawler {
     async fn call(&self, params: Value) -> ToolResult {
         // Get the URL from the parameters
         let url = params["url"].as_str().ok_or_else(|| {
-            WorkflowError::FunctionParamError(t!("workflow.url_must_be_string").to_string())
+            ToolError::FunctionParamError(t!("tools.url_must_be_string").to_string())
         })?;
 
         // Check if the URL is empty
         if url.is_empty() {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.url_must_not_be_empty").to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.url_must_not_be_empty").to_string(),
             ));
         }
 
         // Check if the URL starts with http:// or https://
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.url_invalid", url = url).to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.url_invalid", url = url).to_string(),
             ));
         }
 
@@ -97,8 +94,8 @@ impl ToolDefinition for Crawler {
             .web_crawler(url, Some(json!({"format": format})))
             .await
             .map_err(|e_str| {
-                WorkflowError::Execution(
-                    t!("workflow.web_crawler_failed", url = url, details = e_str).to_string(),
+                ToolError::Execution(
+                    t!("tools.web_scraper_failed", url = url, details = e_str).to_string(),
                 )
             })?;
 

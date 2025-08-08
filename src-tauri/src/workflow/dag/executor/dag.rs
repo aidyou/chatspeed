@@ -87,17 +87,16 @@ use tokio::{
     time,
 };
 
-use crate::workflow::error::WorkflowError;
-use crate::workflow::tool_manager::ToolManager;
-use crate::workflow::{
-    dag::{
+use crate::{tools::ToolDefinition, workflow::error::WorkflowError};
+use crate::{
+    tools::ToolManager,
+    workflow::dag::{
         config::{LoopConfig, NodeConfig, NodeType, ToolConfig},
         context::{Context, NodeState},
         executor::channel::{SharedChannel, WatchChannel},
         graph::WorkflowGraph,
         types::{WorkflowResult, WorkflowState},
     },
-    tool_manager::ToolDefinition,
 };
 
 /// 工作流执行器，负责基于 DAG 的任务调度和执行
@@ -624,7 +623,7 @@ impl WorkflowExecutor {
                 output,
             }) => {
                 let function = function_manager.get_tool(&function).await.map_err(|_| {
-                    WorkflowError::FunctionNotFound(
+                    WorkflowError::Execution(
                         t!("workflow.function_not_found", name = function).to_string(),
                     )
                 })?;
@@ -767,7 +766,7 @@ impl WorkflowExecutor {
                                 .get_tool(function_name)
                                 .await
                                 .map_err(|_| {
-                                    WorkflowError::FunctionNotFound(
+                                    WorkflowError::Execution(
                                         t!("workflow.function_not_found", name = function_name)
                                             .to_string(),
                                     )
@@ -850,7 +849,7 @@ impl WorkflowExecutor {
                     );
                     time::sleep(Duration::from_millis(1000)).await;
                     if i == 3 {
-                        return Err(e);
+                        return Err(e.into());
                     }
                 }
             }

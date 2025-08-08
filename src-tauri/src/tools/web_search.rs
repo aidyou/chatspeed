@@ -5,10 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     http::chp::{Chp, SearchProvider},
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{error::ToolError, ToolDefinition, ToolResult},
 };
 
 pub struct Search {
@@ -30,14 +27,14 @@ impl Search {
     ///             `["foo", "bar"]` -> `"foo" "bar"`
     ///
     /// # Returns
-    /// * `Result<String, WorkflowError>` - The encoded keywords
-    pub fn extract_keywords(params: &Value) -> Result<String, WorkflowError> {
+    /// * `Result<String, ToolError>` - The encoded keywords
+    pub fn extract_keywords(params: &Value) -> Result<String, ToolError> {
         match &params["kw"] {
             Value::String(s) => {
                 let s = s.trim();
                 if s.is_empty() {
-                    return Err(WorkflowError::FunctionParamError(
-                        t!("workflow.keyword_must_be_non_empty").to_string(),
+                    return Err(ToolError::FunctionParamError(
+                        t!("tools.keyword_must_be_non_empty").to_string(),
                     ));
                 }
                 Ok(s.to_string())
@@ -48,15 +45,15 @@ impl Search {
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", s))) // warp double quotes to each kw
                     .collect();
                 if keywords.is_empty() {
-                    return Err(WorkflowError::FunctionParamError(
-                        t!("workflow.keyword_must_be_non_empty").to_string(),
+                    return Err(ToolError::FunctionParamError(
+                        t!("tools.keyword_must_be_non_empty").to_string(),
                     ));
                 }
                 let joined_keywords = keywords.join(" "); // join with space
                 Ok(joined_keywords)
             }
-            _ => Err(WorkflowError::FunctionParamError(
-                t!("workflow.keyword_must_be_non_empty").to_string(),
+            _ => Err(ToolError::FunctionParamError(
+                t!("tools.keyword_must_be_non_empty").to_string(),
             )),
         }
     }
@@ -129,15 +126,13 @@ impl ToolDefinition for Search {
         let provider: SearchProvider = params["provider"]
             .as_str()
             .ok_or_else(|| {
-                WorkflowError::FunctionParamError(
-                    t!("workflow.provider_must_be_string").to_string(),
-                )
+                ToolError::FunctionParamError(t!("tools.provider_must_be_string").to_string())
             })?
             .try_into()
             .map_err(|e_str| {
-                WorkflowError::FunctionParamError(
+                ToolError::FunctionParamError(
                     t!(
-                        "workflow.invalid_search_provider",
+                        "tools.invalid_search_provider",
                         provider_name = params["provider"].as_str().unwrap_or("unknown"),
                         details = e_str
                     )
@@ -148,8 +143,8 @@ impl ToolDefinition for Search {
         let kw = Self::extract_keywords(&params)?;
 
         if kw.is_empty() {
-            return Err(WorkflowError::FunctionParamError(
-                t!("workflow.keyword_must_be_non_empty").to_string(),
+            return Err(ToolError::FunctionParamError(
+                t!("tools.keyword_must_be_non_empty").to_string(),
             ));
         }
 
@@ -170,9 +165,9 @@ impl ToolDefinition for Search {
             )
             .await
             .map_err(|e_str| {
-                WorkflowError::Execution(
+                ToolError::Execution(
                     t!(
-                        "workflow.web_search_failed",
+                        "tools.web_search_failed",
                         provider = provider.to_string(),
                         keyword = kw,
                         details = e_str

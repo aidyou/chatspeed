@@ -1,19 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
-
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::{collections::HashMap, sync::Arc};
 
+use super::ModelName;
 use crate::{
     ai::{interaction::chat_completion::complete_chat_blocking, traits::chat::MCPToolDeclaration},
     db::AiModel,
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{error::ToolError, ToolDefinition, ToolResult},
 };
-
-use super::ModelName;
 
 /// A function that sends an HTTP request.
 pub struct ChatCompletion {
@@ -119,13 +114,13 @@ impl ToolDefinition for ChatCompletion {
     /// Returns a `FunctionResult` containing the result of the function execution.
     async fn call(&self, params: Value) -> ToolResult {
         let model_param = params["model_name"].as_str().ok_or_else(|| {
-            WorkflowError::FunctionParamError(t!("workflow.model_name_must_be_string").to_string())
+            ToolError::FunctionParamError(t!("tools.model_name_must_be_string").to_string())
         })?;
         let model_name = ModelName::try_from(model_param)
-            .map_err(|e| WorkflowError::FunctionParamError(e.to_string()))?;
+            .map_err(|e| ToolError::FunctionParamError(e.to_string()))?;
         let mut model = self.get_model(model_name).await.ok_or_else(|| {
-            WorkflowError::FunctionParamError(
-                t!("workflow.model_not_found", model_name = model_param).to_string(),
+            ToolError::FunctionParamError(
+                t!("tools.model_not_found", model_name = model_param).to_string(),
             )
         })?;
 
@@ -155,7 +150,7 @@ impl ToolDefinition for ChatCompletion {
             .map(|s| s.to_string())
             .unwrap_or(uuid::Uuid::new_v4().to_string());
         let messages = params["messages"].as_array().ok_or_else(|| {
-            WorkflowError::FunctionParamError(t!("workflow.messages_must_be_array").to_string())
+            ToolError::FunctionParamError(t!("tools.messages_must_be_array").to_string())
         })?;
 
         let tools = params
@@ -163,7 +158,10 @@ impl ToolDefinition for ChatCompletion {
             .and_then(|v| serde_json::from_value::<Vec<MCPToolDeclaration>>(v.clone()).ok());
 
         let result = complete_chat_blocking(
-            model.api_protocol.try_into()?,
+            model
+                .api_protocol
+                .try_into()
+                .map_err(|e| ToolError::Initialization(e))?,
             Some(model.base_url.as_str()),
             model.default_model,
             Some(model.api_key.as_str()),
@@ -174,14 +172,12 @@ impl ToolDefinition for ChatCompletion {
         )
         .await
         .map_err(|e_str| {
-            WorkflowError::Execution(
-                t!("workflow.chat_completion_failed", details = e_str).to_string(),
-            )
+            ToolError::Execution(t!("tools.chat_completion_failed", details = e_str).to_string())
         })?;
 
         if result.content.is_empty() {
-            return Err(WorkflowError::Execution(
-                t!("workflow.chat_completion_no_content").to_string(),
+            return Err(ToolError::Execution(
+                t!("tools.chat_completion_no_content").to_string(),
             ));
         }
         log::debug!(
@@ -200,7 +196,7 @@ mod tests {
             println!("{}: {}", key, value);
         }
 
-        let chat_completion = crate::workflow::tools::chat_completion::ChatCompletion::new();
+        let chat_completion = crate::tools::chat_completion::ChatCompletion::new();
 
         let params = serde_json::json!({
             "chat_protocol": "openai",
@@ -216,8 +212,7 @@ mod tests {
             ]
         });
 
-        let result =
-            crate::workflow::tool_manager::ToolDefinition::call(&chat_completion, params).await;
+        let result = crate::tools::ToolDefinition::call(&chat_completion, params).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();

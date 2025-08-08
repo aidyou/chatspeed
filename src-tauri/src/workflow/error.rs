@@ -24,25 +24,6 @@ pub enum WorkflowError {
     #[error("{0}")]
     Execution(String),
 
-    /// Function error
-    #[error("{}", t!("workflow.function", msg = .0))]
-    Function(String),
-
-    /// Function not found
-    #[error("{}", t!("workflow.function_not_found", name = .0))]
-    FunctionNotFound(String),
-
-    /// Function already exists
-    #[error("{}", t!("workflow.function_already_exists", name = .0))]
-    FunctionAlreadyExists(String),
-
-    /// Function parameter error
-    #[error("{0}")]
-    FunctionParamError(String),
-
-    #[error("{}", t!("workflow.mcp_server_not_found", name = .0))]
-    McpServerNotFound(String),
-
     /// Max retries exceeded
     #[error("{}", t!("workflow.max_retries_exceeded", item = .0))]
     // Parameter name 'item' might be more generic
@@ -66,10 +47,6 @@ pub enum WorkflowError {
     /// Serialization error
     #[error("{0}")]
     Serialization(String),
-
-    /// State change failed
-    #[error("{0}")]
-    StateChangeFailed(String),
 
     /// Store error
     #[error("{0}")]
@@ -96,8 +73,8 @@ impl WorkflowError {
             // Consider which execution errors are truly retriable.
             // Network-related or transient Execution errors might be.
             // Errors from Function execution might depend on the function.
-            Self::Io(_) | Self::Timeout(_) | Self::Execution(_) => true,
-            Self::Function(details) => !details.contains("parameter error"), // Example: make parameter errors non-retriable
+            Self::Io(_) | Self::Timeout(_) => true,
+            Self::Execution(details) => !details.contains("parameter error"), // Example: make parameter errors non-retriable
             _ => false,
         }
     }
@@ -137,5 +114,28 @@ impl From<String> for WorkflowError {
 impl From<Box<dyn std::error::Error + Send + Sync>> for WorkflowError {
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
         WorkflowError::Other(err.to_string()) // .to_string() is usually preferred over debug format
+    }
+}
+
+impl From<crate::tools::ToolError> for WorkflowError {
+    fn from(err: crate::tools::ToolError) -> Self {
+        match err {
+            crate::tools::ToolError::Config(msg) => WorkflowError::Config(msg),
+            crate::tools::ToolError::Execution(msg) => WorkflowError::Execution(msg),
+            crate::tools::ToolError::Initialization(msg) => WorkflowError::Initialization(msg),
+            crate::tools::ToolError::FunctionNotFound(name) => {
+                WorkflowError::Execution(format!("Function not found: {}", name))
+            }
+            crate::tools::ToolError::FunctionAlreadyExists(name) => {
+                WorkflowError::Execution(format!("Function already exists: {}", name))
+            }
+            crate::tools::ToolError::FunctionParamError(msg) => WorkflowError::Validation(msg),
+            crate::tools::ToolError::McpServerNotFound(name) => {
+                WorkflowError::Execution(format!("MCP server not found: {}", name))
+            }
+            crate::tools::ToolError::Serialization(error) => WorkflowError::Serialization(error),
+            crate::tools::ToolError::StateChangeFailed(msg) => WorkflowError::Other(msg),
+            crate::tools::ToolError::Store(msg) => WorkflowError::Store(msg),
+        }
     }
 }

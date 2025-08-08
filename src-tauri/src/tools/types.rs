@@ -37,8 +37,8 @@ impl TryFrom<&str> for ModelName {
         match value {
             "reasoning" => Ok(ModelName::Reasoning),
             "general" => Ok(ModelName::General),
-            _ => Err(WorkflowError::FunctionParamError(
-                t!("workflow.invalid_model_name", model_name = value).to_string(),
+            _ => Err(WorkflowError::Initialization(
+                t!("tools.invalid_model_name", model_name = value).to_string(),
             )),
         }
     }

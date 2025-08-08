@@ -5,10 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     http::chp::Chp,
-    workflow::{
-        error::WorkflowError,
-        tool_manager::{ToolDefinition, ToolResult},
-    },
+    tools::{ToolDefinition, ToolError, ToolResult},
 };
 
 /// A function implementation for fetching data from a remote URL.
@@ -79,9 +76,7 @@ impl ToolDefinition for Plot {
     async fn call(&self, params: Value) -> ToolResult {
         // Get the URL from the parameters
         let plot_type = params["plot_type"].as_str().ok_or_else(|| {
-            WorkflowError::FunctionParamError(
-                t!("workflow.plot.plot_type_must_be_string").to_string(),
-            )
+            ToolError::FunctionParamError(t!("tools.plot.plot_type_must_be_string").to_string())
         })?; // Added t!
         let title = params["title"].as_str().unwrap_or_default();
         let x_label = params["x_label"].as_str().unwrap_or_default();
@@ -89,14 +84,14 @@ impl ToolDefinition for Plot {
 
         // Check if the URL is empty
         if plot_type.is_empty() {
-            return Err(WorkflowError::FunctionParamError(
+            return Err(ToolError::FunctionParamError(
                 // Changed message
-                t!("workflow.plot.plot_type_must_not_be_empty").to_string(),
+                t!("tools.plot.plot_type_must_not_be_empty").to_string(),
             ));
         }
 
         let data = params["data"].as_object().ok_or_else(|| {
-            WorkflowError::FunctionParamError(t!("workflow.plot.data_must_be_object").to_string())
+            ToolError::FunctionParamError(t!("tools.plot.data_must_be_object").to_string())
         })?; // Added t!
         if plot_type == "pie" {
             // verify values is present and not empty
@@ -105,8 +100,8 @@ impl ToolDefinition for Plot {
                 .and_then(|v| v.as_array())
                 .map_or(true, |arr| arr.is_empty())
             {
-                return Err(WorkflowError::FunctionParamError(
-                    t!("workflow.plot.pie_values_must_be_non_empty_array").to_string(),
+                return Err(ToolError::FunctionParamError(
+                    t!("tools.plot.pie_values_must_be_non_empty_array").to_string(),
                 ));
             }
             // verify labels is present and not empty
@@ -115,8 +110,8 @@ impl ToolDefinition for Plot {
                 .and_then(|v| v.as_array())
                 .map_or(true, |arr| arr.is_empty())
             {
-                return Err(WorkflowError::FunctionParamError(
-                    t!("workflow.plot.pie_labels_must_be_non_empty_array").to_string(),
+                return Err(ToolError::FunctionParamError(
+                    t!("tools.plot.pie_labels_must_be_non_empty_array").to_string(),
                 ));
             }
         } else if plot_type == "line" || plot_type == "bar" {
@@ -126,8 +121,8 @@ impl ToolDefinition for Plot {
                 .and_then(|v| v.as_array())
                 .map_or(true, |arr| arr.is_empty())
             {
-                return Err(WorkflowError::FunctionParamError(
-                    t!("workflow.plot.line_bar_x_must_be_non_empty_array").to_string(),
+                return Err(ToolError::FunctionParamError(
+                    t!("tools.plot.line_bar_x_must_be_non_empty_array").to_string(),
                 ));
             }
             // verify y is present and not empty
@@ -136,8 +131,8 @@ impl ToolDefinition for Plot {
                 .and_then(|v| v.as_array())
                 .map_or(true, |arr| arr.is_empty())
             {
-                return Err(WorkflowError::FunctionParamError(
-                    t!("workflow.plot.line_bar_y_must_be_non_empty_array").to_string(),
+                return Err(ToolError::FunctionParamError(
+                    t!("tools.plot.line_bar_y_must_be_non_empty_array").to_string(),
                 ));
             }
         }
@@ -164,14 +159,12 @@ impl ToolDefinition for Plot {
             )
             .await
             .map_err(|e_str| {
-                WorkflowError::Execution(
-                    t!("workflow.plot.chp_call_failed", details = e_str).to_string(),
-                )
+                ToolError::Execution(t!("tools.plot.chp_call_failed", details = e_str).to_string())
             })?; // Added t!
 
         if results.is_null() || results.get("url").is_none() {
-            return Err(WorkflowError::Execution(
-                t!("workflow.plot.failed_to_generate_plot").to_string(), // Added t!
+            return Err(ToolError::Execution(
+                t!("tools.plot.failed_to_generate_plot").to_string(), // Added t!
             ));
         }
 

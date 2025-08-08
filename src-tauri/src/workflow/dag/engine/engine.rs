@@ -3,11 +3,11 @@ use std::sync::Arc;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
+use crate::tools::ToolManager;
 use crate::workflow::dag::executor::WorkflowExecutor;
 use crate::workflow::dag::graph::WorkflowGraph;
 use crate::workflow::dag::{context::Context, parser::WorkflowParser, types::WorkflowResult};
 use crate::workflow::error::WorkflowError;
-use crate::workflow::tool_manager::ToolManager;
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
@@ -67,7 +67,7 @@ impl WorkflowEngine {
     pub async fn get_function_calling_spec(
         &self,
     ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
-        self.function_manager.get_tool_calling_spec(None).await
+        Ok(self.function_manager.get_tool_calling_spec(None).await?)
     }
 }
 
