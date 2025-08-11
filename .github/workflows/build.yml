@@ -1,12 +1,12 @@
-name: Release Build
+name: Build Test
 
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: 'Build Platform'
+        description: "Build Platform"
         required: true
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
@@ -152,7 +152,13 @@ jobs:
 
       - name: Get yarn cache directory path
         id: yarn-cache-dir-path
-        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+        shell: pwsh
+        run: |
+          $cacheDir = yarn config get cacheFolder
+          if ([string]::IsNullOrEmpty($cacheDir)) {
+            $cacheDir = "$env:LOCALAPPDATA\Yarn\Cache\v6"
+          }
+          echo "dir=$cacheDir" >> $env:GITHUB_OUTPUT
 
       - name: Yarn Cache
         uses: actions/cache@v3
