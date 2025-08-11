@@ -2,9 +2,11 @@ English | [简体中文](./README.zh-CN.md)
 
 # ChatSpeed
 
-**ChatSpeed: Any `Claude Code`, Any `Gemini CLI`.**
+**ChatSpeed lets you use `Claude Code` or `Gemini CLI` for free!**
 
-ChatSpeed is an innovative, open-source AI agent management platform that revolutionizes how you interact with AI models. Built with Tauri and Vue 3, it goes beyond traditional chat interfaces to serve as a unified proxy system. Through advanced agent management and our MCP (Model Context Protocol) proxy, ChatSpeed seamlessly integrates *any* AI model into the `Claude Code` ecosystem or `Gemini CLI`.
+Its core `ccproxy` module supports arbitrary protocol conversion between OpenAI, Gemini, Claude, Ollama, and more. This means you can seamlessly integrate any free or cost-effective model into development environments like `Claude Code`.
+
+Additionally, `ccproxy`'s MCP proxy feature aggregates all MCP tools installed on ChatSpeed and serves them through a single, unified endpoint.
 
 **AI Proxy Diagram**
 ```mermaid
@@ -31,25 +33,34 @@ graph LR
 
 **MCP Proxy Diagram**
 ```mermaid
-graph LR
-    A[Any Client App] --> B(Chatspeed ccproxy)
-
-    subgraph "MCP Tools managed by Chatspeed"
-        C[Tavily Tools]
-        D[Puppeteer Tools]
-        E[...]
+graph TD
+    subgraph "Available Toolsets"
+        A[Tavily Tools]
+        B[Puppeteer Tools]
+        C[...]
     end
 
-    B --> C
-    B --> D
-    B --> E
+    P(Chatspeed ccproxy)
+
+    subgraph "Exposed via Unified SSE Proxy"
+        D[tavily-search]
+        E[tavily-extract]
+        F[puppeteer-navigate]
+        G[...]
+    end
+
+    A -- "Managed by" --> P
+    B -- "Managed by" --> P
+    C -- "Managed by" --> P
+
+    P -- "Exposes" --> D
+    P -- "Exposes" --> E
+    P -- "Exposes" --> F
+    P -- "Exposes" --> G
 ```
 
 The core mission is to democratize advanced AI integration, making it accessible, cost-effective, and efficient for developers worldwide.
 
-🎉 **First Version Released!** 🎉
-
-ChatSpeed is now available for use. We welcome feedback and contributions from the community!
 
 ## Core Features
 

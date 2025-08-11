@@ -4,7 +4,11 @@
 
 **ChatSpeed: Any Claude, Any Gemini.**
 
-ChatSpeed 是一款创新的开源 AI 代理管理平台，它革命性地改变了您与 AI 模型的交互方式。基于 Tauri 和 Vue 3 构建，它超越了传统的聊天界面，作为一个统一的代理系统运行。通过先进的代理管理和我们的 MCP（模型上下文协议）代理，ChatSpeed 可以将*任何* AI 模型无缝集成到 `Claude Code` 生态系统或 `Gemini CLI` 中。
+**ChatSpeed 让你免费用上 `Claude Code` 或 `Gemini CLI`！**
+
+它的核心 `ccproxy` 模块支持在 OpenAI、Gemini、Claude、Ollama 等协议间任意转换，这意味着你能将任何免费或高性价比的模型无缝接入到 `Claude Code` 等开发环境中。
+
+同时，`ccproxy` 的 MCP 代理功能，会将安装在 ChatSpeed 上的所有 MCP 工具聚合成一个统一的入口，对外提供服务。
 
 **AI代理示意图**
 ```mermaid
@@ -31,25 +35,34 @@ graph LR
 
 **MCP代理示意图**
 ```mermaid
-graph LR
-    A[任何客户端 App] --> B(Chatspeed ccproxy)
-
-    subgraph "由 Chatspeed 管理的 MCP 工具集"
-        C[Tavily 工具]
-        D[Puppeteer 工具]
-        E[...]
+graph TD
+    subgraph "可用的 MCP 工具集 (Toolsets)"
+        A[Tavily Tools]
+        B[Puppeteer Tools]
+        C[...]
     end
 
-    B --> C
-    B --> D
-    B --> E
+    P(Chatspeed ccproxy)
+
+    subgraph "通过统一 SSE 代理提供给客户端"
+        D[tavily-search]
+        E[tavily-extract]
+        F[puppeteer-navigate]
+        G[...]
+    end
+
+    A -- "接入" --> P
+    B -- "接入" --> P
+    C -- "接入" --> P
+
+    P -- "提供" --> D
+    P -- "提供" --> E
+    P -- "提供" --> F
+    P -- "提供" --> G
 ```
 
 我们的核心使命是让先进的 AI 集成大众化，使全球的开发者都能以低成本、高效率的方式使用它。
 
-🎉 **首个版本发布！** 🎉
-
-ChatSpeed 现已可用。我们欢迎来自社区的反馈和贡献！
 
 ## 核心功能
 
