@@ -1,6 +1,7 @@
 //! Handles loading of scraper configurations from the filesystem.
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
+use tauri::Manager;
 use tauri::{AppHandle, Wry};
 use url::Url;
 
@@ -16,13 +17,16 @@ impl ConfigLoader {
     ///
     /// It determines the base directory for schema files, which is typically
     /// the application's data directory.
-    pub fn new(_app: &AppHandle<Wry>) -> Result<Self> {
+    pub fn new(app: &AppHandle<Wry>) -> Result<Self> {
         #[cfg(debug_assertions)]
         let schema_dir = { &*crate::STORE_DIR.read() };
 
         #[cfg(not(debug_assertions))]
-        let schema_dir = app.path().app_data_dir().ok_or_else(|| {
-            anyhow!("Failed to resolve app data directory for scraper config loading")
+        let schema_dir = app.path().app_data_dir().map_err(|e| {
+            anyhow!(
+                "Failed to resolve app data directory for scraper config loading: {}",
+                e.to_string()
+            )
         })?;
 
         Ok(Self {
@@ -67,7 +71,12 @@ impl ConfigLoader {
         // This is a simple heuristic. A more robust solution might use a crate like `psl`.
         let domain_parts: Vec<&str> = host.split('.').collect();
         if domain_parts.len() > 2 {
-            let base_domain = domain_parts.iter().skip(1).cloned().collect::<Vec<&str>>().join(".");
+            let base_domain = domain_parts
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect::<Vec<&str>>()
+                .join(".");
             let base_domain_filename = format!("{}.json", base_domain);
             let base_domain_path = self.schema_dir.join("content").join(base_domain_filename);
 
