@@ -59,7 +59,7 @@ pub fn ensure_default_configs_exist(app: &AppHandle<Wry>) -> Result<()> {
         let resource_dir = app
             .path()
             .resource_dir()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get resource directory"))?;
+            .map_err(|e| anyhow::anyhow!("Failed to get resource directory: {:?}", e))?;
         resource_dir.join("assets").join("scrape").join("schema")
     };
 
