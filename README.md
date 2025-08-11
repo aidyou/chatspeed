@@ -6,24 +6,43 @@ English | [简体中文](./README.zh-CN.md)
 
 ChatSpeed is an innovative, open-source AI agent management platform that revolutionizes how you interact with AI models. Built with Tauri and Vue 3, it goes beyond traditional chat interfaces to serve as a unified proxy system. Through advanced agent management and our MCP (Model Context Protocol) proxy, ChatSpeed seamlessly integrates *any* AI model into the `Claude Code` ecosystem or `Gemini CLI`.
 
+**AI Proxy Diagram**
 ```mermaid
 graph LR
     subgraph "Any AI Model"
         A[Qwen3-Code]
         B[Kimi-K2]
         C[GLM4.5]
+        D[Gemini]
     end
 
     subgraph "Your Development Environment"
         E[Claude Code]
     end
 
-    D(Chatspeed ccproxy)
+    F(Chatspeed ccproxy)
 
-    A --> D
+    A --> F
+    B --> F
+    C --> F
+    D --> F
+    F --> E
+```
+
+**MCP Proxy Diagram**
+```mermaid
+graph LR
+    A[Any Client App] --> B(Chatspeed ccproxy)
+
+    subgraph "MCP Tools managed by Chatspeed"
+        C[Tavily Tools]
+        D[Puppeteer Tools]
+        E[...]
+    end
+
+    B --> C
     B --> D
-    C --> D
-    D --> E
+    B --> E
 ```
 
 The core mission is to democratize advanced AI integration, making it accessible, cost-effective, and efficient for developers worldwide.
