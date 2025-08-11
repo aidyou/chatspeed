@@ -24,10 +24,10 @@ const baseColors = ['#10897C', '#FB452E', '#5BA006', '#1399EF', '#643EFF', '#EA9
 
 // Get display text (first letter or first CJK character)
 const displayText = computed(() => {
-  if (!props.text) return ''
+  const trimmedText = props.text?.trim()
+  if (!trimmedText) return ''
 
-  // Check if character is CJK
-  const firstChar = props.text[0]
+  const firstChar = trimmedText[0]
   const isCJK = /[\u4e00-\u9fff]/.test(firstChar)
 
   return isCJK ? firstChar : firstChar.toUpperCase()
