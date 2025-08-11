@@ -1199,6 +1199,7 @@ impl ToolDefinition for DeepSearch {
                     },
                     "required": ["model_name", "messages"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

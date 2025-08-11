@@ -101,6 +101,7 @@ impl ToolDefinition for ChatCompletion {
                 },
                 "required": ["model_name", "messages"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

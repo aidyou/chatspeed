@@ -34,6 +34,7 @@ impl ToolDefinition for TimeTool {
                 "properties": {},
                 "required": []
             }),
+            output_schema: None,
             disabled: false,
         }
     }

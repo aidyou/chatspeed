@@ -111,6 +111,7 @@ impl ToolDefinition for Search {
                     },
                     "required": ["provider", "kw"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

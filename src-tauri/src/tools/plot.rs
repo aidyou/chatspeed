@@ -62,6 +62,7 @@ impl ToolDefinition for Plot {
                 },
                 "required": ["plot_type","data"],
             }),
+            output_schema: None,
             disabled: false,
         }
     }

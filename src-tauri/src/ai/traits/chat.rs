@@ -208,6 +208,8 @@ pub struct MCPToolDeclaration {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
     #[serde(default, skip_serializing)]
     pub disabled: bool,
 }

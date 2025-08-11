@@ -53,6 +53,7 @@ impl ToolDefinition for Crawler {
                 },
                 "required": ["url"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

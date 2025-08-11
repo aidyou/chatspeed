@@ -23,7 +23,7 @@
                     {{ alias }}
                     <small>{{
                       $t('settings.proxy.mapsToModels', { count: proxyTargets.length })
-                      }}</small>
+                    }}</small>
                   </div>
                 </div>
 
@@ -126,7 +126,7 @@
                   {{ $t('settings.proxy.settings.port') }}
                   <small class="important">{{
                     $t('settings.proxy.settings.portChangedRestartRequired')
-                    }}</small>
+                  }}</small>
                 </div>
               </div>
               <div class="value">
@@ -210,7 +210,7 @@
           </div>
 
           <div class="providers-list-container">
-            <el-scrollbar height="400px">
+            <el-scrollbar class="providers-scrollbar">
               <div v-if="filteredProviders.length === 0" class="no-models-found">
                 {{ $t('settings.proxy.form.noMatchingModels') }}
               </div>
@@ -981,6 +981,15 @@ const genTableData = () => {
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-md);
+  height: min(400px, 40vh);
+  /* 响应式高度：最大400px或40%视口高度 */
+  display: flex;
+  flex-direction: column;
+}
+
+.providers-scrollbar {
+  flex: 1;
+  /* 让滚动条占满剩余空间 */
 }
 
 .no-models-found {
@@ -1060,6 +1069,9 @@ const genTableData = () => {
 
   :deep(.el-dialog__footer) {
     padding-top: var(--cs-space-sm);
+    background: var(--cs-bg-color-light);
+    position: relative;
+    z-index: 10;
   }
 
   :deep(.el-divider__text) {

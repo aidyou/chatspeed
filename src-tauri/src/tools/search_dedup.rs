@@ -45,6 +45,7 @@ impl ToolDefinition for SearchDedup {
                 },
                 "required": ["results", "query"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

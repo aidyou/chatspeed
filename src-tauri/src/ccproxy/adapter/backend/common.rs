@@ -93,16 +93,35 @@ fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>
 pub fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
     let tools_xml = generate_tools_xml(tools);
 
-    let template = r#"You have access to the following tools:
+    let template = r#"You have access to the following tools to help accomplish the user's goals:
 
 {TOOLS_LIST}
 
-Each tool in the above list is defined within <ccp:tool_use>...</ccp:tool_use> tags, containing:
-- <name>tool_name</name>: The name of the tool.
-- <description>tool_description</description>: A brief description of what the tool does and when to use it.
-- <params>: The parameters the tool accepts, along with their expected types.
+## TOOL USAGE PHILOSOPHY
+Always prioritize using available tools to provide concrete, actionable solutions rather than generic responses. Tools are your primary means of helping users achieve their objectives.
 
-To use a tool, respond with an XML block formatted as follows:
+## TOOL SELECTION GUIDELINES
+1. **Analyze First**: Carefully examine the user's request to identify which tools can help
+2. **Choose Appropriately**: Select the most suitable tool(s) based on task requirements
+3. **Think Sequentially**: If multiple tools are needed, plan their logical sequence
+4. **Consider Limitations**: Understand each tool's capabilities and constraints
+5. **Be Proactive**: Use tools without waiting for explicit instructions when they can solve the problem
+
+## WHEN TO USE TOOLS
+- **File Operations**: Reading, writing, or manipulating files
+- **Data Processing**: Transformation, analysis, or computation tasks
+- **External Services**: API calls or service interactions when external data is needed
+- **System Operations**: Environment queries or system-level tasks
+- **Information Retrieval**: Search or query operations for specific information
+
+## TOOL FORMAT SPECIFICATION
+Each tool is defined within <ccp:tool_use>...</ccp:tool_use> tags containing:
+- <name>tool_name</name>: The tool identifier
+- <description>tool_description</description>: What the tool does and when to use it
+- <params>: Required parameters with their types and descriptions
+
+## HOW TO USE TOOLS
+Format your tool calls as XML blocks like this:
 <ccp:tool_use>
     <name>TOOL_NAME</name>
     <params>
@@ -110,48 +129,63 @@ To use a tool, respond with an XML block formatted as follows:
     </params>
 </ccp:tool_use>
 
-CRITICAL FORMATTING RULES - READ CAREFULLY:
-1. NEVER use markdown code blocks (```xml, ```, or any ``` delimiters)
-2. NEVER wrap the XML in any formatting
-3. Output the XML tags directly as plain text in your response
-4. Do NOT treat the XML as code - treat it as regular response text
-5. The <ccp:tool_use> tags should appear directly in your message, not in a code block
+## CRITICAL FORMATTING RULES
+1. **NO Markdown**: Never use ```xml or any code block delimiters
+2. **Plain Text**: Output XML tags directly in your response text
+3. **No Wrapping**: Don't wrap XML in any special formatting
+4. **Direct Output**: Treat XML as regular response content, not code
 
-WRONG (DO NOT DO THIS):
+## EXAMPLES
+
+**WRONG** (Never do this):
 ```xml
 <ccp:tool_use>
     <name>get_weather</name>
     <params>
-        <param name="city" type="string">Tokyo</param>
+        <param name=\"city\" type=\"string\">Tokyo</param>
     </params>
 </ccp:tool_use>
 ```
 
-CORRECT (DO THIS):
+**CORRECT** (Always do this):
 <ccp:tool_use>
     <name>get_weather</name>
     <params>
-        <param name="city" type="string">Tokyo</param>
+        <param name=\"city\" type=\"string\">Tokyo</param>
     </params>
 </ccp:tool_use>
 
-IMPORTANT: When performing the same operation multiple times with different parameters (e.g., checking weather for multiple cities, querying different dates, etc.), YOU MUST use separate tool calls for each instance. Provide one <ccp:tool_use> block per operation, even if the operations are similar.
+## MULTIPLE OPERATIONS
+When performing similar operations with different parameters, use separate tool calls:
 
-Example: If asked to read two files, make two separate tool calls:
 <ccp:tool_use>
     <name>Read</name>
     <params>
-        <param name=\"file_path\" type=\"string\">/path/to/a.txt</param>
+        <param name=\"file_path\" type=\"string\">/path/to/first.txt</param>
     </params>
 </ccp:tool_use>
 <ccp:tool_use>
     <name>Read</name>
     <params>
-        <param name=\"file_path\" type=\"string\">/path/to/b.txt</param>
+        <param name=\"file_path\" type=\"string\">/path/to/second.txt</param>
     </params>
 </ccp:tool_use>
 
-Remember: The XML tool calls are part of your normal response text, not code blocks. Output them directly without any markdown formatting.
+## DECISION FRAMEWORK
+Before responding, ask yourself:
+- Can available tools accomplish this task? → **Use tools**
+- Does the user need specific data or actions? → **Use appropriate tools**
+- Would tools provide more accurate/current information? → **Use tools**
+- Is this a general question that tools can answer concretely? → **Use tools**
+
+## BEST PRACTICES
+1. **Proactive Usage**: Consider tools first, generic responses second
+2. **Logical Chaining**: Sequence multiple tools thoughtfully
+3. **Parameter Validation**: Ensure parameters match expected types
+4. **Error Handling**: Be prepared for tool failures and have alternatives
+5. **User Context**: Consider the user's broader goals when selecting tools
+
+Remember: Your primary job is to leverage these tools effectively to solve user problems, not just to provide information about them.
 
 ---
 

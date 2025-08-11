@@ -51,6 +51,7 @@ impl ToolDefinition for WebScraperTool {
                 },
                 "required": ["url"]
             }),
+            output_schema: None,
             disabled: false,
         }
     }

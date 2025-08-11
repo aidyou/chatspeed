@@ -14,7 +14,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
 };
 use rust_i18n::t;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -34,7 +34,7 @@ impl From<MCPToolDeclaration> for Tool {
             name: tool.name.into(),
             description: Some(tool.description.into()),
             input_schema,
-            // output_schema: None,
+            output_schema: None,
             annotations: None,
         }
     }
@@ -194,6 +194,9 @@ impl ServerHandler for McpProxyHandler {
                 return Ok(CallToolResult {
                     content: vec![Content::text(format!("Tool '{}' not found.", request.name))]
                         .into(),
+                    structured_content: Some(json!({
+                        "error": format!("Tool '{}' not found.", request.name)
+                    })),
                     is_error: Some(true),
                 });
             }
@@ -226,6 +229,7 @@ impl ServerHandler for McpProxyHandler {
         match result {
             Ok(tool_result) => Ok(CallToolResult {
                 content: vec![Content::text(tool_result.to_string())].into(),
+                structured_content: Some(tool_result),
                 is_error: Some(false),
             }),
             Err(e) => Ok(CallToolResult {
@@ -234,6 +238,7 @@ impl ServerHandler for McpProxyHandler {
                     error = e.to_string()
                 ))]
                 .into(),
+                structured_content: Some(json!({"error": e.to_string()})),
                 is_error: Some(true),
             }),
         }
