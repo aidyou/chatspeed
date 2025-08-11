@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Chatspeed Release Script
+# Chatspeed Release Script - 简化版
 # 自动更新版本号并创建发布标签
 
 set -e  # 遇到错误立即退出
@@ -118,42 +118,90 @@ verify_version_update() {
     print_success "Version verification passed: $expected_version"
 }
 
-# 检查工作目录状态
-check_git_status() {
-    if ! git diff-index --quiet HEAD --; then
-        print_warning "You have uncommitted changes in your working directory."
-        read -p "Do you want to continue? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Release cancelled."
-            exit 0
+# 创建和推送标签
+# 获取目标远程仓库
+get_target_remote() {
+    # 优先级：origin > github > 第一个远程
+    if git remote | grep -q "^origin$"; then
+        echo "origin"
+    elif git remote | grep -q "^github$"; then
+        echo "github"
+    else
+        local first_remote=$(git remote | head -1)
+        if [[ -n "$first_remote" ]]; then
+            echo "$first_remote"
+        else
+            print_error "No remote repository configured"
+            exit 1
         fi
     fi
 }
 
-# 创建 Git 提交和标签
-create_git_release() {
+# 获取目标远程仓库（优先 GitHub）
+get_target_remote() {
+    # 优先查找名为 github 的远程仓库
+    if git remote get-url github >/dev/null 2>&1; then
+        echo "github"
+        return
+    fi
+
+    # 检查 origin 是否指向 GitHub
+    if git remote get-url origin >/dev/null 2>&1; then
+        local origin_url=$(git remote get-url origin)
+        if [[ "$origin_url" == *"github.com"* ]]; then
+            echo "origin"
+            return
+        fi
+    fi
+
+    # 查找其他指向 GitHub 的远程仓库
+    for remote in $(git remote); do
+        local url=$(git remote get-url "$remote" 2>/dev/null || echo "")
+        if [[ "$url" == *"github.com"* ]]; then
+            echo "$remote"
+            return
+        fi
+    done
+
+    # 如果没找到 GitHub 远程仓库，使用 origin 作为默认
+    echo "origin"
+}
+
+create_and_push_tag() {
     local version=$1
     local tag="v$version"
+    local remote=$(get_target_remote)
 
-    print_info "Creating Git commit and tag..."
+    print_info "Target remote: $remote ($(git remote get-url $remote))"
 
-    # 添加修改的文件
-    git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
-
-    # 创建提交
-    git commit -m "chore: release version $version"
-    print_success "Created commit for version $version"
+    # 检查标签是否已存在
+    if git tag -l | grep -q "^$tag$"; then
+        print_warning "Tag $tag already exists locally"
+        read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git tag -d "$tag"
+            print_info "Deleted existing local tag $tag"
+        else
+            print_info "Skipping tag creation"
+            return
+        fi
+    fi
 
     # 创建标签
+    print_info "Creating tag $tag..."
     git tag "$tag"
     print_success "Created tag $tag"
 
-    # 推送到远程
-    print_info "Pushing to remote repository..."
-    git push origin HEAD
-    git push origin "$tag"
-    print_success "Pushed commit and tag to remote repository"
+    # 推送标签
+    print_info "Pushing tag $tag to remote $remote..."
+    if git push "$remote" "$tag"; then
+        print_success "Successfully pushed tag $tag to $remote"
+    else
+        print_error "Failed to push tag $tag to $remote"
+        print_info "You can try pushing manually: git push $remote $tag"
+        exit 1
+    fi
 }
 
 # 显示使用说明
@@ -168,9 +216,8 @@ show_usage() {
     echo "The script will:"
     echo "  1. Update version in src-tauri/tauri.conf.json"
     echo "  2. Update version in src-tauri/Cargo.toml"
-    echo "  3. Create a Git commit"
-    echo "  4. Create a Git tag (v{version})"
-    echo "  5. Push commit and tag to remote repository"
+    echo "  3. Create a Git tag (v{version})"
+    echo "  4. Push tag to remote repository"
 }
 
 # 主函数
@@ -235,9 +282,6 @@ main() {
         exit 0
     fi
 
-    # 检查 Git 状态
-    check_git_status
-
     # 执行发布流程
     print_info "Starting release process..."
 
@@ -248,8 +292,8 @@ main() {
     # 验证更新
     verify_version_update "$version"
 
-    # 创建 Git 发布
-    create_git_release "$version"
+    # 创建和推送标签
+    create_and_push_tag "$version"
 
     echo ""
     print_success "🎉 Release $version completed successfully!"

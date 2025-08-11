@@ -13,9 +13,6 @@ on:
           - macos
           - windows
           - linux
-  push:
-    tags:
-      - 'v*'
 
 permissions: write-all
 env:
