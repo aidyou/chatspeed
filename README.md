@@ -1,29 +1,107 @@
+English | [简体中文](./README.zh-CN.md)
+
 # ChatSpeed
 
-🚧 **Project Status: Under Active Development** 🚧
+**ChatSpeed: Any `Claude Code`, Any `Gemini CLI`.**
 
-ChatSpeed is an innovative desktop AI chat application built with Tauri and Vue 3, focusing on performance, privacy, and user experience. The project is currently under active development and not yet ready for production use.
+ChatSpeed is an innovative, open-source AI agent management platform that revolutionizes how you interact with AI models. Built with Tauri and Vue 3, it goes beyond traditional chat interfaces to serve as a unified proxy system. Through advanced agent management and our MCP (Model Context Protocol) proxy, ChatSpeed seamlessly integrates *any* AI model into the `Claude Code` ecosystem or `Gemini CLI`.
 
-## Current Status
+```mermaid
+graph LR
+    subgraph "Any AI Model"
+        A[Qwen3-Code]
+        B[Kimi-K2]
+        C[GLM4.5]
+    end
 
-- 🏗️ Core Features Development
-  - Multi-model AI chat support
-  - Basic conversation interface
-  - Note-taking functionality
-  - Multi-language support
+    subgraph "Your Development Environment"
+        E[Claude Code]
+    end
 
-- ⚠️ Please Note
-  - This repository is in active development
-  - Features and APIs may change significantly
-  - Not recommended for production use yet
-  - Documentation is being worked on
+    D(Chatspeed ccproxy)
 
-## Coming Soon
+    A --> D
+    B --> D
+    C --> D
+    D --> E
+```
 
-- 📚 Comprehensive documentation
-- 🔄 Auto-update system
-- 🎨 Theme customization
-- 🌐 Official website
+The core mission is to democratize advanced AI integration, making it accessible, cost-effective, and efficient for developers worldwide.
+
+🎉 **First Version Released!** 🎉
+
+ChatSpeed is now available for use. We welcome feedback and contributions from the community!
+
+## Core Features
+
+ChatSpeed offers a comprehensive suite of features to streamline your AI workflows:
+
+-   **AI Agent Management**:
+    -   Unified platform to manage diverse AI chat and multimodal agents.
+    -   Export configured agents as reusable tools for other applications.
+    -   Seamless API integration and command-line tool output.
+
+-   **MCP (Model Context Protocol) Proxy**:
+    -   **Any Claude**: Integrate any AI model into the Claude ecosystem.
+    -   **Any Gemini**: Connect any model to the Gemini CLI via `ccproxy`.
+    -   Flexible proxy configuration for seamless model switching.
+
+-   **Multi-Model Support**:
+    -   Compatible with OpenAI, Gemini, Ollama, and Claude through OpenAI-compatible protocols.
+    -   Support for multiple API keys per model with automatic rotation.
+    -   Full parameter configuration (temperature, top_p, etc.) and custom HTTP proxy support.
+
+-   **Web Search**:
+    -   Integrated Google, Bing, and Baidu search engines.
+    -   Real-time web retrieval to expand AI knowledge.
+    -   Deep search with multi-query task decomposition.
+
+-   **Advanced Chat Interface**:
+    -   Clean UI with light/dark themes and multi-language support.
+    -   Rich content parsing: code blocks, mind maps, flowcharts, tables, and formulas.
+    -   Message referencing and resend capabilities.
+
+-   **AI Assistant & Skills**:
+    -   Instant Q&A and translation.
+    -   AI-assisted generation of mind maps and flowcharts.
+    -   Visual skill builder with hotkey support.
+
+-   **Smart Notes & Data Security**:
+    -   Save important conversations to a tag-based knowledge base.
+    -   All data is encrypted and stored locally.
+    -   Database backup and restore functionality.
+
+## Open Source
+
+ChatSpeed is an open-source project under the MIT license. All code is available on [GitHub](https://github.com/aidyou/chatspeed). We welcome contributions from the community to help expand the AI agent ecosystem.
+
+## Installation
+
+### Windows
+
+1. Download the `.msi` installer from the [Releases page](https://github.com/aidyou/chatspeed/releases/latest).
+2. Run the installer and follow the on-screen instructions.
+3. You may see a Windows SmartScreen warning. Click "More info" and then "Run anyway" to proceed.
+
+### macOS
+
+**Important:** On newer versions of macOS, Gatekeeper security may prevent the app from opening, showing a "damaged" error message. This is because the app is not yet notarized by Apple.
+
+Please use the following command-line instruction to bypass this:
+
+1.  Drag the `.app` file from the mounted `.dmg` image to your **Applications** folder.
+2.  Open the **Terminal** app.
+3.  Run the following command (you may need to enter your password):
+    ```sh
+    sudo xattr -cr /Applications/Chatspeed.app
+    ```
+4.  After running the command, you can open the app normally.
+
+### Linux
+
+1. Download the `.AppImage` or `.deb` file from the [Releases page](https://github.com/aidyou/chatspeed/releases/latest).
+2. For `.AppImage`, make the file executable (`chmod +x chatspeed*.AppImage`) and then run it.
+3. For `.deb`, install it using your package manager (e.g., `sudo dpkg -i chatspeed*.deb`).
 
 ## Development Requirements
 
@@ -186,6 +264,7 @@ yarn tauri build --no-bundle
 
 # Bundle for distribution outside the macOS App Store
 yarn tauri bundle --bundles app,dmg
+```
 ```
 
 For more details about macOS distribution, please refer to the [Tauri documentation](https://v2.tauri.app/zh-cn/distribute/).
