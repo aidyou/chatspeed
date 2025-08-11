@@ -99,6 +99,7 @@
     "copy": "Copy",
     "copyCode": "Copy Code",
     "copyMarkdown": "Copy Markdown",
+    "detail": "Detail",
     "diagram": "Diagram",
     "download": "Download",
     "downloadPng": "Download PNG",
@@ -427,10 +428,15 @@
           "title": "API List",
           "protocol": "Protocol",
           "group": "Group",
-          "compat": "Compatible Format",
+          "compat": "Compat",
           "apiUrl": "API Address",
           "note": "Note",
-          "example": "On this machine, you can access the interface via {baseUrl}. For example, you can access the general Openai-compatible interface via {baseUrl}/v1/chat/completions"
+          "example": "On this machine, you can access the API via {baseUrl} For example, you can access the Openai-compatible API via {baseUrl}/v1/chat/completions",
+          "type": "Type",
+          "replaceGroup": "Replace {group} with the group name",
+          "replaceModelAndKey": "Replace {model} with the model name and {key} with the API Key",
+          "replaceGroupModelKey": "Replace {group} with the group name, {model} with the model name, and {key} with the API Key",
+          "supportGroupAndCompat": "Supports groups and compatibility mode"
         }
       },
       "tabs": {

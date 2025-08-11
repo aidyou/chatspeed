@@ -83,7 +83,7 @@ impl ToolDefinition for WebScraperTool {
         let scraper = WebviewScraper::new(self.app_handle.clone());
 
         // Perform scraping
-        let content = scraper.scrape_url(url, selector).await.map_err(|e| {
+        let content = scraper.scrape(url, None).await.map_err(|e| {
             ToolError::Execution(
                 t!(
                     "tools.web_scraper_failed",

@@ -90,8 +90,9 @@
         "create": false
       }
     ],
+    "withGlobalTauri": true,
     "security": {
-      "csp": null
+      "capabilities": []
     }
   },
   "bundle": {
@@ -104,7 +105,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": [
+      "assets"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",

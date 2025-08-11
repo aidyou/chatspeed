@@ -99,6 +99,7 @@
     "copy": "복사",
     "copyCode": "코드 복사",
     "copyMarkdown": "Markdown 복사",
+    "detail": "세부정보",
     "diagram": "플로우차트",
     "download": "다운로드",
     "downloadPng": "PNG로 다운로드",
@@ -430,7 +431,12 @@
           "compat": "호환 형식",
           "apiUrl": "API 주소",
           "note": "참고",
-          "example": "이 컴퓨터에서는 {baseUrl}을 통해 인터페이스에 액세스할 수 있습니다. 예를 들어 일반적인 Openai 호환 인터페이스는 {baseUrl}/v1/chat/completions를 통해 액세스할 수 있습니다."
+          "example": "이 컴퓨터에서는 {baseUrl}을 통해 인터페이스에 액세스할 수 있습니다. 예를 들어 일반적인 Openai 호환 인터페이스는 {baseUrl}/v1/chat/completions를 통해 액세스할 수 있습니다.",
+          "type": "인터페이스 유형",
+          "replaceGroup": "{group}을 그룹 이름으로 바꿉니다",
+          "replaceModelAndKey": "{model}을 모델 이름으로, {key}를 API 키로 바꿉니다",
+          "replaceGroupModelKey": "{group}을 그룹 이름으로, {model}을 모델 이름으로, {key}를 API 키로 바꿉니다",
+          "supportGroupAndCompat": "그룹 및 호환 모드 지원"
         }
       },
       "tabs": {

@@ -99,6 +99,7 @@
     "copy": "コピー",
     "copyCode": "コードをコピー",
     "copyMarkdown": "Markdownをコピー",
+    "detail": "詳細",
     "diagram": "フローチャート",
     "download": "ダウンロード",
     "downloadPng": "PNGでダウンロード",
@@ -430,7 +431,12 @@
           "compat": "互換性のある形式",
           "apiUrl": "APIアドレス",
           "note": "注釈",
-          "example": "このマシンでは、{baseUrl}を介してインターフェースにアクセスできます。たとえば、一般的なOpenai互換インターフェースには、{baseUrl}/v1/chat/completionsを介してアクセスできます"
+          "example": "このマシンでは、{baseUrl}を介してインターフェースにアクセスできます。たとえば、一般的なOpenai互換インターフェースには、{baseUrl}/v1/chat/completionsを介してアクセスできます",
+          "type": "インターフェースタイプ",
+          "replaceGroup": "{group}をグループ名に置き換えます",
+          "replaceModelAndKey": "{model}をモデル名に、{key}をAPIキーに置き換えます",
+          "replaceGroupModelKey": "{group}をグループ名に、{model}をモデル名に、{key}をAPIキーに置き換えます",
+          "supportGroupAndCompat": "グループと互換モードをサポート"
         }
       },
       "tabs": {

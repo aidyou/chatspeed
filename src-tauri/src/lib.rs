@@ -37,13 +37,13 @@ use tauri::Manager;
 use ai::interaction::chat_completion::ChatState;
 use commands::chat::*;
 use commands::clipboard::*;
+use commands::dev_tool::*;
 use commands::env::*;
 use commands::fs::*;
 use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
 use commands::proxy_group::*;
-use commands::scraper_test::*;
 use commands::setting::*;
 use commands::update::*;
 use commands::window::*;
@@ -215,9 +215,8 @@ pub async fn run() -> Result<()> {
             // workflow
             run_dag_workflow,
             run_react_workflow,
-            // scraper test
-            test_webview_scraper,
-            test_webview_scraper_with_selector,
+            // dev tools
+            test_scrape,
         ])
         .plugin(tauri_plugin_opener::init())
                 .on_window_event(|window, event| match event {

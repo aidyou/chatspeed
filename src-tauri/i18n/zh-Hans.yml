@@ -332,7 +332,6 @@ workflow:
   dependency_not_found: "节点 '%{node_id}' 依赖的节点 '%{id}' 不存在"
   duplicate_node_id: "重复的节点ID: %{id}"
   edge_reference_missing: "边引用不存在: %{from} -> %{to}"
-  function: "函数错误: %{msg}"
   incomplete_execution: "工作流执行不完整，缺少节点: %{missing}"
   invalid_array_index: "无效的数组索引: %{index}"
   invalid_graph: "无效的图：%{reason}"

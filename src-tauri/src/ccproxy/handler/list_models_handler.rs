@@ -47,11 +47,11 @@ pub async fn handle_openai_list_models(
     };
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
-    let mut models: HashMap<String, (i32, String)> = HashMap::new();
+    let mut models_info: HashMap<String, (i32, String)> = HashMap::new();
     for (alias, target) in config.into_iter() {
-        // If the alias has already been processed and added to `models`, skip it.
+        // If the alias has already been processed and added to `models_info`, skip it.
         // This prevents re-processing the same alias.
-        if models.contains_key(&alias) {
+        if models_info.contains_key(&alias) {
             continue;
         }
 
@@ -63,10 +63,10 @@ pub async fn handle_openai_list_models(
                 if t.id > 0 {
                     // Attempt to retrieve the AI model from the store using the target item's ID.
                     if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
-                        // If a model is successfully retrieved, insert its details into `models`.
+                        // If a model is successfully retrieved, insert its details into `models_info`.
                         // We clone `alias` because the `for` loop consumes it by value,
                         // and we need to move it into the HashMap.
-                        models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
+                        models_info.insert(alias.clone(), (model.max_tokens, model.name.clone()));
                         // Since we found a model for this alias, we can stop searching
                         // further in `target` for this specific alias.
                         break;
@@ -78,21 +78,32 @@ pub async fn handle_openai_list_models(
 
     let mut sorted_keys = keys.clone();
     sorted_keys.sort();
-    let models: Vec<Value> = sorted_keys
+
+    if models_info.is_empty() {
+        log::info!("'chat_completion_proxy' configuration is empty or not found. Returning empty model list.");
+    };
+
+    let models_list: Vec<Value> = sorted_keys
         .into_iter()
         .map(|alias| {
-            let (max_token, provider) = if let Some(m) = models.get(&alias) {
+            let (max_token, provider) = if let Some(m) = models_info.get(&alias) {
                 m.clone()
             } else {
                 (-1, "ccproxy".to_string())
             };
+            let now = std::time::SystemTime::now();
+            let created_unix = now
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
             json!({
                 "id": alias.clone(),
                 "object": "model".to_string(),
-                "created": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
+                "type": "model".to_string(),
+                "created": created_unix,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "display_name": alias.clone(),
                 "owned_by": provider,
                 "max_tokens": max_token,
                 "powered_by": "chatspeed ccproxy".to_string(),
@@ -100,13 +111,21 @@ pub async fn handle_openai_list_models(
         })
         .collect();
 
-    if models.is_empty() {
-        log::info!("'chat_completion_proxy' configuration is empty or not found. Returning empty model list.");
-    };
+    let first_id = models_list
+        .first()
+        .and_then(|m| m["id"].as_str())
+        .map(|s| s.to_string());
+    let last_id = models_list
+        .last()
+        .and_then(|m| m["id"].as_str())
+        .map(|s| s.to_string());
 
     let response = json!( {
         "object": "list".to_string(),
-        "data": models,
+        "data": models_list,
+        "first_id": first_id,
+        "has_more": false,
+        "last_id": last_id,
     });
 
     Ok(Json(response))

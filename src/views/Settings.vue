@@ -3,11 +3,7 @@
     <titlebar class="header-container" :show-maximize-button="false">
       <template #center>
         <el-menu mode="horizontal" :default-active="settingType" class="menu">
-          <el-menu-item
-            class="upperLayer"
-            v-for="(item, index) in menuItems"
-            :key="index"
-            :index="item.id"
+          <el-menu-item class="upperLayer" v-for="(item, index) in menuItems" :key="index" :index="item.id"
             @click="switchSetting(item.id)">
             <cs :name="item.icon" />
             <span>{{ item.label }}</span>
@@ -44,6 +40,10 @@
     <el-main v-show="settingType === 'about'" class="main">
       <about />
     </el-main>
+
+    <el-main v-show="settingType === 'scraper-test'" class="main">
+      <ScraperTest />
+    </el-main>
   </el-container>
 </template>
 
@@ -59,6 +59,7 @@ import model from '@/components/setting/model.vue'
 import proxy from '@/components/setting/proxy.vue'
 import skill from '@/components/setting/skill.vue'
 import privacy from '@/components/setting/privacy.vue'
+import ScraperTest from '@/components/setting/ScraperTest.vue'
 import titlebar from '@/components/window/titlebar.vue'
 
 const { t } = useI18n()
@@ -75,6 +76,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' }
+  //,{ label: '测试', icon: 'setting', id: 'scraper-test' }
 ])
 
 onMounted(async () => {
@@ -156,7 +158,7 @@ const switchSetting = id => {
       }
 
       .el-menu--horizontal {
-        > .el-menu-item {
+        >.el-menu-item {
           &.is-active {
             border-bottom: none;
             // background-color: var(--cs-active-bg-color);

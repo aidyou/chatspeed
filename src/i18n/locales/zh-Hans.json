@@ -431,7 +431,12 @@
           "compat": "兼容格式",
           "apiUrl": "API地址",
           "note": "备注",
-          "example": "在本机您可以通过 {baseUrl} 来访问接口，例如访问通用的 Openai 兼容格式的接口可以通过 {baseUrl}/v1/chat/completions 来访问"
+          "example": "在本机，您可通过 {baseUrl} 访问接口。例如，调用 OpenAI兼容格式 的通用接口，只需访问 {baseUrl}/v1/chat/completions",
+          "type": "接口类型",
+          "replaceGroup": "将 {group} 替换为分组名称",
+          "replaceModelAndKey": "将 {model} 替换为模型名称，将 {key} 替换为API Key",
+          "replaceGroupModelKey": "将 {group} 替换为分组名称，将 {model} 替换为模型名称，将 {key} 替换为API Key",
+          "supportGroupAndCompat": "支持分组和兼容模式"
         }
       },
       "tabs": {

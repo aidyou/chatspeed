@@ -99,6 +99,7 @@
     "copy": "Копировать",
     "copyCode": "Код",
     "copyMarkdown": "Markdown",
+    "detail": "Детали",
     "diagram": "Блок-схема",
     "download": "Скачать",
     "downloadPng": "Скачать PNG",
@@ -430,7 +431,12 @@
           "compat": "Совместимый формат",
           "apiUrl": "Адрес API",
           "note": "Примечание",
-          "example": "На этом компьютере вы можете получить доступ к интерфейсу через {baseUrl}. Например, вы можете получить доступ к общему интерфейсу, совместимому с Openai, через {baseUrl}/v1/chat/completions"
+          "example": "На этом компьютере вы можете получить доступ к интерфейсу через {baseUrl}. Например, вы можете получить доступ к общему интерфейсу, совместимому с Openai, через {baseUrl}/v1/chat/completions",
+          "type": "Тип интерфейса",
+          "replaceGroup": "Замените {group} на имя группы",
+          "replaceModelAndKey": "Замените {model} на имя модели и {key} на ключ API",
+          "replaceGroupModelKey": "Замените {group} на имя группы, {model} на имя модели и {key} на ключ API",
+          "supportGroupAndCompat": "Поддерживает группы и режим совместимости"
         }
       },
       "tabs": {

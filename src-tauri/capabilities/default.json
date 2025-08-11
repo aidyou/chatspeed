@@ -71,21 +71,15 @@
           "$LOCALAPPDATA/*"
         ]
       },
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: ipc: http://ipc.localhost asset: http://asset.localhost blob:; img-src 'self' data: asset: http://asset.localhost blob: canvas-blob:; connect-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; canvas-src 'self' blob: data:;"
-    }
-  },
-  "macOS": {
-    "entitlements": {
-      "com.apple.security.automation.apple-events": true,
-      "com.apple.security.temporary-exception.apple-events": [
-        "com.apple.systempreferences"
-      ],
-      "com.apple.security.accessibility": true,
-      "com.apple.security.screen-capture": true
-    },
-    "info": {
-      "NSAccessibilityUsageDescription": "Required for monitoring text selection",
-      "NSScreenCaptureUsageDescription": "Required for screen capture functionality"
+      "csp": {
+        "default-src": "'self' 'unsafe-inline' 'unsafe-eval' data: ipc: http://ipc.localhost asset: http://asset.localhost blob:",
+        "img-src": "'self' data: asset: http://asset.localhost blob: canvas-blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "script-src": "'self' 'unsafe-inline' 'unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "worker-src": "'self' blob:",
+        "canvas-src": "'self' blob: data:"
+      }
     }
   }
 }

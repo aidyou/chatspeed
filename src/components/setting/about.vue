@@ -4,14 +4,32 @@
       <h2>About ChatSpeed</h2>
       <div class="version">Version: {{ version }}</div>
       <p>
-        ChatSpeed is an innovative open-source AI chat application designed to enhance your
-        interaction with various AI models. Our mission is to provide a fast, efficient, and
-        user-friendly interface for AI conversations while ensuring complete data privacy and local
-        storage.
+        ChatSpeed is an innovative open-source AI agent management platform that revolutionizes how you interact with AI
+        models. Beyond traditional chat interfaces, ChatSpeed serves as a unified proxy system enabling "Any Claude, Any
+        Gemini" - seamlessly integrating any AI model into Claude ecosystem or Gemini CLI through advanced agent
+        management and MCP (Model Context Protocol) capabilities.
       </p>
 
       <h3>Core Features</h3>
       <ul>
+        <li>
+          AI Agent Management
+          <ul>
+            <li>Unified platform for managing various AI chat agents and multimodal content agents</li>
+            <li>Centralized control center eliminating fragmented AI service management</li>
+            <li>Export configured AI agents as reusable tools for other applications</li>
+            <li>Seamless API integration and command-line tool output capabilities</li>
+          </ul>
+        </li>
+        <li>
+          MCP (Model Context Protocol) Proxy
+          <ul>
+            <li>Advanced proxy system enabling "Any Claude" - integrate any AI model into Claude ecosystem</li>
+            <li>"Any Gemini" capability - connect any model to Gemini CLI via ccproxy and OpenRouter</li>
+            <li>Multimodal Content Protocol support for enhanced AI interactions</li>
+            <li>Flexible proxy configuration for seamless model switching</li>
+          </ul>
+        </li>
         <li>
           Multi-Model Support
           <ul>
@@ -81,9 +99,10 @@
 
       <h3>Open Source</h3>
       <p>
-        ChatSpeed is an open-source project built with Vue 3 and Tauri under MIT license. All code
-        is available on <a href="#" @click="openGithub">GitHub</a>, welcoming developer
-        contributions.
+        ChatSpeed is an open-source AI agent management platform built with Vue 3 and Tauri under MIT license.
+        Our mission is to democratize AI agent management and proxy capabilities, making advanced AI integration
+        accessible to developers worldwide. All code is available on <a href="#" @click="openGithub">GitHub</a>,
+        welcoming developer contributions to expand the AI agent ecosystem.
       </p>
     </div>
     <el-divider />
@@ -91,13 +110,30 @@
       <h2>关于 ChatSpeed</h2>
       <div class="version">版本：{{ version }}</div>
       <p>
-        ChatSpeed 是一款创新的开源 AI 聊天应用，旨在提升您与各类 AI
-        模型的交互体验。我们的使命是在确保完全的数据隐私和本地存储的同时，提供一个快速、高效且用户友好的
-        AI 对话界面。
+        ChatSpeed 是一款创新的开源 AI 代理管理平台，革命性地改变了您与 AI 模型的交互方式。超越传统聊天界面，ChatSpeed 作为统一代理系统实现"Any Claude, Any
+        Gemini"——通过先进的代理管理和 MCP（模型上下文协议）能力，无缝将任何 AI 模型集成到 Claude 生态系统或 Gemini CLI 中。
       </p>
 
       <h3>核心功能</h3>
       <ul>
+        <li>
+          AI 代理管理
+          <ul>
+            <li>统一平台管理各种 AI 聊天代理和多模态内容代理</li>
+            <li>集中式控制中心，告别碎片化的 AI 服务管理</li>
+            <li>将配置好的 AI 代理导出为可复用工具供其他应用使用</li>
+            <li>无缝 API 集成和命令行工具输出能力</li>
+          </ul>
+        </li>
+        <li>
+          MCP（模型上下文协议）代理
+          <ul>
+            <li>先进代理系统实现"Any Claude"——将任何 AI 模型集成到 Claude 生态系统</li>
+            <li>"Any Gemini"能力——通过 ccproxy 和 OpenRouter 将任何模型连接到 Gemini CLI</li>
+            <li>多模态内容协议支持，增强 AI 交互能力</li>
+            <li>灵活的代理配置，实现无缝模型切换</li>
+          </ul>
+        </li>
         <li>
           多模型支持
           <ul>
@@ -170,9 +206,10 @@
 
       <h3>开源项目</h3>
       <p>
-        ChatSpeed 是基于 Vue 3 和 Tauri 构建的开源项目，遵循 MIT 协议。所有代码均已开源至
-        <a href="#" @click="openGithub">GitHub 代码平台</a>
-        ，欢迎开发者参与贡献。
+        ChatSpeed 是基于 Vue 3 和 Tauri 构建的开源 AI 代理管理平台，遵循 MIT 协议。
+        我们的使命是让 AI 代理管理和代理能力民主化，使先进的 AI 集成对全球开发者都触手可及。
+        所有代码均已开源至 <a href="#" @click="openGithub">GitHub 代码平台</a>，
+        欢迎开发者参与贡献，共同扩展 AI 代理生态系统。
       </p>
     </div>
   </div>

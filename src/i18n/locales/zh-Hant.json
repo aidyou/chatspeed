@@ -99,10 +99,11 @@
     "copy": "複製",
     "copyCode": "程式碼",
     "copyMarkdown": "Markdown",
+    "detail": "詳情",
     "diagram": "流程圖",
     "download": "下載",
-    "downloadPng": "下載 PNG",
-    "downloadSvg": "下載 SVG",
+    "downloadPng": "下載PNG",
+    "downloadSvg": "下載SVG",
     "loading": "載入中……",
     "mindmap": "思維導圖",
     "no": "否",
@@ -430,7 +431,12 @@
           "compat": "相容格式",
           "apiUrl": "API 位址",
           "note": "備註",
-          "example": "在本機您可以透過 {baseUrl} 來存取介面，例如存取通用的 Openai 相容格式的介面可以透過 {baseUrl}/v1/chat/completions 來存取"
+          "example": "在本機您可以透過 {baseUrl} 來存取介面，例如存取通用的 Openai 相容格式的介面可以透過 {baseUrl}/v1/chat/completions 來存取",
+          "type": "介面類型",
+          "replaceGroup": "將 {group} 替換為分組名稱",
+          "replaceModelAndKey": "將 {model} 替換為模型名稱，將 {key} 替換為 API 金鑰",
+          "replaceGroupModelKey": "將 {group} 替換為分組名稱，將 {model} 替換為模型名稱，將 {key} 替換為 API 金鑰",
+          "supportGroupAndCompat": "支援分組和相容模式"
         }
       },
       "tabs": {

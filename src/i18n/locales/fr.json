@@ -99,6 +99,7 @@
     "copy": "Copier",
     "copyCode": "Copier le code",
     "copyMarkdown": "Copier en Markdown",
+    "detail": "Détail",
     "diagram": "Diagramme",
     "download": "Télécharger",
     "downloadPng": "Télécharger en PNG",
@@ -430,7 +431,12 @@
           "compat": "Format compatible",
           "apiUrl": "Adresse de l'API",
           "note": "Note",
-          "example": "Sur cette machine, vous pouvez accéder à l'interface via {baseUrl}. Par exemple, vous pouvez accéder à l'interface compatible Openai générale via {baseUrl}/v1/chat/completions"
+          "example": "Sur cette machine, vous pouvez accéder à l'interface via {baseUrl}. Par exemple, vous pouvez accéder à l'interface compatible Openai générale via {baseUrl}/v1/chat/completions",
+          "type": "Type d'interface",
+          "replaceGroup": "Remplacez {group} par le nom du groupe",
+          "replaceModelAndKey": "Remplacez {model} par le nom du modèle et {key} par la clé API",
+          "replaceGroupModelKey": "Remplacez {group} par le nom du groupe, {model} par le nom du modèle et {key} par la clé API",
+          "supportGroupAndCompat": "Prend en charge les groupes et le mode de compatibilité"
         }
       },
       "tabs": {

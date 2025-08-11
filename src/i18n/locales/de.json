@@ -99,6 +99,7 @@
     "copy": "Kopieren",
     "copyCode": "Code",
     "copyMarkdown": "Markdown",
+    "detail": "Detail",
     "diagram": "Flussdiagramm",
     "download": "Herunterladen",
     "downloadPng": "PNG herunterladen",
@@ -430,7 +431,12 @@
           "compat": "Kompatibles Format",
           "apiUrl": "API-Adresse",
           "note": "Hinweis",
-          "example": "Auf diesem Computer können Sie über {baseUrl} auf die Schnittstelle zugreifen. Beispielsweise können Sie auf die allgemeine Openai-kompatible Schnittstelle über {baseUrl}/v1/chat/completions zugreifen"
+          "example": "Auf diesem Computer können Sie über {baseUrl} auf die Schnittstelle zugreifen. Beispielsweise können Sie auf die allgemeine Openai-kompatible Schnittstelle über {baseUrl}/v1/chat/completions zugreifen",
+          "type": "Schnittstellentyp",
+          "replaceGroup": "Ersetzen Sie {group} durch den Gruppennamen",
+          "replaceModelAndKey": "Ersetzen Sie {model} durch den Modellnamen und {key} durch den API-Schlüssel",
+          "replaceGroupModelKey": "Ersetzen Sie {group} durch den Gruppennamen, {model} durch den Modellnamen und {key} durch den API-Schlüssel",
+          "supportGroupAndCompat": "Unterstützt Gruppen und Kompatibilitätsmodus"
         }
       },
       "tabs": {

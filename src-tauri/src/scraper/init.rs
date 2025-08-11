@@ -46,12 +46,23 @@ pub fn ensure_default_configs_exist(app: &AppHandle<Wry>) -> Result<()> {
         .app_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get application data directory, error: {:?}", e))?;
 
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| anyhow::anyhow!("Failed to get resource directory, error: {:?}", e))?;
+    // In debug mode, read directly from the source assets to avoid bundling issues.
+    // In release mode, read from the bundled resources.
+    #[cfg(debug_assertions)]
+    let schema_src_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("scrape")
+        .join("schema");
 
-    let schema_src_path = resource_dir.join("assets").join("scrape").join("schema");
+    #[cfg(not(debug_assertions))]
+    let schema_src_path = {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get resource directory"))?;
+        resource_dir.join("assets").join("scrape").join("schema")
+    };
+
     let schema_dest_path = app_data_dir.join("schema");
 
     // Spawn a background task to handle file copying asynchronously.
