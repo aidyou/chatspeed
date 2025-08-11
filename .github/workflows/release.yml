@@ -283,7 +283,18 @@ jobs:
 
   release-linux:
     if: github.event_name == 'push' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux'
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          # TODO: Enable aarch64 when cross-compilation issues are resolved
+          # - os: ubuntu-22.04
+          #   target: aarch64-unknown-linux-gnu
+          #   arch: aarch64
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -292,7 +303,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust Target
-        run: rustup target add x86_64-unknown-linux-gnu
+        run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -334,7 +345,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             sqlite3 \
-            libsqlite3-dev
+            libsqlite3-dev \
+            rpm
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -370,7 +382,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: --target x86_64-unknown-linux-gnu
+          args: --target ${{ matrix.target }}
 
   create-release:
     needs: [release-windows, release-macos, release-linux]
@@ -384,6 +396,14 @@ jobs:
           echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
           echo "RELEASE_DATE=$(TZ=Asia/Shanghai date +'%Y-%m-%d')" >> $GITHUB_ENV
 
+      - name: Check if prerelease
+        run: |
+          if [[ "${{ env.VERSION }}" =~ -[a-zA-Z] ]]; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         env:
@@ -393,6 +413,8 @@ jobs:
           name: ChatSpeed ${{ env.VERSION }}
           body: |
             ChatSpeed ${{ env.VERSION }} Released on ${{ env.RELEASE_DATE }}
+
+            ${{ env.IS_PRERELEASE == 'true' && '⚠️ **This is a pre-release version for testing purposes.**' || '' }}
 
             ### Downloads
             - Windows
@@ -404,14 +426,16 @@ jobs:
             - Linux
               - [x64 AppImage](https://github.com/aidyou/chatspeed/releases/download/${{ env.VERSION }}/chatspeed_${{ env.VERSION }}_amd64.AppImage)
               - [x64 DEB](https://github.com/aidyou/chatspeed/releases/download/${{ env.VERSION }}/chatspeed_${{ env.VERSION }}_amd64.deb)
+              - [x64 RPM](https://github.com/aidyou/chatspeed/releases/download/${{ env.VERSION }}/chatspeed-${{ env.VERSION }}-1.x86_64.rpm)
 
             ### Release Notes
 
-            Please add release notes here...
-          draft: true
-          prerelease: false
+            ${{ env.IS_PRERELEASE == 'true' && 'This is a test release for auto-update functionality.' || 'Please add release notes here...' }}
+          draft: ${{ env.IS_PRERELEASE == 'false' }}
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           files: |
             src-tauri/target/*/release/bundle/deb/*.deb
+            src-tauri/target/*/release/bundle/rpm/*.rpm
             src-tauri/target/*/release/bundle/appimage/*.AppImage
             src-tauri/target/*/release/bundle/dmg/*.dmg
             src-tauri/target/*/release/bundle/msi/*.msi

@@ -307,8 +307,11 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
+            arch: x86_64
+          # TODO: Enable aarch64 when cross-compilation issues are resolved
+          # - os: ubuntu-22.04
+          #   target: aarch64-unknown-linux-gnu
+          #   arch: aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
@@ -408,12 +411,23 @@ jobs:
         with:
           args: --target ${{ matrix.target }}
 
-      - name: Upload Linux Artifacts
+      - name: Upload Linux DEB Package
         uses: actions/upload-artifact@v4
         with:
-          name: linux-${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'x86_64' || 'aarch64' }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          name: linux-${{ matrix.arch }}-deb
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+          retention-days: 30
+
+      - name: Upload Linux RPM Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-rpm
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          retention-days: 30
+
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-appimage
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
           retention-days: 30
