@@ -164,7 +164,7 @@ impl Config {
             return Ok(ProxyGroup {
                 id: 0,
                 name: "default".to_string(),
-                temperature: Some(-1.0),
+                temperature: Some(1.0),
                 disabled: false,
                 ..Default::default()
             });

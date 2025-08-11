@@ -236,11 +236,14 @@ jobs:
       - name: Install dependencies (macOS)
         run: |
           brew list sqlite3 || brew install sqlite3
-          brew list bzip2 || brew install bzip2
+          if ! brew list bzip2 &>/dev/null; then
+            brew install bzip2 || echo "bzip2 installation failed, but may already be available system-wide"
+          fi
           echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix sqlite3)/lib -L$(brew --prefix bzip2)/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include -I$(brew --prefix bzip2)/include" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$(brew --prefix bzip2)/lib/pkgconfig" >> $GITHUB_ENV
+          BZIP2_PREFIX=$(brew --prefix bzip2 2>/dev/null || echo "/usr/local")
+          echo "LDFLAGS=-L$(brew --prefix sqlite3)/lib -L$BZIP2_PREFIX/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include -I$BZIP2_PREFIX/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$BZIP2_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Install Node
         uses: actions/setup-node@v4
