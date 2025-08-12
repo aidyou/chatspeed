@@ -1,5 +1,8 @@
 [English](./README.md) | 简体中文
 
+![claude code](assets/images/claude.gif)
+
+
 # ChatSpeed
 
 **ChatSpeed: Any Claude, Any Gemini.**

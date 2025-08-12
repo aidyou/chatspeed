@@ -1,5 +1,7 @@
 English | [简体中文](./README.zh-CN.md)
 
+![claude code](assets/images/claude.gif)
+
 # ChatSpeed
 
 **ChatSpeed lets you use `Claude Code` or `Gemini CLI` for free!**
