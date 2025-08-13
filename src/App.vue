@@ -1,27 +1,15 @@
 <template>
   <div class="app-container" :class="[windowType, windowStore.os]">
-    <div
-      class="titlebar"
-      data-tauri-drag-region
-      @pointerdown="handleDragStart"
-      @pointerup="handleDragEnd">
+    <div class="titlebar" data-tauri-drag-region @pointerdown="handleDragStart" @pointerup="handleDragEnd">
     </div>
     <router-view></router-view>
 
     <!-- Update management dialogs -->
-    <UpdateDialog
-      v-model="updateStore.showUpdateDialog"
-      :version-info="updateStore.versionInfo"
-      @confirm="updateStore.confirmUpdate"
-      @cancel="updateStore.cancelUpdate" />
-    <ProgressDialog
-      v-model="updateStore.showProgressDialog"
-      :progress="updateStore.downloadProgress"
-      :error="updateStore.downloadError"
-      @cancel="updateStore.cancelUpdate" />
-    <RestartDialog
-      v-model="updateStore.showRestartDialog"
-      @restart="updateStore.restartApp"
+    <UpdateDialog v-model="updateStore.showUpdateDialog" :version-info="updateStore.versionInfo"
+      @confirm="updateStore.confirmUpdate" @cancel="updateStore.cancelUpdate" />
+    <ProgressDialog v-model="updateStore.showProgressDialog" :progress="updateStore.downloadProgress"
+      :error="updateStore.downloadError" @cancel="updateStore.cancelUpdate" />
+    <RestartDialog v-model="updateStore.showRestartDialog" @restart="updateStore.restartApp"
       @later="updateStore.postponeRestart" />
   </div>
 </template>
@@ -311,6 +299,7 @@ body {
   font-family: var(--cs-font-family);
   font-weight: 400;
 }
+
 .app-container {
   height: 100vh;
   width: 100vw;
@@ -319,7 +308,7 @@ body {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-radius: var(--cs-border-radius-md);
-  
+
   border: 0.5px solid var(--cs-border-color);
   box-sizing: border-box;
 

@@ -118,22 +118,23 @@ verify_version_update() {
     print_success "Version verification passed: $expected_version"
 }
 
-# 创建和推送标签
-# 获取目标远程仓库
-get_target_remote() {
-    # 优先级：origin > github > 第一个远程
-    if git remote | grep -q "^origin$"; then
-        echo "origin"
-    elif git remote | grep -q "^github$"; then
-        echo "github"
+# 提交版本更改
+commit_version_changes() {
+    local version=$1
+
+    # 检查是否有未提交的更改
+    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml; then
+        print_info "Committing version changes..."
+
+        # 添加版本文件到暂存区
+        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
+
+        # 提交更改
+        git commit -m "chore: bump version to $version"
+
+        print_success "Committed version changes"
     else
-        local first_remote=$(git remote | head -1)
-        if [[ -n "$first_remote" ]]; then
-            echo "$first_remote"
-        else
-            print_error "No remote repository configured"
-            exit 1
-        fi
+        print_info "No version changes to commit"
     fi
 }
 
@@ -174,24 +175,63 @@ create_and_push_tag() {
 
     print_info "Target remote: $remote ($(git remote get-url $remote))"
 
-    # 检查标签是否已存在
-    if git tag -l | grep -q "^$tag$"; then
-        print_warning "Tag $tag already exists locally"
+    # 检查远程标签是否已存在
+    if git ls-remote --tags "$remote" | grep -q "refs/tags/$tag$"; then
+        print_warning "Tag $tag already exists on remote $remote"
         read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            git tag -d "$tag"
-            print_info "Deleted existing local tag $tag"
+            # 删除远程标签
+            print_info "Deleting remote tag $tag..."
+            git push "$remote" ":refs/tags/$tag" || print_warning "Failed to delete remote tag (may not exist)"
+
+            # 删除本地标签
+            if git tag -l | grep -q "^$tag$"; then
+                git tag -d "$tag"
+                print_info "Deleted existing local tag $tag"
+            fi
         else
             print_info "Skipping tag creation"
             return
         fi
     fi
 
-    # 创建标签
-    print_info "Creating tag $tag..."
-    git tag "$tag"
+    # 检查本地标签是否已存在
+    if git tag -l | grep -q "^$tag$"; then
+        print_warning "Tag $tag already exists locally"
+        git tag -d "$tag"
+        print_info "Deleted existing local tag $tag"
+    fi
+
+    # 推送版本提交到远程
+    print_info "Pushing version commit to remote $remote..."
+    if git push "$remote" HEAD; then
+        print_success "Successfully pushed version commit to $remote"
+    else
+        print_error "Failed to push version commit to $remote"
+        exit 1
+    fi
+
+    # 等待一下确保提交已经到达远程
+    sleep 2
+
+    # 创建标签（指向当前 HEAD）
+    print_info "Creating tag $tag on current HEAD..."
+    git tag "$tag" HEAD
     print_success "Created tag $tag"
+
+    # 验证标签指向正确的提交
+    local tag_commit=$(git rev-list -n 1 "$tag")
+    local head_commit=$(git rev-parse HEAD)
+
+    if [[ "$tag_commit" != "$head_commit" ]]; then
+        print_error "Tag $tag does not point to current HEAD"
+        print_error "Tag commit: $tag_commit"
+        print_error "HEAD commit: $head_commit"
+        exit 1
+    fi
+
+    print_info "Tag $tag points to commit: $tag_commit"
 
     # 推送标签
     print_info "Pushing tag $tag to remote $remote..."
@@ -291,6 +331,9 @@ main() {
 
     # 验证更新
     verify_version_update "$version"
+
+    # 提交版本更改
+    commit_version_changes "$version"
 
     # 创建和推送标签
     create_and_push_tag "$version"

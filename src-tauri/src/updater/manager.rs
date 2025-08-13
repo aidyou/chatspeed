@@ -104,6 +104,10 @@ impl UpdateManager {
     /// * `Ok(())` if the update was successfully downloaded and installed
     /// * `Err(UpdateError)` if there was an error during the process
     pub async fn download_and_install(&self, version_info: &VersionInfo) -> Result<()> {
+        info!(
+            "Starting download and install for version: {}",
+            version_info.version
+        );
         let updater = self
             .app
             .updater()
@@ -123,21 +127,42 @@ impl UpdateManager {
 
         let app_handle = self.app.clone();
         let app_handle2 = app_handle.clone();
-        let mut last_report_time = Instant::now();
+        let last_report_time = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
 
         // Download and install the update
         update
             .download_and_install(
                 move |current, total| {
                     let now = Instant::now();
-                    if now.duration_since(last_report_time) >= PROGRESS_REPORT_INTERVAL {
+                    let mut last_time = last_report_time.lock().unwrap();
+
+                    if now.duration_since(*last_time) >= PROGRESS_REPORT_INTERVAL {
                         if let Some(total) = total {
-                            let progress = (current as f64 / total as f64) * 100.0;
-                            info!("Download progress: {:.0}%", progress);
-                            let _ =
-                                app_handle.emit(EVENT_UPDATE_PROGRESS, format!("{:.0}", progress));
+                            if total > 0 {
+                                let progress = (current as f64 / total as f64) * 100.0;
+                                info!(
+                                    "Download progress: {:.1}% ({}/{})",
+                                    progress, current, total
+                                );
+
+                                // Send progress as object with both percentage and bytes
+                                let progress_data = serde_json::json!({
+                                    "progress": progress / 100.0,  // 0.0 to 1.0 for frontend
+                                    "current": current,
+                                    "total": total
+                                });
+                                let _ = app_handle.emit(EVENT_UPDATE_PROGRESS, progress_data);
+                            } else {
+                                info!("Download progress: total size unknown ({} bytes)", current);
+                                let progress_data = serde_json::json!({
+                                    "progress": 0.0,
+                                    "current": current,
+                                    "total": 0
+                                });
+                                let _ = app_handle.emit(EVENT_UPDATE_PROGRESS, progress_data);
+                            }
                         }
-                        last_report_time = now;
+                        *last_time = now;
                     }
                 },
                 move || {
@@ -146,9 +171,12 @@ impl UpdateManager {
                 },
             )
             .await
-            .map_err(|e| UpdateError::DownloadError(e.to_string()))?;
+            .map_err(|e| {
+                warn!("Download and install failed: {}", e);
+                UpdateError::DownloadError(e.to_string())
+            })?;
 
-        info!("Update installation completed");
+        info!("Update installation completed successfully");
         Ok(())
     }
 }

@@ -31,8 +31,22 @@ export const useUpdateStore = defineStore('update', () => {
   }
 
   const handleDownloadProgress = (payload) => {
-    downloadProgress.value = Math.floor(payload.progress * 100)
+    // Handle both old string format and new object format
+    let progress = 0
+    if (typeof payload === 'string') {
+      // Old format: "50"
+      progress = parseInt(payload) || 0
+    } else if (typeof payload === 'object' && payload.progress !== undefined) {
+      // New format: { progress: 0.5, current: 1024, total: 2048 }
+      progress = Math.floor((payload.progress || 0) * 100)
+    } else if (typeof payload === 'number') {
+      // Direct number format
+      progress = Math.floor(payload)
+    }
+
+    downloadProgress.value = Math.max(0, Math.min(100, progress))
     downloadError.value = ''
+    console.log('Download progress:', downloadProgress.value + '%')
   }
 
   const handleUpdateReady = () => {
@@ -48,13 +62,19 @@ export const useUpdateStore = defineStore('update', () => {
     try {
       showUpdateDialog.value = false
       showProgressDialog.value = true
+      downloadProgress.value = 0
+      downloadError.value = ''
+
       // Clear ignored version when user confirms update
       ignoredVersion.value = null
       csRemoveStorage(csStorageKey.ignoreVersion)
+
       await invoke('confirm_update', { versionInfo: versionInfo.value })
     } catch (error) {
-      downloadError.value = error.message
-      ElMessage.error(error.message)
+      console.error('Update failed:', error)
+      downloadError.value = error.message || '下载或安装更新失败'
+      showProgressDialog.value = false
+      ElMessage.error(`下载或安装更新失败: ${error.message || '未知错误'}`)
     }
   }
 

@@ -530,16 +530,6 @@ pub async fn run() -> Result<()> {
                 }
             });
 
-            // Start the MCP server
-            // let chat_state_for_mcp = chat_state.clone();
-            // let mcp_server = mcp::server::McpServer::new(chat_state_for_mcp);
-            // tauri::async_runtime::spawn(async move {
-            //     let addr = "127.0.0.1:8081".parse().expect(&t!("mcp.invalid_server_address").to_string());
-            //     if let Err(e) = mcp_server.start(addr).await {
-            //         error!("Failed to start MCP server: {}", e);
-            //     }
-            // });
-
             // 启动自动更新检查
             let auto_update = if let Ok(c) = main_store.clone().lock() {
                 c.get_config(CFG_AUTO_UPDATE, true)
@@ -549,6 +539,8 @@ pub async fn run() -> Result<()> {
             if auto_update {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+
                     let update_manager = UpdateManager::new(app_handle);
 
                     loop {
