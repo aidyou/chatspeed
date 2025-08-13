@@ -13,6 +13,7 @@
  * Future adjustments and additions may be made as needed to accommodate new requirements or functionalities.
  */
 
+import { openUrl as invokeOpenUrl } from '@tauri-apps/plugin-opener'
 import { ElMessage } from 'element-plus';
 import 'element-plus/es/components/message/style/css';
 
@@ -301,4 +302,16 @@ export function Uuid() {
     hexTable[buf[10]] + hexTable[buf[11]] +
     hexTable[buf[12]] + hexTable[buf[13]] +
     hexTable[buf[14]] + hexTable[buf[15]];
+}
+
+/**
+ * Opens the given URL in the default web browser
+ */
+export async function openUrl(url) {
+  try {
+    await invokeOpenUrl(url)
+  } catch (error) {
+    console.log(error)
+    showMessage(t('common.openUrlError'), 'error')
+  }
 }

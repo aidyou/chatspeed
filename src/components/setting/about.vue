@@ -218,7 +218,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
-import { openUrl as invokeOpenUrl } from '@tauri-apps/plugin-opener'
+import { openUrl } from '@/libs/util'
 
 const version = ref('')
 
@@ -229,7 +229,7 @@ onMounted(() => {
 })
 
 const openGithub = () => {
-  invokeOpenUrl('https://github.com/aidyou/chatspeed')
+  openUrl('https://github.com/aidyou/chatspeed')
 }
 </script>
 

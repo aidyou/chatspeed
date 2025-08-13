@@ -245,6 +245,7 @@
       "statusError": "啟動錯誤: {error}",
       "statusConnected": "已連線，啟動中...",
       "statusRunning": "執行中",
+      "statusStarting": "啟動中",
       "statusStopped": "未啟動",
       "statusUnknow": "未知",
       "stop": "停止",
@@ -282,7 +283,13 @@
         "configNameRequired": "設定名稱不可為空。",
         "nameRequired": "伺服器名稱不可為空。",
         "typeRequired": "伺服器類型不可為空。",
-        "urlRequired": "SSE 類型需要 URL。"
+        "urlRequired": "SSE 類型需要 URL。",
+        "placeholderError": "設定中包含未設定的佔位符，請設定實際值：",
+        "bearerTokenPlaceholder": "Bearer Token 包含佔位符：{placeholders}",
+        "envPlaceholder": "環境變數包含佔位符：{placeholders}",
+        "urlPlaceholder": "URL 包含佔位符：{placeholders}",
+        "commandPlaceholder": "命令包含佔位符：{placeholders}",
+        "argsPlaceholder": "參數包含佔位符：{placeholders}"
       }
     },
     "model": {

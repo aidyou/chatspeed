@@ -7,13 +7,8 @@
           <div class="icon-btn upperLayer" @click="onToggleSidebar">
             <cs name="sidebar" />
           </div>
-          <div
-            class="icon-btn upperLayer pin-btn"
-            @click="onPin"
-            :class="{ active: mainWindowIsAlwaysOnTop }">
-            <el-tooltip
-              :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)"
-              :hide-after="0"
+          <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: mainWindowIsAlwaysOnTop }">
+            <el-tooltip :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)" :hide-after="0"
               placement="bottom">
               <cs name="pin" />
             </el-tooltip>
@@ -24,9 +19,7 @@
             <el-dropdown @command="onModelChange" trigger="click">
               <div class="dropdown-text upperLayer">
                 <span class="text">
-                  <img
-                    :src="currentModel?.providerLogo"
-                    v-if="currentModel?.providerLogo !== ''"
+                  <img :src="currentModel?.providerLogo" v-if="currentModel?.providerLogo !== ''"
                     class="provider-logo-sm" />
                   <avatar :text="currentModel?.name" size="12px" v-else />
                   {{ currentModel?.name }}
@@ -35,17 +28,11 @@
               </div>
               <template #dropdown>
                 <el-dropdown-menu class="dropdown">
-                  <el-dropdown-item
-                    v-for="model in modelProviders"
-                    :key="model.id"
-                    :command="model.id"
+                  <el-dropdown-item v-for="model in modelProviders" :key="model.id" :command="model.id"
                     :class="{ 'is-active': currentModel.id === model.id }">
                     <div class="item">
                       <div class="name">
-                        <img
-                          :src="model.providerLogo"
-                          v-if="model.providerLogo !== ''"
-                          class="provider-logo" />
+                        <img :src="model.providerLogo" v-if="model.providerLogo !== ''" class="provider-logo" />
                         <avatar :text="model.name" size="16px" v-else />
                         {{ model.name }}
                       </div>
@@ -69,12 +56,8 @@
                         </div>
                       </div>
                     </el-dropdown-item>
-                    <el-dropdown-item
-                      v-for="(model, index) in models"
-                      :divided="index == 0"
-                      :key="index"
-                      :command="model.id"
-                      :class="{ 'is-active': currentModel?.defaultModel === model.id }">
+                    <el-dropdown-item v-for="(model, index) in models" :divided="index == 0" :key="index"
+                      :command="model.id" :class="{ 'is-active': currentModel?.defaultModel === model.id }">
                       <div class="item">
                         <div class="name">
                           {{ model.name || model.id.split('/').pop() }}
@@ -94,10 +77,7 @@
           </div>
         </template>
         <template #right>
-          <div
-            class="icon-btn upperLayer"
-            :class="{ disabled: !canCreateNewConversation }"
-            @click="newChat">
+          <div class="icon-btn upperLayer" :class="{ disabled: !canCreateNewConversation }" @click="newChat">
             <cs name="new-chat" />
           </div>
         </template>
@@ -112,16 +92,10 @@
                 <cs name="search" />
               </template>
             </el-input>
-            <el-tooltip
-              :content="$t('chat.showFavoriteConversations')"
-              placement="top"
-              :hide-after="0"
+            <el-tooltip :content="$t('chat.showFavoriteConversations')" placement="top" :hide-after="0"
               transition="none">
-              <cs
-                class="favourite-flag-icon"
-                :name="favoriteFlag ? 'favourite-fill' : 'favourite1'"
-                :active="favoriteFlag"
-                @click.stop="favoriteFlag = !favoriteFlag" />
+              <cs class="favourite-flag-icon" :name="favoriteFlag ? 'favourite-fill' : 'favourite1'"
+                :active="favoriteFlag" @click.stop="favoriteFlag = !favoriteFlag" />
             </el-tooltip>
           </div>
           <div v-show="!sidebarCollapsed" class="conversations">
@@ -129,22 +103,14 @@
               <template v-for="(date, idx) in dateGroupKeys" :key="idx">
                 <template v-if="conversationsForShow[date]?.length > 0">
                   <div class="date">{{ $t(`chat.date.${date}`) }}</div>
-                  <div
-                    class="item"
-                    v-for="(chat, index) in conversationsForShow[date]"
-                    @click="selectConversation(chat.id)"
-                    @mouseenter="hoveredConversionIndex = chat.id"
-                    @mouseleave="hoveredConversionIndex = null"
-                    :key="index"
+                  <div class="item" v-for="(chat, index) in conversationsForShow[date]"
+                    @click="selectConversation(chat.id)" @mouseenter="hoveredConversionIndex = chat.id"
+                    @mouseleave="hoveredConversionIndex = null" :key="index"
                     :class="{ active: chat.id === chatStore.currentConversationId }">
                     {{ chat.title }}
                     <div class="icons" v-show="chat.id === hoveredConversionIndex">
-                      <div
-                        class="icon icon-favourite"
-                        @click.stop="onFavouriteConversation(chat.id)">
-                        <cs
-                          :name="chat.isFavorite ? 'favourite-fill' : 'favourite'"
-                          :active="chat.isFavorite" />
+                      <div class="icon icon-favourite" @click.stop="onFavouriteConversation(chat.id)">
+                        <cs :name="chat.isFavorite ? 'favourite-fill' : 'favourite'" :active="chat.isFavorite" />
                       </div>
                       <div class="icon icon-edit" @click.stop="onEditConversation(chat.id)">
                         <cs name="edit" />
@@ -174,22 +140,13 @@
             </div>
 
             <!-- message list -->
-            <div
-              v-for="(message, index) in messagesForShow"
-              :key="index"
-              :id="'message-' + message.id"
-              class="message"
-              :class="message.role"
-              @mouseenter="hoveredMessageIndex = index"
-              @mouseleave="hoveredMessageIndex = null">
+            <div v-for="(message, index) in messagesForShow" :key="index" :id="'message-' + message.id" class="message"
+              :class="message.role" @mouseenter="hoveredMessageIndex = index" @mouseleave="hoveredMessageIndex = null">
               <div class="avatar">
                 <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
-                <logo
-                  v-else
-                  :name="
-                    message?.metadata?.provider
-                      ? getModelLogo(message.metadata.provider)
-                      : currentModel?.logo
+                <logo v-else :name="message?.metadata?.provider
+                  ? getModelLogo(message.metadata.provider)
+                  : currentModel?.logo
                   " />
               </div>
               <div class="content-container">
@@ -204,51 +161,26 @@
                 <div class="content" v-if="message.role === 'user'">
                   <pre class="simple-text">{{ message.content }}</pre>
                 </div>
-                <markdown
-                  :content="message.content"
-                  :reference="message.metadata?.reference || []"
-                  :reasoning="message.metadata?.reasoning || ''"
-                  :log="chatState.log"
-                  :plan="chatState.plan"
-                  v-else />
+                <markdown :content="message.content" :reference="message.metadata?.reference || []"
+                  :reasoning="message.metadata?.reasoning || ''" :log="chatState.log" :plan="chatState.plan" v-else />
                 <div class="metadata">
                   <div class="buttons">
-                    <el-tooltip
-                      :content="$t('chat.resendMessage')"
-                      :hide-after="0"
-                      placement="top"
-                      transition="none"
+                    <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" placement="top" transition="none"
                       v-if="message.role == 'user'">
                       <cs name="resend" @click="onResendMessage(message.id)" class="icon-resend" />
                     </el-tooltip>
-                    <el-tooltip
-                      :content="$t('chat.quoteMessage')"
-                      :hide-after="0"
-                      placement="top"
-                      transition="none"
+                    <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" placement="top" transition="none"
                       v-else>
                       <cs name="quote" @click="onReplyMessage(message.id)" class="icon-quote" />
                     </el-tooltip>
-                    <el-tooltip
-                      :content="$t('chat.copyMessage')"
-                      :hide-after="0"
-                      placement="top"
-                      transition="none">
+                    <el-tooltip :content="$t('chat.copyMessage')" :hide-after="0" placement="top" transition="none">
                       <cs name="copy" @click="onCopyMessage(message.id)" class="icon-copy" />
                     </el-tooltip>
-                    <el-tooltip
-                      :content="$t('chat.takeNote')"
-                      :hide-after="0"
-                      placement="top"
-                      transition="none"
+                    <el-tooltip :content="$t('chat.takeNote')" :hide-after="0" placement="top" transition="none"
                       v-if="message.role != 'user'">
                       <cs name="note" @click="onTakeNote(message)" class="icon-note" />
                     </el-tooltip>
-                    <el-tooltip
-                      :content="$t('chat.deleteMessage')"
-                      :hide-after="0"
-                      placement="top"
-                      transition="none">
+                    <el-tooltip :content="$t('chat.deleteMessage')" :hide-after="0" placement="top" transition="none">
                       <cs name="delete" @click="onDeleteMessage(message.id)" class="icon-delete" />
                     </el-tooltip>
                   </div>
@@ -271,8 +203,7 @@
                           $t('chat.metadata.speed', {
                             speed: Math.round((message?.metadata?.tokensPerSecond * 100) / 100)
                           })
-                        }}</span
-                      >
+                        }}</span>
                     </div>
                   </div>
                 </div>
@@ -286,16 +217,11 @@
             <!-- chatting message -->
             <div v-if="isChatting" class="message assistant" :class="{ loading: isChatting }">
               <div class="avatar">
-                <logo
-                  :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
+                <logo :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
-                <chatting
-                  :content="currentAssistantMessage"
-                  :reference="chatState.reference"
-                  :reasoning="chatState.reasoning"
-                  :log="chatState.log"
-                  :plan="chatState.plan"
+                <chatting :content="currentAssistantMessage" :reference="chatState.reference"
+                  :reasoning="chatState.reasoning" :log="chatState.log" :plan="chatState.plan"
                   :is-reasoning="chatState.isReasoning" />
               </div>
             </div>
@@ -315,10 +241,7 @@
           <!-- footer -->
           <el-footer class="input-container">
             <div class="skill-list-container" v-show="isSkillListVisible">
-              <SkillList
-                ref="skillListRef"
-                @onSelected="onSkillSelected"
-                @visibleChanged="onSkillListVisibleChanged"
+              <SkillList ref="skillListRef" @onSelected="onSkillSelected" @visibleChanged="onSkillListVisibleChanged"
                 :searchKw="skillSearchKeyword" />
             </div>
             <div class="additional" v-if="selectedSkill || replyMessage">
@@ -341,55 +264,34 @@
             </div>
             <div class="input">
               <!-- message input -->
-              <el-input
-                ref="inputRef"
-                v-model="inputMessage"
-                type="textarea"
-                :autosize="{ minRows: 1, maxRows: 10 }"
-                :disabled="!canChat"
-                :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
-                @keydown.enter="onKeyEnter"
-                @keydown="onKeyDown"
-                @input="onInput"
-                @compositionstart="onCompositionStart"
+              <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
+                :disabled="!canChat" :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
+                @keydown.enter="onKeyEnter" @keydown="onKeyDown" @input="onInput" @compositionstart="onCompositionStart"
                 @compositionend="onCompositionEnd" />
 
               <!-- chat icons -->
               <div class="input-footer">
                 <div class="icons">
-                  <el-tooltip
-                    :content="
-                      $t(`chat.${!deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled'}`)
-                    "
-                    :hide-after="0"
-                    placement="top"
-                    v-if="crawlerAvailable">
+                  <el-tooltip :content="$t(`chat.${!deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled'}`)
+                    " :hide-after="0" placement="top" v-if="crawlerAvailable">
                     <label @click="onDeepSearchEnabled" :class="{ active: deepSearchEnabled }">
                       <cs name="skill-deep-search" class="small" />
                       {{ $t('chat.deepsearch') }}
                     </label>
                   </el-tooltip>
-                  <el-tooltip
-                    :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-                    :hide-after="0"
-                    placement="top"
-                    v-if="crawlerAvailable && !deepSearchEnabled">
+                  <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+                    :hide-after="0" placement="top" v-if="crawlerAvailable && !deepSearchEnabled">
                     <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
                       <cs name="connected" class="small" />
                       {{ $t('chat.network') }}
                     </label>
                   </el-tooltip>
-                  <label
-                    @click="onToggleSkillSelector"
-                    :class="{ active: isSkillListVisible }"
+                  <label @click="onToggleSkillSelector" :class="{ active: isSkillListVisible }"
                     v-if="!deepSearchEnabled">
                     <cs class="small" name="tool" />{{ $t('chat.skills') }}
                   </label>
-                  <el-tooltip
-                    :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
-                    :hide-after="0"
-                    placement="top"
-                    v-if="!deepSearchEnabled">
+                  <el-tooltip :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
+                    :hide-after="0" placement="top" v-if="!deepSearchEnabled">
                     <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
                       <cs name="clear-context" class="small" />
                       {{ $t('chat.context') }}
@@ -398,11 +300,7 @@
                 </div>
                 <div class="icons">
                   <cs name="stop" @click="onStopChat" v-if="isChatting" />
-                  <cs
-                    v-else
-                    name="send"
-                    @click="dispatchChatCompletion(null)"
-                    :class="{ disabled: !canSendMessage }" />
+                  <cs v-else name="send" @click="dispatchChatCompletion(null)" :class="{ disabled: !canSendMessage }" />
                 </div>
               </div>
             </div>
@@ -412,11 +310,8 @@
     </el-container>
 
     <!-- eidt conversation -->
-    <el-dialog
-      v-model="editConversationDialogVisible"
-      :title="$t('chat.editConversationTitle')"
-      :close-on-press-escape="false"
-      width="50%">
+    <el-dialog v-model="editConversationDialogVisible" :title="$t('chat.editConversationTitle')"
+      :close-on-press-escape="false" width="50%">
       <el-form>
         <el-form-item :label="$t('chat.conversationTitle')">
           <el-input v-model="editConversationTitle" />
@@ -425,42 +320,22 @@
       <template #footer>
         <el-button @click="editConversationDialogVisible = false">{{
           $t('common.cancel')
-        }}</el-button>
+          }}</el-button>
         <el-button type="primary" @click="onSaveEditConversation">{{
           $t('common.save')
-        }}</el-button>
+          }}</el-button>
       </template>
     </el-dialog>
 
     <!-- add note dialog -->
-    <el-dialog
-      v-model="takeNoteDialogVisible"
-      :title="$t('chat.takeNote')"
-      :close-on-press-escape="false"
-      :close-on-click-modal="false"
-      width="50%"
-      class="take-note-dialog">
-      <el-form
-        ref="takeNoteFormRef"
-        :model="takeNoteForm"
-        :rules="takeNoteRules"
-        label-width="80px">
+    <el-dialog v-model="takeNoteDialogVisible" :title="$t('chat.takeNote')" :close-on-press-escape="false"
+      :close-on-click-modal="false" width="50%" class="take-note-dialog">
+      <el-form ref="takeNoteFormRef" :model="takeNoteForm" :rules="takeNoteRules" label-width="80px">
         <el-form-item :label="$t('chat.noteTags')" prop="tags">
-          <el-select
-            ref="tagsInputRef"
-            v-model="takeNoteForm.tags"
-            filterable
-            allow-create
-            multiple
-            default-first-option
-            :placeholder="$t('chat.noteTagsPlaceholder')"
-            :no-data-text="$t('common.noData')"
+          <el-select ref="tagsInputRef" v-model="takeNoteForm.tags" filterable allow-create multiple
+            default-first-option :placeholder="$t('chat.noteTagsPlaceholder')" :no-data-text="$t('common.noData')"
             class="w-full">
-            <el-option
-              v-for="tag in noteStore.tags"
-              :key="tag.id"
-              :label="tag.name"
-              :value="tag.name" />
+            <el-option v-for="tag in noteStore.tags" :key="tag.id" :label="tag.name" :value="tag.name" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('chat.noteTitle')" prop="title">
@@ -2089,6 +1964,7 @@ const onTakeNote = message => {
               .cs {
                 color: var(--cs-text-color-primary);
               }
+
               &.icon-delete .cs {
                 font-size: var(--cs-font-size-xxs) !important;
               }
@@ -2147,6 +2023,7 @@ const onTakeNote = message => {
           }
         }
       }
+
       &.assistant {
         .content-container {
           flex: 1;
@@ -2163,12 +2040,14 @@ const onTakeNote = message => {
             color: var(--cs-error-color) !important;
           }
         }
+
         .content {
           color: var(--cs-error-color);
           background-color: var(--cs-error-bg-color);
         }
       }
     }
+
     .empty-message {
       display: flex;
       align-items: center;
@@ -2275,6 +2154,7 @@ const onTakeNote = message => {
             color: var(--cs-text-color-primary);
           }
         }
+
         label {
           font-size: var(--cs-font-size-sm);
           display: flex;
@@ -2312,6 +2192,7 @@ const onTakeNote = message => {
           padding-right: var(--cs-space-xxs);
         }
       }
+
       .input-footer {
         display: flex;
         flex-direction: row;

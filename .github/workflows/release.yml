@@ -205,7 +205,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: ${{ matrix.target == 'x86_64-pc-windows-msvc' }}
+          includeUpdaterJson: true
 
   release-macos:
     needs: create-release
@@ -307,6 +307,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
+          includeUpdaterJson: true
 
   release-linux:
     needs: create-release
@@ -407,6 +408,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
+          includeUpdaterJson: true
 
   publish-release:
     name: Publish Release

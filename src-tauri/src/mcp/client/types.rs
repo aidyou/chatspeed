@@ -145,6 +145,7 @@ pub type McpClientResult<T> = Result<T, McpClientError>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum McpStatus {
+    Starting,
     Connected,
     Running,
     Stopped,
@@ -155,6 +156,7 @@ pub enum McpStatus {
 impl Display for McpStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            McpStatus::Starting => write!(f, "Starting"),
             &McpStatus::Connected => write!(f, "Connected"),
             McpStatus::Running => write!(f, "Running"),
             McpStatus::Stopped => write!(f, "Stopped"),

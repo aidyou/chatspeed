@@ -245,6 +245,7 @@
       "statusError": "Startfehler: {error}",
       "statusConnected": "Verbunden, wird gestartet...",
       "statusRunning": "Wird ausgeführt",
+      "statusStarting": "Wird gestartet",
       "statusStopped": "Nicht gestartet",
       "statusUnknow": "Unbekannt",
       "stop": "Stopp",
@@ -282,7 +283,13 @@
         "configNameRequired": "Konfigurationsname darf nicht leer sein.",
         "nameRequired": "Servername darf nicht leer sein.",
         "typeRequired": "Servertyp darf nicht leer sein.",
-        "urlRequired": "SSE-Typ erfordert eine URL."
+        "urlRequired": "SSE-Typ erfordert eine URL。",
+        "placeholderError": "Die Konfiguration enthält nicht gesetzte Platzhalter, bitte setze tatsächliche Werte:",
+        "bearerTokenPlaceholder": "Bearer-Token enthält Platzhalter: {placeholders}",
+        "envPlaceholder": "Umgebungsvariablen enthalten Platzhalter: {placeholders}",
+        "urlPlaceholder": "URL enthält Platzhalter: {placeholders}",
+        "commandPlaceholder": "Befehl enthält Platzhalter: {placeholders}",
+        "argsPlaceholder": "Argumente enthalten Platzhalter: {placeholders}"
       }
     },
     "model": {

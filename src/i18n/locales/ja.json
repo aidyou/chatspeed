@@ -245,6 +245,7 @@
       "statusError": "起動エラー: {error}",
       "statusConnected": "接続済み、起動中...",
       "statusRunning": "実行中",
+      "statusStarting": "起動中",
       "statusStopped": "未起動",
       "statusUnknow": "不明",
       "stop": "停止",
@@ -282,7 +283,13 @@
         "configNameRequired": "設定名は空にできません。",
         "nameRequired": "サーバー名は空にできません。",
         "typeRequired": "サーバータイプは空にできません。",
-        "urlRequired": "SSEタイプにはURLが必要です。"
+        "urlRequired": "SSEタイプにはURLが必要です。",
+        "placeholderError": "設定に未設定のプレースホルダーが含まれています。実際の値を設定してください：",
+        "bearerTokenPlaceholder": "Bearerトークンにプレースホルダーが含まれています：{placeholders}",
+        "envPlaceholder": "環境変数にプレースホルダーが含まれています：{placeholders}",
+        "urlPlaceholder": "URLにプレースホルダーが含まれています：{placeholders}",
+        "commandPlaceholder": "コマンドにプレースホルダーが含まれています：{placeholders}",
+        "argsPlaceholder": "引数にプレースホルダーが含まれています：{placeholders}"
       }
     },
     "model": {

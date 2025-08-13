@@ -28,7 +28,7 @@ import { Markmap } from 'markmap-view'
 import { Transformer } from 'markmap-lib'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
-import { openUrl as invokeOpenUrl } from '@tauri-apps/plugin-opener'
+import { openUrl } from '@/libs/util'
 import katex from 'katex'
 
 // =================================================
@@ -704,7 +704,7 @@ const DIRECTIVE_CONFIG = {
             e.preventDefault()
             e.stopPropagation()
             try {
-              await invokeOpenUrl(e.target.href)
+              await openUrl(e.target.href)
             } catch (error) {
               console.error('Failed to open URL:', error)
             }

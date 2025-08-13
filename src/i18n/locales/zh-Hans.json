@@ -245,6 +245,7 @@
       "statusError": "启动错误: {error}",
       "statusConnected": "已连接，启动中...",
       "statusRunning": "运行中",
+      "statusStarting": "启动中",
       "statusStopped": "未启动",
       "statusUnknow": "未知",
       "stop": "停止",
@@ -282,7 +283,13 @@
         "configNameRequired": "配置名称不能为空。",
         "nameRequired": "服务器名称不能为空。",
         "typeRequired": "服务器类型不能为空。",
-        "urlRequired": "SSE 类型需要 URL。"
+        "urlRequired": "SSE 类型需要 URL。",
+        "placeholderError": "配置中包含未设置的占位符，请设置实际值：",
+        "bearerTokenPlaceholder": "Bearer Token 包含占位符：{placeholders}",
+        "envPlaceholder": "环境变量包含占位符：{placeholders}",
+        "urlPlaceholder": "URL 包含占位符：{placeholders}",
+        "commandPlaceholder": "命令包含占位符：{placeholders}",
+        "argsPlaceholder": "参数包含占位符：{placeholders}"
       }
     },
     "model": {

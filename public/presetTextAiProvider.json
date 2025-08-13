@@ -63,7 +63,7 @@
     {
       "protocol": "openai",
       "name": "Groq",
-      "logo": "https://groq.com/wp-content/uploads/2024/02/android-icon-192x192-1-150x150.png",
+      "logo": "https://console.groq.com/favicon.ico",
       "desc": "Experience the fastest inference in the world",
       "baseUrl": "https://api.groq.com/openai/v1",
       "models": [],

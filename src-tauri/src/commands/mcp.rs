@@ -171,13 +171,28 @@ pub async fn add_mcp_server(
 
     // Register the MCP server with the function manager if it's not disabled.
     // This is an async operation, so it must happen after the main_store lock is released.
+    // We spawn this as a background task to avoid blocking the add operation.
+    // If MCP server startup fails, the data is still saved in the database.
     if !mcp_data.disabled {
-        chat_state
-            .tool_manager
-            .clone()
-            .register_mcp_server(mcp_data.config.clone()) // Use the config from mcp_data
-            .await
-            .map_err(|e| e.to_string())?;
+        let tool_manager = chat_state.tool_manager.clone();
+        let config = mcp_data.config.clone();
+        let server_name = config.name.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = tool_manager.register_mcp_server(config).await {
+                log::error!(
+                    "Failed to start MCP server '{}' after adding to database: {}",
+                    server_name,
+                    e
+                );
+                // Note: The server data is still in the database and can be manually started later
+            } else {
+                log::info!(
+                    "MCP server '{}' started successfully after being added to database",
+                    server_name
+                );
+            }
+        });
     }
     Ok(mcp_data)
 }
@@ -252,31 +267,55 @@ pub async fn update_mcp_server(
             .map_err(|e| e.to_string())?;
     } // store_guard is dropped here
 
-    // Scope for chat_state async operations: reregister the MCP server.
-    // The original `config` (McpServerConfig is Clone) and `name` (&str with sufficient lifetime)
-    // are used here. `disabled` is also a direct parameter.
-    {
-        let fm = chat_state.tool_manager.clone();
-        fm.unregister_mcp_server(name)
-            .await
-            .map_err(|e| e.to_string())?;
-        if !disabled {
-            fm.register_mcp_server(config)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    } // fm_guard is dropped here
-
-    // Scope for the second main_store lock: get the updated MCP data.
-    {
+    // Get the updated MCP data first before async operations
+    let updated_mcp = {
         let store_guard = main_store
             .lock()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
             .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())
-    } // store_guard is dropped here
+            .map_err(|e| e.to_string())?
+    }; // store_guard is dropped here
+
+    // Scope for chat_state async operations: reregister the MCP server.
+    // We spawn this as a background task to avoid blocking the update operation.
+    // If MCP server restart fails, the data is still updated in the database.
+    {
+        let fm = chat_state.tool_manager.clone();
+        let server_name = name.to_string();
+        let config_clone = config.clone();
+
+        tokio::spawn(async move {
+            // First unregister the old server
+            if let Err(e) = fm.unregister_mcp_server(&server_name).await {
+                log::warn!(
+                    "Failed to unregister MCP server '{}' during update: {}",
+                    server_name,
+                    e
+                );
+            }
+
+            // Then register the new configuration if not disabled
+            if !disabled {
+                if let Err(e) = fm.register_mcp_server(config_clone).await {
+                    log::error!(
+                        "Failed to restart MCP server '{}' after update: {}",
+                        server_name,
+                        e
+                    );
+                    // Note: The server data is still updated in the database and can be manually started later
+                } else {
+                    log::info!(
+                        "MCP server '{}' restarted successfully after update",
+                        server_name
+                    );
+                }
+            }
+        });
+    }
+
+    Ok(updated_mcp)
 }
 
 /// Delete an MCP server
@@ -318,21 +357,37 @@ pub async fn delete_mcp_server(
         mcp.name.clone()
     }; // store_guard is dropped here
 
-    // Unregister the MCP server from function manager (async operation).
-    chat_state
-        .tool_manager
-        .clone()
-        .unregister_mcp_server(&mcp_name)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Re-acquire lock to delete from database.
+    // Delete from database first
     {
         let mut store_guard = main_store
             .lock()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard.delete_mcp(id).map_err(|e| e.to_string())
+        store_guard.delete_mcp(id).map_err(|e| e.to_string())?;
     } // store_guard is dropped here
+
+    // Unregister the MCP server from function manager (async operation).
+    // We spawn this as a background task to avoid blocking the delete operation.
+    // The server data is already deleted from the database.
+    let tool_manager = chat_state.tool_manager.clone();
+    let server_name = mcp_name.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = tool_manager.unregister_mcp_server(&server_name).await {
+            log::error!(
+                "Failed to unregister MCP server '{}' after deleting from database: {}",
+                server_name,
+                e
+            );
+            // Note: The server data is deleted from the database but may still be running
+        } else {
+            log::info!(
+                "MCP server '{}' unregistered successfully after being deleted",
+                server_name
+            );
+        }
+    });
+
+    Ok(())
 }
 
 /// Connect to an MCP server
@@ -382,26 +437,47 @@ pub async fn enable_mcp_server(
         log::debug!("enabling mcp server, mcp_config: {:?}", mcp_config);
     }
 
-    // Start the MCP server using the function manager (async operation).
-    chat_state
-        .tool_manager
-        .clone()
-        .start_mcp_server(mcp_config)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    #[cfg(debug_assertions)]
+    // Update the database status first to mark it as enabled
     {
-        log::debug!("mcp server started");
-    }
+        let mut store_guard = main_store
+            .lock()
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        store_guard
+            .change_mcp_status(id, false)
+            .map_err(|e| e.to_string())?;
+    } // store_guard is dropped here
 
-    // Re-acquire lock to update the database after server start up.
-    let mut store_guard = main_store
-        .lock()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    store_guard
-        .change_mcp_status(id, false)
-        .map_err(|e| e.to_string())?;
+    // Start the MCP server using the function manager (async operation).
+    // We spawn this as a background task to avoid blocking the enable operation.
+    // The server is already marked as enabled in the database.
+    let tool_manager = chat_state.tool_manager.clone();
+    let server_name = mcp_config.name.clone();
+
+    tokio::spawn(async move {
+        #[cfg(debug_assertions)]
+        {
+            log::debug!("enabling mcp server, mcp_config: {:?}", mcp_config);
+        }
+
+        if let Err(e) = tool_manager.start_mcp_server(mcp_config).await {
+            log::error!(
+                "Failed to start MCP server '{}' after enabling: {}",
+                server_name,
+                e
+            );
+            // Note: The server is marked as enabled in the database but failed to start
+            // Users can try to restart it manually or check the configuration
+        } else {
+            log::info!(
+                "MCP server '{}' started successfully after being enabled",
+                server_name
+            );
+            #[cfg(debug_assertions)]
+            {
+                log::debug!("mcp server started");
+            }
+        }
+    });
 
     Ok(())
 }
@@ -447,21 +523,45 @@ pub async fn disable_mcp_server(
         mcp.name.clone()
     }; // store_guard is dropped here
 
-    // Stop the MCP server using the function manager (async operation).
-    chat_state
-        .tool_manager
-        .clone()
-        .stop_mcp_server(&mcp_name)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Update the database status first to mark it as disabled
+    {
+        let mut store_guard = main_store
+            .lock()
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        store_guard
+            .change_mcp_status(id, true)
+            .map_err(|e| e.to_string())?;
+    } // store_guard is dropped here
 
-    // Re-acquire lock to update the database after server stop.
-    let mut store_guard = main_store
-        .lock()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    store_guard
-        .change_mcp_status(id, true)
-        .map_err(|e| e.to_string())?;
+    // Stop the MCP server using the function manager (async operation).
+    // We spawn this as a background task to avoid blocking the disable operation.
+    // The server is already marked as disabled in the database.
+    let tool_manager = chat_state.tool_manager.clone();
+    let server_name = mcp_name.clone();
+
+    tokio::spawn(async move {
+        log::info!("Starting to stop MCP server '{}'", server_name);
+
+        match tool_manager.stop_mcp_server(&server_name).await {
+            Ok(_) => {
+                log::info!(
+                    "MCP server '{}' stopped successfully after being disabled",
+                    server_name
+                );
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to stop MCP server '{}' after disabling: {}",
+                    server_name,
+                    e
+                );
+                // Note: The server is marked as disabled in the database but may still be running
+                // Users can try to restart it manually or check the configuration
+            }
+        }
+
+        log::info!("Finished stopping MCP server '{}'", server_name);
+    });
 
     Ok(())
 }
@@ -492,21 +592,41 @@ pub async fn restart_mcp_server(
             .get_mcp_by_id(id)
             .map_err(|e| e.to_string())?;
 
-        if mcp.disabled == false {
-            return Ok(());
+        // Only restart if the server is enabled (not disabled)
+        if mcp.disabled {
+            return Err(
+                "Cannot restart a disabled MCP server. Please enable it first.".to_string(),
+            );
         }
 
         mcp.config.clone()
     };
 
+    // Restart the MCP server in a background task to avoid blocking
     let fm = chat_state.tool_manager.clone();
-    fm.stop_mcp_server(mcp_config.name.as_str())
-        .await
-        .map_err(|e| e.to_string())?;
+    let server_name = mcp_config.name.clone();
 
-    fm.start_mcp_server(mcp_config)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::spawn(async move {
+        // First stop the server
+        if let Err(e) = fm.stop_mcp_server(&server_name).await {
+            log::warn!(
+                "Failed to stop MCP server '{}' during restart: {}",
+                server_name,
+                e
+            );
+        }
+
+        // Then start it again (this will automatically send "Starting" status)
+        if let Err(e) = fm.start_mcp_server(mcp_config).await {
+            log::error!(
+                "Failed to start MCP server '{}' during restart: {}",
+                server_name,
+                e
+            );
+        } else {
+            log::info!("MCP server '{}' restarted successfully", server_name);
+        }
+    });
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name        = "chatspeed"
-version     = "1.0.0"
+version     = "0.9.0"
 description = "Quickly solve problems with the help of AI"
 authors     = ["Ezool Network"]
 edition     = "2021"
@@ -52,12 +52,7 @@ phf              = { version = "0.12.1", features = ["macros"] }
 quick-xml        = { version = "0.38.0", features = ["serialize"] }
 regex            = "1.10.3"
 
-reqwest = { version = "0.12.15", features = [
-    "blocking",
-    "stream",
-    "multipart",
-    "cookies",
-] }
+reqwest = { version = "0.12.15", features = ["blocking", "stream", "multipart", "cookies"] }
 rmcp = { version = "0.5.0", features = [
     "client",
     "reqwest",
@@ -108,9 +103,7 @@ zip                          = "4.0.0"
 # v8                           = { version = "130.0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60.2", features = [
-    "Win32_UI_WindowsAndMessaging",
-] }
+windows-sys = { version = "0.60.2", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(unix)'.dependencies]
 # Linux/macOS 特定依赖

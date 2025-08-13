@@ -245,6 +245,7 @@
       "statusError": "Erro de inicialização: {error}",
       "statusConnected": "Conectado, iniciando...",
       "statusRunning": "Em execução",
+      "statusStarting": "Iniciando",
       "statusStopped": "Não iniciado",
       "statusUnknow": "Desconhecido",
       "stop": "Parar",
@@ -282,7 +283,13 @@
         "configNameRequired": "O nome da configuração não pode estar vazio.",
         "nameRequired": "O nome do servidor não pode estar vazio.",
         "typeRequired": "O tipo de servidor não pode estar vazio.",
-        "urlRequired": "O tipo SSE requer uma URL."
+        "urlRequired": "O tipo SSE requer uma URL.",
+        "placeholderError": "A configuração contém espaços reservados não definidos, por favor defina valores reais:",
+        "bearerTokenPlaceholder": "O token Bearer contém espaços reservados: {placeholders}",
+        "envPlaceholder": "As variáveis de ambiente contêm espaços reservados: {placeholders}",
+        "urlPlaceholder": "O URL contém espaços reservados: {placeholders}",
+        "commandPlaceholder": "O comando contém espaços reservados: {placeholders}",
+        "argsPlaceholder": "Os argumentos contêm espaços reservados: {placeholders}"
       }
     },
     "model": {

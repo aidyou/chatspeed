@@ -3,7 +3,7 @@
     <!-- 顶部标题和添加按钮 -->
     <div class="title">
       <span>{{ $t('settings.mcp.title') }}</span>
-      <el-tooltip :content="$t('settings.mcp.addServer')" placement="top">
+      <el-tooltip :content="$t('settings.mcp.addServer')" placement="left" :hide-after="0">
         <span class="icon" @click="showPresetMcpDialog">
           <cs name="add" />
         </span>
@@ -22,7 +22,7 @@
                   : 'caret-right'
                   " />
               </div>
-              <Avatar :text="server.name" :size="32" />
+              <avatar :text="server.name" :size="32" />
               <div class="server-info">
                 <div class="server-name">{{ server.name }}</div>
                 <div class="server-status" :class="getServerStatusClass(server.status)">
@@ -144,7 +144,7 @@
                   }
                 ]">
                   <el-input v-model="currentServerForm.config.argsString" type="textarea" :rows="1"
-                    :autosize="{ minRows: 1, maxRows: 2 }" :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
+                    :autosize="{ minRows: 1, maxRows: 3 }" :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
                 </el-form-item>
               </template>
 
@@ -165,8 +165,8 @@
                 </el-form-item>
               </template>
               <el-form-item :label="$t('settings.mcp.form.env')" prop="config.envString">
-                <el-input v-model="currentServerForm.config.envString" type="textarea"
-                  :placeholder="$t('settings.mcp.form.envPlaceholder')" />
+                <el-input v-model="currentServerForm.config.envString" type="textarea" :rows="2"
+                  :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('settings.mcp.form.envPlaceholder')" />
               </el-form-item>
               <el-form-item :label="$t('settings.mcp.form.timeout')" prop="config.timeout">
                 <el-input v-model="currentServerForm.config.timeout" type="number"
@@ -223,8 +223,8 @@
                       : $t('settings.mcp.addFromPreset')
                   }}
                 </el-button>
-                <a :href="preset.website" target="_blank" rel="noopener noreferrer" v-if="preset.website">{{
-                  $t('common.detail') }}</a>
+                <el-button size="small" round @click="openUrl(preset.website)" v-if="preset.website">{{
+                  $t('common.detail') }}</el-button>
               </el-space>
             </div>
           </el-card>
@@ -241,7 +241,7 @@
 import { ref, computed, watch, reactive, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
-// import { openUrl } from '@tauri-apps/plugin-opener'; // Not used
+import { openUrl } from '@/libs/util'
 import { ElMessageBox, ElTooltip } from 'element-plus'
 
 import { showMessage, showMessageBox } from '@/libs/util'
@@ -533,6 +533,13 @@ const handleSubmit = async () => {
     }
   })
 
+  // 检查是否包含占位符
+  const placeholderValidation = validatePlaceholders()
+  if (!placeholderValidation.isValid) {
+    showMessage(placeholderValidation.message, 'error')
+    return
+  }
+
   formLoading.value = true
 
   const payload = preparePayloadFromForm(currentServerForm)
@@ -763,8 +770,8 @@ const importPresetMcp = preset => {
     config: {
       // This is McpServerConfig
       name: preset.name, // McpServerConfig's name, defaults to server name
-      type: mcpSpecificConfig.type || 'stdio', // Default to stdio if not specified
-      command: mcpSpecificConfig.command,
+      type: mcpSpecificConfig.type || (mcpSpecificConfig.url ? 'sse' : 'stdio'), // Default to stdio if not specified
+      command: mcpSpecificConfig.command || '',
       args: mcpSpecificConfig.args || [],
       env: mcpSpecificConfig.env || [], // Assuming env might be in preset
       // Add other fields from mcpSpecificConfig if they exist (url, bearer_token, proxy, disabled_tools for config)
@@ -785,6 +792,73 @@ const importPresetMcp = preset => {
 const handleManualAddFromPresetDialog = () => {
   presetMcpsVisible.value = false
   openServerFormDialog() // Open a blank form for manual addition
+}
+
+// =================================================
+// Validation Functions
+// =================================================
+const validatePlaceholders = () => {
+  const placeholderRegex = /\{[^}]+\}/g
+  const errors = []
+
+  // 检查 Bearer Token
+  if (currentServerForm.config.type === 'sse' && currentServerForm.config.bearer_token) {
+    const bearerToken = currentServerForm.config.bearer_token.trim()
+    if (bearerToken && placeholderRegex.test(bearerToken)) {
+      const matches = bearerToken.match(placeholderRegex)
+      errors.push(t('settings.mcp.validation.bearerTokenPlaceholder', {
+        placeholders: matches.join(', ')
+      }))
+    }
+  }
+
+  // 检查环境变量
+  if (currentServerForm.config.envString) {
+    const envString = currentServerForm.config.envString.trim()
+    if (envString && placeholderRegex.test(envString)) {
+      const matches = envString.match(placeholderRegex)
+      errors.push(t('settings.mcp.validation.envPlaceholder', {
+        placeholders: matches.join(', ')
+      }))
+    }
+  }
+
+  // 检查 URL（如果是 SSE 类型）
+  if (currentServerForm.config.type === 'sse' && currentServerForm.config.url) {
+    const url = currentServerForm.config.url.trim()
+    if (url && placeholderRegex.test(url)) {
+      const matches = url.match(placeholderRegex)
+      errors.push(t('settings.mcp.validation.urlPlaceholder', {
+        placeholders: matches.join(', ')
+      }))
+    }
+  }
+
+  // 检查命令和参数（如果是 stdio 类型）
+  if (currentServerForm.config.type === 'stdio') {
+    if (currentServerForm.config.command && placeholderRegex.test(currentServerForm.config.command)) {
+      const matches = currentServerForm.config.command.match(placeholderRegex)
+      errors.push(t('settings.mcp.validation.commandPlaceholder', {
+        placeholders: matches.join(', ')
+      }))
+    }
+
+    if (currentServerForm.config.argsString && placeholderRegex.test(currentServerForm.config.argsString)) {
+      const matches = currentServerForm.config.argsString.match(placeholderRegex)
+      errors.push(t('settings.mcp.validation.argsPlaceholder', {
+        placeholders: matches.join(', ')
+      }))
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      isValid: false,
+      message: t('settings.mcp.validation.placeholderError') + '\n' + errors.join('\n')
+    }
+  }
+
+  return { isValid: true }
 }
 
 // =================================================
@@ -885,6 +959,17 @@ const trimQuotes = str => {
                 border-radius: 8px;
                 margin-right: var(--cs-space-xs);
                 flex-shrink: 0;
+              }
+
+              &.starting {
+                .status-dot {
+                  background: var(--cs-info-color);
+                  animation: pulse 1.5s ease-in-out infinite;
+                }
+
+                .status-text {
+                  color: var(--cs-info-color);
+                }
               }
 
               &.connected {
@@ -1173,6 +1258,20 @@ const trimQuotes = str => {
         }
       }
     }
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(0.8);
+  }
+
+  50% {
+    transform: scale(1.2);
+  }
+
+  100% {
+    transform: scale(0.8);
   }
 }
 </style>

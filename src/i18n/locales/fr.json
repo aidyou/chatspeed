@@ -245,6 +245,7 @@
       "statusError": "Erreur de démarrage : {error}",
       "statusConnected": "Connecté, démarrage en cours...",
       "statusRunning": "En cours d'exécution",
+      "statusStarting": "Démarrage en cours",
       "statusStopped": "Non démarré",
       "statusUnknow": "Inconnu",
       "stop": "Arrêter",
@@ -282,7 +283,13 @@
         "configNameRequired": "Le nom de la configuration ne peut pas être vide.",
         "nameRequired": "Le nom du serveur ne peut pas être vide.",
         "typeRequired": "Le type de serveur ne peut pas être vide.",
-        "urlRequired": "Le type SSE nécessite une URL."
+        "urlRequired": "Le type SSE nécessite une URL.",
+        "placeholderError": "La configuration contient des espaces réservés non définis, veuillez définir des valeurs réelles :",
+        "bearerTokenPlaceholder": "Le jeton Bearer contient des espaces réservés : {placeholders}",
+        "envPlaceholder": "Les variables d'environnement contiennent des espaces réservés : {placeholders}",
+        "urlPlaceholder": "L'URL contient des espaces réservés : {placeholders}",
+        "commandPlaceholder": "La commande contient des espaces réservés : {placeholders}",
+        "argsPlaceholder": "Les arguments contiennent des espaces réservés : {placeholders}"
       }
     },
     "model": {

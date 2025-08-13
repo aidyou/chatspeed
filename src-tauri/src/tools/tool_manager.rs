@@ -437,6 +437,18 @@ impl ToolManager {
         // Clone for logging in case of early error
         let server_name_for_log = mcp_server_config.name.clone();
 
+        // Immediately broadcast "Starting" status to provide user feedback
+        if let Err(e) = self
+            .mcp_status_event_sender
+            .send((server_name_for_log.clone(), McpStatus::Starting))
+        {
+            log::warn!(
+                "Failed to broadcast MCP starting status for server {}: {}",
+                server_name_for_log,
+                e
+            );
+        }
+
         // 1. Create the MCP client (SseClient or StdioClient)
         // This happens without holding FunctionManager's locks
         let client_arc: Arc<dyn McpClient> = match mcp_server_config.protocol_type {

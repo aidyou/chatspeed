@@ -119,7 +119,7 @@
   },
   "menu": {
     "about": "About",
-    "assistant": "Desktop Assistant",
+    "assistant": "Assistant",
     "mcp": "MCP",
     "model": "AI Engine",
     "note": "Note",
@@ -245,6 +245,7 @@
       "statusConnected": "Connected, starting...",
       "statusError": "Startup error: {error}",
       "statusRunning": "Running",
+      "statusStarting": "Starting",
       "statusStopped": "Not started",
       "statusUnknow": "Unknown",
       "stop": "Stop",
@@ -282,7 +283,13 @@
         "configNameRequired": "Config name cannot be empty.",
         "nameRequired": "Server name cannot be empty.",
         "typeRequired": "Server type cannot be empty.",
-        "urlRequired": "SSE type requires a URL."
+        "urlRequired": "SSE type requires a URL.",
+        "placeholderError": "Configuration contains unset placeholders, please set actual values:",
+        "bearerTokenPlaceholder": "Bearer Token contains placeholders: {placeholders}",
+        "envPlaceholder": "Environment variables contain placeholders: {placeholders}",
+        "urlPlaceholder": "URL contains placeholders: {placeholders}",
+        "commandPlaceholder": "Command contains placeholders: {placeholders}",
+        "argsPlaceholder": "Arguments contain placeholders: {placeholders}"
       }
     },
     "model": {

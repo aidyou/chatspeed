@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0.0",
   "productName": "Chatspeed",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "identifier": "ai.aidyou.chatspeed",
   "build": {
     "beforeDevCommand": "yarn dev",
@@ -16,9 +16,9 @@
         "label": "main",
         "title": "ChatSpeed",
         "url": "/",
-        "width": 800,
+        "width": 600,
         "minWidth": 450,
-        "height": 600,
+        "height": 700,
         "titleBarStyle": "Transparent",
         "decorations": false,
         "dragDropEnabled": true,
@@ -130,9 +130,9 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://cdn.jsdelivr.net/gh/aidyou/chatspeed/releases/{{target}}/{{current_version}}",
-        "https://github.com/aidyou/chatspeed/releases/download/{{current_version}}/{{target}}",
-        "https://releases.aidyou.ai/chatspeed/{{target}}/{{current_version}}"
+        "https://github.com/aidyou/chatspeed/releases/latest/download/{{target}}.json",
+        "https://cdn.jsdelivr.net/gh/aidyou/chatspeed@latest/{{target}}.json",
+        "https://releases.aidyou.ai/chatspeed/{{target}}/latest.json"
       ],
       "dialog": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBNjhFQzBGNjVCNzE2Q0EKUldUS0ZyZGxEK3hvS25xRUZPaStNL2FyUkhpdmtrN0QwN0VycXF6L1dZdGc0ZnE5WVRQWkZFK0QK",

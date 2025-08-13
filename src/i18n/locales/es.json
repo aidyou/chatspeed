@@ -245,6 +245,7 @@
       "statusError": "Error de inicio: {error}",
       "statusConnected": "Conectado, iniciando...",
       "statusRunning": "En ejecución",
+      "statusStarting": "Iniciando",
       "statusStopped": "No iniciado",
       "statusUnknow": "Desconocido",
       "stop": "Detener",
@@ -282,7 +283,13 @@
         "configNameRequired": "El nombre de la configuración no puede estar vacío.",
         "nameRequired": "El nombre del servidor не puede estar vacío.",
         "typeRequired": "El tipo de servidor не puede estar vacío.",
-        "urlRequired": "El tipo SSE requiere una URL."
+        "urlRequired": "El tipo SSE requiere una URL.",
+        "placeholderError": "La configuración contiene marcadores de posición no establecidos, por favor establece valores reales:",
+        "bearerTokenPlaceholder": "El token Bearer contiene marcadores de posición: {placeholders}",
+        "envPlaceholder": "Las variables de entorno contienen marcadores de posición: {placeholders}",
+        "urlPlaceholder": "La URL contiene marcadores de posición: {placeholders}",
+        "commandPlaceholder": "El comando contiene marcadores de posición: {placeholders}",
+        "argsPlaceholder": "Los argumentos contienen marcadores de posición: {placeholders}"
       }
     },
     "model": {

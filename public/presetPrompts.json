@@ -5,7 +5,7 @@
           "name": "翻译",
           "icon": "skill-translate",
           "description": "自动识别文字语言并翻译",
-          "prompt": "请将下面的内容从 {fromLang} 翻译为 {toLang} ：\n\n{content}",
+          "prompt": "<cs:task>\n请将`<cs:content></cs:content>`中的文字翻译为 {toLang}，不要输出与翻译文本无关的任何信息\n</cs:task>\n\n<cs:content>\n{content}\n</cs:content>",
           "type": "translation"
         },
         {
@@ -35,7 +35,7 @@
           "name": "Translate",
           "icon": "skill-translate",
           "description": "Automatically identify the language of the text and translate it",
-          "prompt": "Please translate the following text from {fromLang} to {toLang}:\n\n{content}",
+          "prompt": "<cs:task>\nPlease translate the text in `<cs:content></cs:content>` from {fromLang} to {toLang}\n</cs:task>\n\n<cs:content>\n{content}\n</cs:content>",
           "type": "translation"
         },
         {
@@ -61,6 +61,6 @@
         }
       ]
     },
-    "version": "1.0.0",
-    "lastUpdated": "2025-02-12T14:52:04+08:00"
+    "version": "1.0.1",
+    "lastUpdated": "2025-08-13T14:52:04+08:00"
   }

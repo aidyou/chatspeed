@@ -2,7 +2,6 @@
 
 ![claude code](assets/images/claude.gif)
 
-
 # ChatSpeed
 
 **ChatSpeed: Any Claude, Any Gemini.**
@@ -14,6 +13,7 @@
 同时，`ccproxy` 的 MCP 代理功能，会将安装在 ChatSpeed 上的所有 MCP 工具聚合成一个统一的入口，对外提供服务。
 
 **AI代理示意图**
+
 ```mermaid
 graph LR
     subgraph "Any AI Model"
@@ -37,6 +37,7 @@ graph LR
 ```
 
 **MCP代理示意图**
+
 ```mermaid
 graph TD
     subgraph "可用的 MCP 工具集 (Toolsets)"
@@ -66,45 +67,44 @@ graph TD
 
 我们的核心使命是让先进的 AI 集成大众化，使全球的开发者都能以低成本、高效率的方式使用它。
 
-
 ## 核心功能
 
 ChatSpeed 提供了一套全面的功能来简化您的 AI 工作流：
 
--   **AI 代理管理**:
-    -   统一平台管理各种 AI 聊天代理和多模态内容代理。
-    -   将配置好的 AI 代理导出为可复用工具供其他应用使用。
-    -   无缝的 API 集成和命令行工具输出能力。
+- **AI 代理管理**:
+  - 统一平台管理各种 AI 聊天代理和多模态内容代理。
+  - 将配置好的 AI 代理导出为可复用工具供其他应用使用。
+  - 无缝的 API 集成和命令行工具输出能力。
 
--   **MCP (模型上下文协议) 代理**:
-    -   **Any Claude**: 将任何 AI 模型集成到 Claude 生态系统。
-    -   **Any Gemini**: 通过 `ccproxy` 将任何模型连接到 Gemini CLI。
-    -   灵活的代理配置，实现无缝模型切换。
+- **MCP (模型上下文协议) 代理**:
+  - **Any Claude**: 将任何 AI 模型集成到 Claude 生态系统。
+  - **Any Gemini**: 通过 `ccproxy` 将任何模型连接到 Gemini CLI。
+  - 灵活的代理配置，实现无缝模型切换。
 
--   **多模型支持**:
-    -   通过 OpenAI 兼容协议，兼容 OpenAI、Gemini、Ollama 和 Claude。
-    -   支持单个模型配置多个 API 密钥，并自动轮换使用。
-    -   完整的模型参数配置（temperature, top_p 等）和自定义 HTTP 代理支持。
+- **多模型支持**:
+  - 通过 OpenAI 兼容协议，兼容 OpenAI、Gemini、Ollama 和 Claude。
+  - 支持单个模型配置多个 API 密钥，并自动轮换使用。
+  - 完整的模型参数配置（temperature, top_p 等）和自定义 HTTP 代理支持。
 
--   **联网搜索**:
-    -   集成了 Google、Bing、百度搜索引擎。
-    -   实时网络检索，扩展 AI 的知识边界。
-    -   通过多查询任务分解实现深度搜索。
+- **联网搜索**:
+  - 集成了 Google、Bing、百度搜索引擎。
+  - 实时网络检索，扩展 AI 的知识边界。
+  - 通过多查询任务分解实现深度搜索。
 
--   **高级聊天界面**:
-    -   简洁的 UI，支持明/暗色主题和多语言。
-    -   丰富的消息内容解析：代码块、思维导图、流程图、表格和公式。
-    -   消息引用和重新发送功能。
+- **高级聊天界面**:
+  - 简洁的 UI，支持明/暗色主题和多语言。
+  - 丰富的消息内容解析：代码块、思维导图、流程图、表格和公式。
+  - 消息引用和重新发送功能。
 
--   **智能助手与技能**:
-    -   即时问答和翻译。
-    -   AI 辅助生成思维导图和流程图。
-    -   可视化的技能构建器，支持快捷键。
+- **智能助手与技能**:
+  - 即时问答和翻译。
+  - AI 辅助生成思维导图和流程图。
+  - 可视化的技能构建器，支持快捷键。
 
--   **智记与数据安全**:
-    -   将重要的对话保存到基于标签的知识库中。
-    -   所有数据都在本地加密存储。
-    -   数据库备份和恢复功能。
+- **智记与数据安全**:
+  - 将重要的对话保存到基于标签的知识库中。
+  - 所有数据都在本地加密存储。
+  - 数据库备份和恢复功能。
 
 ## 开源
 
@@ -114,9 +114,9 @@ ChatSpeed 是一个遵循 MIT 许可的开源项目。所有代码都托管在 [
 
 ### Windows
 
-1.  从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.msi` 安装程序。
-2.  运行安装程序并按照屏幕上的提示操作。
-3.  您可能会看到 Windows SmartScreen 警告。请点击“更多信息”，然后点击“仍要运行”以继续。
+1. 从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.msi` 安装程序。
+2. 运行安装程序并按照屏幕上的提示操作。
+3. 您可能会看到 Windows SmartScreen 警告。请点击“更多信息”，然后点击“仍要运行”以继续。
 
 ### macOS
 
@@ -124,19 +124,21 @@ ChatSpeed 是一个遵循 MIT 许可的开源项目。所有代码都托管在 [
 
 请使用以下终端命令来解决此问题：
 
-1.  将 `.app` 文件从挂载的 `.dmg` 镜像中拖拽到您的“应用程序”文件夹。
-2.  打开“终端”应用 (Terminal)。
-3.  执行以下命令 (可能需要输入您的系统密码):
+1. 将 `.app` 文件从挂载的 `.dmg` 镜像中拖拽到您的“应用程序”文件夹。
+2. 打开“终端”应用 (Terminal)。
+3. 执行以下命令 (可能需要输入您的系统密码):
+
     ```sh
     sudo xattr -cr /Applications/Chatspeed.app
     ```
-4.  命令执行成功后，您就可以正常打开应用了。
+
+4. 命令执行成功后，您就可以正常打开应用了。
 
 ### Linux
 
-1.  从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.AppImage` 或 `.deb` 文件。
-2.  对于 `.AppImage` 文件，请先为其添加可执行权限 (`chmod +x chatspeed*.AppImage`)，然后直接运行。
-3.  对于 `.deb` 文件，请使用您的包管理器进行安装 (例如 `sudo dpkg -i chatspeed*.deb`)。
+1. 从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.AppImage` 或 `.deb` 文件。
+2. 对于 `.AppImage` 文件，请先为其添加可执行权限 (`chmod +x chatspeed*.AppImage`)，然后直接运行。
+3. 对于 `.deb` 文件，请使用您的包管理器进行安装 (例如 `sudo dpkg -i chatspeed*.deb`)。
 
 ## 开发要求
 
@@ -201,15 +203,18 @@ yarn tauri dev
    # 安装所需库
    # 用于 x64 构建:
    .
+
 vcpkg install sqlite3:x64-windows-static-md
    .
 vcpkg install bzip2:x64-windows-static-md
 
-   # 用于 ARM64 构建:
+# 用于 ARM64 构建
+
    .
 vcpkg install sqlite3:arm64-windows-static-md
    .
 vcpkg install bzip2:arm64-windows-static-md
+
    ```
 
 #### 构建
@@ -304,6 +309,7 @@ yarn tauri build --no-bundle
 # 打包为可在 macOS App Store 之外分发的应用
 yarn tauri bundle --bundles app,dmg
 ```
+
 ```
 
 关于 macOS 分发的更多详情，请参考 [Tauri 文档](https://v2.tauri.app/zh-cn/distribute/)。

@@ -245,6 +245,7 @@
       "statusError": "Ошибка запуска: {error}",
       "statusConnected": "Подключено, запуск...",
       "statusRunning": "Работает",
+      "statusStarting": "Запуск",
       "statusStopped": "Не запущен",
       "statusUnknow": "Неизвестно",
       "stop": "Остановить",
@@ -282,7 +283,13 @@
         "configNameRequired": "Имя конфигурации не может быть пустым.",
         "nameRequired": "Имя сервера не может быть пустым.",
         "typeRequired": "Тип сервера не может быть пустым.",
-        "urlRequired": "Для типа SSE требуется URL."
+        "urlRequired": "Для типа SSE требуется URL.",
+        "placeholderError": "Конфигурация содержит незаполненные заполнители, пожалуйста, установите фактические значения:",
+        "bearerTokenPlaceholder": "Токен носителя содержит заполнители: {placeholders}",
+        "envPlaceholder": "Переменные среды содержат заполнители: {placeholders}",
+        "urlPlaceholder": "URL содержит заполнители: {placeholders}",
+        "commandPlaceholder": "Команда содержит заполнители: {placeholders}",
+        "argsPlaceholder": "Аргументы содержат заполнители: {placeholders}"
       }
     },
     "model": {
