@@ -132,7 +132,7 @@
         "https://cdn.jsdelivr.net/gh/aidyou/chatspeed@updater-meta/{{version}}/{{target}}.json"
       ],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgMzUyOEEzQkIwQTQ2N0YxOQpSV1FaZjBZS3U2TW9OU1BINTZ6NlZmWnRuZmFPUkxsOVY1UnAzZnRCdU9VTlBjZC9HRGQ2RUpPRAo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDODQ4QUFEQzc1QzY2QTIKUldTaVpsekhyWXFFN0tUZHdVM2wxcnB1SzIyU1BZeFY5ZnNXN09LMzR1R2w5VHh2V011ODNXOW4K",
       "windows": {
         "installMode": "passive"
       }
