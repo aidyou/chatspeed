@@ -36,12 +36,14 @@ jobs:
           echo "Processing tag: ${{ github.ref_name }}"
 
           # Get the commit that the tag points to (with error handling)
-          if TAG_COMMIT=$(git rev-list -n 1 "${{ github.ref_name }}" 2>/dev/null); then
+          if TAG_COMMIT=$(git rev-list -n 1 "${{ github.ref_name }}" 2>/dev/null);
+          then
             echo "commit=$TAG_COMMIT" >> $GITHUB_OUTPUT
             echo "✅ Tag ${{ github.ref_name }} points to commit: $TAG_COMMIT"
 
             # Verify that the commit is valid
-            if git cat-file -e "$TAG_COMMIT" 2>/dev/null; then
+            if git cat-file -e "$TAG_COMMIT" 2>/dev/null;
+            then
               echo "✅ Commit $TAG_COMMIT is valid"
             else
               echo "❌ Commit $TAG_COMMIT is not valid"
@@ -113,9 +115,7 @@ jobs:
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
           key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.target }}-
@@ -202,27 +202,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: yarn
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        shell: pwsh
-        run: |
-          $cacheDir = yarn config get cacheFolder
-          if ([string]::IsNullOrEmpty($cacheDir)) {
-            $cacheDir = "$env:LOCALAPPDATA\Yarn\Cache\v6"
-          }
-          echo "dir=$cacheDir" >> $env:GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable
@@ -239,7 +222,8 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }} --bundles nsis
-          includeUpdaterJson: false
+          includeUpdaterJson: true
+
   release-macos:
     needs: create-release
     strategy:
@@ -273,17 +257,6 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
             ${{ runner.os }}-cargo-
 
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
-          key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ matrix.target }}-
-            ${{ runner.os }}-vcpkg-
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -295,7 +268,8 @@ jobs:
       - name: Install dependencies (macOS)
         run: |
           brew list sqlite3 || brew install sqlite3
-          if ! brew list bzip2 &>/dev/null; then
+          if ! brew list bzip2 &>/dev/null;
+          then
             brew install bzip2 || echo "bzip2 installation failed, but may already be available system-wide"
           fi
           echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
@@ -308,21 +282,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: yarn
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable
@@ -344,7 +307,8 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: false
+          includeUpdaterJson: true
+
   release-linux:
     needs: create-release
     strategy:
@@ -377,17 +341,6 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
             ${{ runner.os }}-cargo-
 
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
-          key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ matrix.target }}-
-            ${{ runner.os }}-vcpkg-
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -412,21 +365,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: yarn
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable
@@ -443,7 +385,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --verbose --target ${{ matrix.target }} --bundles deb,rpm,appimage
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
   create-updater-json:
     name: Create Updater JSON
@@ -478,11 +420,11 @@ jobs:
           ls -1
 
           # Verify that the files exist before trying to read them
-          [ -f "Chatspeed_${VERSION#v}_x64.dmg.sig" ] || { echo "x64 dmg signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_aarch64.dmg.sig" ] || { echo "aarch64 dmg signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_x64-setup.exe.sig" ] || { echo "x64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_arm64-setup.exe.sig" ] || { echo "arm64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_amd64.AppImage.sig" ] || { echo "amd64 AppImage signature not found!"; exit 1; }
+          [ -f "Chatspeed_x64.app.tar.gz.sig" ] || { echo "x64 app.tar.gz signature not found!"; exit 1; }
+          [ -f "Chatspeed_aarch64.app.tar.gz.sig" ] || { echo "aarch64 app.tar.gz signature not found!"; exit 1; }
+          [ -f "Chatspeed_${{ VERSION#v }}_x64-setup.exe.sig" ] || { echo "x64 exe signature not found!"; exit 1; }
+          [ -f "Chatspeed_${{ VERSION#v }}_arm64-setup.exe.sig" ] || { echo "arm64 exe signature not found!"; exit 1; }
+          [ -f "Chatspeed_${{ VERSION#v }}_amd64.AppImage.sig" ] || { echo "amd64 AppImage signature not found!"; exit 1; }
 
       - name: Create updater JSON files
         run: |
@@ -495,11 +437,11 @@ jobs:
           mkdir -p "releases/${VERSION_NUM}"
 
           # Read signatures from files
-          DARWIN_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_x64.dmg.sig")
-          DARWIN_ARM64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_aarch64.dmg.sig")
-          WINDOWS_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_x64-setup.exe.sig")
-          WINDOWS_ARM64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_arm64-setup.exe.sig")
-          LINUX_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_amd64.AppImage.sig")
+          DARWIN_X64_SIG=$(cat "./signatures/Chatspeed_x64.app.tar.gz.sig")
+          DARWIN_ARM64_SIG=$(cat "./signatures/Chatspeed_aarch64.app.tar.gz.sig")
+          WINDOWS_X64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_x64-setup.exe.sig")
+          WINDOWS_ARM64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_arm64-setup.exe.sig")
+          LINUX_X64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_amd64.AppImage.sig")
 
           echo "Signatures read successfully for version ${VERSION_NUM}."
 
@@ -531,11 +473,11 @@ jobs:
             "platforms": {
               "darwin-x86_64": {
                 "signature": "${DARWIN_X64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_${VERSION_NUM}_x64.dmg"
+                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_x64.app.tar.gz"
               },
               "darwin-aarch64": {
                 "signature": "${DARWIN_ARM64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_${VERSION_NUM}_aarch64.dmg"
+                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_aarch64.app.tar.gz"
               }
             }
           }
