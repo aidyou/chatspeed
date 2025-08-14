@@ -222,7 +222,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }} --bundles nsis
-          includeUpdaterJson: true
+          includeUpdaterJson: false
 
   release-macos:
     needs: create-release
@@ -307,7 +307,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: true
+          includeUpdaterJson: false
 
   release-linux:
     needs: create-release
@@ -385,7 +385,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --verbose --target ${{ matrix.target }} --bundles deb,rpm,appimage
-          includeUpdaterJson: true
+          includeUpdaterJson: false
 
   create-updater-json:
     name: Create Updater JSON
@@ -422,9 +422,9 @@ jobs:
           # Verify that the files exist before trying to read them
           [ -f "Chatspeed_x64.app.tar.gz.sig" ] || { echo "x64 app.tar.gz signature not found!"; exit 1; }
           [ -f "Chatspeed_aarch64.app.tar.gz.sig" ] || { echo "aarch64 app.tar.gz signature not found!"; exit 1; }
-          [ -f "Chatspeed_${{ VERSION#v }}_x64-setup.exe.sig" ] || { echo "x64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${{ VERSION#v }}_arm64-setup.exe.sig" ] || { echo "arm64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${{ VERSION#v }}_amd64.AppImage.sig" ] || { echo "amd64 AppImage signature not found!"; exit 1; }
+          [ -f "Chatspeed_${VERSION#v}_x64-setup.exe.sig" ] || { echo "x64 exe signature not found!"; exit 1; }
+          [ -f "Chatspeed_${VERSION#v}_arm64-setup.exe.sig" ] || { echo "arm64 exe signature not found!"; exit 1; }
+          [ -f "Chatspeed_${VERSION#v}_amd64.AppImage.sig" ] || { echo "amd64 AppImage signature not found!"; exit 1; }
 
       - name: Create updater JSON files
         run: |
@@ -439,9 +439,9 @@ jobs:
           # Read signatures from files
           DARWIN_X64_SIG=$(cat "./signatures/Chatspeed_x64.app.tar.gz.sig")
           DARWIN_ARM64_SIG=$(cat "./signatures/Chatspeed_aarch64.app.tar.gz.sig")
-          WINDOWS_X64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_x64-setup.exe.sig")
-          WINDOWS_ARM64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_arm64-setup.exe.sig")
-          LINUX_X64_SIG=$(cat "./signatures/Chatspeed_${{ VERSION_NUM }}_amd64.AppImage.sig")
+          WINDOWS_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_x64-setup.exe.sig")
+          WINDOWS_ARM64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_arm64-setup.exe.sig")
+          LINUX_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_amd64.AppImage.sig")
 
           echo "Signatures read successfully for version ${VERSION_NUM}."
 
