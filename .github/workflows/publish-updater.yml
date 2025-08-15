@@ -19,7 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir ./public
+          mkdir -p ./public
           gh release download ${{ github.event.release.tag_name }} --pattern 'latest.json' --dir ./public --clobber
 
       - name: Deploy to updater-meta branch
