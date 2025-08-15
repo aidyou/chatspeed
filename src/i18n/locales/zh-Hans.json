@@ -106,6 +106,7 @@
     "downloadSvg": "下载 SVG",
     "loading": "加载中……",
     "mindmap": "思维导图",
+    "newVersionReady": "新版本已准备好，点击重启以更新",
     "no": "否",
     "noData": "无数据",
     "openUrlError": "打开链接失败",

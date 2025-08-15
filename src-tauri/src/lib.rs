@@ -45,7 +45,6 @@ use commands::message::*;
 use commands::note::*;
 use commands::proxy_group::*;
 use commands::setting::*;
-use commands::update::*;
 use commands::window::*;
 use commands::workflow::*;
 use constants::*;
@@ -54,7 +53,7 @@ use http::server::start_http_server;
 use libs::window_channels::WindowChannels;
 use logger::setup_logger;
 use shortcut::register_desktop_shortcut;
-use tools::*;
+// use tools::*;
 use tray::create_tray;
 use updater::*;
 use window::*;
@@ -115,6 +114,7 @@ pub async fn run() -> Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new())))) // move chat state register to setup scope
         // Initialize the shell plugin
         .plugin(tauri_plugin_shell::init())
@@ -207,11 +207,6 @@ pub async fn run() -> Result<()> {
             // start_text_monitor,
             // stop_text_monitor,
 
-            // updater
-            check_update,
-            confirm_update,
-            install_update,
-            restart_app,
             // workflow
             run_dag_workflow,
             run_react_workflow,
@@ -544,16 +539,11 @@ pub async fn run() -> Result<()> {
                     let update_manager = UpdateManager::new(app_handle);
 
                     loop {
-                        match update_manager.check_update().await {
-                            Ok(Some(version_info)) => {
-                                log::info!("New version {} available", version_info.version);
-                                update_manager.notify_update_available(&version_info);
-                            }
-                            Ok(None) => log::debug!("No updates available"),
-                            Err(e) => log::error!("Failed to check for updates: {}", e),
+                        if let Err(e) = update_manager.check_and_download_update().await {
+                            log::error!("Failed to check for updates: {}", e);
                         }
 
-                        // 24小时检查一次
+                        // Check once every 24 hours
                         tokio::time::sleep(tokio::time::Duration::from_secs(24 * 60 * 60)).await;
                     }
                 });

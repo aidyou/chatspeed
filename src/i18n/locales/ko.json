@@ -106,6 +106,7 @@
     "downloadSvg": "SVG로 다운로드",
     "loading": "로드 중...",
     "mindmap": "마인드맵",
+    "newVersionReady": "새 버전이 준비되었습니다. 클릭하여 재시작하고 업데이트하세요",
     "no": "아니요",
     "noData": "데이터 없음",
     "openUrlError": "링크 열기 실패",

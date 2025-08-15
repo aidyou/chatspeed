@@ -364,6 +364,9 @@ jobs:
       - release-macos
       - release-linux
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Download latest.json
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,147 +1,150 @@
 :root {
-    --cs-font-family: 'PingFang SC', 'Microsoft YaHei', 'SimHei', 'Noto Sans SC', 'Source Han Sans SC', 'Helvetica Neue', 'Arial', sans-serif;
+  --cs-font-family:
+    'PingFang SC', 'Microsoft YaHei', 'SimHei', 'Noto Sans SC', 'Source Han Sans SC',
+    'Helvetica Neue', 'Arial', sans-serif;
 
-    --cs-titlebar-height: 40px;
-    --cs-titlebar-zindex: 9999;
-    --cs-upper-layer-zindex: 10000;
+  --cs-titlebar-height: 40px;
+  --cs-titlebar-zindex: 9999;
+  --cs-upper-layer-zindex: 10000;
 
-    --cs-space-xxs: 2px;
-    --cs-space-xs: 5px;
-    --cs-space-sm: 10px;
-    --cs-space: 15px;
-    --cs-space-md: 20px;
-    --cs-space-lg: 30px;
+  --cs-space-xxs: 2px;
+  --cs-space-xs: 5px;
+  --cs-space-sm: 10px;
+  --cs-space: 15px;
+  --cs-space-md: 20px;
+  --cs-space-lg: 30px;
 
-    --cs-border-radius-sm: 3px;
-    --cs-border-radius: 5px;
-    --cs-border-radius-md: 10px;
-    --cs-border-radius-lg: 15px;
-    --cs-border-radius-xl: 20px;
-    --cs-border-radius-xxl: 30px;
-    --cs-border-radius-round: 100%;
+  --cs-border-radius-sm: 3px;
+  --cs-border-radius: 5px;
+  --cs-border-radius-md: 10px;
+  --cs-border-radius-lg: 15px;
+  --cs-border-radius-xl: 20px;
+  --cs-border-radius-xxl: 30px;
+  --cs-border-radius-round: 100%;
 
-    --cs-font-size-xxs: 8px;
-    --cs-font-size-xs: 10px;
-    --cs-font-size-sm: 12px;
-    --cs-font-size: 14px;
-    --cs-font-size-md: 16px;
-    --cs-font-size-lg: 18px;
-    --cs-font-size-xl: 20px;
-    --cs-font-size-xxl: 24px;
+  --cs-font-size-xxs: 8px;
+  --cs-font-size-xs: 10px;
+  --cs-font-size-sm: 12px;
+  --cs-font-size: 14px;
+  --cs-font-size-md: 16px;
+  --cs-font-size-lg: 18px;
+  --cs-font-size-xl: 20px;
+  --cs-font-size-xxl: 24px;
 
-    --cs-color-primary-rgb: 65, 181, 85;
-    --cs-color-primary: rgb(var(--cs-color-primary-rgb));
-    --cs-color-primary-dark: #3b3c3d;
-    --cs-color-primary-light: rgba(var(--cs-color-primary-rgb), 0.5);
-    --cs-color-primary-lighter: rgba(var(--cs-color-primary-rgb), 0.3);
-    --cs-color-primary-red: rgb(245, 108, 108);
-    --cs-error-color: var(--cs-color-primary-red);
-    --cs-error-bg-color: rgba(var(--cs-color-primary-red-rgb), 0.1);
-    --cs-info-color: rgb(70, 162, 237);
-    --cs-success-color: rgb(65, 181, 85);
-    --cs-warning-color: rgb(255, 193, 7);
+  --cs-color-primary-rgb: 65, 181, 85;
+  --cs-color-primary: rgb(var(--cs-color-primary-rgb));
+  --cs-color-primary-dark: #3b3c3d;
+  --cs-color-primary-light: rgba(var(--cs-color-primary-rgb), 0.5);
+  --cs-color-primary-lighter: rgba(var(--cs-color-primary-rgb), 0.3);
+  --cs-color-primary-red: rgb(245, 108, 108);
+  --cs-color-white: rgb(255, 255, 255);
+  --cs-error-color: var(--cs-color-primary-red);
+  --cs-error-bg-color: rgba(var(--cs-color-primary-red-rgb), 0.1);
+  --cs-info-color: rgb(70, 162, 237);
+  --cs-success-color: rgb(65, 181, 85);
+  --cs-warning-color: rgb(255, 193, 7);
 
-    /* override element-plus variables */
-    --el-color-primary: var(--cs-color-primary);
+  /* override element-plus variables */
+  --el-color-primary: var(--cs-color-primary);
 
-    --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
-    --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
-    --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
-    --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
-    --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
-    --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
+  --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
+  --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
+  --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
+  --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
+  --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
+  --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
 }
 
 :root.light {
-    --cs-text-color-primary: rgba(0, 0, 0, 0.85);
-    --cs-text-color-secondary: #999;
-    --cs-text-color-tertiary: #ccc;
-    --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+  --cs-text-color-primary: rgba(0, 0, 0, 0.85);
+  --cs-text-color-secondary: #999;
+  --cs-text-color-tertiary: #ccc;
+  --cs-text-color-placeholder: var(--cs-text-color-tertiary);
 
-    --cs-bg-color: #F1F2F1;
-    --cs-bg-color-light: #EAEAEA;
-    --cs-bg-color-deep: #E7E7E6;
-    --cs-bg-color-box-title: #E0E0E0;
-    --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
+  --cs-bg-color: #f1f2f1;
+  --cs-bg-color-light: #eaeaea;
+  --cs-bg-color-deep: #e7e7e6;
+  --cs-bg-color-box-title: #e0e0e0;
+  --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
 
-    --cs-code-bg-color: rgb(197, 197, 197, 0.1);
-    --cs-code-block-bg-color: transparent;
-    --cs-code-text-color: var(--cs-text-color-primary);
-    --cs-border-color: #D9DAD9;
+  --cs-code-bg-color: rgb(197, 197, 197, 0.1);
+  --cs-code-block-bg-color: transparent;
+  --cs-code-text-color: var(--cs-text-color-primary);
+  --cs-border-color: #d9dad9;
 
-    --cs-titlebar-border-color: #E2E2E0;
-    --cs-titlebar-bg-color: #FCFCFC;
-    --cs-input-bg-color: #E5E6E5;
+  --cs-titlebar-border-color: #e2e2e0;
+  --cs-titlebar-bg-color: #fcfcfc;
+  --cs-input-bg-color: #e5e6e5;
 
-    --cs-active-bg-color: #D2D3D1;
-    --cs-hover-bg-color: #EFEFEF;
-    --cs-shadow-color: rgba(0, 0, 0, 0.1);
+  --cs-active-bg-color: #d2d3d1;
+  --cs-hover-bg-color: #efefef;
+  --cs-shadow-color: rgba(0, 0, 0, 0.1);
 
-    /* override element-plus variables */
-    --el-color-primary: var(--cs-color-primary);
-    --el-font-family: var(--cs-font-family);
-    --el-menu-text-color: var(--cs-text-color-secondary);
-    --el-menu-border-color: var(--cs-border-color);
+  /* override element-plus variables */
+  --el-color-primary: var(--cs-color-primary);
+  --el-font-family: var(--cs-font-family);
+  --el-menu-text-color: var(--cs-text-color-secondary);
+  --el-menu-border-color: var(--cs-border-color);
 
-    --el-text-color-primary: var(--cs-text-color-primary);
-    --el-bg-color: var(--cs-bg-color-light);
-    --el-bg-color-page: var(--cs-bg-color-deep);
-    --el-input-placeholder-color: var(--cs-text-color-placeholder);
+  --el-text-color-primary: var(--cs-text-color-primary);
+  --el-bg-color: var(--cs-bg-color-light);
+  --el-bg-color-page: var(--cs-bg-color-deep);
+  --el-input-placeholder-color: var(--cs-text-color-placeholder);
 
-    --el-button-hover-border-color: var(--cs-color-primary-light);
-    --el-button-hover-bg-color: var(--cs-color-primary-lighter);
-    --el-button-outline-color: var(--cs-color-primary-light);
+  --el-button-hover-border-color: var(--cs-color-primary-light);
+  --el-button-hover-bg-color: var(--cs-color-primary-lighter);
+  --el-button-outline-color: var(--cs-color-primary-light);
 
-    --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
-    --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
-    --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
-    --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
-    --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
-    --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
+  --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
+  --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
+  --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
+  --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
+  --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
+  --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
 }
 
 :root.dark {
-    --cs-text-color-primary: rgba(255, 255, 255, 0.85);
-    --cs-text-color-secondary: rgba(132, 133, 134, 0.9);
-    --cs-text-color-tertiary: rgb(65, 65, 65, 0.9);
-    --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+  --cs-text-color-primary: rgba(255, 255, 255, 0.85);
+  --cs-text-color-secondary: rgba(132, 133, 134, 0.9);
+  --cs-text-color-tertiary: rgb(65, 65, 65, 0.9);
+  --cs-text-color-placeholder: var(--cs-text-color-tertiary);
 
-    --cs-bg-color: #202122;
-    --cs-bg-color-light: rgb(36, 36, 38);
-    --cs-bg-color-deep: #232629;
-    --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
-    --cs-bg-color-box-title: #272829;
+  --cs-bg-color: #202122;
+  --cs-bg-color-light: rgb(36, 36, 38);
+  --cs-bg-color-deep: #232629;
+  --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
+  --cs-bg-color-box-title: #272829;
 
-    --cs-code-bg-color: rgb(255, 255, 255, 0.1);
-    --cs-code-text-color: var(--cs-text-color-primary);
-    --cs-code-block-bg-color: transparent;
+  --cs-code-bg-color: rgb(255, 255, 255, 0.1);
+  --cs-code-text-color: var(--cs-text-color-primary);
+  --cs-code-block-bg-color: transparent;
 
-    --cs-border-color: #363738;
-    --cs-input-bg-color: #282B2D;
-    --cs-active-bg-color: #2F3234;
-    --cs-hover-bg-color: #2E2F2C;
+  --cs-border-color: #363738;
+  --cs-input-bg-color: #282b2d;
+  --cs-active-bg-color: #2f3234;
+  --cs-hover-bg-color: #2e2f2c;
 
-    --cs-titlebar-bg-color: #21221E;
-    --cs-titlebar-border-color: #111;
-    --cs-shadow-color: rgba(255, 255, 255, 0.1);
+  --cs-titlebar-bg-color: #21221e;
+  --cs-titlebar-border-color: #111;
+  --cs-shadow-color: rgba(255, 255, 255, 0.1);
 
-    /* override element-plus variables */
-    --el-color-primary: var(--cs-color-primary);
-    --el-font-family: var(--cs-font-family);
-    --el-menu-text-color: var(--cs-text-color-secondary);
-    --el-menu-border-color: var(--cs-border-color);
+  /* override element-plus variables */
+  --el-color-primary: var(--cs-color-primary);
+  --el-font-family: var(--cs-font-family);
+  --el-menu-text-color: var(--cs-text-color-secondary);
+  --el-menu-border-color: var(--cs-border-color);
 
-    --el-text-color-primary: var(--cs-text-color-primary);
-    --el-bg-color: var(--cs-bg-color-deep);
-    --el-bg-color-page: var(--cs-bg-color-light);
-    --el-input-placeholder-color: var(--cs-text-color-placeholder);
-    --el-button-hover-border-color: var(--cs-color-primary-light);
-    --el-button-hover-bg-color: var(--cs-color-primary-lighter);
+  --el-text-color-primary: var(--cs-text-color-primary);
+  --el-bg-color: var(--cs-bg-color-deep);
+  --el-bg-color-page: var(--cs-bg-color-light);
+  --el-input-placeholder-color: var(--cs-text-color-placeholder);
+  --el-button-hover-border-color: var(--cs-color-primary-light);
+  --el-button-hover-bg-color: var(--cs-color-primary-lighter);
 
-    --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
-    --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
-    --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
-    --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
-    --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
-    --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
+  --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
+  --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
+  --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
+  --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
+  --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
+  --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
 }

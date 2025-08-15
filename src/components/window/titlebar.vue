@@ -29,6 +29,15 @@
       <div class="right">
         <slot name="right"></slot>
 
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady"
+          :content="t('common.newVersionReady')">
+          <div class="menu icon-btn upperLayer restart">
+            <cs name="restart" @click="updateStore.restartApp" />
+          </div>
+        </el-tooltip>
+
         <!-- menu show control -->
         <el-dropdown @command="handleCommand" trigger="click" v-if="showMenuButton">
           <div class="menu icon-btn upperLayer">
@@ -61,8 +70,10 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useWindowStore } from '@/stores/window'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useUpdateStore } from '@/stores/update'
 
 const { t } = useI18n()
+const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 
 // Compute OS-specific layout
@@ -340,6 +351,14 @@ init()
     .cs {
       font-size: 18px !important;
       color: var(--cs-text-color-secondary);
+    }
+
+    &.restart {
+      /* background-color: var(--cs-success-color); */
+      /* border-radius: var(--cs-border-radius); */
+      .cs {
+        color: var(--cs-success-color);
+      }
     }
   }
 

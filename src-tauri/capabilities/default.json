@@ -47,7 +47,9 @@
           "path": "$APPLOG/chatspeed.log"
         }
       ]
-    }
+    },
+    "process:allow-restart",
+    "updater:default"
   ],
   "plugins": {
     "fs": {

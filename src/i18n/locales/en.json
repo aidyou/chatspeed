@@ -106,6 +106,7 @@
     "downloadSvg": "Download SVG",
     "loading": "Loading...",
     "mindmap": "Mind Map",
+    "newVersionReady": "A new version is ready, click to restart and update",
     "no": "No",
     "noData": "No Data",
     "openUrlError": "Failed to open URL",

@@ -126,6 +126,10 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
+    "process": {},
+    "shell": {
+      "open": true
+    },
     "updater": {
       "active": true,
       "endpoints": [
@@ -137,9 +141,6 @@
       "windows": {
         "installMode": "passive"
       }
-    },
-    "shell": {
-      "open": true
     }
   }
 }

@@ -1,16 +1,11 @@
 <template>
   <div class="app-container" :class="[windowType, windowStore.os]">
-    <div class="titlebar" data-tauri-drag-region @pointerdown="handleDragStart" @pointerup="handleDragEnd">
-    </div>
-    <router-view></router-view>
-
-    <!-- Update management dialogs -->
-    <UpdateDialog v-model="updateStore.showUpdateDialog" :version-info="updateStore.versionInfo"
-      @confirm="updateStore.confirmUpdate" @cancel="updateStore.cancelUpdate" />
-    <ProgressDialog v-model="updateStore.showProgressDialog" :progress="updateStore.downloadProgress"
-      :error="updateStore.downloadError" @cancel="updateStore.cancelUpdate" />
-    <RestartDialog v-model="updateStore.showRestartDialog" @restart="updateStore.restartApp"
-      @later="updateStore.postponeRestart" />
+    <div
+      class="titlebar"
+      data-tauri-drag-region
+      @pointerdown="handleDragStart"
+      @pointerup="handleDragEnd" />
+    <router-view />
   </div>
 </template>
 
@@ -38,11 +33,6 @@ import { useSkillStore } from '@/stores/skill'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
-
-// Import update management components
-import UpdateDialog from '@/components/updater/UpdateDialog.vue'
-import ProgressDialog from '@/components/updater/ProgressDialog.vue'
-import RestartDialog from '@/components/updater/RestartDialog.vue'
 
 const router = useRouter()
 const settingStore = useSettingStore()
@@ -225,7 +215,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  updateStore.resetDialogs()
   if (listener.value) {
     listener.value()
   }
@@ -285,12 +274,12 @@ const setLighlightTheme = () => {
   document.head.appendChild(link)
 }
 
-const handleDragStart = (e) => {
-  windowStore.setMouseEventState(true);
+const handleDragStart = e => {
+  windowStore.setMouseEventState(true)
 }
 
-const handleDragEnd = (e) => {
-  windowStore.setMouseEventState(false);
+const handleDragEnd = e => {
+  windowStore.setMouseEventState(false)
 }
 </script>
 

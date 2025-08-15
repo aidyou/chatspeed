@@ -106,6 +106,7 @@
     "downloadSvg": "Télécharger en SVG",
     "loading": "Chargement...",
     "mindmap": "Carte mentale",
+    "newVersionReady": "Une nouvelle version est prête, cliquez pour redémarrer et mettre à jour",
     "no": "Non",
     "noData": "Aucune donnée",
     "openUrlError": "Échec de l'ouverture de l'URL",
