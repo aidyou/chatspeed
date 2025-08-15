@@ -355,31 +355,3 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --verbose --target ${{ matrix.target }} --bundles deb,rpm,appimage
           includeUpdaterJson: true
-
-  deploy-updater-manifest:
-    name: Deploy Updater Manifest
-    runs-on: ubuntu-latest
-    needs:
-      - release-windows
-      - release-macos
-      - release-linux
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download latest.json
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download ${{ github.ref_name }} --pattern 'latest.json' --clobber
-
-      - name: Deploy to updater-meta branch
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          publish_branch: updater-meta
-          keep_files: false
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Deploy latest.json for ${{ github.ref_name }}'
