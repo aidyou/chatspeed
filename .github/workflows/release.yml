@@ -30,47 +30,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get tag commit
-        id: tag-commit
-        run: |
-          echo "Processing tag: ${{ github.ref_name }}"
-
-          # Get the commit that the tag points to (with error handling)
-          if TAG_COMMIT=$(git rev-list -n 1 "${{ github.ref_name }}" 2>/dev/null);
-          then
-            echo "commit=$TAG_COMMIT" >> $GITHUB_OUTPUT
-            echo "✅ Tag ${{ github.ref_name }} points to commit: $TAG_COMMIT"
-
-            # Verify that the commit is valid
-            if git cat-file -e "$TAG_COMMIT" 2>/dev/null;
-            then
-              echo "✅ Commit $TAG_COMMIT is valid"
-            else
-              echo "❌ Commit $TAG_COMMIT is not valid"
-              exit 1
-            fi
-          else
-            echo "❌ Failed to get commit for tag ${{ github.ref_name }}"
-            echo "Available tags:"
-            git tag -l | head -10
-            exit 1
-          fi
-
-          # Display tag information for debugging
-          echo "Available tags:"
-          git tag -l | head -10
-
       - name: Create Release
         id: create-release
         uses: actions/github-script@v7
         with:
           script: |
-            const tagCommit = '${{ steps.tag-commit.outputs.commit }}';
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: '${{ github.ref_name }}',
-              target_commitish: tagCommit,
+              target_commitish: '${{ github.sha }}',
               name: 'ChatSpeed ${{ github.ref_name }}',
               body: 'See the assets below to download and install this version.',
               draft: true,
@@ -222,7 +191,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }} --bundles nsis
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
   release-macos:
     needs: create-release
@@ -307,7 +276,7 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
   release-linux:
     needs: create-release
@@ -385,149 +354,29 @@ jobs:
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --verbose --target ${{ matrix.target }} --bundles deb,rpm,appimage
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
-  create-updater-json:
-    name: Create Updater JSON
+  deploy-updater-manifest:
+    name: Deploy Updater Manifest
     runs-on: ubuntu-latest
     needs:
-      - create-release
       - release-windows
       - release-macos
       - release-linux
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download release signatures
+      - name: Download latest.json
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          VERSION="${{ github.ref_name }}"
-          echo "Downloading signatures for version $VERSION"
+          gh release download ${{ github.ref_name }} --pattern 'latest.json' --clobber
 
-          # Create a directory to store signatures
-          mkdir -p ./signatures
-          cd ./signatures
-
-          # Download all .sig files from the release
-          gh release download "$VERSION" --pattern "*.sig"
-
-          echo "Downloaded signature files:"
-          ls -1
-
-          # Verify that the files exist before trying to read them
-          [ -f "Chatspeed_x64.app.tar.gz.sig" ] || { echo "x64 app.tar.gz signature not found!"; exit 1; }
-          [ -f "Chatspeed_aarch64.app.tar.gz.sig" ] || { echo "aarch64 app.tar.gz signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_x64-setup.exe.sig" ] || { echo "x64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_arm64-setup.exe.sig" ] || { echo "arm64 exe signature not found!"; exit 1; }
-          [ -f "Chatspeed_${VERSION#v}_amd64.AppImage.sig" ] || { echo "amd64 AppImage signature not found!"; exit 1; }
-
-      - name: Create updater JSON files
-        run: |
-          # Get release info
-          VERSION="${{ github.ref_name }}"
-          VERSION_NUM="${VERSION#v}"
-          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-          # Create a versioned directory for updater files
-          mkdir -p "releases/${VERSION_NUM}"
-
-          # Read signatures from files
-          DARWIN_X64_SIG=$(cat "./signatures/Chatspeed_x64.app.tar.gz.sig")
-          DARWIN_ARM64_SIG=$(cat "./signatures/Chatspeed_aarch64.app.tar.gz.sig")
-          WINDOWS_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_x64-setup.exe.sig")
-          WINDOWS_ARM64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_arm64-setup.exe.sig")
-          LINUX_X64_SIG=$(cat "./signatures/Chatspeed_${VERSION_NUM}_amd64.AppImage.sig")
-
-          echo "Signatures read successfully for version ${VERSION_NUM}."
-
-          # Windows (x64 and arm64)
-          cat > "releases/${VERSION_NUM}/windows.json" << EOF
-          {
-            "version": "${VERSION_NUM}",
-            "notes": "See the assets to download this version and install.",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              "windows-x86_64": {
-                "signature": "${WINDOWS_X64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_${VERSION_NUM}_x64-setup.exe"
-              },
-              "windows-aarch64": {
-                "signature": "${WINDOWS_ARM64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_${VERSION_NUM}_arm64-setup.exe"
-              }
-            }
-          }
-          EOF
-
-          # macOS (Intel and Apple Silicon)
-          cat > "releases/${VERSION_NUM}/darwin.json" << EOF
-          {
-            "version": "${VERSION_NUM}",
-            "notes": "See the assets to download this version and install.",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              "darwin-x86_64": {
-                "signature": "${DARWIN_X64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_x64.app.tar.gz"
-              },
-              "darwin-aarch64": {
-                "signature": "${DARWIN_ARM64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_aarch64.app.tar.gz"
-              }
-            }
-          }
-          EOF
-
-          # Linux x64
-          cat > "releases/${VERSION_NUM}/linux.json" << EOF
-          {
-            "version": "${VERSION_NUM}",
-            "notes": "See the assets to download this version and install.",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              "linux-x86_64": {
-                "signature": "${LINUX_X64_SIG}",
-                "url": "https://github.com/aidyou/chatspeed/releases/download/${VERSION}/Chatspeed_${VERSION_NUM}_amd64.AppImage"
-              }
-            }
-          }
-          EOF
-
-          echo "Updater JSON files created successfully in releases/${VERSION_NUM}/"
-          ls -R releases
-
-      - name: Deploy Update Manifest
+      - name: Deploy to updater-meta branch
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./releases
+          publish_dir: .
           publish_branch: updater-meta
-          keep_files: true
-
-  # publish-release:
-  #   name: Publish Release
-  #   runs-on: ubuntu-latest
-  #   if: github.event_name == 'push'
-  #   needs:
-  #     - create-release
-  #     - release-windows
-  #     - release-macos
-  #     - release-linux
-  #   steps:
-  #     - name: Mark release as ready
-  #       uses: actions/github-script@v7
-  #       with:
-  #         github-token: ${{ secrets.GITHUB_TOKEN }}
-  #         script: |
-  #           console.log('Publishing release ${{ github.ref_name }}');
-  #           await github.rest.repos.updateRelease({
-  #             owner: context.repo.owner,
-  #             repo: context.repo.repo,
-  #             release_id: ${{ needs.create-release.outputs.release-id }},
-  #             draft: false,
-  #           });
+          keep_files: false
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy latest.json for ${{ github.ref_name }}'
