@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { relaunch } from '@tauri-apps/plugin-process';
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 
 import { csStorageKey } from '@/config/config'
 import { csGetStorage, csSetStorage, csRemoveStorage } from '@/libs/util'
@@ -17,6 +19,7 @@ export const useUpdateStore = defineStore('update', () => {
   const downloadError = ref('')
   const isUpdateReady = ref(false)
   const ignoredVersion = ref(csGetStorage(csStorageKey.ignoreVersion))
+  const appWindow = getCurrentWindow()
 
   // Event handlers for update process
   const handleUpdateAvailable = (payload) => {
@@ -53,10 +56,11 @@ export const useUpdateStore = defineStore('update', () => {
   const restartApp = async () => {
     console.log('User requested to restart and install the update.')
     try {
-      await relaunch()
+      await invoke('install_and_restart')
+      // The backend will restart the app, so no need to call relaunch()
     } catch (error) {
       console.error('Failed to restart application:', error)
-      ElMessage.error(`重启失败: ${error.message || '未知错误'}`)
+      ElMessage.error(`更新失败: ${error.message || '未知错误'}`)
     }
   }
 
@@ -72,6 +76,18 @@ export const useUpdateStore = defineStore('update', () => {
     }
   }
 
+
+  appWindow.listen('update://available', ({ payload }) => {
+    handleUpdateAvailable(payload)
+  })
+
+  appWindow.listen('update://download-progress', ({ payload }) => {
+    handleDownloadProgress(payload)
+  })
+
+  appWindow.listen('update://ready', () => {
+    handleUpdateReady()
+  })
 
   return {
     // State

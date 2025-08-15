@@ -10,5 +10,6 @@ pub mod message;
 pub mod note;
 pub mod proxy_group;
 pub mod setting;
+pub mod updater;
 pub mod window;
 pub mod workflow;

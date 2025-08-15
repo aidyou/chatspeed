@@ -1,6 +1,6 @@
 [package]
 name        = "chatspeed"
-version     = "1.0.1"
+version     = "1.0.0"
 description = "Quickly solve problems with the help of AI"
 authors     = ["Ezool Network"]
 edition     = "2021"
@@ -96,7 +96,6 @@ tracing-subscriber           = { version = "0.3.19", features = ["env-filter"] }
 unicode-script               = "0.5.7"
 unicode-segmentation         = "1.9.0"
 url                          = "2.5.4"
-urlencoding                  = "2.1.3"
 uuid                         = { version = "1.16.0", features = ["v4", "serde"] }
 walkdir                      = "2.4.0"
 whatlang                     = "0.16.4"

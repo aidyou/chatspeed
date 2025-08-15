@@ -23,6 +23,18 @@ pub enum UpdateError {
     #[error("{}", t!("updater.errors.config", error = .0))]
     ConfigError(String),
 
+    /// Error during the update installation process.
+    #[error("{}", t!("updater.errors.install", error = .0))]
+    InstallError(String),
+
+    /// IO error.
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    /// Error acquiring a mutex lock.
+    #[error("Mutex lock error: {0}")]
+    LockError(String),
+
     /// The version from the server does not match the version the user intended to install.
     #[error("{}", t!("updater.errors.version_mismatch"))]
     VersionMismatch,

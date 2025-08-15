@@ -6,18 +6,14 @@ use url::Url;
 
 use super::config_loader::ConfigLoader;
 use super::webview_wrapper::WebviewScraper;
+use crate::libs::util;
 
 /// Represents the type of scraping request.
 pub enum ScrapeRequest {
     /// A request to scrape search engine results.
-    Search {
-        query: String,
-        provider: String,
-    },
+    Search { query: String, provider: String },
     /// A request to scrape content from a specific URL.
-    Content {
-        url: String,
-    },
+    Content { url: String },
 }
 
 /// The primary entry point for the scraper module.
@@ -34,17 +30,20 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
     match request {
         ScrapeRequest::Search { query, provider } => {
             let config = config_loader.load_search_config(&provider)?;
-            
+
             // URL-encode the query to ensure it's safe for the template.
-            let encoded_query = urlencoding::encode(&query);
-            let url = config.config.url_template.replace("{query}", &encoded_query);
+            let encoded_query = util::urlencode(&query);
+            let url = config
+                .config
+                .url_template
+                .replace("{query}", &encoded_query);
 
             scraper.scrape(&url, Some(config)).await
         }
         ScrapeRequest::Content { url } => {
             let url_obj = Url::parse(&url).context("Failed to parse content URL")?;
             let config = config_loader.load_content_config(&url_obj)?;
-            
+
             scraper.scrape(&url, config).await
         }
     }

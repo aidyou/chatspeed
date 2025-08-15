@@ -10,4 +10,3 @@ mod types;
 
 pub use error::*;
 pub use manager::UpdateManager;
-pub use types::*;

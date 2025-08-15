@@ -19,14 +19,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p ./public
-          gh release download ${{ github.event.release.tag_name }} --pattern 'latest.json' --dir ./public --clobber
+          mkdir -p ./updater-dist
+          gh release download ${{ github.event.release.tag_name }} --pattern 'latest.json' --dir ./updater-dist --clobber
 
       - name: Deploy to updater-meta branch
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
+          publish_dir: ./updater-dist
           publish_branch: updater-meta
           keep_files: false
           user_name: 'github-actions[bot]'

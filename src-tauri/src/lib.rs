@@ -30,6 +30,7 @@ use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
+use commands::updater::install_and_restart;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
 
@@ -212,6 +213,8 @@ pub async fn run() -> Result<()> {
             run_react_workflow,
             // dev tools
             test_scrape,
+            // updater
+            install_and_restart,
         ])
         .plugin(tauri_plugin_opener::init())
                 .on_window_event(|window, event| match event {
@@ -525,21 +528,23 @@ pub async fn run() -> Result<()> {
                 }
             });
 
-            // 启动自动更新检查
+            //===== update check =======
+            // Create and manage the UpdateManager
+            let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
+            app.manage(update_manager.clone());
+
             let auto_update = if let Ok(c) = main_store.clone().lock() {
                 c.get_config(CFG_AUTO_UPDATE, true)
             } else {
                 true
             };
             if auto_update {
-                let app_handle = app.handle().clone();
+                let update_manager_clone = update_manager.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
 
-                    let update_manager = UpdateManager::new(app_handle);
-
                     loop {
-                        if let Err(e) = update_manager.check_and_download_update().await {
+                        if let Err(e) = update_manager_clone.check_and_download_update().await {
                             log::error!("Failed to check for updates: {}", e);
                         }
 
