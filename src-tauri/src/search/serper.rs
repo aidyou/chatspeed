@@ -137,7 +137,7 @@ impl SearchProvider for SerperProvider {
                 snippet: Some(item.snippet),
                 // The `date` field from Serper can be used as `content`.
                 content: item.date,
-                score: None, // Serper doesn't provide a scope field.
+                ..Default::default()
             })
             .collect();
 

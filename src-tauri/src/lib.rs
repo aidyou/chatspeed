@@ -161,6 +161,7 @@ pub async fn run() -> Result<()> {
             enable_mcp_server,
             disable_mcp_server,
             restart_mcp_server,
+            refresh_mcp_server,
             get_mcp_server_tools,
             update_mcp_tool_status,
             // proxy group
@@ -246,7 +247,7 @@ pub async fn run() -> Result<()> {
                                 // Wait for a short duration. This delay is the key to solving the race condition.
                                 // It allows the `mousedown` event from the frontend (which indicates a drag start)
                                 // to be processed and set the ON_MOUSE_EVENT flag before we check it.
-                                sleep(Duration::from_millis(300)).await;
+                                sleep(Duration::from_millis(200)).await;
 
                                 // After the delay, we perform the definitive checks.
                                 let is_pinned =

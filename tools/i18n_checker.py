@@ -2,11 +2,13 @@ import yaml
 import os
 import re
 
+
 def parse_yaml_keys(filepath):
     with open(filepath, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
 
     keys = set()
+
     def flatten_dict(d, parent_key=''):
         for k, v in d.items():
             new_key = f"{parent_key}.{k}" if parent_key else k
@@ -15,8 +17,10 @@ def parse_yaml_keys(filepath):
             elif isinstance(v, (str, int, float, bool)):
                 # Only add keys that have a direct string value
                 keys.add(new_key)
+
     flatten_dict(data)
     return keys
+
 
 def extract_rust_i18n_keys(directory):
     rust_keys = set()
@@ -32,9 +36,20 @@ def extract_rust_i18n_keys(directory):
                         rust_keys.add(match)
     return rust_keys
 
+
+ignore_unused = set(
+    [
+        "db.database_error",
+        "db.io_error",
+        "db.json_error",
+        "db.tauri_error",
+    ]
+)
+
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.join(script_dir, '..') # Assuming tools/ is directly under project root
+    project_root = os.path.join(script_dir, '..')  # Assuming tools/ is directly under project root
 
     yaml_file = os.path.join(project_root, "src-tauri", "i18n", "zh-Hans.yml")
     rust_src_dir = os.path.join(project_root, "src-tauri", "src")
@@ -43,7 +58,7 @@ def main():
     defined_keys = parse_yaml_keys(yaml_file)
     used_keys = extract_rust_i18n_keys(rust_src_dir)
 
-    unused_keys = defined_keys - used_keys
+    unused_keys = defined_keys - used_keys - ignore_unused
     missing_keys = used_keys - defined_keys
 
     output_file = os.path.join(output_dir, "i18n_check_results.txt")
@@ -58,6 +73,7 @@ def main():
             f.write(f"{key}\n")
 
     print(f"Results written to {output_file}")
+
 
 if __name__ == "__main__":
     main()

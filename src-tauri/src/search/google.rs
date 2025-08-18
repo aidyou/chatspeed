@@ -115,9 +115,8 @@ impl SearchProvider for GoogleSearch {
             .map(|item| SearchResult {
                 title: item.title,
                 url: item.link,
-                snippet: Some(item.snippet), // Google API 的 snippet 字段是 String，这里转换为 Option<String>
-                score: None,                 // Google Custom Search API 结果中没有直接的 score 字段
-                content: None,               // Google Custom Search API 不直接提供完整内容
+                snippet: Some(item.snippet), // The snippet field in the Google API is of type String, converted to Option<String> here
+                ..Default::default()
             })
             .collect();
 

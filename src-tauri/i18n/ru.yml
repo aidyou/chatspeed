@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "Ошибка конфигурации сервера MCP '%{server_name}': %{error}"
     config_mismatch: "Несоответствие конфигурации MCP, создаваемый клиент MCP %{client}, тип конфигурации: %{protocol_type}"
     failed_to_call_tool: "Не удалось вызвать инструмент MCP - %{server_name}::%{tool_name}(%{args}), ошибка: %{error}"
+    http_service_start_failed: "Не удалось запустить службу MCP HTTP (URL: %{url}), причина: %{error}"
+    http_url_cant_be_empty: "Параметр URL клиента MCP HTTP не может быть пустым"
     invalid_tool_name: "Недопустимый формат имени инструмента MCP: %{name}"
     list_tools_timeout: "Время ожидания получения списка инструментов для %{name} истекло"
     no_running: "Клиент MCP '%{client}' не запущен, проверьте конфигурацию и перезапустите службу"
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "Параметр URL клиента SSE не может быть пустым"
     stdio_args_cant_be_empty: "Параметр args клиента stdio не может быть пустым"
     stdio_command_cant_be_empty: "Параметр command «Команда запуска» клиента stdio не может быть пустым"
-    stdio_command_not_found_no_help: "Не удалось запустить службу MCP: команда \"%{command}\" не найдена (исходная ошибка: %{original_error}). Убедитесь, что команда установлена и находится в переменной окружения PATH вашей системы."
-    stdio_command_not_found_with_help: "Не удалось запустить службу MCP: команда \"%{command}\" не найдена (исходная ошибка: %{original_error})."
+    stdio_command_not_found_no_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}). Убедитесь, что команда установлена и находится в переменной окружения PATH вашей системы.'
+    stdio_command_not_found_with_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}).'
     stdio_npx_not_found_help: "Обычно это означает, что Node.js установлен неправильно или команда 'npx' отсутствует в переменной окружения PATH вашей системы. Проверьте установку Node.js."
     stdio_process_creation_failed: "Не удалось создать процесс Stdio (команда: %{command}), причина: %{error}"
     stdio_service_start_failed: "Не удалось запустить службу Stdio (команда: %{command}), причина: %{error}"
-    stdio_uvx_not_found_help: "Это может означать, что ваша среда Python или инструмент \"%{command}\" настроены неправильно или отсутствуют в переменной окружения PATH вашей системы. Проверьте настройку Python и инструмента \"%{command}\"."
-  invalid_server_address: "Недопустимый адрес сервера MCP"
+    stdio_uvx_not_found_help: 'Это может означать, что ваша среда Python или инструмент "%{command}" настроены неправильно или отсутствуют в переменной окружения PATH вашей системы. Проверьте настройку Python и инструмента "%{command}".'
+  op_in_progress_error: "Операция уже выполняется для этого сервера. Пожалуйста, попробуйте позже."
   proxy:
     service_description: "Прокси-сервер MCP - обеспечивает унифицированный доступ ко всем включенным инструментам MCP"
     tool_execution_error: "Ошибка выполнения инструмента: %{error}"
+    tool_not_found: "Инструмент MCP '%{tool_name}' не найден"
 
 network:
   client_build_error: "Не удалось создать HTTP-клиент: %{error}"
@@ -250,7 +253,6 @@ tools:
   invalid_search_provider: "Недопустимый поставщик поисковых услуг '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "Параметр ключевое слово (kw) должен быть непустой строкой или непустым массивом"
   invalid_model_name: "Недопустимое имя модели: %{model_name}"
-  invalid_timezone_parameter: "Недопустимый параметр часового пояса '%{timezone}'"
   max_retries_exceeded: "Превышено максимальное количество попыток для: %{item}"
   messages_must_be_array: "Параметр сообщения (messages) должен быть массивом"
   mcp_server_not_found: "Сервер MCP не найден: %{name}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ Анализ «%{title}» завершен"
     summarizing_webpage: "▷ Анализ «%{title}»"
     summarizing: "☞ Анализ содержимого веб-страницы"
-  plot:
-    chp_call_failed: "Ошибка вызова службы построения графиков: %{details}"
-    data_must_be_object: "Параметр данные (data) должен быть объектом"
-    failed_to_generate_plot: "Не удалось сгенерировать график"
-    line_bar_x_must_be_non_empty_array: "Параметр данные оси X (x) для линейного/столбчатого графика должен быть непустым массивом"
-    line_bar_y_must_be_non_empty_array: "Параметр данные оси Y (y) для линейного/столбчатого графика должен быть непустым массивом"
-    pie_labels_must_be_non_empty_array: "Параметр метки (labels) для круговой диаграммы должен быть непустым массивом"
-    pie_values_must_be_non_empty_array: "Параметр значения (values) для круговой диаграммы должен быть непустым массивом"
-    plot_type_must_be_string: "Параметр тип графика (plot_type) должен быть строкой"
-    plot_type_must_not_be_empty: "Параметр тип графика (plot_type) не может быть пустым"
 
 tray:
   about: "О программе"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Ошибка конфигурации программы обновления: %{error}"
+    download: "Не удалось загрузить или установить обновление: %{error}"
+    install: "Не удалось установить обновление: %{error}"
     update_not_found: "Текущая версия является последней, доступных обновлений нет"
+    update_request: "Запрос на обновление не удался: %{error}"
     version_mismatch: "Несоответствие версий, ожидаемая версия установки отличается от версии обновления, предоставленной сервером, проверьте обновления еще раз"
     version_parse: "Ошибка разбора версии: ожидаемая версия '%{version}', ошибка: %{error}"
-    update_request: "Запрос на обновление не удался: %{error}"
-    download: "Не удалось загрузить или установить обновление: %{error}"
-    config: "Ошибка конфигурации программы обновления: %{error}"
 
 workflow:
   array_index_out_of_bounds: "Индекс массива вне допустимого диапазона: %{index}"

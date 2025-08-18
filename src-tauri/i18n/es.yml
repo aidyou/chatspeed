@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "Error de configuración del servidor MCP '%{server_name}': %{error}"
     config_mismatch: "Error de coincidencia de configuración de MCP, cliente MCP creado %{client}, tipo de configuración: %{protocol_type}"
     failed_to_call_tool: "Error al llamar a la herramienta MCP - %{server_name}::%{tool_name}(%{args}), error: %{error}"
+    http_service_start_failed: "Error al iniciar el servicio MCP HTTP (URL: %{url}), motivo: %{error}"
+    http_url_cant_be_empty: "El parámetro de URL del cliente MCP HTTP no puede estar vacío"
     invalid_tool_name: "Formato de nombre de herramienta MCP no válido: %{name}"
     list_tools_timeout: "Tiempo de espera agotado al obtener la lista de herramientas para %{name}"
     no_running: "El cliente MCP '%{client}' no se está ejecutando. Compruebe la configuración y reinicie el servicio."
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "El parámetro de URL del cliente SSE no puede estar vacío"
     stdio_args_cant_be_empty: "El parámetro de argumentos del cliente stdio не puede estar vacío"
     stdio_command_cant_be_empty: "El parámetro de comando 'Comando de inicio' del cliente stdio не puede estar vacío"
-    stdio_command_not_found_no_help: "No se pudo iniciar el servicio MCP: no se encontró el comando \"%{command}\" (error original: %{original_error}). Asegúrese de que el comando esté instalado y en la variable de entorno PATH de su sistema."
-    stdio_command_not_found_with_help: "No se pudo iniciar el servicio MCP: no se encontró el comando \"%{command}\" (error original: %{original_error})."
+    stdio_command_not_found_no_help: 'No se pudo iniciar el servicio MCP: no se encontró el comando "%{command}" (error original: %{original_error}). Asegúrese de que el comando esté instalado y en la variable de entorno PATH de su sistema.'
+    stdio_command_not_found_with_help: 'No se pudo iniciar el servicio MCP: no se encontró el comando "%{command}" (error original: %{original_error}).'
     stdio_npx_not_found_help: "Esto suele significar que Node.js no está instalado correctamente o que el comando 'npx' no está en la variable de entorno PATH de su sistema. Compruebe la instalación de Node.js."
     stdio_process_creation_failed: "Error al crear el proceso Stdio (comando: %{command}), motivo: %{error}"
     stdio_service_start_failed: "Error al iniciar el servicio Stdio (comando: %{command}), motivo: %{error}"
-    stdio_uvx_not_found_help: "Esto podría significar que su entorno de Python o la herramienta \"%{command}\" no están configurados correctamente o no están en la variable de entorno PATH de su sistema. Compruebe la configuración de Python y \"%{command}\"."
-  invalid_server_address: "Dirección de servidor MCP no válida"
+    stdio_uvx_not_found_help: 'Esto podría significar que su entorno de Python o la herramienta "%{command}" no están configurados correctamente o no están en la variable de entorno PATH de su sistema. Compruebe la configuración de Python y "%{command}".'
+  op_in_progress_error: "Ya hay una operación en curso para este servidor. Por favor, inténtelo de nuevo más tarde."
   proxy:
     service_description: "Servidor proxy MCP: proporciona acceso unificado a todas las herramientas MCP habilitadas"
     tool_execution_error: "Error de ejecución de la herramienta: %{error}"
+    tool_not_found: "Herramienta MCP '%{tool_name}' no encontrada"
 
 network:
   client_build_error: "Error al crear el cliente HTTP: %{error}"
@@ -248,7 +251,6 @@ tools:
   function_already_exists: "La función ya existe: %{name}"
   function_not_found: "No se encontró la función de la herramienta en el flujo de trabajo: %{name}"
   invalid_search_provider: "Proveedor de servicios de búsqueda no válido '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "Parámetro de zona horaria no válido '%{timezone}'"
   keyword_must_be_non_empty: "El parámetro de palabra clave (kw) debe ser una cadena no vacía o una matriz no vacía"
   invalid_model_name: "Nombre de modelo no válido: %{model_name}"
   max_retries_exceeded: "Se superó el número máximo de reintentos: %{item}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ Análisis de '%{title}' completado"
     summarizing_webpage: "▷ Analizando '%{title}'"
     summarizing: "☞ Analizando el contenido de la web"
-  plot:
-    chp_call_failed: "Error al llamar al servicio de trazado: %{details}"
-    data_must_be_object: "El parámetro de datos debe ser un objeto"
-    failed_to_generate_plot: "Error al generar el gráfico"
-    line_bar_x_must_be_non_empty_array: "El parámetro de datos del eje X para el gráfico de líneas/barras debe ser una matriz no vacía"
-    line_bar_y_must_be_non_empty_array: "El parámetro de datos del eje Y para el gráfico de líneas/barras debe ser una matriz no vacía"
-    pie_labels_must_be_non_empty_array: "El parámetro de etiquetas para el gráfico circular debe ser una matriz no vacía"
-    pie_values_must_be_non_empty_array: "El parámetro de valores para el gráfico circular debe ser una matriz no vacía"
-    plot_type_must_be_string: "El parámetro de tipo de trazado debe ser una cadena"
-    plot_type_must_not_be_empty: "El parámetro de tipo de trazado no puede estar vacío"
 
 tray:
   about: "Acerca de"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Error de configuración del actualizador: %{error}"
+    download: "Error al descargar o instalar la actualización: %{error}"
+    install: "Error al instalar la actualización: %{error}"
     update_not_found: "Actualmente es la última versión, no hay actualizaciones disponibles"
+    update_request: "Error en la solicitud de actualización: %{error}"
     version_mismatch: "Error de coincidencia de versión, la versión de instalación esperada difiere de la versión de actualización proporcionada por el servidor. Vuelva a comprobar si hay actualizaciones."
     version_parse: "Error de análisis de versión: versión esperada '%{version}', error: %{error}"
-    update_request: "Error en la solicitud de actualización: %{error}"
-    download: "Error al descargar o instalar la actualización: %{error}"
-    config: "Error de configuración del actualizador: %{error}"
 
 workflow:
   array_index_out_of_bounds: "Índice de matriz fuera de los límites: %{index}"

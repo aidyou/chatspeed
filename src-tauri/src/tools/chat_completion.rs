@@ -7,7 +7,7 @@ use super::ModelName;
 use crate::{
     ai::{interaction::chat_completion::complete_chat_blocking, traits::chat::MCPToolDeclaration},
     db::AiModel,
-    tools::{error::ToolError, ToolDefinition, ToolResult},
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 /// A function that sends an HTTP request.
@@ -113,7 +113,7 @@ impl ToolDefinition for ChatCompletion {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn call(&self, params: Value) -> ToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
         let model_param = params["model_name"].as_str().ok_or_else(|| {
             ToolError::FunctionParamError(t!("tools.model_name_must_be_string").to_string())
         })?;
@@ -186,7 +186,10 @@ impl ToolDefinition for ChatCompletion {
             serde_json::to_string_pretty(&result).unwrap_or_default()
         );
 
-        Ok(json!(result))
+        Ok(ToolCallResult::success(
+            Some(result.content.clone()),
+            Some(json!(&result)),
+        ))
     }
 }
 
@@ -217,7 +220,7 @@ mod tests {
 
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert!(response.get("content").is_some());
+        assert!(response.content.is_some());
         dbg!(response);
     }
 }

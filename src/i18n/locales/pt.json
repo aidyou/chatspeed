@@ -273,7 +273,7 @@
         "tabForm": "Editar formulário",
         "tabJson": "Editar JSON",
         "timeout": "Tempo limite",
-        "timeoutPlaceholder": "Definir o tempo limite da solicitação em segundos, padrão 60s",
+        "timeoutPlaceholder": "Definir o tempo limite da solicitação em segundos, padrão 15s",
         "type": "Tipo",
         "url": "URL",
         "validationFailed": "Falha na validação do formulário, verifique sua entrada."

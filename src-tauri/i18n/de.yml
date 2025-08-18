@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "Konfigurationsfehler für MCP-Server '%{server_name}': %{error}"
     config_mismatch: "MCP-Konfiguration stimmt nicht überein, erstellter MCP-Client %{client}, Konfigurationstyp: %{protocol_type}"
     failed_to_call_tool: "Aufruf des MCP-Werkzeugs fehlgeschlagen - %{server_name}::%{tool_name}(%{args}), Fehler: %{error}"
+    http_service_start_failed: "Start des MCP HTTP-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}"
+    http_url_cant_be_empty: "URL-Parameter des MCP HTTP-Clients darf nicht leer sein"
     invalid_tool_name: "Ungültiges MCP-Werkzeugnamenformat: %{name}"
     list_tools_timeout: "Timeout beim Abrufen der Werkzeugliste für %{name}"
     no_running: "MCP-Client '%{client}' nicht gestartet. Bitte Konfiguration überprüfen und Dienst neu starten."
@@ -199,10 +201,11 @@ mcp:
     stdio_process_creation_failed: "Erstellung des Stdio-Prozesses fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
     stdio_service_start_failed: "Start des Stdio-Dienstes fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
     stdio_uvx_not_found_help: 'Dies könnte bedeuten, dass Ihre Python-Umgebung oder das Werkzeug "%{command}" nicht korrekt eingerichtet ist oder sich nicht in der PATH-Umgebungsvariable Ihres Systems befindet. Bitte überprüfen Sie Ihre Python- und "%{command}"-Einrichtung.'
-  invalid_server_address: "Ungültige MCP-Serveradresse"
+  op_in_progress_error: "Ein Vorgang ist bereits für diesen Server in Bearbeitung. Bitte versuchen Sie es später erneut."
   proxy:
     service_description: "MCP-Proxyserver - bietet einheitlichen Zugriff auf alle aktivierten MCP-Tools"
     tool_execution_error: "Werkzeugausführungsfehler: %{error}"
+    tool_not_found: "MCP-Werkzeug '%{tool_name}' nicht gefunden"
 
 network:
   client_build_error: "HTTP-Client konnte nicht erstellt werden: %{error}"
@@ -248,7 +251,6 @@ tools:
   function_already_exists: "Funktion existiert bereits: %{name}"
   function_not_found: "Werkzeugfunktion im Workflow nicht gefunden: %{name}"
   invalid_search_provider: "Ungültiger Suchdienstanbieter '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "Ungültiger Zeitzonenparameter '%{timezone}'"
   keyword_must_be_non_empty: "Keyword(kw)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein"
   invalid_model_name: "Ungültiger Modellname: %{model_name}"
   max_retries_exceeded: "Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ '%{title}'-Analyse abgeschlossen"
     summarizing_webpage: "▷ '%{title}' wird analysiert"
     summarizing: "☞ Webinhalt wird analysiert"
-  plot:
-    chp_call_failed: "Aufruf des Plot-Dienstes fehlgeschlagen: %{details}"
-    data_must_be_object: "Daten(data)-Parameter muss ein Objekt sein"
-    failed_to_generate_plot: "Diagrammerstellung fehlgeschlagen"
-    line_bar_x_must_be_non_empty_array: "X-Achsendaten(x)-Parameter für Linien-/Balkendiagramm muss ein nicht leeres Array sein"
-    line_bar_y_must_be_non_empty_array: "Y-Achsendaten(y)-Parameter für Linien-/Balkendiagramm muss ein nicht leeres Array sein"
-    pie_labels_must_be_non_empty_array: "Beschriftungen(labels)-Parameter für Tortendiagramm muss ein nicht leeres Array sein"
-    pie_values_must_be_non_empty_array: "Werte(values)-Parameter für Tortendiagramm muss ein nicht leeres Array sein"
-    plot_type_must_be_string: "Plot-Typ(plot_type)-Parameter muss ein String sein"
-    plot_type_must_not_be_empty: "Plot-Typ(plot_type)-Parameter darf nicht leer sein"
 
 tray:
   about: "Über"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Updater-Konfigurationsfehler: %{error}"
+    download: "Update konnte nicht heruntergeladen oder installiert werden: %{error}"
+    install: "Update-Installation fehlgeschlagen: %{error}"
     update_not_found: "Sie verwenden bereits die neueste Version - keine Updates verfügbar"
+    update_request: "Update-Anfrage fehlgeschlagen: %{error}"
     version_mismatch: "Versionskonflikt - die erwartete Installationsversion unterscheidet sich von der vom Server bereitgestellten Update-Version. Bitte suchen Sie erneut nach Updates."
     version_parse: "Fehler beim Verarbeiten der Version: erwartete Version '%{version}', Fehler: %{error}"
-    update_request: "Update-Anfrage fehlgeschlagen: %{error}"
-    download: "Update konnte nicht heruntergeladen oder installiert werden: %{error}"
-    config: "Updater-Konfigurationsfehler: %{error}"
 
 workflow:
   array_index_out_of_bounds: "Array-Index außerhalb der Grenzen: %{index}"

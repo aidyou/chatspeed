@@ -273,7 +273,7 @@
         "tabForm": "Editar formulario",
         "tabJson": "Editar JSON",
         "timeout": "Tiempo de espera",
-        "timeoutPlaceholder": "Establecer el tiempo de espera de la solicitud en segundos, por defecto 60s",
+        "timeoutPlaceholder": "Establecer el tiempo de espera de la solicitud en segundos, por defecto 15s",
         "type": "Tipo",
         "url": "URL",
         "validationFailed": "Error de validación del formulario, por favor, compruebe su entrada."

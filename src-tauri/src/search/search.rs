@@ -1,3 +1,5 @@
+use std::{fmt::Display, str::FromStr};
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -6,18 +8,111 @@ use serde_json::Value;
 /// Defines a single search result item.
 /// The `skip_serializing_if` attribute ensures that `Option` fields
 /// are omitted from the JSON output when they are `None`.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResult {
+    #[serde(default, skip_deserializing, skip_serializing_if = "is_zero")]
+    pub id: usize,
     pub title: String,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sitename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub score: Option<f32>,
+}
+
+impl Display for SearchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.id > 0 {
+            write!(f, "id: {}\n", self.id)?;
+        }
+
+        write!(f, "title: {}\nurl: {}\n", self.title, self.url)?;
+
+        if let Some(s) = self.snippet.as_ref() {
+            write!(f, "snippet: {}\n", s)?;
+        }
+        if let Some(c) = self.content.as_ref() {
+            write!(f, "content: {}\n", c)?;
+        }
+        if let Some(s) = self.sitename.as_ref() {
+            write!(f, "sitename: {}\n", s)?;
+        }
+        if let Some(pb) = self.publish_date.as_ref() {
+            write!(f, "publish_date: {}\n", pb)?;
+        }
+        if let Some(s) = self.score.as_ref() {
+            write!(f, "score: {}\n", s)?;
+        }
+        Ok(())
+    }
+}
+
+fn is_zero<T: PartialEq + From<u8>>(value: &T) -> bool {
+    *value == T::from(0)
+}
+
+#[derive(PartialEq, Clone)]
+pub enum SearchProviderName {
+    Baidu,
+    BaiduNews,
+    Google,
+    GoogleNews,
+    Bing,
+}
+
+impl Display for SearchProviderName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Baidu => write!(f, "baidu"),
+            Self::BaiduNews => write!(f, "baidu_news"),
+            Self::Google => write!(f, "google"),
+            Self::GoogleNews => write!(f, "google_news"),
+            Self::Bing => write!(f, "bing"),
+        }
+    }
+}
+
+impl From<SearchProviderName> for String {
+    fn from(provider: SearchProviderName) -> Self {
+        provider.to_string()
+    }
+}
+
+impl FromStr for SearchProviderName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
+    }
+}
+
+impl TryFrom<&str> for SearchProviderName {
+    type Error = String;
+
+    fn try_from(provider: &str) -> Result<Self, Self::Error> {
+        match provider {
+            "baidu" => Ok(Self::Baidu),
+            "baidu_news" => Ok(Self::BaiduNews),
+            "google" => Ok(Self::Google),
+            "google_news" => Ok(Self::GoogleNews),
+            "bing" => Ok(Self::Bing),
+            _ => Err(format!("Invalid search provider: {}", provider)),
+        }
+    }
+}
+
+impl TryFrom<String> for SearchProviderName {
+    type Error = String;
+
+    fn try_from(provider: String) -> Result<Self, Self::Error> {
+        Self::try_from(provider.as_str())
+    }
 }
 
 /// Defines the time period for a search query.

@@ -12,8 +12,10 @@ use crate::commands::chat::setup_chat_proxy;
 use crate::db::{AiModel, MainStore};
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, SseClient, StdioClient,
+    StreamableHttpClient,
 };
 use crate::tools::error::ToolError;
+use crate::tools::ToolCallResult;
 
 // use super::tools::Crawler;
 // use super::tools::Plot;
@@ -25,6 +27,7 @@ pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
 
 /// The result type of a function call.
+pub type NativeToolResult = Result<ToolCallResult, ToolError>;
 pub type ToolResult = Result<Value, ToolError>;
 
 /// A trait defining the characteristics of a function.
@@ -52,7 +55,7 @@ pub trait ToolDefinition: Send + Sync {
     ///
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
-    async fn call(&self, params: Value) -> ToolResult;
+    async fn call(&self, params: Value) -> NativeToolResult;
 }
 
 /// Manages the registration and execution of workflow functions.
@@ -67,6 +70,9 @@ pub struct ToolManager {
     mcp_tools: RwLock<HashMap<String, Vec<MCPToolDeclaration>>>,
     /// A channel for sending MCP status events.
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
+    /// A set to track MCP server IDs with ongoing operations (start, stop, restart, refresh).
+    /// This is used to prevent race conditions from rapid UI clicks.
+    pub ops_in_progress: tokio::sync::Mutex<HashSet<i64>>,
 }
 
 impl ToolManager {
@@ -78,6 +84,7 @@ impl ToolManager {
             mcp_servers: RwLock::new(HashMap::new()),
             mcp_tools: RwLock::new(HashMap::new()),
             mcp_status_event_sender: sender,
+            ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -226,7 +233,7 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
-    pub async fn native_tool_call(&self, name: &str, params: Value) -> ToolResult {
+    pub async fn native_tool_call(&self, name: &str, params: Value) -> NativeToolResult {
         let tool = self.get_tool(name).await?;
         tool.call(params).await
     }
@@ -245,7 +252,7 @@ impl ToolManager {
         if name.contains(MCP_TOOL_NAME_SPLIT) {
             self.call_mcp_tool_by_combined_name(name, params).await
         } else {
-            self.native_tool_call(name, params).await
+            self.native_tool_call(name, params).await.map(|v| v.into())
         }
     }
 
@@ -460,6 +467,10 @@ impl ToolManager {
                 StdioClient::new(mcp_server_config.clone()) // Clone for the client
                     .map(|c| Arc::new(c) as Arc<dyn McpClient>)
             }
+            McpProtocolType::StreamableHttp => {
+                StreamableHttpClient::new(mcp_server_config.clone()) // Clone for the client
+                    .map(|c| Arc::new(c) as Arc<dyn McpClient>)
+            }
         }
         .map_err(|e_mcp| {
             ToolError::Config(
@@ -611,15 +622,18 @@ impl ToolManager {
             log::debug!("register_mcp_server_inner: client.name() = {}", &name);
         }
 
-        let mut servers = self.mcp_servers.write().await;
-        if servers.contains_key(&name) {
+        // Adhere to a consistent locking order (mcp_tools -> mcp_servers) to prevent deadlocks.
+        let mut mcp_tools_guard = self.mcp_tools.write().await;
+        let mut servers_guard = self.mcp_servers.write().await;
+
+        if servers_guard.contains_key(&name) {
             // This case might happen if registration is triggered multiple times quickly
             // before the first one completes its async tool listing.
             // Depending on desired behavior, could log a warning and update, or return error.
             // For now, let's log and allow update (though client Arc should be the same).
             log::warn!("MCP server {} is already in mcp_servers map during inner registration. Overwriting.", &name);
         }
-        servers.insert(name.clone(), client.clone()); // client.clone() is cheap (Arc clone)
+        servers_guard.insert(name.clone(), client.clone()); // client.clone() is cheap (Arc clone)
 
         #[cfg(debug_assertions)]
         {
@@ -631,7 +645,6 @@ impl ToolManager {
             // Always insert if Some, even if 'declarations' is an empty Vec.
             // This allows the frontend to distinguish between "server not found in mcp_tools"
             // and "server found, but has no tools".
-            let mut mcp_tools_guard = self.mcp_tools.write().await;
             let tool_count = declarations.len();
             mcp_tools_guard.insert(name.clone(), declarations);
             #[cfg(debug_assertions)]
@@ -666,10 +679,12 @@ impl ToolManager {
     /// # Returns
     /// * `Result<(), ToolError>` - The result of the unregistration.
     pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), ToolError> {
-        // Remove MCP tools from internal state first
-        let mut mcp_tools = self.mcp_tools.write().await;
-        mcp_tools.remove(name);
-        // mcp_tools write lock is released here
+        // Scope the locks to ensure they are released before awaiting .stop()
+        {
+            // Remove MCP tools from internal state first
+            let mut mcp_tools = self.mcp_tools.write().await;
+            mcp_tools.remove(name);
+        } // mcp_tools write lock is released here
 
         // Get the server Arc to stop it *after* removing it from the map
         // and releasing the FunctionManager's mcp_servers lock.
@@ -677,7 +692,7 @@ impl ToolManager {
             // Acquire write lock for mcp_servers
             let mut servers_guard = self.mcp_servers.write().await;
             servers_guard.remove(name) // This removes and returns the Arc<dyn McpClient>
-        }; // servers_guard (write lock on mcp_servers) is released here explicitly by scope end
+        }; // servers_guard (write lock on mcp_servers) is released here
 
         // Stop the server client if it was found
         if let Some(server_arc) = server_to_stop {
@@ -705,6 +720,82 @@ impl ToolManager {
             );
         }
         Ok(())
+    }
+
+    /// Refreshes the tool list for a specific MCP server.
+    ///
+    /// This function will contact the specified MCP server, fetch its current list of tools,
+    /// and update the in-memory cache (`mcp_tools`) with the new list.
+    /// It uses status notifications to inform the frontend about its progress.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the MCP server to refresh.
+    ///
+    /// # Returns
+    /// * `Result<(), ToolError>` - Ok on success, or an error if the server is not found or fetching tools fails.
+    pub async fn refresh_mcp_server_tools(&self, name: &str) -> Result<(), ToolError> {
+        // Use "Starting" status to indicate a refresh is in progress.
+        self.mcp_status_event_sender
+            .send((name.to_string(), McpStatus::Starting))
+            .ok();
+
+        let client = match self.get_mcp_server(name).await {
+            Ok(client) => client,
+            Err(e) => {
+                self.mcp_status_event_sender
+                    .send((name.to_string(), McpStatus::Error(e.to_string())))
+                    .ok();
+                return Err(e);
+            }
+        };
+
+        let tools_result = client.list_tools().await;
+
+        match tools_result {
+            Ok(tools) => {
+                log::debug!(
+                    "Successfully fetched {} tools for MCP server {} during refresh.",
+                    tools.len(),
+                    name
+                );
+                let config = client.config().await;
+                let disabled_tool_names: HashSet<String> =
+                    config.disabled_tools.unwrap_or_default();
+
+                let tools_with_disabled_flag: Vec<MCPToolDeclaration> = tools
+                    .into_iter()
+                    .map(|mut tool_decl| {
+                        tool_decl.disabled = disabled_tool_names.contains(&tool_decl.name);
+                        tool_decl
+                    })
+                    .collect();
+
+                let mut mcp_tools_guard = self.mcp_tools.write().await;
+                mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag);
+
+                // On success, notify that it's "Running" again.
+                self.mcp_status_event_sender
+                    .send((name.to_string(), McpStatus::Running))
+                    .ok();
+                log::info!("Successfully refreshed tools for MCP server: {}", name);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to list tools for MCP server {} during refresh: {}",
+                    name,
+                    e.to_string()
+                );
+                let mut mcp_tools_guard = self.mcp_tools.write().await;
+                mcp_tools_guard.insert(name.to_string(), Vec::new());
+
+                // On failure, notify "Error" status.
+                self.mcp_status_event_sender
+                    .send((name.to_string(), McpStatus::Error(e.to_string())))
+                    .ok();
+                Err(ToolError::Execution(e.to_string()))
+            }
+        }
     }
 
     /// Gets the status of all registered MCP servers.
@@ -793,25 +884,35 @@ impl ToolManager {
         mcp_tool_name: &str,
         is_disabled: bool,
     ) -> Result<(), ToolError> {
-        // Phase 1: Update the McpClient's internal config copy
-        {
-            // Scope for mcp_servers read lock
+        // Phase 1: Update the McpClient's internal config copy.
+        // Get the client Arc first, then release the lock before awaiting the update.
+        let server_client_to_update = {
             let mcp_servers_read_guard = self.mcp_servers.read().await;
-            if let Some(server_client) = mcp_servers_read_guard.get(mcp_server_name) {
-                server_client.update_disabled_tools(mcp_tool_name, is_disabled).await
-                    .map_err(|e| ToolError::Config(format!("Failed to update McpClient internal config for tool {} on server {}: {}", mcp_tool_name, mcp_server_name, e)))?;
-                log::debug!(
-                    "Internal McpClient config updated for tool {} on server {}, disabled={}",
-                    mcp_tool_name,
-                    mcp_server_name,
-                    is_disabled
-                );
-            } else {
-                // Log if server not found in mcp_servers, but proceed to update mcp_tools cache if possible.
-                log::warn!("Server {} not found in mcp_servers cache while trying to update its internal config for tool {}.", mcp_server_name, mcp_tool_name);
-            }
+            mcp_servers_read_guard.get(mcp_server_name).cloned()
+        };
+
+        if let Some(server_client) = server_client_to_update {
+            server_client
+                .update_disabled_tools(mcp_tool_name, is_disabled)
+                .await
+                .map_err(|e| {
+                    ToolError::Config(format!(
+                        "Failed to update McpClient internal config for tool {} on server {}: {}",
+                        mcp_tool_name, mcp_server_name, e
+                    ))
+                })?;
+            log::debug!(
+                "Internal McpClient config updated for tool {} on server {}, disabled={}",
+                mcp_tool_name,
+                mcp_server_name,
+                is_disabled
+            );
+        } else {
+            // Log if server not found in mcp_servers, but proceed to update mcp_tools cache if possible.
+            log::warn!("Server {} not found in mcp_servers cache while trying to update its internal config for tool {}.", mcp_server_name, mcp_tool_name);
         }
 
+        // Phase 2: Update the in-memory cache for mcp_tools.
         let mut mcp_tools_guard = self.mcp_tools.write().await;
         if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
             // find the tool in the list by name

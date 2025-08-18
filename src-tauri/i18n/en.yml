@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "MCP server '%{server_name}' configuration error: %{error}"
     config_mismatch: "MCP configuration mismatch, creating MCP client %{client}, config type: %{protocol_type}"
     failed_to_call_tool: "Failed to call MCP tool - %{server_name}::%{tool_name}(%{args}), error: %{error}"
+    http_service_start_failed: "Failed to start MCP HTTP service (URL: %{url}), reason: %{error}"
+    http_url_cant_be_empty: "MCP HTTP client URL parameter cannot be empty"
     invalid_tool_name: "Invalid MCP tool name format: %{name}"
     list_tools_timeout: "Timeout getting tool list for %{name}"
     no_running: "MCP client '%{client}' not running, please check configuration and restart service"
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "SSE client URL parameter cannot be empty"
     stdio_args_cant_be_empty: "Stdio client args parameter cannot be empty"
     stdio_command_cant_be_empty: "Stdio client 'Startup Command' parameter cannot be empty"
-    stdio_command_not_found_no_help: "Failed to start MCP service: command \"%{command}\" not found (original error: %{original_error}). Please ensure the command is installed and in your system's PATH environment variable."
-    stdio_command_not_found_with_help: "Failed to start MCP service: command \"%{command}\" not found (original error: %{original_error})."
+    stdio_command_not_found_no_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}). Please ensure the command is installed and in your system''s PATH environment variable.'
+    stdio_command_not_found_with_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}).'
     stdio_npx_not_found_help: "This usually means Node.js is not properly installed, or 'npx' command is not in your system's PATH environment variable. Please check your Node.js installation."
     stdio_process_creation_failed: "Failed to create Stdio process (command: %{command}), reason: %{error}"
     stdio_service_start_failed: "Failed to start Stdio service (command: %{command}), reason: %{error}"
-    stdio_uvx_not_found_help: "This might mean your Python environment or \"%{command}\" tool is not properly set up, or it's not in your system's PATH environment variable. Please check your Python and \"%{command}\" setup."
-  invalid_server_address: "Invalid MCP server address"
+    stdio_uvx_not_found_help: 'This might mean your Python environment or "%{command}" tool is not properly set up, or it''s not in your system''s PATH environment variable. Please check your Python and "%{command}" setup.'
+  op_in_progress_error: "An operation is already in progress for this server. Please try again later."
   proxy:
     service_description: "MCP proxy server - provides unified access to all enabled MCP tools"
     tool_execution_error: "Tool execution error: %{error}"
+    tool_not_found: "MCP tool '%{tool_name}' not found"
 
 network:
   client_build_error: "Failed to create HTTP client: %{error}"
@@ -248,7 +251,6 @@ tools:
   function_already_exists: "Function already exists: %{name}"
   function_not_found: "Tool function not found in workflow: %{name}"
   invalid_search_provider: "Invalid search service provider '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "Invalid timezone parameter '%{timezone}'"
   keyword_must_be_non_empty: "Keyword (kw) parameter must be non-empty string or non-empty array"
   invalid_model_name: "Invalid model name: %{model_name}"
   max_retries_exceeded: "Maximum retry count exceeded: %{item}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ '%{title}' analysis completed"
     summarizing_webpage: "▷ Analyzing '%{title}'"
     summarizing: "☞ Analyzing web content"
-  plot:
-    chp_call_failed: "Failed to call plotting service: %{details}"
-    data_must_be_object: "Data parameter must be an object"
-    failed_to_generate_plot: "Failed to generate chart"
-    line_bar_x_must_be_non_empty_array: "X-axis data parameter for line/bar chart must be non-empty array"
-    line_bar_y_must_be_non_empty_array: "Y-axis data parameter for line/bar chart must be non-empty array"
-    pie_labels_must_be_non_empty_array: "Labels parameter for pie chart must be non-empty array"
-    pie_values_must_be_non_empty_array: "Values parameter for pie chart must be non-empty array"
-    plot_type_must_be_string: "Plot type parameter must be a string"
-    plot_type_must_not_be_empty: "Plot type parameter cannot be empty"
 
 tray:
   about: "About"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Updater configuration error: %{error}"
+    download: "Failed to download or install update: %{error}"
+    install: "Failed to install update: %{error}"
     update_not_found: "Currently the latest version, no available updates"
+    update_request: "Update request failed: %{error}"
     version_mismatch: "Version mismatch, expected installation version differs from server-provided update version, please recheck for updates"
     version_parse: "Version parsing error: expected version '%{version}', error: %{error}"
-    update_request: "Update request failed: %{error}"
-    download: "Failed to download or install update: %{error}"
-    config: "Updater configuration error: %{error}"
 
 workflow:
   array_index_out_of_bounds: "Array index out of bounds: %{index}"

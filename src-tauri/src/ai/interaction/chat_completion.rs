@@ -12,7 +12,7 @@ use crate::ai::interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT
 use crate::ai::traits::chat::{
     ChatCompletionResult, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration, Usage,
 };
-use crate::http::chp::SearchResult;
+use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
     ai::{

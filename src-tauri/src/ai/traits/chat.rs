@@ -1,6 +1,6 @@
 use crate::{
     ai::{error::AiError, interaction::chat_completion::ChatProtocol},
-    http::chp::SearchResult,
+    search::SearchResult,
 };
 
 use super::stoppable::Stoppable;

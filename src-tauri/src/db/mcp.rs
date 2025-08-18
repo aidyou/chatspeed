@@ -94,7 +94,11 @@ impl MainStore {
         config: McpServerConfig,
         disabled: bool,
     ) -> Result<Mcp, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
@@ -138,7 +142,10 @@ impl MainStore {
         config: McpServerConfig,
         disable: bool,
     ) -> Result<Mcp, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
@@ -175,7 +182,10 @@ impl MainStore {
     /// - SQL execution fails
     /// - Transaction commit fails
     pub fn delete_mcp(&mut self, id: i64) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute("DELETE FROM mcp WHERE id = ?", params![id])?;
 
         if let Ok(mcp) = Self::get_all_mcps(&conn) {
@@ -193,7 +203,10 @@ impl MainStore {
     /// # Returns
     /// Returns `Result` with unit type `()` on success, or `StoreError` on failure
     pub fn change_mcp_status(&mut self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute(
             "UPDATE mcp SET disabled =? WHERE id =?",
             params![disabled, id],

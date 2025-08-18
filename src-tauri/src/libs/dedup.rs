@@ -4,7 +4,7 @@ use phf::{phf_map, phf_set};
 use url::Url;
 
 use super::similarity::{compute_relevance, detect_lang_and_script, simhash};
-use crate::http::chp::SearchResult;
+use crate::search::SearchResult;
 
 /// Common news title suffixes in different languages
 static TITLE_SUFFIXES: phf::Map<&'static str, phf::Set<&'static str>> = phf_map! {
@@ -244,7 +244,7 @@ fn semantic_deduplicate(results: Vec<SearchResult>) -> Vec<SearchResult> {
         });
 
         // Calculate content simhash if available
-        let content_duplicate = if let Some(content) = &res.summary {
+        let content_duplicate = if let Some(content) = &res.snippet {
             let content_hash = simhash(content);
             seen_content_hashes.iter().any(|&h: &u64| {
                 let hamming_distance = (h ^ content_hash).count_ones();
@@ -257,7 +257,7 @@ fn semantic_deduplicate(results: Vec<SearchResult>) -> Vec<SearchResult> {
         // Keep if neither title nor content is duplicate
         if !title_duplicate && !content_duplicate {
             seen_title_hashes.insert(title_hash);
-            if let Some(content) = &res.summary {
+            if let Some(content) = &res.snippet {
                 seen_content_hashes.insert(simhash(content));
             }
             deduped.push(res.clone());
@@ -274,52 +274,55 @@ fn semantic_deduplicate(results: Vec<SearchResult>) -> Vec<SearchResult> {
     deduped
 }
 
+#[cfg(test)]
 mod tests {
+    use super::SearchResult;
+    use crate::search::SearchProviderName;
 
     #[test]
     fn test_dynamic_urls() {
         let results = vec![
             // utm param will be removed
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.com/article?id=123&utm=track".into(),
                 title: "Rust教程".into(),
                 ..Default::default()
             },
             // ref param will be removed
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.com/article?id=123&ref=social".into(),
                 title: "Rust教程".into(),
                 ..Default::default()
             },
             // wfr param and for param will be removed
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.com/article?id=123&wfr=social&for=pc".into(),
                 title: "Rust教程".into(),
                 ..Default::default()
             },
             // 不同ID参数
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.com/article?id=456".into(),
                 title: "Rust高级技巧".into(),
                 ..Default::default()
             },
             // 相同标题不同内容
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.net/post?pid=789".into(),
                 title: "Rust并发编程".into(),
-                summary: Some("Mutex使用指南".into()),
+                snippet: Some("Mutex使用指南".into()),
                 ..Default::default()
             },
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.net/post?pid=790".into(),
                 title: "Rust并发编程".into(),
-                summary: Some("Channel最佳实践".into()),
+                snippet: Some("Channel最佳实践".into()),
                 ..Default::default()
             },
-            crate::http::chp::SearchResult {
+            SearchResult {
                 url: "https://example.net/post.pdf".into(),
                 title: "Rust并发编程".into(),
-                summary: Some("Channel最佳实践".into()),
+                snippet: Some("Channel最佳实践".into()),
                 ..Default::default()
             },
         ];
@@ -334,10 +337,7 @@ mod tests {
         // crawl news from baidu news and google news
         let keywords = "五粮液最近怎样，可以买吗？";
         let mut result = vec![];
-        let providers = vec![
-            crate::http::chp::SearchProvider::Baidu,
-            crate::http::chp::SearchProvider::Google,
-        ];
+        let providers = vec![SearchProviderName::Baidu, SearchProviderName::Google];
         for provider in providers {
             // The crawler is running in a separate process
             // Must be install chatspeedbot

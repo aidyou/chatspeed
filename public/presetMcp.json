@@ -1,5 +1,22 @@
 [
   {
+    "name": "filesystem",
+    "description": "Provides comprehensive filesystem operations including reading, writing, moving files, directory management, and advanced file editing with pattern matching and formatting capabilities.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "config": {
+      "mcpServers": {
+        "filesystem": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "{PATH_TO_MOUNT}"
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "github",
     "description": "GitHub's official MCP Server that provides seamless integration with GitHub APIs, enabling advanced automation and interaction capabilities for developers and tools.",
     "website": "https://github.com/github/github-mcp-server",
@@ -51,22 +68,6 @@
     }
   },
   {
-    "name": "sequential-thinking",
-    "description": "A structured problem-solving tool that enables step-by-step analysis, thought revision, and branching logic for complex reasoning tasks.",
-    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
-    "config": {
-      "mcpServers": {
-        "sequential-thinking": {
-          "command": "npx",
-          "args": [
-            "-y",
-            "@modelcontextprotocol/server-sequential-thinking"
-          ]
-        }
-      }
-    }
-  },
-  {
     "name": "git",
     "description": "Provides Git repository interaction and automation tools for reading, searching, and manipulating Git repositories through commands like status, diff, commit, branch management, and more.",
     "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
@@ -92,6 +93,45 @@
           "args": [
             "-y",
             "@modelcontextprotocol/server-puppeteer"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "figma",
+    "description": "MCP server to provide Figma layout information to AI coding agents like Cursor.",
+    "website": "https://github.com/GLips/Figma-Context-MCP",
+    "config": {
+      "mcpServers": {
+        "figma": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "figma-developer-mcp",
+            "--figma-api-key={YOUR_API_KEY_HERE}"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "firecrawl",
+    "description": "A Model Context Protocol (MCP) server implementation that integrates with Firecrawl for web scraping capabilities.",
+    "website": "https://github.com/mendableai/firecrawl-mcp-server",
+    "config": {
+      "mcpServers": {
+        "firecrawl": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "firecrawl-mcp"
+          ],
+          "env": [
+            [
+              "FIRECRAWL_API_KEY",
+              "{YOUR_API_KEY_HERE}"
+            ]
           ]
         }
       }
@@ -291,6 +331,22 @@
     }
   },
   {
+    "name": "sequential-thinking",
+    "description": "A structured problem-solving tool that enables step-by-step analysis, thought revision, and branching logic for complex reasoning tasks.",
+    "website": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "config": {
+      "mcpServers": {
+        "sequential-thinking": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-sequential-thinking"
+          ]
+        }
+      }
+    }
+  },
+  {
     "name": "docker",
     "description": "A powerful Model Context Protocol (MCP) server for Docker operations, enabling seamless container and compose stack management through Claude AI.",
     "website": "https://smithery.ai/server/docker-mcp",
@@ -300,21 +356,6 @@
           "command": "uvx",
           "args": [
             "docker-mcp"
-          ]
-        }
-      }
-    }
-  },
-  {
-    "name": "mcp-installer",
-    "description": "This server is a server that installs other MCP servers for you. Install it, and you can ask Claude to install MCP servers hosted in npm or PyPi for you. Requires npx and uv to be installed for node and Python servers respectively.",
-    "website": "https://github.com/anaisbetts/mcp-installer",
-    "config": {
-      "mcpServers": {
-        "mcp-installer": {
-          "command": "npx",
-          "args": [
-            "@anaisbetts/mcp-installer"
           ]
         }
       }

@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    http::chp::{Chp, SearchProvider},
-    tools::{error::ToolError, ToolDefinition, ToolResult},
+    http::chp::Chp,
+    search::SearchProviderName,
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 pub struct Search {
@@ -123,8 +124,8 @@ impl ToolDefinition for Search {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn call(&self, params: Value) -> ToolResult {
-        let provider: SearchProvider = params["provider"]
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let provider: SearchProviderName = params["provider"]
             .as_str()
             .ok_or_else(|| {
                 ToolError::FunctionParamError(t!("tools.provider_must_be_string").to_string())
@@ -176,7 +177,16 @@ impl ToolDefinition for Search {
                     .to_string(),
                 )
             })?;
-        Ok(json!(results))
+        Ok(ToolCallResult::success(
+            Some(
+                results
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n===============\n"),
+            ),
+            Some(json!(results)),
+        ))
     }
 }
 

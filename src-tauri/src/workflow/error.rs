@@ -25,7 +25,7 @@ pub enum WorkflowError {
     Execution(String),
 
     /// Max retries exceeded
-    #[error("{}", t!("workflow.max_retries_exceeded", item = .0))]
+    #[error("{}", t!("tools.max_retries_exceeded", item = .0))]
     // Parameter name 'item' might be more generic
     MaxRetriesExceeded(String),
 

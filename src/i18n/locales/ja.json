@@ -273,7 +273,7 @@
         "tabForm": "フォーム編集",
         "tabJson": "JSON編集",
         "timeout": "タイムアウト",
-        "timeoutPlaceholder": "リクエストのタイムアウト時間を秒単位で設定、デフォルトは60秒",
+        "timeoutPlaceholder": "リクエストのタイムアウト時間を秒単位で設定、デフォルトは15秒",
         "type": "タイプ",
         "url": "URL",
         "validationFailed": "フォームの検証に失敗しました。入力を確認してください。"

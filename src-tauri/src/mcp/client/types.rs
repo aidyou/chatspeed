@@ -24,12 +24,16 @@ pub enum McpProtocolType {
     Sse,
     /// Standard I/O protocol
     Stdio,
+    /// Streamable HTTP protocol
+    #[serde(rename = "streamable_http")]
+    StreamableHttp,
 }
 impl From<&str> for McpProtocolType {
     fn from(value: &str) -> Self {
         match value {
             "sse" => McpProtocolType::Sse,
             "stdio" => McpProtocolType::Stdio,
+            "streamable_http" => McpProtocolType::StreamableHttp,
             _ => McpProtocolType::Stdio,
         }
     }
@@ -45,6 +49,7 @@ impl From<McpProtocolType> for &str {
         match value {
             McpProtocolType::Sse => "sse",
             McpProtocolType::Stdio => "stdio",
+            McpProtocolType::StreamableHttp => "streamable_http",
         }
     }
 }
@@ -60,6 +65,7 @@ impl Display for McpProtocolType {
         match self {
             McpProtocolType::Sse => write!(f, "sse"),
             McpProtocolType::Stdio => write!(f, "stdio"),
+            McpProtocolType::StreamableHttp => write!(f, "streamable_http"),
         }
     }
 }
@@ -329,7 +335,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
             // serialize the content as the successful result.
             // This assumes `Content` can be serialized to `Value`.
             // We'll serialize the Vec<Content> into a JSON Value (likely an array).
-            serde_json::to_value(call_tool_result.content).map_err(|e| {
+            serde_json::to_value(call_tool_result).map_err(|e| {
                 McpClientError::CallError(format!("Failed to serialize successful content: {}", e))
             })
         } else {

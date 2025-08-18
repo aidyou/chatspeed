@@ -4,9 +4,9 @@ use serde_json::{json, Value};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    http::chp::SearchResult,
     libs::dedup::dedup_and_rank_results,
-    tools::{error::ToolError, ToolDefinition, ToolResult},
+    search::SearchResult,
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 pub struct SearchDedup;
@@ -59,7 +59,7 @@ impl ToolDefinition for SearchDedup {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the deduplicated and ranked search results.
-    async fn call(&self, params: Value) -> ToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
         let results: Vec<SearchResult> = serde_json::from_value(params["results"].clone())
             .map_err(|e| ToolError::Serialization(e.to_string()))?;
         let query = params["query"]
@@ -75,7 +75,16 @@ impl ToolDefinition for SearchDedup {
         }
 
         let deduped_results = dedup_and_rank_results(results, &query);
-        Ok(json!(deduped_results))
+        Ok(ToolCallResult::success(
+            Some(
+                deduped_results
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n===============\n"),
+            ),
+            Some(json!(deduped_results)),
+        ))
     }
 }
 #[cfg(test)]
@@ -115,7 +124,16 @@ mod tests {
         log::debug!("Deduplicated results: {:#?}", result);
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(
+            result
+                .unwrap()
+                .structured_content
+                .unwrap()
+                .as_array()
+                .iter()
+                .count(),
+            2
+        );
 
         // 测试空查询
         let params = json!({
@@ -134,7 +152,16 @@ mod tests {
 
         let result = tool.call(params).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_array().unwrap().len(), 0);
+        assert_eq!(
+            result
+                .unwrap()
+                .structured_content
+                .unwrap()
+                .as_array()
+                .iter()
+                .count(),
+            0
+        );
 
         // 测试无效参数
         let params = json!({

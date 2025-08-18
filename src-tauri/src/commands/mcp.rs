@@ -415,22 +415,52 @@ pub async fn enable_mcp_server(
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Get the MCP config. McpServerConfig is Clone.
-    let mcp_config = {
+    // Acquire operation lock for this server ID to prevent race conditions.
+    {
+        let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
+        if !ops.insert(id) {
+            return Err(t!("mcp.op_in_progress_error").to_string());
+        }
+    }
+
+    // STEP 1: Extract all needed data from the main_store, then drop the lock.
+    let server_info = {
         let store_guard = main_store
             .lock()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mcp = store_guard
+        store_guard
             .config
             .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
+            .map(|mcp| (mcp.config.clone(), !mcp.disabled)) // Extract config and enabled status
+            .map_err(|e| e.to_string())
+    };
 
-        if mcp.disabled == false {
-            return Ok(());
+    // STEP 2: Perform logic and awaits *after* the lock is released.
+    let mcp_config = match server_info {
+        Ok((config, already_enabled)) => {
+            if already_enabled {
+                // It's safe to await here because the store_guard is dropped.
+                chat_state
+                    .tool_manager
+                    .ops_in_progress
+                    .lock()
+                    .await
+                    .remove(&id);
+                return Ok(());
+            }
+            config
         }
-
-        mcp.config.clone()
-    }; // store_guard is dropped here
+        Err(e) => {
+            // If get_mcp_by_id failed, release the op lock before returning.
+            chat_state
+                .tool_manager
+                .ops_in_progress
+                .lock()
+                .await
+                .remove(&id);
+            return Err(e);
+        }
+    };
 
     #[cfg(debug_assertions)]
     {
@@ -445,13 +475,10 @@ pub async fn enable_mcp_server(
         store_guard
             .change_mcp_status(id, false)
             .map_err(|e| e.to_string())?;
-    } // store_guard is dropped here
+    }
 
     // Start the MCP server using the function manager (async operation).
-    // We spawn this as a background task to avoid blocking the enable operation.
-    // The server is already marked as enabled in the database.
     let tool_manager = chat_state.tool_manager.clone();
-    let server_name = mcp_config.name.clone();
 
     tokio::spawn(async move {
         #[cfg(debug_assertions)]
@@ -459,24 +486,29 @@ pub async fn enable_mcp_server(
             log::debug!("enabling mcp server, mcp_config: {:?}", mcp_config);
         }
 
-        if let Err(e) = tool_manager.start_mcp_server(mcp_config).await {
+        // The start_mcp_server function consumes the Arc, so we clone it for the call.
+        if let Err(e) = tool_manager
+            .clone()
+            .start_mcp_server(mcp_config.clone())
+            .await
+        {
             log::error!(
                 "Failed to start MCP server '{}' after enabling: {}",
-                server_name,
+                mcp_config.name,
                 e
             );
-            // Note: The server is marked as enabled in the database but failed to start
-            // Users can try to restart it manually or check the configuration
         } else {
             log::info!(
                 "MCP server '{}' started successfully after being enabled",
-                server_name
+                mcp_config.name
             );
             #[cfg(debug_assertions)]
             {
                 log::debug!("mcp server started");
             }
         }
+        // Release the operation lock once the task is complete.
+        tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
     Ok(())
@@ -507,21 +539,52 @@ pub async fn disable_mcp_server(
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Get the MCP name.
-    let mcp_name = {
+    // Acquire operation lock for this server ID to prevent race conditions.
+    {
+        let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
+        if !ops.insert(id) {
+            return Err(t!("mcp.op_in_progress_error").to_string());
+        }
+    }
+
+    // STEP 1: Extract all needed data from the main_store, then drop the lock.
+    let server_info = {
         let store_guard = main_store
             .lock()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mcp = store_guard
+        store_guard
             .config
             .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
-        if mcp.disabled == true {
-            return Ok(());
-        }
+            .map(|mcp| (mcp.name.clone(), mcp.disabled)) // Extract name and disabled status
+            .map_err(|e| e.to_string())
+    };
 
-        mcp.name.clone()
-    }; // store_guard is dropped here
+    // STEP 2: Perform logic and awaits *after* the lock is released.
+    let mcp_name = match server_info {
+        Ok((name, disabled)) => {
+            if disabled {
+                // It's safe to await here because the store_guard is dropped.
+                chat_state
+                    .tool_manager
+                    .ops_in_progress
+                    .lock()
+                    .await
+                    .remove(&id);
+                return Ok(());
+            }
+            name
+        }
+        Err(e) => {
+            // If get_mcp_by_id failed, release the op lock before returning.
+            chat_state
+                .tool_manager
+                .ops_in_progress
+                .lock()
+                .await
+                .remove(&id);
+            return Err(e);
+        }
+    };
 
     // Update the database status first to mark it as disabled
     {
@@ -531,84 +594,101 @@ pub async fn disable_mcp_server(
         store_guard
             .change_mcp_status(id, true)
             .map_err(|e| e.to_string())?;
-    } // store_guard is dropped here
+    }
 
     // Stop the MCP server using the function manager (async operation).
-    // We spawn this as a background task to avoid blocking the disable operation.
-    // The server is already marked as disabled in the database.
     let tool_manager = chat_state.tool_manager.clone();
-    let server_name = mcp_name.clone();
 
     tokio::spawn(async move {
-        log::info!("Starting to stop MCP server '{}'", server_name);
+        log::info!("Starting to stop MCP server '{}'", mcp_name);
 
-        match tool_manager.stop_mcp_server(&server_name).await {
+        match tool_manager.stop_mcp_server(&mcp_name).await {
             Ok(_) => {
                 log::info!(
                     "MCP server '{}' stopped successfully after being disabled",
-                    server_name
+                    mcp_name
                 );
             }
             Err(e) => {
                 log::error!(
                     "Failed to stop MCP server '{}' after disabling: {}",
-                    server_name,
+                    mcp_name,
                     e
                 );
-                // Note: The server is marked as disabled in the database but may still be running
-                // Users can try to restart it manually or check the configuration
             }
         }
 
-        log::info!("Finished stopping MCP server '{}'", server_name);
+        log::info!("Finished stopping MCP server '{}'", mcp_name);
+        // Release the operation lock once the task is complete.
+        tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
     Ok(())
 }
 
-/// Restart an MCP server
-///
-/// Restarts the specified MCP server.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to restart.
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful, or an error message.
 #[tauri::command]
 pub async fn restart_mcp_server(
     main_store: State<'_, Arc<Mutex<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    let mcp_config = {
+    // Acquire operation lock for this server ID to prevent race conditions.
+    {
+        let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
+        if !ops.insert(id) {
+            return Err(t!("mcp.op_in_progress_error").to_string());
+        }
+    }
+
+    // STEP 1: Extract all needed data from the main_store, then drop the lock.
+    let server_info = {
         let store_guard = main_store
             .lock()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mcp = store_guard
+        store_guard
             .config
             .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
-
-        // Only restart if the server is enabled (not disabled)
-        if mcp.disabled {
-            return Err(
-                "Cannot restart a disabled MCP server. Please enable it first.".to_string(),
-            );
-        }
-
-        mcp.config.clone()
+            .map(|mcp| (mcp.name.clone(), mcp.disabled))
+            .map_err(|e| e.to_string())
     };
 
-    // Restart the MCP server in a background task to avoid blocking
-    let fm = chat_state.tool_manager.clone();
-    let server_name = mcp_config.name.clone();
+    // STEP 2: Perform logic and awaits *after* the lock is released.
+    let server_name = match server_info {
+        Ok((name, disabled)) => {
+            if disabled {
+                // It's safe to await here because the store_guard is dropped.
+                chat_state
+                    .tool_manager
+                    .ops_in_progress
+                    .lock()
+                    .await
+                    .remove(&id);
+                return Err(
+                    "Cannot restart a disabled MCP server. Please enable it first.".to_string(),
+                );
+            }
+            name
+        }
+        Err(e) => {
+            // If get_mcp_by_id failed, release the op lock before returning.
+            chat_state
+                .tool_manager
+                .ops_in_progress
+                .lock()
+                .await
+                .remove(&id);
+            return Err(e);
+        }
+    };
 
+    // Clone Arcs for the background task.
+    let tool_manager = chat_state.tool_manager.clone();
+    let main_store_clone = main_store.inner().clone();
+
+    // Restart the MCP server in a background task to avoid blocking the UI.
     tokio::spawn(async move {
-        // First stop the server
-        if let Err(e) = fm.stop_mcp_server(&server_name).await {
+        // First, stop the server.
+        if let Err(e) = tool_manager.stop_mcp_server(&server_name).await {
             log::warn!(
                 "Failed to stop MCP server '{}' during restart: {}",
                 server_name,
@@ -616,16 +696,133 @@ pub async fn restart_mcp_server(
             );
         }
 
-        // Then start it again (this will automatically send "Starting" status)
-        if let Err(e) = fm.start_mcp_server(mcp_config).await {
+        // Then, get the latest config from the database right before starting.
+        // This is carefully structured to not hold the std::sync::MutexGuard across an await.
+        let config_to_start: Option<McpServerConfig> = {
+            match main_store_clone.lock() {
+                Ok(store_guard) => {
+                    // Lock succeeded, now check the config
+                    match store_guard.config.get_mcp_by_id(id) {
+                        Ok(mcp) => {
+                            if mcp.disabled {
+                                log::info!("MCP server '{}' was disabled before it could be restarted. Aborting restart.", server_name);
+                                None // Abort if disabled
+                            } else {
+                                Some(mcp.config) // Success!
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to get MCP config for id {} during restart: {}. Aborting restart.", id, e);
+                            None // Config lookup failed
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to lock main_store during restart: {}", e);
+                    None // Locking failed
+                }
+            }
+        }; // store_guard is dropped here.
+
+        // Now, with the lock released, we can use the config and await other operations.
+        if let Some(mcp_config) = config_to_start {
+            if let Err(e) = tool_manager.clone().start_mcp_server(mcp_config).await {
+                log::error!(
+                    "Failed to start MCP server '{}' during restart: {}",
+                    server_name,
+                    e
+                );
+            } else {
+                log::info!("MCP server '{}' restarted successfully", server_name);
+            }
+        }
+
+        // Finally, release the operation lock.
+        tool_manager.ops_in_progress.lock().await.remove(&id);
+    });
+
+    Ok(())
+}
+
+/// Refresh the tool list for an MCP server.
+///
+/// This command fetches the latest tool list from the specified MCP server
+/// and updates the application's in-memory state.
+///
+/// # Arguments
+/// - `chat_state` - The state of the chat system.
+/// - `main_store` - The state of the main application store.
+/// - `id` - The ID of the MCP server to refresh.
+///
+/// # Returns
+/// * `Result<(), String>` - Ok if successful, or an error message.
+#[tauri::command]
+pub async fn refresh_mcp_server(
+    chat_state: State<'_, Arc<ChatState>>,
+    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    id: i64,
+) -> Result<(), String> {
+    // Acquire operation lock for this server ID to prevent race conditions.
+    {
+        let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
+        if !ops.insert(id) {
+            return Err(t!("mcp.op_in_progress_error").to_string());
+        }
+    }
+
+    // STEP 1: Extract all needed data from the main_store, then drop the lock.
+    let server_info = {
+        let store_guard = main_store
+            .lock()
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        store_guard
+            .config
+            .get_mcp_by_id(id)
+            .map(|mcp| (mcp.name.clone(), mcp.disabled))
+            .map_err(|e| e.to_string())
+    };
+
+    // STEP 2: Perform logic and awaits *after* the lock is released.
+    let server_name = match server_info {
+        Ok((name, disabled)) => {
+            if disabled {
+                // It's safe to await here because the store_guard is dropped.
+                chat_state
+                    .tool_manager
+                    .ops_in_progress
+                    .lock()
+                    .await
+                    .remove(&id);
+                return Err("Cannot refresh a disabled MCP server.".to_string());
+            }
+            name
+        }
+        Err(e) => {
+            // If get_mcp_by_id failed, release the op lock before returning.
+            chat_state
+                .tool_manager
+                .ops_in_progress
+                .lock()
+                .await
+                .remove(&id);
+            return Err(e);
+        }
+    };
+
+    // Spawn a background task to do the refresh, so the UI is not blocked.
+    let tool_manager = chat_state.tool_manager.clone();
+    log::info!("Triggered tool refresh for MCP server '{}'", server_name);
+
+    tokio::spawn(async move {
+        if let Err(e) = tool_manager.refresh_mcp_server_tools(&server_name).await {
             log::error!(
-                "Failed to start MCP server '{}' during restart: {}",
+                "Error refreshing MCP server '{}' in background: {}",
                 server_name,
                 e
             );
-        } else {
-            log::info!("MCP server '{}' restarted successfully", server_name);
         }
+        // Release the operation lock once the task is complete.
+        tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
     Ok(())

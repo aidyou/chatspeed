@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "MCPサーバー '%{server_name}' の設定エラー: %{error}"
     config_mismatch: "MCP設定の不一致、作成中のMCPクライアント %{client}, 設定タイプ: %{protocol_type}"
     failed_to_call_tool: "MCPツールの呼び出しに失敗しました - %{server_name}::%{tool_name}(%{args}), エラー: %{error}"
+    http_service_start_failed: "MCP HTTPサービスの起動に失敗しました (URL: %{url}), 原因: %{error}"
+    http_url_cant_be_empty: "MCP HTTPクライアントのURLパラメータは空にできません"
     invalid_tool_name: "無効なMCPツール名形式: %{name}"
     list_tools_timeout: "%{name} のツールリスト取得がタイムアウトしました"
     no_running: "MCPクライアント '%{client}' が実行されていません。設定を確認してサービスを再起動してください"
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "SSEクライアントのURLパラメータは空にできません"
     stdio_args_cant_be_empty: "stdioクライアントのargsパラメータは空にできません"
     stdio_command_cant_be_empty: "stdioクライアントの「起動コマンド」パラメータcommandは空にできません"
-    stdio_command_not_found_no_help: "MCPサービスの起動に失敗しました: コマンド \"%{command}\" が見つかりません (元のエラー: %{original_error})。コマンドがインストールされ、システムのPATH環境変数に含まれていることを確認してください。"
-    stdio_command_not_found_with_help: "MCPサービスの起動に失敗しました: コマンド \"%{command}\" が見つかりません (元のエラー: %{original_error})。"
+    stdio_command_not_found_no_help: 'MCPサービスの起動に失敗しました: コマンド "%{command}" が見つかりません (元のエラー: %{original_error})。コマンドがインストールされ、システムのPATH環境変数に含まれていることを確認してください。'
+    stdio_command_not_found_with_help: 'MCPサービスの起動に失敗しました: コマンド "%{command}" が見つかりません (元のエラー: %{original_error})。'
     stdio_npx_not_found_help: "これは通常、Node.jsが正しくインストールされていないか、'npx'コマンドがシステムのPATH環境変数に含まれていないことを意味します。Node.jsのインストールを確認してください。"
     stdio_process_creation_failed: "Stdioプロセスの作成に失敗しました (コマンド: %{command}), 原因: %{error}"
     stdio_service_start_failed: "Stdioサービスの起動に失敗しました (コマンド: %{command}), 原因: %{error}"
-    stdio_uvx_not_found_help: "これは、Python環境または \"%{command}\" ツールが正しく設定されていないか、システムのPATH環境変数に含まれていないことを意味する可能性があります。Pythonおよび \"%{command}\" の設定を確認してください。"
-  invalid_server_address: "無効なMCPサーバーアドレス"
+    stdio_uvx_not_found_help: 'これは、Python環境または "%{command}" ツールが正しく設定されていないか、システムのPATH環境変数に含まれていないことを意味する可能性があります。Pythonおよび "%{command}" の設定を確認してください。'
+  op_in_progress_error: "このサーバーでは既に操作が進行中です。後でもう一度お試しください。"
   proxy:
     service_description: "MCPプロキシサーバー - 有効になっているすべてのMCPツールへの統一されたアクセスを提供します"
     tool_execution_error: "ツール実行エラー: %{error}"
+    tool_not_found: "MCPツール '%{tool_name}' が見つかりません"
 
 network:
   client_build_error: "HTTPクライアントの作成に失敗しました: %{error}"
@@ -253,15 +256,6 @@ tray:
   settings: "設定"
   skill: "スキル"
 
-updater:
-  errors:
-    update_not_found: "現在最新バージョンです。利用可能な更新はありません"
-    version_mismatch: "バージョンの不一致。期待されるインストールバージョンがサーバーから提供された更新バージョンと異なります。更新を再確認してください"
-    version_parse: "バージョン解析エラー: 期待バージョン '%{version}', エラー: %{error}"
-    update_request: "更新リクエストに失敗しました: %{error}"
-    download: "更新のダウンロードまたはインストールに失敗しました: %{error}"
-    config: "アップデーター設定エラー: %{error}"
-
 tools:
   chat_completion_failed: "チャット補完の実行に失敗しました: %{details}"
   chat_completion_no_content: "AIモデルはコンテンツを返しませんでした。入力を確認するか、再試行してください"
@@ -269,7 +263,6 @@ tools:
   function_already_exists: "関数は既に存在します: %{name}"
   function_not_found: "ワークフローにツール関数が見つかりません: %{name}"
   invalid_search_provider: "無効な検索サービスプロバイダー '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "無効なタイムゾーンパラメータ '%{timezone}'"
   keyword_must_be_non_empty: "キーワード(kw)パラメータは空でない文字列または空でない配列である必要があります"
   invalid_model_name: "無効なモデル名: %{model_name}"
   max_retries_exceeded: "最大リトライ回数を超えました: %{item}"
@@ -310,16 +303,16 @@ tools:
     summarization_success: "✔ 「%{title}」の分析が完了しました"
     summarizing_webpage: "▷ 「%{title}」を分析中"
     summarizing: "☞ ウェブコンテンツを分析中"
-  plot:
-    chp_call_failed: "プロットサービスの呼び出しに失敗しました: %{details}"
-    data_must_be_object: "データ(data)パラメータはオブジェクトである必要があります"
-    failed_to_generate_plot: "グラフの生成に失敗しました"
-    line_bar_x_must_be_non_empty_array: "折れ線グラフ/棒グラフのX軸データ(x)パラメータは空でない配列である必要があります"
-    line_bar_y_must_be_non_empty_array: "折れ線グラフ/棒グラフのY軸データ(y)パラメータは空でない配列である必要があります"
-    pie_labels_must_be_non_empty_array: "円グラフのラベル(labels)パラメータは空でない配列である必要があります"
-    pie_values_must_be_non_empty_array: "円グラフの数値(values)パラメータは空でない配列である必要があります"
-    plot_type_must_be_string: "プロットタイプ(plot_type)パラメータは文字列である必要があります"
-    plot_type_must_not_be_empty: "プロットタイプ(plot_type)パラメータは空にできません"
+
+updater:
+  errors:
+    config: "アップデーター設定エラー: %{error}"
+    download: "更新のダウンロードまたはインストールに失敗しました: %{error}"
+    install: "更新のインストールに失敗しました: %{error}"
+    update_not_found: "現在最新バージョンです。利用可能な更新はありません"
+    update_request: "更新リクエストに失敗しました: %{error}"
+    version_mismatch: "バージョンの不一致。期待されるインストールバージョンがサーバーから提供された更新バージョンと異なります。更新を再確認してください"
+    version_parse: "バージョン解析エラー: 期待バージョン '%{version}', エラー: %{error}"
 
 workflow:
   array_index_out_of_bounds: "配列インデックスが範囲外です: %{index}"

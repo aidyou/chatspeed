@@ -52,8 +52,9 @@ use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, Mod
 use crate::commands::constants::URL_REGEX;
 use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
 use crate::db::MainStore;
-use crate::http::chp::{Chp, SearchProvider};
+use crate::http::chp::Chp;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
+use crate::search::SearchProviderName;
 use crate::tools::{DeepSearch, ModelName, ToolManager};
 
 use rust_i18n::t;
@@ -495,8 +496,8 @@ pub async fn deep_search(
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
         .get_config(CFG_SEARCH_ENGINE, vec![])
         .into_iter()
-        .filter_map(|s: String| s.trim().parse::<SearchProvider>().ok())
-        .collect::<Vec<SearchProvider>>();
+        .filter_map(|s: String| s.trim().parse::<SearchProviderName>().ok())
+        .collect::<Vec<SearchProviderName>>();
 
     let tx = chat_state.channels.get_or_create_channel(window).await?;
     let tx_clone = tx.clone();
@@ -522,7 +523,7 @@ pub async fn deep_search(
     let reasoning_model = ToolManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref())
         .map_err(|e| {
             t!(
-                "workflow.failed_to_get_model",
+                "tools.failed_to_get_model",
                 model_type = ModelName::Reasoning.as_ref(),
                 error = e.to_string()
             )
@@ -532,7 +533,7 @@ pub async fn deep_search(
     let general_model = ToolManager::get_model(main_store.inner(), ModelName::General.as_ref())
         .map_err(|e| {
             t!(
-                "workflow.failed_to_get_model",
+                "tools.failed_to_get_model",
                 model_type = ModelName::General.as_ref(),
                 error = e.to_string()
             )

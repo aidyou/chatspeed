@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "Erro de configuração do servidor MCP '%{server_name}': %{error}"
     config_mismatch: "Incompatibilidade de configuração MCP, cliente MCP criado %{client}, tipo de configuração: %{protocol_type}"
     failed_to_call_tool: "Falha ao chamar a ferramenta MCP - %{server_name}::%{tool_name}(%{args}), erro: %{error}"
+    http_service_start_failed: "Falha ao iniciar o serviço MCP HTTP (URL: %{url}), motivo: %{error}"
+    http_url_cant_be_empty: "O parâmetro URL do cliente MCP HTTP não pode estar vazio"
     invalid_tool_name: "Formato de nome de ferramenta MCP inválido: %{name}"
     list_tools_timeout: "Tempo limite esgotado para obter a lista de ferramentas de %{name}"
     no_running: "O cliente MCP '%{client}' não está em execução, verifique a configuração e reinicie o serviço"
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "O parâmetro URL do cliente SSE não pode estar vazio"
     stdio_args_cant_be_empty: "O parâmetro args do cliente stdio não pode estar vazio"
     stdio_command_cant_be_empty: "O parâmetro command 'Comando de Inicialização' do cliente stdio não pode estar vazio"
-    stdio_command_not_found_no_help: "Falha ao iniciar o serviço MCP: comando \"%{command}\" não encontrado (erro original: %{original_error}). Certifique-se de que o comando está instalado e no PATH do seu sistema."
-    stdio_command_not_found_with_help: "Falha ao iniciar o serviço MCP: comando \"%{command}\" não encontrado (erro original: %{original_error})."
+    stdio_command_not_found_no_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}). Certifique-se de que o comando está instalado e no PATH do seu sistema.'
+    stdio_command_not_found_with_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}).'
     stdio_npx_not_found_help: "Isso geralmente significa que o Node.js não está instalado corretamente ou o comando 'npx' não está no PATH do seu sistema. Verifique a instalação do Node.js."
     stdio_process_creation_failed: "Falha ao criar o processo Stdio (comando: %{command}), motivo: %{error}"
     stdio_service_start_failed: "Falha ao iniciar o serviço Stdio (comando: %{command}), motivo: %{error}"
-    stdio_uvx_not_found_help: "Isso pode significar que seu ambiente Python ou a ferramenta \"%{command}\" não está configurada corretamente ou não está no PATH do seu sistema. Verifique a configuração do Python e da ferramenta \"%{command}\"."
-  invalid_server_address: "Endereço de servidor MCP inválido"
+    stdio_uvx_not_found_help: 'Isso pode significar que seu ambiente Python ou a ferramenta "%{command}" não está configurada corretamente ou não está no PATH do seu sistema. Verifique a configuração do Python e da ferramenta "%{command}".'
+  op_in_progress_error: "Uma operação já está em andamento para este servidor. Por favor, tente novamente mais tarde."
   proxy:
     service_description: "Servidor proxy MCP - fornece acesso unificado a todas as ferramentas MCP habilitadas"
     tool_execution_error: "Erro de execução da ferramenta: %{error}"
+    tool_not_found: "Ferramenta MCP '%{tool_name}' não encontrada"
 
 network:
   client_build_error: "Falha ao construir o cliente HTTP: %{error}"
@@ -250,7 +253,6 @@ tools:
   invalid_search_provider: "Provedor de serviço de pesquisa inválido '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "O parâmetro palavra-chave (kw) deve ser uma string não vazia ou um array não vazio"
   invalid_model_name: "Nome de modelo inválido: %{model_name}"
-  invalid_timezone_parameter: "Parâmetro de fuso horário '%{timezone}' inválido"
   max_retries_exceeded: "Número máximo de tentativas excedido: %{item}"
   messages_must_be_array: "O parâmetro de mensagens deve ser um array"
   mcp_server_not_found: "Servidor MCP não encontrado: %{name}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ Análise de '%{title}' concluída"
     summarizing_webpage: "▷ Analisando '%{title}'"
     summarizing: "☞ Analisando conteúdo da web"
-  plot:
-    chp_call_failed: "Falha na chamada do serviço de plotagem: %{details}"
-    data_must_be_object: "O parâmetro de dados deve ser um objeto"
-    failed_to_generate_plot: "Falha ao gerar o gráfico"
-    line_bar_x_must_be_non_empty_array: "O parâmetro de dados do eixo X para o gráfico de linhas/barras deve ser um array não vazio"
-    line_bar_y_must_be_non_empty_array: "O parâmetro de dados do eixo Y para o gráfico de linhas/barras deve ser um array não vazio"
-    pie_labels_must_be_non_empty_array: "O parâmetro de rótulos para o gráfico de pizza deve ser um array não vazio"
-    pie_values_must_be_non_empty_array: "O parâmetro de valores para o gráfico de pizza deve ser um array não vazio"
-    plot_type_must_be_string: "O parâmetro de tipo de gráfico deve ser uma string"
-    plot_type_must_not_be_empty: "O parâmetro de tipo de gráfico não pode estar vazio"
 
 tray:
   about: "Sobre"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Erro de configuração do atualizador: %{error}"
+    download: "Falha ao baixar ou instalar a atualização: %{error}"
+    install: "Falha ao instalar a atualização: %{error}"
     update_not_found: "Atualmente a versão mais recente, sem atualizações disponíveis"
+    update_request: "Falha na solicitação de atualização: %{error}"
     version_mismatch: "Incompatibilidade de versão, a versão de instalação esperada difere da versão de atualização fornecida pelo servidor, verifique novamente as atualizações"
     version_parse: "Erro de análise de versão: versão esperada '%{version}', erro: %{error}"
-    update_request: "Falha na solicitação de atualização: %{error}"
-    download: "Falha ao baixar ou instalar a atualização: %{error}"
-    config: "Erro de configuração do atualizador: %{error}"
 
 workflow:
   array_index_out_of_bounds: "Índice de array fora dos limites: %{index}"

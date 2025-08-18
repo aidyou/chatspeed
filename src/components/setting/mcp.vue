@@ -125,6 +125,7 @@
                 <el-radio-group v-model="currentServerForm.config.type">
                   <el-radio value="stdio">Stdio</el-radio>
                   <el-radio value="sse">SSE</el-radio>
+                  <el-radio value="streamable_http">Streamable HTTP</el-radio>
                 </el-radio-group>
               </el-form-item>
 
@@ -146,9 +147,13 @@
                   <el-input v-model="currentServerForm.config.argsString" type="textarea" :rows="1"
                     :autosize="{ minRows: 1, maxRows: 3 }" :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
                 </el-form-item>
+                <el-form-item :label="$t('settings.mcp.form.env')" prop="config.envString">
+                  <el-input v-model="currentServerForm.config.envString" type="textarea" :rows="2"
+                    :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('settings.mcp.form.envPlaceholder')" />
+                </el-form-item>
               </template>
 
-              <template v-if="currentServerForm.config.type === 'sse'">
+              <template v-if="currentServerForm.config.type !== 'stdio'">
                 <el-form-item :label="$t('settings.mcp.form.url')" prop="config.url" :rules="[
                   {
                     required: true,
@@ -164,10 +169,6 @@
                   <el-input v-model="currentServerForm.config.proxy" />
                 </el-form-item>
               </template>
-              <el-form-item :label="$t('settings.mcp.form.env')" prop="config.envString">
-                <el-input v-model="currentServerForm.config.envString" type="textarea" :rows="2"
-                  :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('settings.mcp.form.envPlaceholder')" />
-              </el-form-item>
               <el-form-item :label="$t('settings.mcp.form.timeout')" prop="config.timeout">
                 <el-input v-model="currentServerForm.config.timeout" type="number"
                   :placeholder="$t('settings.mcp.form.timeoutPlaceholder')" />
@@ -342,7 +343,8 @@ watch(jsonConfigString, newJson => {
               currentServerForm.config.url = null
               currentServerForm.config.bearer_token = null
               currentServerForm.config.proxy = null
-            } else if (serverConfigFromFile.type === 'sse') {
+              currentServerForm.config.env = serverConfigFromFile.env || []
+            } else {
               currentServerForm.config.url = serverConfigFromFile.url || null
               currentServerForm.config.bearer_token = serverConfigFromFile.bearer_token || null
               currentServerForm.config.proxy = serverConfigFromFile.proxy || null
@@ -350,9 +352,9 @@ watch(jsonConfigString, newJson => {
               currentServerForm.config.command = null
               currentServerForm.config.args = []
               currentServerForm.config.argsString = ''
+              currentServerForm.config.env = []
             }
 
-            currentServerForm.config.env = serverConfigFromFile.env || []
             currentServerForm.config.envString = arrayToEnvString(currentServerForm.config.env)
 
             currentServerForm.config.disabled_tools = serverConfigFromFile.disabled_tools || []
@@ -410,7 +412,7 @@ const preparePayloadFromForm = form => {
   if (form.config.type === 'stdio') {
     serverConfigData.command = (form.config.command || '').trim()
     serverConfigData.args = parseStringToArray(form.config.argsString || '')
-  } else if (form.config.type === 'sse') {
+  } else {
     serverConfigData.url = (form.config.url || '').trim()
     if (form.config.bearer_token && form.config.bearer_token.trim()) {
       serverConfigData.bearer_token = form.config.bearer_token.trim()
@@ -801,8 +803,8 @@ const validatePlaceholders = () => {
   const placeholderRegex = /\{[^}]+\}/g
   const errors = []
 
-  // 检查 Bearer Token
-  if (currentServerForm.config.type === 'sse' && currentServerForm.config.bearer_token) {
+  // check Bearer Token, streamable_http and sse may has bearer_token
+  if (currentServerForm.config.type !== 'stdio' && currentServerForm.config.bearer_token) {
     const bearerToken = currentServerForm.config.bearer_token.trim()
     if (bearerToken && placeholderRegex.test(bearerToken)) {
       const matches = bearerToken.match(placeholderRegex)
@@ -812,7 +814,7 @@ const validatePlaceholders = () => {
     }
   }
 
-  // 检查环境变量
+  // check the env
   if (currentServerForm.config.envString) {
     const envString = currentServerForm.config.envString.trim()
     if (envString && placeholderRegex.test(envString)) {
@@ -823,8 +825,8 @@ const validatePlaceholders = () => {
     }
   }
 
-  // 检查 URL（如果是 SSE 类型）
-  if (currentServerForm.config.type === 'sse' && currentServerForm.config.url) {
+  // check the url, streamable_http and sse must be has url and may has placeholder in url
+  if (currentServerForm.config.type !== 'stdio' && currentServerForm.config.url) {
     const url = currentServerForm.config.url.trim()
     if (url && placeholderRegex.test(url)) {
       const matches = url.match(placeholderRegex)
@@ -834,7 +836,7 @@ const validatePlaceholders = () => {
     }
   }
 
-  // 检查命令和参数（如果是 stdio 类型）
+  // The stdio may has placeholder in command
   if (currentServerForm.config.type === 'stdio') {
     if (currentServerForm.config.command && placeholderRegex.test(currentServerForm.config.command)) {
       const matches = currentServerForm.config.command.match(placeholderRegex)

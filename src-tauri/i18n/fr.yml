@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "Erreur de configuration du serveur MCP '%{server_name}' : %{error}"
     config_mismatch: "Inadéquation de la configuration MCP, client MCP créé %{client}, type de configuration : %{protocol_type}"
     failed_to_call_tool: "Échec de l'appel de l'outil MCP - %{server_name}::%{tool_name}(%{args}), erreur : %{error}"
+    http_service_start_failed: "Échec du démarrage du service MCP HTTP (URL : %{url}), raison : %{error}"
+    http_url_cant_be_empty: "Le paramètre d'URL du client MCP HTTP ne peut pas être vide"
     invalid_tool_name: "Format de nom d'outil MCP non valide : %{name}"
     list_tools_timeout: "Délai d'attente pour l'obtention de la liste d'outils pour %{name}"
     no_running: "Le client MCP '%{client}' n'est pas en cours d'exécution, veuillez vérifier la configuration et redémarrer le service"
@@ -193,16 +195,17 @@ mcp:
     sse_url_cant_be_empty: "Le paramètre d'URL du client SSE ne peut pas être vide"
     stdio_args_cant_be_empty: "Le paramètre d'arguments du client stdio ne peut pas être vide"
     stdio_command_cant_be_empty: "Le paramètre de commande 'Commande de démarrage' du client stdio ne peut pas être vide"
-    stdio_command_not_found_no_help: "Échec du démarrage du service MCP : commande \"%{command}\" non trouvée (erreur d'origine : %{original_error}). Veuillez vous assurer que la commande est installée et dans la variable d'environnement PATH de votre système."
-    stdio_command_not_found_with_help: "Échec du démarrage du service MCP : commande \"%{command}\" non trouvée (erreur d'origine : %{original_error})."
+    stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}). Veuillez vous assurer que la commande est installée et dans la variable d''environnement PATH de votre système.'
+    stdio_command_not_found_with_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}).'
     stdio_npx_not_found_help: "Cela signifie généralement que Node.js n'est pas correctement installé ou que la commande 'npx' ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre installation de Node.js."
     stdio_process_creation_failed: "Échec de la création du processus Stdio (commande : %{command}), raison : %{error}"
     stdio_service_start_failed: "Échec du démarrage du service Stdio (commande : %{command}), raison : %{error}"
-    stdio_uvx_not_found_help: "Cela peut signifier que votre environnement Python ou l'outil \"%{command}\" n'est pas correctement configuré ou qu'il ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre configuration de Python et de \"%{command}\"."
-  invalid_server_address: "Adresse de serveur MCP non valide"
+    stdio_uvx_not_found_help: 'Cela peut signifier que votre environnement Python ou l''outil "%{command}" n''est pas correctement configuré ou qu''il ne se trouve pas dans la variable d''environnement PATH de votre système. Veuillez vérifier votre configuration de Python et de "%{command}".'
+  op_in_progress_error: "Une opération est déjà en cours pour ce serveur. Veuillez réessayer plus tard."
   proxy:
     service_description: "Serveur proxy MCP - fournit un accès unifié à tous les outils MCP activés"
     tool_execution_error: "Erreur d'exécution de l'outil : %{error}"
+    tool_not_found: "Outil MCP '%{tool_name}' introuvable"
 
 network:
   client_build_error: "Échec de la création du client HTTP : %{error}"
@@ -248,7 +251,6 @@ tools:
   function_already_exists: "La fonction existe déjà : %{name}"
   function_not_found: "Fonction d'outil non trouvée dans le flux de travail : %{name}"
   invalid_search_provider: "Fournisseur de services de recherche non valide '%{provider_name}' : %{details}"
-  invalid_timezone_parameter: "Paramètre de fuseau horaire '%{timezone}' non valide"
   keyword_must_be_non_empty: "Le paramètre de mot-clé (kw) doit être une chaîne non vide ou un tableau non vide"
   invalid_model_name: "Nom de modèle non valide : %{model_name}"
   max_retries_exceeded: "Nombre maximal de tentatives dépassé : %{item}"
@@ -289,17 +291,6 @@ tools:
     summarization_success: "✔ Analyse de '%{title}' terminée"
     summarizing_webpage: "▷ Analyse de '%{title}'"
     summarizing: "☞ Analyse du contenu Web"
-  plot:
-    chp_call_failed: "Échec de l'appel du service de traçage : %{details}"
-    data_must_be_object: "Le paramètre de données doit être un objet"
-    failed_to_generate_plot: "Échec de la génération du graphique"
-    line_bar_x_must_be_non_empty_array: "Le paramètre de données de l'axe des X pour le graphique en courbes/à barres doit être un tableau non vide"
-    line_bar_y_must_be_non_empty_array: "Le paramètre de données de l'axe des Y pour le graphique en courbes/à barres doit être un tableau non vide"
-    pie_labels_must_be_non_empty_array: "Le paramètre d'étiquettes pour le graphique à secteurs doit être un tableau non vide"
-    pie_values_must_be_non_empty_array: "Le paramètre de valeurs pour le graphique à secteurs doit être un tableau non vide"
-    plot_type_must_be_string: "Le paramètre de type de tracé doit être une chaîne"
-    plot_type_must_not_be_empty: "Le paramètre de type de tracé ne peut pas être vide"
-
 
 tray:
   about: "À propos"
@@ -315,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "Erreur de configuration du programme de mise à jour : %{error}"
+    download: "Échec du téléchargement ou de l'installation de la mise à jour : %{error}"
+    install: "Échec de l'installation de la mise à jour : %{error}"
     update_not_found: "Version actuelle la plus récente, aucune mise à jour disponible"
+    update_request: "Échec de la demande de mise à jour : %{error}"
     version_mismatch: "Incompatibilité de version, la version d'installation attendue diffère de la version de mise à jour fournie par le serveur, veuillez revérifier les mises à jour"
     version_parse: "Erreur d'analyse de version : version attendue '%{version}', erreur : %{error}"
-    update_request: "Échec de la demande de mise à jour : %{error}"
-    download: "Échec du téléchargement ou de l'installation de la mise à jour : %{error}"
-    config: "Erreur de configuration du programme de mise à jour : %{error}"
 
 workflow:
   array_index_out_of_bounds: "Indice de tableau hors limites : %{index}"

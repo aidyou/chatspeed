@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     scraper::webview_wrapper::WebviewScraper,
-    tools::{error::ToolError, ToolDefinition, ToolResult},
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
@@ -57,7 +57,7 @@ impl ToolDefinition for WebScraperTool {
     }
 
     /// Executes the web scraper tool.
-    async fn call(&self, params: Value) -> ToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
         // Get the URL from parameters
         let url = params["url"].as_str().ok_or_else(|| {
             ToolError::FunctionParamError(t!("tools.url_must_be_string").to_string())
@@ -96,12 +96,15 @@ impl ToolDefinition for WebScraperTool {
         })?;
 
         // Return the scraped content as JSON
-        Ok(json!({
-            "url": url,
-            "content": content,
-            "selector": selector.unwrap_or("body"),
-            "format": "markdown"
-        }))
+        Ok(ToolCallResult::success(
+            Some(content.clone()),
+            Some(json!({
+                "url": url,
+                "content": content,
+                "selector": selector.unwrap_or("body"),
+                "format": "markdown"
+            })),
+        ))
     }
 }
 

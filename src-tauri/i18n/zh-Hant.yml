@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "MCP伺服器 '%{server_name}' 配置錯誤: %{error}"
     config_mismatch: "MCP配置不符，正在建立的MCP用戶端 %{client}，配置類型：%{protocol_type}"
     failed_to_call_tool: "呼叫MCP工具失敗 - %{server_name}::%{tool_name}(%{args})，錯誤: %{error}"
+    http_service_start_failed: "啟動 MCP HTTP 服務失敗 (URL: %{url})，原因: %{error}"
+    http_url_cant_be_empty: "MCP HTTP 用戶端 URL 參數不可為空"
     invalid_tool_name: "無效的MCP工具名稱格式: %{name}"
     list_tools_timeout: "獲取 %{name} 工具清單逾時"
     no_running: "MCP 用戶端 '%{client}' 未啟動，請檢查配置並重新啟動服務"
@@ -199,10 +201,11 @@ mcp:
     stdio_process_creation_failed: "建立 Stdio 程序失敗 (指令: %{command})，原因: %{error}"
     stdio_service_start_failed: "啟動 Stdio 服務失敗 (指令: %{command})，原因: %{error}"
     stdio_uvx_not_found_help: "這可能意味著您的 Python 環境或「%{command}」工具未正確設定，或它不在系統的 PATH 環境變數中。請檢查您的 Python 和「%{command}」設定。"
-  invalid_server_address: "無效的MCP伺服器位址"
+  op_in_progress_error: "當前伺服器正忙，請稍後再試"
   proxy:
     service_description: "MCP 代理伺服器 - 提供對所有已啟用 MCP 工具的統一存取介面"
     tool_execution_error: "工具執行錯誤: %{error}"
+    tool_not_found: "MCP工具 '%{tool_name}' 未找"
 
 network:
   client_build_error: "建立HTTP用戶端失敗: %{error}"
@@ -250,7 +253,6 @@ tools:
   invalid_search_provider: "無效的搜尋服務提供者 '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "關鍵詞(kw)參數必須是非空字串或非空陣列"
   invalid_model_name: "無效的模型名稱: %{model_name}"
-  invalid_timezone_parameter: "時區 '%{timezone}' 參數無效"
   max_retries_exceeded: "超過最大重試次數: %{item}"
   messages_must_be_array: "訊息參數(messages)必須是一個陣列"
   mcp_server_not_found: "未找到MCP伺服器: %{name}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ 「%{title}」分析完成"
     summarizing_webpage: "▷ 正在分析「%{title}」"
     summarizing: "☞ 正在分析網頁內容"
-  plot:
-    chp_call_failed: "呼叫繪圖服務失敗: %{details}"
-    data_must_be_object: "資料(data)參數必須是一個物件"
-    failed_to_generate_plot: "產生圖表失敗"
-    line_bar_x_must_be_non_empty_array: "折線圖/長條圖的X軸資料(x)參數必須是非空陣列"
-    line_bar_y_must_be_non_empty_array: "折線圖/長條圖的Y軸資料(y)參數必須是非空陣列"
-    pie_labels_must_be_non_empty_array: "圓餅圖的標籤(labels)參數必須是非空陣列"
-    pie_values_must_be_non_empty_array: "圓餅圖的數值(values)參數必須是非空陣列"
-    plot_type_must_be_string: "繪圖類型(plot_type)參數必須是字串"
-    plot_type_must_not_be_empty: "繪圖類型(plot_type)參數不可為空"
 
 tray:
   about: "關於"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "更新器配置錯誤: %{error}"
+    download: "下載或安裝更新失敗: %{error}"
+    install: "安裝更新失敗: %{error}"
     update_not_found: "目前已是最新版本，暫無可用更新"
+    update_request: "更新請求失敗: %{error}"
     version_mismatch: "版本不符，期望安裝的版本與伺服器提供的更新版本不一致，請重新檢查更新"
     version_parse: "版本解析錯誤: 期望版本 '%{version}', 錯誤: %{error}"
-    update_request: "更新請求失敗: %{error}"
-    download: "下載或安裝更新失敗: %{error}"
-    config: "更新器配置錯誤: %{error}"
 
 workflow:
   array_index_out_of_bounds: "陣列索引越界: %{index}"

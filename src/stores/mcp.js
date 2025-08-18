@@ -241,6 +241,18 @@ export const useMcpStore = defineStore('mcp', () => {
     }
   };
 
+  const refreshMcpTools = async (id) => {
+    loading.value = true;
+    error.value = null;
+    try {
+      await invoke('refresh_mcp_server', { id });
+    } catch (err) {
+      await _handleError(err);
+    } finally {
+      loading.value = false;
+    }
+  };
+
   /**
    * Fetches the tools provided by a specific MCP server.
    * @param {number} serverId - The ID of the MCP server.
@@ -337,9 +349,17 @@ export const useMcpStore = defineStore('mcp', () => {
   const updateServerStatus = (serverName, status) => {
     const index = servers.value.findIndex(s => s.name === serverName);
     if (index !== -1) {
+      const server = servers.value[index];
       // Create a new object to ensure reactivity update is picked up by Vue
-      servers.value.splice(index, 1, { ...servers.value[index], status: status });
+      servers.value.splice(index, 1, { ...server, status: status });
       console.debug(`MCP Store: Updated status for server "${serverName}" to`, status);
+
+      // When a server becomes running (e.g., after a restart or refresh),
+      // it's the perfect time to fetch its latest tool list.
+      if (status === 'running') {
+        console.debug(`Server "${serverName}" is now running, refreshing its tool list.`);
+        fetchMcpServerTools(server.id);
+      }
     }
   };
 
@@ -467,6 +487,7 @@ export const useMcpStore = defineStore('mcp', () => {
     enableMcpServer,
     disableMcpServer,
     restartMcpServer,
+    refreshMcpTools,
     fetchMcpServerTools,
     toggleDisableTool,
     handleSyncStateUpdate,

@@ -624,7 +624,7 @@ impl WorkflowExecutor {
             }) => {
                 let function = function_manager.get_tool(&function).await.map_err(|_| {
                     WorkflowError::Execution(
-                        t!("workflow.function_not_found", name = function).to_string(),
+                        t!("tools.function_not_found", name = function).to_string(),
                     )
                 })?;
 
@@ -640,7 +640,7 @@ impl WorkflowExecutor {
                 }
 
                 self.context
-                    .set_output(output.unwrap_or(node.id), result)
+                    .set_output(output.unwrap_or(node.id), result.into())
                     .await?;
             }
             NodeType::Loop(_) => {
@@ -767,7 +767,7 @@ impl WorkflowExecutor {
                                 .await
                                 .map_err(|_| {
                                     WorkflowError::Execution(
-                                        t!("workflow.function_not_found", name = function_name)
+                                        t!("tools.function_not_found", name = function_name)
                                             .to_string(),
                                     )
                                 })?;
@@ -836,9 +836,7 @@ impl WorkflowExecutor {
         for i in 0..3 {
             match function.call(params.clone()).await {
                 Ok(result) => {
-                    if Value::Null != result {
-                        return Ok(result);
-                    }
+                    return Ok(result.into());
                 }
                 Err(e) => {
                     log::error!(

@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "MCP 서버 '%{server_name}' 구성 오류: %{error}"
     config_mismatch: "MCP 구성 불일치, 생성 중인 MCP 클라이언트 %{client}, 구성 유형: %{protocol_type}"
     failed_to_call_tool: "MCP 도구 호출 실패 - %{server_name}::%{tool_name}(%{args}), 오류: %{error}"
+    http_service_start_failed: "MCP HTTP 서비스 시작 실패 (URL: %{url}), 원인: %{error}"
+    http_url_cant_be_empty: "MCP HTTP 클라이언트 URL 매개변수는 비워 둘 수 없습니다"
     invalid_tool_name: "잘못된 MCP 도구 이름 형식: %{name}"
     list_tools_timeout: "%_name} 도구 목록 가져오기 시간 초과"
     no_running: "MCP 클라이언트 '%{client}'가 실행 중이 아닙니다. 구성을 확인하고 서비스를 다시 시작하십시오."
@@ -199,10 +201,11 @@ mcp:
     stdio_process_creation_failed: "Stdio 프로세스 생성 실패 (명령: %{command}), 원인: %{error}"
     stdio_service_start_failed: "Stdio 서비스 시작 실패 (명령: %{command}), 원인: %{error}"
     stdio_uvx_not_found_help: "이는 Python 환경 또는 '%{command}' 도구가 올바르게 설정되지 않았거나 시스템의 PATH 환경 변수에 없음을 의미할 수 있습니다. Python 및 '%{command}' 설정을 확인하십시오."
-  invalid_server_address: "잘못된 MCP 서버 주소"
+  op_in_progress_error: "이 서버에서는 이미 작업이 진행 중입니다. 나중에 다시 시도해 주세요."
   proxy:
     service_description: "MCP 프록시 서버 - 활성화된 모든 MCP 도구에 대한 통합 액세스를 제공합니다."
     tool_execution_error: "도구 실행 오류: %{error}"
+    tool_not_found: "MCP 도구 '%{tool_name}' 을(를) 찾을 수 없습니다"
 
 network:
   client_build_error: "HTTP 클라이언트 빌드 실패: %{error}"
@@ -253,15 +256,6 @@ tray:
   settings: "설정"
   skill: "기술"
 
-updater:
-  errors:
-    update_not_found: "현재 최신 버전이며 사용 가능한 업데이트가 없습니다."
-    version_mismatch: "버전 불일치, 예상 설치 버전이 서버에서 제공한 업데이트 버전과 다릅니다. 업데이트를 다시 확인하십시오."
-    version_parse: "버전 구문 분석 오류: 예상 버전 '%{version}', 오류: %{error}"
-    update_request: "업데이트 요청 실패: %{error}"
-    download: "업데이트 다운로드 또는 설치 실패: %{error}"
-    config: "업데이터 구성 오류: %{error}"
-
 tools:
   chat_completion_failed: "채팅 자동 완성 실행 실패: %{details}"
   chat_completion_no_content: "AI 모델이 콘텐츠를 반환하지 않았습니다. 입력을 확인하거나 다시 시도하십시오."
@@ -269,7 +263,6 @@ tools:
   function_already_exists: "함수가 이미 존재합니다: %{name}"
   function_not_found: "워크플로에서 도구 함수를 찾을 수 없습니다: %{name}"
   invalid_search_provider: "잘못된 검색 서비스 제공자 '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "잘못된 시간대 매개변수 '%{timezone}'"
   keyword_must_be_non_empty: "키워드(kw) 매개변수는 비어 있지 않은 문자열 또는 비어 있지 않은 배열이어야 합니다."
   invalid_model_name: "잘못된 모델 이름: %{model_name}"
   max_retries_exceeded: "최대 재시도 횟수 초과: %{item}"
@@ -310,16 +303,16 @@ tools:
     summarization_success: "✔ '%{title}' 분석 완료"
     summarizing_webpage: "▷ '%{title}' 분석 중"
     summarizing: "☞ 웹 콘텐츠 분석 중"
-  plot:
-    chp_call_failed: "플로팅 서비스 호출 실패: %{details}"
-    data_must_be_object: "데이터(data) 매개변수는 객체여야 합니다."
-    failed_to_generate_plot: "차트 생성 실패"
-    line_bar_x_must_be_non_empty_array: "선/막대 차트의 X축 데이터(x) 매개변수는 비어 있지 않은 배열이어야 합니다."
-    line_bar_y_must_be_non_empty_array: "선/막대 차트의 Y축 데이터(y) 매개변수는 비어 있지 않은 배열이어야 합니다."
-    pie_labels_must_be_non_empty_array: "원형 차트의 레이블(labels) 매개변수는 비어 있지 않은 배열이어야 합니다."
-    pie_values_must_be_non_empty_array: "원형 차트의 값(values) 매개변수는 비어 있지 않은 배열이어야 합니다."
-    plot_type_must_be_string: "플롯 유형(plot_type) 매개변수는 문자열이어야 합니다."
-    plot_type_must_not_be_empty: "플롯 유형(plot_type) 매개변수는 비워 둘 수 없습니다."
+
+updater:
+  errors:
+    config: "업데이터 구성 오류: %{error}"
+    download: "업데이트 다운로드 또는 설치 실패: %{error}"
+    install: "업데이트 설치 실패: %{error}"
+    update_not_found: "현재 최신 버전이며 사용 가능한 업데이트가 없습니다."
+    update_request: "업데이트 요청 실패: %{error}"
+    version_mismatch: "버전 불일치, 예상 설치 버전이 서버에서 제공한 업데이트 버전과 다릅니다. 업데이트를 다시 확인하십시오."
+    version_parse: "버전 구문 분석 오류: 예상 버전 '%{version}', 오류: %{error}"
 
 workflow:
   array_index_out_of_bounds: "배열 인덱스 범위를 벗어났습니다: %{index}"

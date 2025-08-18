@@ -34,7 +34,7 @@ struct TavilyResult {
     url: String,
     content: String,
     raw_content: Option<String>,
-    score: Option<f64>,
+    score: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +113,7 @@ impl SearchProvider for TavilySearch {
                 },
                 content: item.raw_content,
                 score: item.score,
+                ..Default::default()
             })
             .collect();
 

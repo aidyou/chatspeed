@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     http::chp::Chp,
-    tools::{error::ToolError, ToolDefinition, ToolResult},
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 /// A function implementation for fetching data from a remote URL.
@@ -65,7 +65,7 @@ impl ToolDefinition for Crawler {
     ///
     /// # Returns
     /// * `FunctionResult` - The result of the function execution.
-    async fn call(&self, params: Value) -> ToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
         // Get the URL from the parameters
         let url = params["url"].as_str().ok_or_else(|| {
             ToolError::FunctionParamError(t!("tools.url_must_be_string").to_string())
@@ -101,7 +101,10 @@ impl ToolDefinition for Crawler {
             })?;
 
         // Return the results as JSON
-        Ok(json!(results))
+        Ok(ToolCallResult::success(
+            Some(results.content.clone()),
+            Some(json!(results)),
+        ))
     }
 }
 

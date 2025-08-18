@@ -273,7 +273,7 @@
         "tabForm": "表单编辑",
         "tabJson": "JSON 编辑",
         "timeout": "超时",
-        "timeoutPlaceholder": "设置请求超时时间，单位为秒，默认60秒",
+        "timeoutPlaceholder": "设置连接超时时间，单位为秒，默认15秒",
         "type": "类型",
         "url": "URL",
         "validationFailed": "表单验证失败，请检查输入。"

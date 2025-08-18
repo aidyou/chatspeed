@@ -185,6 +185,8 @@ mcp:
     config_error_for_server: "MCP服务器 '%{server_name}' 配置错误: %{error}"
     config_mismatch: "MCP配置不匹配，正在创建的MCP客户端%{client}，配置类型：%{protocol_type}"
     failed_to_call_tool: "调用MCP工具失败 - %{server_name}::%{tool_name}(%{args})，错误: %{error}"
+    http_service_start_failed: "启动 MCP HTTP 服务失败 (URL: %{url})，原因: %{error}"
+    http_url_cant_be_empty: "MCP HTTP 客户端 URL 参数不能为空"
     invalid_tool_name: "无效的MCP工具名称格式: %{name}"
     list_tools_timeout: "获取 %{name} 工具列表超时"
     no_running: "MCP 客户端 '%{client}' 未启动，请检查配置并重新启动服务"
@@ -199,10 +201,11 @@ mcp:
     stdio_process_creation_failed: "创建 Stdio 进程失败 (命令: %{command})，原因: %{error}"
     stdio_service_start_failed: "启动 Stdio 服务失败 (命令: %{command})，原因: %{error}"
     stdio_uvx_not_found_help: "这可能意味着您的 Python 环境或 “%{command}” 工具没有正确设置，或者它不在系统的 PATH 环境变量中。请检查您的 Python 和 “%{command}” 设置。"
-  invalid_server_address: "无效的MCP服务器地址"
+  op_in_progress_error: "当前服务器正忙，请稍后再试"
   proxy:
     service_description: "MCP 代理服务器 - 提供对所有已启用 MCP 工具的统一访问接口"
     tool_execution_error: "工具执行错误: %{error}"
+    tool_not_found: "MCP工具 '%{tool_name}' 未找到"
 
 network:
   client_build_error: "创建HTTP客户端失败: %{error}"
@@ -248,7 +251,6 @@ tools:
   function_already_exists: "函数已存在: %{name}"
   function_not_found: "工作流中未找到工具函数: %{name}"
   invalid_search_provider: "无效的搜索服务提供者 '%{provider_name}': %{details}"
-  invalid_timezone_parameter: "时区 '%{timezone}' 参数无效"
   keyword_must_be_non_empty: "关键词(kw)参数必须是非空字符串或非空数组"
   invalid_model_name: "无效的模型名称: %{model_name}"
   max_retries_exceeded: "超过最大重试次数: %{item}"
@@ -289,16 +291,6 @@ tools:
     summarization_success: "✔ 「%{title}」分析完成"
     summarizing_webpage: "▷ 正在分析「%{title}」"
     summarizing: "☞ 正在分析网页内容"
-  plot:
-    chp_call_failed: "调用绘图服务失败: %{details}"
-    data_must_be_object: "数据(data)参数必须是一个对象"
-    failed_to_generate_plot: "生成图表失败"
-    line_bar_x_must_be_non_empty_array: "折线图/柱状图的X轴数据(x)参数必须是非空数组"
-    line_bar_y_must_be_non_empty_array: "折线图/柱状图的Y轴数据(y)参数必须是非空数组"
-    pie_labels_must_be_non_empty_array: "饼图的标签(labels)参数必须是非空数组"
-    pie_values_must_be_non_empty_array: "饼图的数值(values)参数必须是非空数组"
-    plot_type_must_be_string: "绘图类型(plot_type)参数必须是字符串"
-    plot_type_must_not_be_empty: "绘图类型(plot_type)参数不能为空"
 
 tray:
   about: "关于"
@@ -314,12 +306,13 @@ tray:
 
 updater:
   errors:
+    config: "更新器配置错误: %{error}"
+    download: "下载或安装更新失败: %{error}"
+    install: "安装更新失败: %{error}"
     update_not_found: "当前已是最新版本，暂无可用更新"
+    update_request: "更新请求失败: %{error}"
     version_mismatch: "版本不匹配，期望安装的版本与服务器提供的更新版本不一致，请重新检查更新"
     version_parse: "版本解析错误: 期望版本 '%{version}', 错误: %{error}"
-    update_request: "更新请求失败: %{error}"
-    download: "下载或安装更新失败: %{error}"
-    config: "更新器配置错误: %{error}"
 
 workflow:
   array_index_out_of_bounds: "数组索引越界: %{index}"

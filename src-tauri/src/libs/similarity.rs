@@ -11,7 +11,7 @@ lazy_static::lazy_static! {
 }
 use whatlang::{Lang, Script};
 
-use crate::http::chp::SearchResult;
+use crate::search::SearchResult;
 
 static STOP_WORDS: phf::Map<&'static str, phf::Set<&'static str>> = phf_map! {
     "zh-Hans" => phf_set! {
@@ -95,7 +95,7 @@ pub fn compute_relevance(result: &mut SearchResult, query: &str) -> f32 {
 
     // Calculate content relevance
     let content_relevance =
-        compute_content_relevance(&result.summary.clone().unwrap_or_default(), query);
+        compute_content_relevance(&result.snippet.clone().unwrap_or_default(), query);
 
     // Calculate base score
     let base_score =
@@ -105,15 +105,15 @@ pub fn compute_relevance(result: &mut SearchResult, query: &str) -> f32 {
     result.score = if let Some(pd) = &result.publish_date {
         if let Some(pt) = strtotime(pd) {
             let time_decay = time_score(pt);
-            base_score * 0.9 + time_decay * 0.1
+            Some(base_score * 0.9 + time_decay * 0.1)
         } else {
-            base_score
+            Some(base_score)
         }
     } else {
-        base_score
+        Some(base_score)
     };
 
-    result.score.clamp(0.2, 1.0)
+    result.score.map(|s| s.clamp(0.2, 1.0)).unwrap_or(0.2)
 }
 
 fn url_quality_score(url: &str) -> f32 {
@@ -628,7 +628,7 @@ mod tests {
         let mut result = SearchResult {
             title: "Rust异步编程指南".to_string(),
             url: "https://example.com/rust-async".to_string(),
-            summary: Some("Rust异步编程指南：深入讲解异步编程原理...".to_string()),
+            snippet: Some("Rust异步编程指南：深入讲解异步编程原理...".to_string()),
             ..SearchResult::default()
         };
 

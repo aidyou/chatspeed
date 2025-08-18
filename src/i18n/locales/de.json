@@ -273,7 +273,7 @@
         "tabForm": "Formular bearbeiten",
         "tabJson": "JSON bearbeiten",
         "timeout": "Zeitüberschreitung",
-        "timeoutPlaceholder": "Anfrage-Timeout in Sekunden festlegen, Standard 60 Sekunden",
+        "timeoutPlaceholder": "Anfrage-Timeout in Sekunden festlegen, Standard 15 Sekunden",
         "type": "Typ",
         "url": "URL",
         "validationFailed": "Formularüberprüfung fehlgeschlagen, bitte Eingabe überprüfen."

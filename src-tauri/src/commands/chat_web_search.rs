@@ -10,7 +10,8 @@ use crate::ai::interaction::chat_completion::{
 };
 use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType};
 use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
-use crate::http::chp::{Chp, SearchProvider, SearchResult};
+use crate::http::chp::Chp;
+use crate::search::{SearchProviderName, SearchResult};
 use crate::{ai::traits::chat::ChatResponse, db::MainStore};
 
 const MAX_SEARCH_RESULT: i32 = 3;
@@ -569,7 +570,7 @@ async fn execute_multi_search(
 
     for engine_str in search_engines {
         // Try to convert to SearchProvider
-        match SearchProvider::try_from(engine_str.as_str()) {
+        match SearchProviderName::try_from(engine_str.as_str()) {
             Ok(provider) => {
                 let crawler_clone = crawler.clone();
                 let keywords_clone = keywords_owned.clone();

@@ -7,8 +7,8 @@ use super::{types::Step, MessageRole};
 use crate::{
     ai::interaction::chat_completion::ChatState,
     db::MainStore,
-    http::chp::SearchResult,
     libs::util::format_json_str,
+    search::SearchResult,
     tools::{ModelName, Search, ToolManager},
     workflow::{
         error::WorkflowError,
@@ -790,7 +790,7 @@ impl ReactExecutor {
                     self.context.add_toolresult_record(
                         function_call.clone(),
                         StepStatus::Success.to_string(),
-                        Some(result.clone()),
+                        Some(json!(result.clone())),
                         None,
                     );
 
@@ -1238,7 +1238,10 @@ impl ReactExecutor {
         params.insert("top_p".to_string(), json!(0.9));
 
         // Execute function
-        Ok(function.call(Value::Object(params)).await?)
+        Ok(function
+            .call(Value::Object(params))
+            .await
+            .map(|r| r.into())?)
     }
 
     /// Generate a plan based on user request, retry up to 3 times

@@ -22,16 +22,17 @@ use crate::{
         traits::chat::{ChatCompletionResult, ChatResponse, MCPToolDeclaration, MessageType},
     },
     db::AiModel,
-    http::chp::{Chp, SearchProvider, SearchResult},
+    http::chp::Chp,
     libs::{dedup::dedup_and_rank_results, util::format_json_str},
-    tools::{ModelName, ToolDefinition, ToolResult},
+    search::{SearchProviderName, SearchResult},
+    tools::{ModelName, NativeToolResult, ToolDefinition},
 };
 
 pub struct DeepSearch {
     chat_state: Arc<ChatState>,
     models: Arc<tokio::sync::RwLock<HashMap<ModelName, AiModel>>>,
     crawler_url: String,
-    search_providers: Vec<SearchProvider>,
+    search_providers: Vec<SearchProviderName>,
     max_crawler_threads: usize,
     progress_callback: Arc<dyn Fn(Arc<ChatResponse>) + Send + Sync>,
     stop_flag: Arc<AtomicBool>,
@@ -42,7 +43,7 @@ impl DeepSearch {
         chat_state: Arc<ChatState>,
         max_crawler_threads: Option<usize>,
         crawler_url: String,
-        search_providers: Vec<SearchProvider>,
+        search_providers: Vec<SearchProviderName>,
         progress_callback: Arc<dyn Fn(Arc<ChatResponse>) + Send + Sync>,
     ) -> Self {
         Self {
@@ -325,7 +326,7 @@ impl DeepSearch {
         };
 
         for s in search_results.iter_mut() {
-            if s.summary.clone().unwrap_or_default().is_empty() {
+            if s.snippet.clone().unwrap_or_default().is_empty() {
                 continue;
             }
             s.id = i;
@@ -333,7 +334,7 @@ impl DeepSearch {
             content.push(format!(
                 "[webpage {} begin]\n{}\n[webpage {} end]",
                 s.id,
-                s.summary.clone().unwrap_or_default(),
+                s.snippet.clone().unwrap_or_default(),
                 s.id
             ))
         }
@@ -611,7 +612,7 @@ impl DeepSearch {
         for provider in self.search_providers.clone() {
             self.check_stop()?;
 
-            // Try to convert to SearchProvider
+            // Try to convert to SearchProviderName
             #[cfg(debug_assertions)]
             {
                 log::debug!(
@@ -863,7 +864,7 @@ impl DeepSearch {
                         );
 
                         let mut result_clone = result.clone();
-                        result_clone.summary = Some(crawl_result.content);
+                        result_clone.snippet = Some(crawl_result.content);
                         let mut results = results_clone.lock().await;
                         results.push(result_clone);
 
@@ -931,12 +932,12 @@ impl DeepSearch {
         let mut results = Vec::<SearchResult>::new();
         for result in search_results
             .into_iter()
-            .filter(|r| r.summary.as_deref().map(|s| !s.is_empty()).unwrap_or(false))
+            .filter(|r| r.snippet.as_deref().map(|s| !s.is_empty()).unwrap_or(false))
         {
             self.check_stop()?;
 
-            let summary = result
-                .summary
+            let snippet = result
+                .snippet
                 .as_ref()
                 .map(|s| s.to_string())
                 .unwrap_or("".to_string());
@@ -958,7 +959,7 @@ impl DeepSearch {
 
             let prompt = SUMMARIZE_PROMPT
                 .replace("{{topic}}", query)
-                .replace("{{content}}", summary.as_str());
+                .replace("{{content}}", snippet.as_str());
             let chat_result = self
                 .chat_with_retry(
                     ModelName::General,
@@ -984,7 +985,7 @@ impl DeepSearch {
                     log::debug!("Summarizing finished, URL: {}", &result.url);
 
                     let mut result = result.clone();
-                    result.summary = Some(r.content.clone());
+                    result.snippet = Some(r.content.clone());
                     results.push(result);
                 })
                 .map_err(|e| {
@@ -1204,7 +1205,7 @@ impl ToolDefinition for DeepSearch {
         }
     }
 
-    async fn call(&self, _param: serde_json::Value) -> ToolResult {
+    async fn call(&self, _param: serde_json::Value) -> NativeToolResult {
         todo!()
     }
 }
@@ -1215,7 +1216,7 @@ mod test {
 
     use crate::{
         ai::traits::chat::ChatResponse,
-        http::chp::SearchProvider,
+        search::SearchProviderName,
         tools::{DeepSearch, ModelName, ToolManager},
     };
 
@@ -1239,7 +1240,7 @@ mod test {
             chat_state,
             None,
             "http://127.0.0.1:12321".to_string(),
-            vec![SearchProvider::Google, SearchProvider::Bing],
+            vec![SearchProviderName::Google, SearchProviderName::Bing],
             process_callback,
         );
         ds.add_model(

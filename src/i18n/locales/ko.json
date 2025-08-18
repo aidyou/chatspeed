@@ -273,7 +273,7 @@
         "tabForm": "양식 편집",
         "tabJson": "JSON 편집",
         "timeout": "시간 초과",
-        "timeoutPlaceholder": "요청 시간 초과를 초 단위로 설정, 기본값 60초",
+        "timeoutPlaceholder": "요청 시간 초과를 초 단위로 설정, 기본값 15초",
         "type": "유형",
         "url": "URL",
         "validationFailed": "양식 유효성 검사 실패, 입력을 확인하십시오."

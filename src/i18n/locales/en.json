@@ -273,7 +273,7 @@
         "tabForm": "Form Edit",
         "tabJson": "JSON Edit",
         "timeout": "Timeout",
-        "timeoutPlaceholder": "Set request timeout in seconds, default 60s",
+        "timeoutPlaceholder": "Set connection timeout in seconds, default 15s",
         "type": "Type",
         "url": "URL",
         "validationFailed": "Form validation failed, please check your input."

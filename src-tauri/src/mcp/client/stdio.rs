@@ -35,6 +35,10 @@ use rmcp::{service::RunningService, transport::TokioChildProcess, RoleClient, Se
 use rust_i18n::t;
 use tokio::{process::Command, sync::RwLock};
 
+#[allow(unused)]
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use super::core::McpClientCore;
 use super::{
     types::{McpClientInternal, McpStatus, StatusChangeCallback},
@@ -170,6 +174,11 @@ impl McpClient for StdioClient {
                 (!k.is_empty() && !v.is_empty()).then_some((k, v))
             }));
         }
+
+        // On Unix, create a new process group to prevent signals from propagating to the parent.
+        // This is crucial to prevent the main application from crashing when the child process is terminated.
+        #[cfg(unix)]
+        cmd.process_group(0);
 
         let process = TokioChildProcess::new(cmd).map_err(|e| {
             let original_error_message = e.to_string();
@@ -325,14 +334,14 @@ mod test {
 
         // Initialize
         let server_info = service.peer_info();
-        tracing::info!("Connected to server: {server_info:#?}");
+        log::info!("Connected to server: {server_info:#?}");
 
         // List tools
         let tools = service
             .list_tools(Default::default())
             .await
             .map_err(|e| e.to_string())?;
-        tracing::info!("Available tools: {tools:#?}");
+        log::info!("Available tools: {tools:#?}");
 
         // Call tool 'git_status' with arguments = {"repo_path": "."}
         // let tool_result = service
@@ -341,7 +350,7 @@ mod test {
         //         arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
         //     })
         //     .await?;
-        // tracing::info!("Tool result: {tool_result:#?}");
+        // log::info!("Tool result: {tool_result:#?}");
         service.cancel().await.map_err(|e| e.to_string())?;
 
         Ok(())

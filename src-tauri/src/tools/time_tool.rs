@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    tools::{ToolDefinition, ToolResult},
+    tools::{NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 pub struct TimeTool;
@@ -43,13 +43,14 @@ impl ToolDefinition for TimeTool {
     ///
     /// # Returns
     /// Returns a `ToolResult` containing the current time as a simple string.
-    async fn call(&self, _params: Value) -> ToolResult {
+    async fn call(&self, _params: Value) -> NativeToolResult {
         let local_time = Local::now();
         let formatted_time = local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string();
 
-        Ok(json!({
-            "current_time": formatted_time
-        }))
+        Ok(ToolCallResult::success(
+            Some(formatted_time.clone()),
+            Some(json!({"current_time":formatted_time})),
+        ))
     }
 }
 
@@ -67,10 +68,10 @@ mod tests {
 
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert!(response["current_time"].is_string());
+        assert!(response.content.is_some());
 
         // Verify the time format is correct (YYYY-MM-DD HH:MM:SS TZ)
-        let time_str = response["current_time"].as_str().unwrap();
+        let time_str = response.content.as_ref().unwrap();
         log::debug!("time_str: {}", time_str);
         assert!(time_str.len() > 19); // At least contains date and time part
         assert!(time_str.contains("-")); // Contains date separator

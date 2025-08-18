@@ -2,14 +2,16 @@ use reqwest::{Client, StatusCode};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fmt::Display;
-use std::{convert::TryFrom, str::FromStr};
 use url::form_urlencoded::byte_serialize;
 
-use crate::http::{
-    client::HttpClient,
-    error::{HttpError, HttpResult},
-    types::HttpConfig,
+use crate::search::SearchResult;
+use crate::{
+    http::{
+        client::HttpClient,
+        error::{HttpError, HttpResult},
+        types::HttpConfig,
+    },
+    search::SearchProviderName,
 };
 
 #[derive(Clone)]
@@ -24,97 +26,6 @@ pub struct CrawlerData {
     pub title: String,
     pub content: String,
     pub url: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SearchResult {
-    #[serde(skip_deserializing, skip_serializing_if = "is_zero")]
-    pub id: usize,
-    pub title: String,
-    pub url: String,
-    pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sitename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub publish_date: Option<String>,
-    #[serde(skip_deserializing)]
-    #[serde(default, skip_serializing)]
-    pub score: f32,
-}
-
-fn is_zero<T: PartialEq + From<u8>>(value: &T) -> bool {
-    *value == T::from(0)
-}
-
-impl Default for SearchResult {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            title: String::new(),
-            url: String::new(),
-            summary: None,
-            sitename: None,
-            publish_date: None,
-            score: 0.0,
-        }
-    }
-}
-#[derive(PartialEq, Clone)]
-pub enum SearchProvider {
-    Baidu,
-    BaiduNews,
-    Google,
-    GoogleNews,
-    Bing,
-}
-
-impl Display for SearchProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Baidu => write!(f, "baidu"),
-            Self::BaiduNews => write!(f, "baidu_news"),
-            Self::Google => write!(f, "google"),
-            Self::GoogleNews => write!(f, "google_news"),
-            Self::Bing => write!(f, "bing"),
-        }
-    }
-}
-
-impl From<SearchProvider> for String {
-    fn from(provider: SearchProvider) -> Self {
-        provider.to_string()
-    }
-}
-
-impl FromStr for SearchProvider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s)
-    }
-}
-
-impl TryFrom<&str> for SearchProvider {
-    type Error = String;
-
-    fn try_from(provider: &str) -> Result<Self, Self::Error> {
-        match provider {
-            "baidu" => Ok(Self::Baidu),
-            "baidu_news" => Ok(Self::BaiduNews),
-            "google" => Ok(Self::Google),
-            "google_news" => Ok(Self::GoogleNews),
-            "bing" => Ok(Self::Bing),
-            _ => Err(format!("Invalid search provider: {}", provider)),
-        }
-    }
-}
-
-impl TryFrom<String> for SearchProvider {
-    type Error = String;
-
-    fn try_from(provider: String) -> Result<Self, Self::Error> {
-        Self::try_from(provider.as_str())
-    }
 }
 
 /// Extension trait for `Value` that provides helper methods for getting string values
@@ -310,7 +221,7 @@ impl Chp {
     /// Returns an error if the HTTP request fails or if the response is invalid.
     pub async fn web_search(
         &self,
-        provider: SearchProvider,
+        provider: SearchProviderName,
         keywords: &[&str],
         page: Option<i64>,
         number: Option<i64>,
@@ -350,7 +261,7 @@ impl Chp {
             results.push(SearchResult {
                 title: item.get_str_or_default("title"),
                 url: item.get_str_or_default("url"),
-                summary: item.get_str("summary").map(|s| s.to_string()),
+                snippet: item.get_str("snippet").map(|s| s.to_string()),
                 sitename: item.get_str("sitename").map(|s| s.to_string()),
                 publish_date: item.get_str("publish_date").map(|s| s.to_string()),
                 ..SearchResult::default()
@@ -358,7 +269,7 @@ impl Chp {
         }
 
         if resolve_baidu_links
-            && (provider == SearchProvider::Baidu || provider == SearchProvider::BaiduNews)
+            && (provider == SearchProviderName::Baidu || provider == SearchProviderName::BaiduNews)
         {
             Ok(Self::resolve_all_baidu_links(results).await)
         } else {
@@ -484,7 +395,7 @@ mod tests {
         let chp = crate::http::chp::Chp::new("http://localhost:12321".to_string(), None);
         let result = chp
             .web_search(
-                crate::http::chp::SearchProvider::Google,
+                crate::http::chp::SearchProviderName::Google,
                 &["deepseek"],
                 Some(1),
                 Some(10),

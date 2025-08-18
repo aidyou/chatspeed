@@ -273,7 +273,7 @@
         "tabForm": "表單編輯",
         "tabJson": "JSON 編輯",
         "timeout": "逾時",
-        "timeoutPlaceholder": "設定請求逾時時間，單位為秒，預設 60 秒",
+        "timeoutPlaceholder": "設定連接逾時時間，單位為秒，預設15秒",
         "type": "類型",
         "url": "URL",
         "validationFailed": "表單驗證失敗，請檢查輸入。"

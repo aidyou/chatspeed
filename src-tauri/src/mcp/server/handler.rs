@@ -3,10 +3,12 @@
 //! This module implements the MCP server handler that proxies tool calls to the internal tool manager.
 
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::tools::ToolCallResult;
 use crate::{ai::interaction::chat_completion::ChatState, tools::MCP_TOOL_NAME_SPLIT};
+use rmcp::model::IntoContents;
 use rmcp::{
     model::{
-        CallToolRequestParam, CallToolResult, Content, Implementation, InitializeRequestParam,
+        CallToolRequestParam, CallToolResult, Implementation, InitializeRequestParam,
         InitializeResult, ListToolsResult, PaginatedRequestParam, ProtocolVersion,
         ServerCapabilities, ServerInfo, Tool,
     },
@@ -129,10 +131,7 @@ impl ServerHandler for McpProxyHandler {
             if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT) {
                 let tool_name = tool_spec.name.clone();
                 display_tools.push(tool_spec.into());
-                self.tool_map
-                    .write()
-                    .await
-                    .insert(tool_name.clone(), ToolReference::new(None, tool_name));
+                new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));
                 continue;
             }
 
@@ -191,12 +190,10 @@ impl ServerHandler for McpProxyHandler {
         let tool_ref = match tool_map_guard.get(request.name.as_ref()) {
             Some(tool) => tool.clone(),
             None => {
+                let error = json!({"error":t!("mcp.proxy.tool_not_found", tool_name = request.name).to_string()});
                 return Ok(CallToolResult {
-                    content: vec![Content::text(format!("Tool '{}' not found.", request.name))]
-                        .into(),
-                    structured_content: Some(json!({
-                        "error": format!("Tool '{}' not found.", request.name)
-                    })),
+                    content: Some(error.to_string().into_contents()),
+                    structured_content: Some(error),
                     is_error: Some(true),
                 });
             }
@@ -224,23 +221,43 @@ impl ServerHandler for McpProxyHandler {
                 .tool_manager
                 .native_tool_call(&tool_ref.tool_name, Value::Object(arguments))
                 .await
+                .map(|r| r.into())
         };
 
         match result {
-            Ok(tool_result) => Ok(CallToolResult {
-                content: vec![Content::text(tool_result.to_string())].into(),
-                structured_content: Some(tool_result),
-                is_error: Some(false),
-            }),
-            Err(e) => Ok(CallToolResult {
-                content: vec![Content::text(t!(
-                    "mcp.proxy.tool_execution_error",
-                    error = e.to_string()
-                ))]
-                .into(),
-                structured_content: Some(json!({"error": e.to_string()})),
-                is_error: Some(true),
-            }),
+            Ok(tool_result) => {
+                let (content, structured_content) = if let Ok(result) =
+                    serde_json::from_value::<CallToolResult>(tool_result.clone())
+                {
+                    (result.content, result.structured_content)
+                } else if let Ok(result) =
+                    serde_json::from_value::<ToolCallResult>(tool_result.clone())
+                {
+                    (
+                        result.content.map(|s| s.into_contents()),
+                        result.structured_content,
+                    )
+                } else {
+                    (
+                        Some(tool_result.to_string().into_contents()),
+                        Some(tool_result.clone()),
+                    )
+                };
+                Ok(CallToolResult {
+                    content,
+                    structured_content,
+                    is_error: Some(false),
+                })
+            }
+            Err(e) => {
+                let error = json!({"error":t!("mcp.proxy.tool_execution_error", error = e.to_string())
+                .to_string()});
+                Ok(CallToolResult {
+                    content: Some(error.to_string().into_contents()),
+                    structured_content: Some(error),
+                    is_error: Some(true),
+                })
+            }
         }
     }
 }
