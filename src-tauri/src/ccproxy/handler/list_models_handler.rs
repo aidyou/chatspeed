@@ -20,9 +20,9 @@ use crate::{
 // =================================================
 //  chat completion proxy
 // =================================================
-/// Handles the `/v1/models` (list models) request.
+/// Handles the `/v1/models` (list models) request for openai and claude.
 /// Reads `chat_completion_proxy` from `MainStore`.
-pub async fn handle_openai_list_models(
+pub async fn handle_list_models(
     group_name: Option<String>,
     main_store: Arc<Mutex<MainStore>>,
 ) -> ProxyResult<Json<Value>> {

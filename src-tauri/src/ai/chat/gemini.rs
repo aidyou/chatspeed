@@ -928,6 +928,11 @@ impl AiChatTrait for GeminiChat {
         let model_details: Vec<ModelDetails> = models_response
             .models
             .into_iter()
+            .fold(std::collections::HashMap::new(), |mut acc, model| {
+                acc.insert(model.name.clone(), model);
+                acc
+            })
+            .into_values()
             // Filter for models that support 'generateContent', common for chat
             .filter(|m| {
                 m.supported_generation_methods

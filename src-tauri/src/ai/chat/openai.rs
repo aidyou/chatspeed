@@ -620,6 +620,11 @@ impl AiChatTrait for OpenAIChat {
         let model_details: Vec<ModelDetails> = models_response
             .data
             .into_iter()
+            .fold(std::collections::HashMap::new(), |mut acc, model| {
+                acc.insert(model.id.to_lowercase(), model);
+                acc
+            })
+            .into_values()
             .map(|model| {
                 let id = model.id.to_lowercase();
 

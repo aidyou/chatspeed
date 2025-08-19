@@ -72,7 +72,7 @@
 use crate::ai::interaction::{chat_completion::ChatState, ChatProtocol};
 use crate::ccproxy::{
     auth::authenticate_request,
-    handle_chat_completion, handle_ollama_tags, handle_openai_list_models,
+    handle_chat_completion, handle_list_models, handle_ollama_tags,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
     helper::CcproxyQuery,
 };
@@ -220,7 +220,7 @@ fn openai_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
             ),
             get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
-                    handle_openai_list_models(Some(group_name), state.main_store.clone())
+                    handle_list_models(Some(group_name), state.main_store.clone())
                         .await
                         .into_response()
                 },
@@ -237,7 +237,7 @@ fn openai_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                 },
             ),
             get(|State(state): State<Arc<SharedState>>| async move {
-                handle_openai_list_models(None, state.main_store.clone())
+                handle_list_models(None, state.main_store.clone())
                     .await
                     .into_response()
             }),

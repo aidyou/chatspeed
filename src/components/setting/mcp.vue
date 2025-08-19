@@ -17,7 +17,7 @@
           <div class="item">
             <div class="server-left">
               <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
-                <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded
+                <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded && server.status === 'running'
                   ? 'caret-down'
                   : 'caret-right'
                   " />

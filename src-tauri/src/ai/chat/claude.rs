@@ -837,6 +837,11 @@ impl AiChatTrait for ClaudeChat {
         let models = api_response
             .data
             .into_iter()
+            .fold(std::collections::HashMap::new(), |mut acc, model| {
+                acc.insert(model.id.to_lowercase(), model);
+                acc
+            })
+            .into_values()
             .map(|api_model| {
                 let model_id = api_model.id.to_lowercase();
                 ModelDetails {

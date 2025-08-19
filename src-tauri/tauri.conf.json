@@ -133,8 +133,8 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://cdn.jsdelivr.net/gh/aidyou/chatspeed@updater-meta/latest.json",
-        "https://github.com/aidyou/chatspeed/releases/latest/download/latest.json"
+        "https://github.com/aidyou/chatspeed/releases/latest/download/latest.json",
+        "https://cdn.jsdelivr.net/gh/aidyou/chatspeed@updater-meta/latest.json"
       ],
       "dialog": false,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDODQ4QUFEQzc1QzY2QTIKUldTaVpsekhyWXFFN0tUZHdVM2wxcnB1SzIyU1BZeFY5ZnNXN09LMzR1R2w5VHh2V011ODNXOW4K",
