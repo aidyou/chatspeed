@@ -15,21 +15,9 @@
     "conversationTitle": "대화 주제",
     "conversationTitleUpdated": "대화 주제가 변경되었습니다.",
     "copyMessage": "메시지 복사",
-    "date": {
-      "earlier": "더 이전",
-      "lastMonth": "지난달",
-      "lastWeek": "지난주",
-      "lastYear": "작년",
-      "thisMonth": "이번 달",
-      "thisWeek": "이번 주",
-      "thisYear": "올해",
-      "today": "오늘",
-      "twoDaysAgo": "그저께",
-      "yesterday": "어제"
-    },
+    "deepsearch": "심층 검색",
     "deepSearchDisabled": "심층 검색 끄기",
     "deepSearchEnabled": "심층 검색 켜기: AI가 문제를 심층적으로 분석하고 인터넷에서 관련 정보를 검색합니다.",
-    "deepsearch": "심층 검색",
     "deleteMessage": "메시지 삭제",
     "diagramError": "플로우차트 렌더링 실패",
     "disableContext": "대화 내용 기억 끄기",
@@ -53,12 +41,6 @@
     "haveNoModel": "아직 모델이 추가되지 않았습니다. 상단 메뉴의 \"모델 추가+\" 버튼을 클릭하여 추가해주세요.",
     "inputMessagePlaceholder": "{at} 입력으로 스킬 호출",
     "messageCopied": "메시지가 복사되었습니다.",
-    "metadata": {
-      "completion": "출력",
-      "prompt": "입력",
-      "speed": "출력 속도: {speed} 토큰/초",
-      "tokens": "누적 토큰"
-    },
     "mindmapError": "마인드맵 렌더링 실패",
     "network": "인터넷 연결",
     "networkDisabled": "인터넷 연결 끄기",
@@ -66,8 +48,8 @@
     "newConversation": "새 대화",
     "noteDeleteConfirmContent": "이 지식 노트를 삭제하시겠습니까?",
     "noteDeleteConfirmTitle": "삭제 확인",
-    "noteSaveFailed": "지식 노트 저장 실패：{error}",
     "noteSaved": "지식 노트가 저장되었습니다.",
+    "noteSaveFailed": "지식 노트 저장 실패：{error}",
     "noteTags": "태그",
     "noteTagsPlaceholder": "여러 태그는 쉼표로 구분해주세요.",
     "noteTagsRequired": "태그를 입력해주세요.",
@@ -84,11 +66,29 @@
     "showFavoriteConversations": "즐겨찾는 대화 주제 보기",
     "skills": "스킬",
     "takeNote": "지식 노트에 저장",
+    "translationSkillPromptEmpty": "번역 스킬의 프롬프트가 비어있습니다.",
+    "date": {
+      "earlier": "더 이전",
+      "lastMonth": "지난달",
+      "lastWeek": "지난주",
+      "lastYear": "작년",
+      "thisMonth": "이번 달",
+      "thisWeek": "이번 주",
+      "thisYear": "올해",
+      "today": "오늘",
+      "twoDaysAgo": "그저께",
+      "yesterday": "어제"
+    },
+    "metadata": {
+      "completion": "출력",
+      "prompt": "입력",
+      "speed": "출력 속도: {speed} 토큰/초",
+      "tokens": "누적 토큰"
+    },
     "transaction": {
       "autoDetection": "자동 감지",
       "errorOnDetectLanguage": "언어 감지 실패, 원본 언어를 직접 선택해주세요. 오류: {error}"
-    },
-    "translationSkillPromptEmpty": "번역 스킬의 프롬프트가 비어있습니다."
+    }
   },
   "common": {
     "autoHide": "창을 '포커스를 잃으면 자동 숨김'으로 설정",
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "프록시 서버 주소가 잘못되었습니다.",
       "proxyServerPlaceholder": "예: http://127.0.0.1:8080",
       "proxyType": "프록시 유형",
-      "proxyTypes": {
-        "http": "HTTP 프록시",
-        "none": "프록시 사용 안 함",
-        "system": "시스템 설정 따름"
-      },
       "proxyUsername": "프록시 사용자 이름",
       "proxyUsernamePlaceholder": "인증이 필요 없으면 비워두세요.",
       "restore": "백업 복원",
@@ -203,13 +198,18 @@
       "websearchModel": "웹 검색 모델",
       "websearchModelTooltip": "대화 내용을 검색 키워드로 생성하는 데 사용됩니다. 추론 모델을 사용하지 마세요. 속도가 매우 느립니다!",
       "wordSelectionToolbar": "AI 단어 선택 도구 모음",
+      "workflowSettings": "워크플로우 설정",
+      "proxyTypes": {
+        "http": "HTTP 프록시",
+        "none": "프록시 사용 안 함",
+        "system": "시스템 설정 따름"
+      },
       "workflow": {
         "general": "일반 모델",
         "generalTooltip": "텍스트 요약, 정보 추출 등 워크플로우의 간단한 작업에 사용됩니다.",
         "reasoning": "추론 모델",
         "reasoningTooltip": "계획, 분석 결과 요약 등 워크플로우의 복잡한 작업에 주로 사용됩니다."
-      },
-      "workflowSettings": "워크플로우 설정"
+      }
     },
     "mcp": {
       "added": "추가됨",
@@ -238,13 +238,13 @@
       "noServersFound": "MCP 서버를 찾을 수 없습니다.",
       "noTools": "사용 가능한 도구가 없거나 아직 가져오지 않았습니다.",
       "operationFailed": "작업 실패: {error}",
-      "restart": "다시 시작",
-      "restartSuccess": "MCP 서버 \"{name}\"이(가) 다시 시작되었습니다.",
-      "restartFailed": "MCP 서버 \"{name}\"을(를) 다시 시작하지 못했습니다: {error}",
       "presetTitle": "프리셋 MCP 서버 선택",
+      "restart": "다시 시작",
+      "restartFailed": "MCP 서버 \"{name}\"을(를) 다시 시작하지 못했습니다: {error}",
+      "restartSuccess": "MCP 서버 \"{name}\"이(가) 다시 시작되었습니다.",
       "start": "시작",
-      "statusError": "시작 오류: {error}",
       "statusConnected": "연결됨, 시작 중...",
+      "statusError": "시작 오류: {error}",
       "statusRunning": "실행 중",
       "statusStarting": "시작 중",
       "statusStopped": "시작되지 않음",
@@ -279,18 +279,19 @@
         "validationFailed": "양식 유효성 검사 실패, 입력을 확인하십시오."
       },
       "validation": {
+        "argsPlaceholder": "인수에 플레이스홀더가 포함되어 있습니다: {placeholders}",
         "argsRequired": "인수는 비워 둘 수 없습니다.",
+        "bearerTokenPlaceholder": "Bearer 토큰에 플레이스홀더가 포함되어 있습니다: {placeholders}",
+        "commandPlaceholder": "명령에 플레이스홀더가 포함되어 있습니다: {placeholders}",
         "commandRequired": "Stdio 유형에는 명령이 필요합니다.",
         "configNameRequired": "구성 이름은 비워 둘 수 없습니다.",
-        "nameRequired": "서버 이름은 비워 둘 수 없습니다.",
-        "typeRequired": "서버 유형은 비워 둘 수 없습니다.",
-        "urlRequired": "SSE 유형에는 URL이 필요합니다.",
-        "placeholderError": "설정에 설정되지 않은 플레이스홀더가 포함되어 있습니다. 실제 값을 설정해 주세요:",
-        "bearerTokenPlaceholder": "Bearer 토큰에 플레이스홀더가 포함되어 있습니다: {placeholders}",
         "envPlaceholder": "환경 변수에 플레이스홀더가 포함되어 있습니다: {placeholders}",
+        "invalidName": "잘못된 MCP 이름: {name}",
+        "nameRequired": "서버 이름은 비워 둘 수 없습니다.",
+        "placeholderError": "설정에 설정되지 않은 플레이스홀더가 포함되어 있습니다. 실제 값을 설정해 주세요:",
+        "typeRequired": "서버 유형은 비워 둘 수 없습니다.",
         "urlPlaceholder": "URL에 플레이스홀더가 포함되어 있습니다: {placeholders}",
-        "commandPlaceholder": "명령에 플레이스홀더가 포함되어 있습니다: {placeholders}",
-        "argsPlaceholder": "인수에 플레이스홀더가 포함되어 있습니다: {placeholders}"
+        "urlRequired": "SSE 유형에는 URL이 필요합니다."
       }
     },
     "model": {
@@ -318,6 +319,8 @@
       "disabled": "사용 안 함",
       "documentation": "문서",
       "edit": "모델 수정",
+      "frequencyPenalty": "빈도 패널티",
+      "frequencyPenaltyPlaceholder": "모델이 동일한 단어를 반복하는 빈도를 조정합니다. 값이 높을수록 반복이 줄어듭니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
       "functionCall": "함수 호출",
       "imageInput": "이미지 입력",
       "import": "모델 가져오기",
@@ -335,19 +338,18 @@
       "modelsRequired": "최소 하나 이상의 모델을 추가해야 합니다.",
       "nameRequired": "공급업체 이름을 입력해주세요.",
       "noModels": "사용 가능한 모델이 없습니다. 먼저 추가해주세요.",
-      "noModelsFound": "모델을 찾을 수 없습니다.",
       "noModelSelected": "하나 이상의 모델을 선택하십시오.",
+      "noModelsFound": "모델을 찾을 수 없습니다.",
       "notFound": "모델이 존재하지 않거나 삭제되었습니다.",
+      "presencePenalty": "존재 패널티",
+      "presencePenaltyPlaceholder": "모델이 이미 나타난 단어를 반복할 가능성을 조정합니다. 값이 높을수록 반복 가능성이 낮아집니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
       "presetModels": "프리셋 모델",
       "provider": "공급업체",
-      "proxyTypes": {
-        "bySetting": "네트워크 설정 따름",
-        "http": "HTTP 프록시",
-        "none": "프록시 사용 안 함"
-      },
       "proxyServerRequired": "프록시 서버 주소를 입력하십시오.",
       "reasoning": "추론 모델",
       "searchByIdOrName": "ID 또는 이름으로 검색",
+      "stop": "중지 토큰",
+      "stopPlaceholder": "모델이 텍스트 생성을 중지할 토큰을 설정합니다. 여러 개는 줄 바꿈으로 구분합니다.",
       "temperature": "온도",
       "temperaturePlaceholder": "모델 출력의 무작위성을 제어합니다. 값이 높을수록 출력이 더 무작위적입니다.",
       "topK": "Top K",
@@ -356,12 +358,11 @@
       "topPPlaceholder": "모델이 가장 가능성이 높은 P개의 단어 중에서 선택하도록 제어합니다. 값이 작을수록 출력이 더 결정적입니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
       "ungrouped": "분류되지 않음",
       "updateSuccess": "모델이 업데이트되었습니다.",
-      "frequencyPenalty": "빈도 패널티",
-      "frequencyPenaltyPlaceholder": "모델이 동일한 단어를 반복하는 빈도를 조정합니다. 값이 높을수록 반복이 줄어듭니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
-      "presencePenalty": "존재 패널티",
-      "presencePenaltyPlaceholder": "모델이 이미 나타난 단어를 반복할 가능성을 조정합니다. 값이 높을수록 반복 가능성이 낮아집니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
-      "stop": "중지 토큰",
-      "stopPlaceholder": "모델이 텍스트 생성을 중지할 토큰을 설정합니다. 여러 개는 줄 바꿈으로 구분합니다."
+      "proxyTypes": {
+        "bySetting": "네트워크 설정 따름",
+        "http": "HTTP 프록시",
+        "none": "프록시 사용 안 함"
+      }
     },
     "proxy": {
       "addNow": "지금 추가",
@@ -433,18 +434,18 @@
         "saveSuccess": "프록시 설정이 성공적으로 저장되었습니다.",
         "title": "프록시 설정",
         "api": {
-          "title": "API 목록",
-          "protocol": "프로토콜",
-          "group": "그룹",
-          "compat": "호환 형식",
           "apiUrl": "API 주소",
-          "note": "참고",
+          "compat": "호환 형식",
           "example": "이 컴퓨터에서는 {baseUrl}을 통해 인터페이스에 액세스할 수 있습니다. 예를 들어 일반적인 Openai 호환 인터페이스는 {baseUrl}/v1/chat/completions를 통해 액세스할 수 있습니다.",
-          "type": "인터페이스 유형",
+          "group": "그룹",
+          "note": "참고",
+          "protocol": "프로토콜",
           "replaceGroup": "{group}을 그룹 이름으로 바꿉니다",
-          "replaceModelAndKey": "{model}을 모델 이름으로, {key}를 API 키로 바꿉니다",
           "replaceGroupModelKey": "{group}을 그룹 이름으로, {model}을 모델 이름으로, {key}를 API 키로 바꿉니다",
-          "supportGroupAndCompat": "그룹 및 호환 모드 지원"
+          "replaceModelAndKey": "{model}을 모델 이름으로, {key}를 API 키로 바꿉니다",
+          "supportGroupAndCompat": "그룹 및 호환 모드 지원",
+          "title": "API 목록",
+          "type": "인터페이스 유형"
         }
       },
       "tabs": {
@@ -512,7 +513,6 @@
       "deleteTitle": "스킬 삭제",
       "description": "스킬 설명",
       "disabled": "사용 안 함",
-      "toolsEnabled": "도구 호출 허용",
       "edit": "스킬 수정",
       "icon": "아이콘",
       "iconOrLogoRequired": "아이콘을 선택하거나 이미지를 업로드해주세요.",
@@ -534,6 +534,9 @@
       "selectIcon": "아이콘을 선택해주세요.",
       "selectSkill": "스킬 선택",
       "selectType": "스킬 유형을 선택해주세요.",
+      "toolsEnabled": "도구 호출 허용",
+      "updateSuccess": "스킬이 업데이트되었습니다.",
+      "useSystemRole": "시스템 역할 사용",
       "type": {
         "chat": "채팅",
         "coding": "코딩",
@@ -549,9 +552,7 @@
         "translation": "번역",
         "voiceRecognition": "음성 인식",
         "writing": "글쓰기"
-      },
-      "updateSuccess": "스킬이 업데이트되었습니다.",
-      "useSystemRole": "시스템 역할 사용"
+      }
     },
     "type": {
       "about": "정보",

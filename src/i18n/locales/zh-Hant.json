@@ -15,21 +15,9 @@
     "conversationTitle": "對話主題",
     "conversationTitleUpdated": "對話主題已更新",
     "copyMessage": "複製訊息",
-    "date": {
-      "earlier": "更早",
-      "lastMonth": "上個月",
-      "lastWeek": "上週",
-      "lastYear": "去年",
-      "thisMonth": "本月",
-      "thisWeek": "本週",
-      "thisYear": "今年",
-      "today": "今天",
-      "twoDaysAgo": "前天",
-      "yesterday": "昨天"
-    },
+    "deepsearch": "深度搜尋",
     "deepSearchDisabled": "關閉深度搜尋",
     "deepSearchEnabled": "開啟深度搜尋：AI 將深入分析問題並聯網搜尋相關資訊",
-    "deepsearch": "深度搜尋",
     "deleteMessage": "刪除訊息",
     "diagramError": "流程圖渲染失敗",
     "disableContext": "點擊關閉上下文記憶",
@@ -53,12 +41,6 @@
     "haveNoModel": "您尚未新增任何模型，請點擊標題列的「新增模型+」按鈕新增",
     "inputMessagePlaceholder": "輸入 {at} 可呼叫技能",
     "messageCopied": "訊息已複製",
-    "metadata": {
-      "completion": "輸出",
-      "prompt": "輸入",
-      "speed": "輸出速率：{speed} 令牌/秒",
-      "tokens": "累計令牌"
-    },
     "mindmapError": "思維導圖渲染失敗",
     "network": "聯網",
     "networkDisabled": "關閉聯網",
@@ -66,8 +48,8 @@
     "newConversation": "新對話",
     "noteDeleteConfirmContent": "確定要刪除這條智記嗎？",
     "noteDeleteConfirmTitle": "刪除確認",
-    "noteSaveFailed": "智記儲存失敗：{error}",
     "noteSaved": "智記已儲存",
+    "noteSaveFailed": "智記儲存失敗：{error}",
     "noteTags": "標籤",
     "noteTagsPlaceholder": "多個標籤請用逗號分隔",
     "noteTagsRequired": "請輸入標籤",
@@ -84,11 +66,29 @@
     "showFavoriteConversations": "顯示收藏的對話主題",
     "skills": "技能",
     "takeNote": "儲存到智記",
+    "translationSkillPromptEmpty": "翻譯技能的提示詞不能為空",
+    "date": {
+      "earlier": "更早",
+      "lastMonth": "上個月",
+      "lastWeek": "上週",
+      "lastYear": "去年",
+      "thisMonth": "本月",
+      "thisWeek": "本週",
+      "thisYear": "今年",
+      "today": "今天",
+      "twoDaysAgo": "前天",
+      "yesterday": "昨天"
+    },
+    "metadata": {
+      "completion": "輸出",
+      "prompt": "輸入",
+      "speed": "輸出速率：{speed} 令牌/秒",
+      "tokens": "累計令牌"
+    },
     "transaction": {
       "autoDetection": "自動偵測",
       "errorOnDetectLanguage": "偵測語言失敗，請手動選擇源語言，錯誤: {error}"
-    },
-    "translationSkillPromptEmpty": "翻譯技能的提示詞不能為空"
+    }
   },
   "common": {
     "autoHide": "將視窗設定為「失去焦點後自動隱藏」",
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "代理伺服器位址無效",
       "proxyServerPlaceholder": "如：http://127.0.0.1:8080",
       "proxyType": "代理類型",
-      "proxyTypes": {
-        "http": "HTTP 代理",
-        "none": "不使用代理",
-        "system": "跟隨系統"
-      },
       "proxyUsername": "代理使用者名稱",
       "proxyUsernamePlaceholder": "如無須驗證，留空即可",
       "restore": "恢復備份",
@@ -203,13 +198,18 @@
       "websearchModel": "網路搜尋模型",
       "websearchModelTooltip": "用於將你的對話產生搜尋關鍵詞，請不要用推理模型，否則會很慢！",
       "wordSelectionToolbar": "AI 劃詞工具列",
+      "workflowSettings": "工作流程設定",
+      "proxyTypes": {
+        "http": "HTTP 代理",
+        "none": "不使用代理",
+        "system": "跟隨系統"
+      },
       "workflow": {
         "general": "通用模型",
         "generalTooltip": "用於工作流程中簡單的任務，如文字摘要、資訊提取等",
         "reasoning": "推理模型",
         "reasoningTooltip": "主要用於工作流程中複雜的任務，包括計劃、彙總分析結果等"
-      },
-      "workflowSettings": "工作流程設定"
+      }
     },
     "mcp": {
       "added": "已新增",
@@ -279,18 +279,19 @@
         "validationFailed": "表單驗證失敗，請檢查輸入。"
       },
       "validation": {
+        "argsPlaceholder": "參數包含佔位符：{placeholders}",
         "argsRequired": "參數不可為空。",
+        "bearerTokenPlaceholder": "Bearer Token 包含佔位符：{placeholders}",
+        "commandPlaceholder": "命令包含佔位符：{placeholders}",
         "commandRequired": "Stdio 類型需要指令。",
         "configNameRequired": "設定名稱不可為空。",
-        "nameRequired": "伺服器名稱不可為空。",
-        "typeRequired": "伺服器類型不可為空。",
-        "urlRequired": "SSE 類型需要 URL。",
-        "placeholderError": "設定中包含未設定的佔位符，請設定實際值：",
-        "bearerTokenPlaceholder": "Bearer Token 包含佔位符：{placeholders}",
         "envPlaceholder": "環境變數包含佔位符：{placeholders}",
+        "invalidName": "MCP 名稱無效：{name}",
+        "nameRequired": "伺服器名稱不可為空。",
+        "placeholderError": "設定中包含未設定的佔位符，請設定實際值：",
+        "typeRequired": "伺服器類型不可為空。",
         "urlPlaceholder": "URL 包含佔位符：{placeholders}",
-        "commandPlaceholder": "命令包含佔位符：{placeholders}",
-        "argsPlaceholder": "參數包含佔位符：{placeholders}"
+        "urlRequired": "SSE 類型需要 URL。"
       }
     },
     "model": {
@@ -340,11 +341,6 @@
       "notFound": "模型不存在或已刪除",
       "presetModels": "預設模型",
       "provider": "供應商",
-      "proxyTypes": {
-        "bySetting": "跟隨網路設定",
-        "http": "HTTP 代理",
-        "none": "不使用代理"
-      },
       "proxyServerRequired": "請輸入代理伺服器位址",
       "reasoning": "推理模型",
       "searchByIdOrName": "按 ID 或名稱搜尋",
@@ -361,7 +357,12 @@
       "presencePenalty": "存在懲罰",
       "presencePenaltyPlaceholder": "調整模型重複已出現詞語的可能性。值越大，越不容易重複。設為 0 或留空則不啟用。",
       "stop": "終止標記",
-      "stopPlaceholder": "設定模型產生文字時遇到即停止的標記。多個請用換行符分隔。"
+      "stopPlaceholder": "設定模型產生文字時遇到即停止的標記。多個請用換行符分隔。",
+      "proxyTypes": {
+        "bySetting": "跟隨網路設定",
+        "http": "HTTP 代理",
+        "none": "不使用代理"
+      }
     },
     "proxy": {
       "addNow": "立即新增",
@@ -512,7 +513,6 @@
       "deleteTitle": "刪除技能",
       "description": "技能描述",
       "disabled": "是否停用",
-      "toolsEnabled": "允許工具呼叫",
       "edit": "編輯技能",
       "icon": "圖示",
       "iconOrLogoRequired": "請選擇圖示或上傳圖片",
@@ -534,6 +534,9 @@
       "selectIcon": "請選擇圖示",
       "selectSkill": "選擇技能",
       "selectType": "請選擇技能類型",
+      "toolsEnabled": "允許工具呼叫",
+      "updateSuccess": "技能已更新",
+      "useSystemRole": "使用系統角色",
       "type": {
         "chat": "聊天",
         "coding": "編程",
@@ -549,9 +552,7 @@
         "translation": "翻譯",
         "voiceRecognition": "語音識別",
         "writing": "寫作"
-      },
-      "updateSuccess": "技能已更新",
-      "useSystemRole": "使用系統角色"
+      }
     },
     "type": {
       "about": "關於",

@@ -1,3 +1,6 @@
 [submodule "website"]
 	path = website
 	url = git@github.com:aidyou/chatspeed-website.git
+[submodule "chatspeed-docs"]
+	path = chatspeed-docs
+	url = git@github.com:aidyou/chatspeed-docs.git

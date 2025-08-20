@@ -15,21 +15,9 @@
     "conversationTitle": "Conversation Title",
     "conversationTitleUpdated": "Conversation title updated",
     "copyMessage": "Copy Message",
-    "date": {
-      "earlier": "Earlier",
-      "lastMonth": "Last Month",
-      "lastWeek": "Last Week",
-      "lastYear": "Last Year",
-      "thisMonth": "This Month",
-      "thisWeek": "This Week",
-      "thisYear": "This Year",
-      "today": "Today",
-      "twoDaysAgo": "Two days ago",
-      "yesterday": "Yesterday"
-    },
+    "deepsearch": "Deep Search",
     "deepSearchDisabled": "Deep Search Disabled",
     "deepSearchEnabled": "Deep Search Enabled: AI will deeply analyze the problem and search for related information online.",
-    "deepsearch": "Deep Search",
     "deleteMessage": "Delete Message",
     "diagramError": "Failed to render diagram",
     "disableContext": "Disable Context Memory",
@@ -53,12 +41,6 @@
     "haveNoModel": "You haven't added any models yet. Please click \"Add Model+\" in the title bar to add one.",
     "inputMessagePlaceholder": "Enter {at} to call up a skill",
     "messageCopied": "Message copied",
-    "metadata": {
-      "completion": "Output",
-      "prompt": "Input",
-      "speed": "Output Rate: {speed} tokens/sec",
-      "tokens": "Total Tokens"
-    },
     "mindmapError": "Failed to render mind map",
     "network": "Network",
     "networkDisabled": "Network Disabled",
@@ -66,8 +48,8 @@
     "newConversation": "New Conversation",
     "noteDeleteConfirmContent": "Are you sure you want to delete this note?",
     "noteDeleteConfirmTitle": "Delete Confirmation",
-    "noteSaveFailed": "Failed to save note: {error}",
     "noteSaved": "Note saved",
+    "noteSaveFailed": "Failed to save note: {error}",
     "noteTags": "Tags",
     "noteTagsPlaceholder": "Separate multiple tags with commas",
     "noteTagsRequired": "Please enter tags",
@@ -84,6 +66,24 @@
     "showFavoriteConversations": "Show Favorite Conversations",
     "skills": "Skills",
     "takeNote": "Save to Note",
+    "date": {
+      "earlier": "Earlier",
+      "lastMonth": "Last Month",
+      "lastWeek": "Last Week",
+      "lastYear": "Last Year",
+      "thisMonth": "This Month",
+      "thisWeek": "This Week",
+      "thisYear": "This Year",
+      "today": "Today",
+      "twoDaysAgo": "Two days ago",
+      "yesterday": "Yesterday"
+    },
+    "metadata": {
+      "completion": "Output",
+      "prompt": "Input",
+      "speed": "Output Rate: {speed} tokens/sec",
+      "tokens": "Total Tokens"
+    },
     "transaction": {
       "autoDetection": "Auto Detection",
       "errorOnDetectLanguage": "Failed to detect language, please manually select the source language, error: {error}"
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "Invalid proxy server address",
       "proxyServerPlaceholder": "e.g., http://127.0.0.1:8080",
       "proxyType": "Proxy Type",
-      "proxyTypes": {
-        "http": "HTTP Proxy",
-        "none": "No Proxy",
-        "system": "System Proxy"
-      },
       "proxyUsername": "Proxy Username",
       "proxyUsernamePlaceholder": "Leave blank if no authentication is required",
       "restore": "Restore Backup",
@@ -203,13 +198,18 @@
       "websearchModel": "Web Search Model",
       "websearchModelTooltip": "Used to generate search keywords from your conversations. Please do not use inference models, otherwise it will be very slow!",
       "wordSelectionToolbar": "AI Word Selection Toolbar",
+      "workflowSettings": "Workflow Settings",
+      "proxyTypes": {
+        "http": "HTTP Proxy",
+        "none": "No Proxy",
+        "system": "System Proxy"
+      },
       "workflow": {
         "general": "General Model",
         "generalTooltip": "Used for simple tasks in the workflow, such as text summarization, information extraction, etc.",
         "reasoning": "Reasoning Model",
         "reasoningTooltip": "Mainly used for complex tasks in the workflow, including planning, summarizing analysis results, etc."
-      },
-      "workflowSettings": "Workflow Settings"
+      }
     },
     "mcp": {
       "added": "Added",
@@ -279,18 +279,19 @@
         "validationFailed": "Form validation failed, please check your input."
       },
       "validation": {
+        "argsPlaceholder": "Arguments contain placeholders: {placeholders}",
         "argsRequired": "Arguments cannot be empty.",
+        "bearerTokenPlaceholder": "Bearer Token contains placeholders: {placeholders}",
+        "commandPlaceholder": "Command contains placeholders: {placeholders}",
         "commandRequired": "Stdio type requires a command.",
         "configNameRequired": "Config name cannot be empty.",
-        "nameRequired": "Server name cannot be empty.",
-        "typeRequired": "Server type cannot be empty.",
-        "urlRequired": "SSE type requires a URL.",
-        "placeholderError": "Configuration contains unset placeholders, please set actual values:",
-        "bearerTokenPlaceholder": "Bearer Token contains placeholders: {placeholders}",
         "envPlaceholder": "Environment variables contain placeholders: {placeholders}",
+        "invalidName": "Invalid MCP name: {name}",
+        "nameRequired": "Server name cannot be empty.",
+        "placeholderError": "Configuration contains unset placeholders, please set actual values:",
+        "typeRequired": "Server type cannot be empty.",
         "urlPlaceholder": "URL contains placeholders: {placeholders}",
-        "commandPlaceholder": "Command contains placeholders: {placeholders}",
-        "argsPlaceholder": "Arguments contain placeholders: {placeholders}"
+        "urlRequired": "SSE type requires a URL."
       }
     },
     "model": {
@@ -354,8 +355,8 @@
       "topK": "Top K",
       "topKPlaceholder": "Controls the model's selection from the K most likely words. A smaller value results in more deterministic output. Set to 0 or leave blank to disable. OpenAi compatible interfaces do not support this.",
       "topP": "Top P",
-      "ungrouped": "Ungrouped",
       "topPPlaceholder": "Controls the model's selection from the P most likely words. A smaller value results in more deterministic output. Set to 0 or leave blank to disable.",
+      "ungrouped": "Ungrouped",
       "updateSuccess": "Model updated",
       "proxyTypes": {
         "bySetting": "Follow Network Settings",
@@ -433,18 +434,18 @@
         "saveSuccess": "Proxy settings saved successfully",
         "title": "Proxy Settings",
         "api": {
-          "title": "API List",
-          "protocol": "Protocol",
-          "group": "Group",
-          "compat": "Compat",
           "apiUrl": "API Address",
-          "note": "Note",
+          "compat": "Compat",
           "example": "On this machine, you can access the API via {baseUrl} For example, you can access the Openai-compatible API via {baseUrl}/v1/chat/completions",
-          "type": "Type",
+          "group": "Group",
+          "note": "Note",
+          "protocol": "Protocol",
           "replaceGroup": "Replace {group} with the group name",
-          "replaceModelAndKey": "Replace {model} with the model name and {key} with the API Key",
           "replaceGroupModelKey": "Replace {group} with the group name, {model} with the model name, and {key} with the API Key",
-          "supportGroupAndCompat": "Supports groups and compatibility mode"
+          "replaceModelAndKey": "Replace {model} with the model name and {key} with the API Key",
+          "supportGroupAndCompat": "Supports groups and compatibility mode",
+          "title": "API List",
+          "type": "Type"
         }
       },
       "tabs": {
@@ -512,7 +513,6 @@
       "deleteTitle": "Delete Skill",
       "description": "Skill Description",
       "disabled": "Disabled",
-      "toolsEnabled": "Allow Tool Calls",
       "edit": "Edit Skill",
       "icon": "Icon",
       "iconOrLogoRequired": "Please select an icon or upload an image",
@@ -534,6 +534,7 @@
       "selectIcon": "Select Icon",
       "selectSkill": "Select Skill",
       "selectType": "Select Skill Type",
+      "toolsEnabled": "Allow Tool Calls",
       "type": {
         "chat": "Chat",
         "coding": "Coding",

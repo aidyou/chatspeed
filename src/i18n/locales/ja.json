@@ -15,21 +15,9 @@
     "conversationTitle": "会話のタイトル",
     "conversationTitleUpdated": "会話のタイトルを更新しました",
     "copyMessage": "メッセージをコピー",
-    "date": {
-      "earlier": "さらに前",
-      "lastMonth": "先月",
-      "lastWeek": "先週",
-      "lastYear": "昨年",
-      "thisMonth": "今月",
-      "thisWeek": "今週",
-      "thisYear": "今年",
-      "today": "今日",
-      "twoDaysAgo": "一昨日",
-      "yesterday": "昨日"
-    },
+    "deepsearch": "ディープ検索",
     "deepSearchDisabled": "ディープ検索を無効にする",
     "deepSearchEnabled": "ディープ検索を有効にする：AIが問題を深く分析し、インターネットで関連情報を検索します",
-    "deepsearch": "ディープ検索",
     "deleteMessage": "メッセージを削除",
     "diagramError": "フローチャートのレンダリングに失敗しました",
     "disableContext": "コンテキストの記憶を無効にする",
@@ -53,12 +41,6 @@
     "haveNoModel": "モデルが追加されていません。タイトルバーの「モデルを追加+」ボタンをクリックして追加してください",
     "inputMessagePlaceholder": "{at} を入力してスキルを呼び出す",
     "messageCopied": "メッセージをコピーしました",
-    "metadata": {
-      "completion": "出力",
-      "prompt": "入力",
-      "speed": "出力速度：{speed} トークン/秒",
-      "tokens": "累計トークン"
-    },
     "mindmapError": "マインドマップのレンダリングに失敗しました",
     "network": "インターネット接続",
     "networkDisabled": "インターネット接続を無効にする",
@@ -66,8 +48,8 @@
     "newConversation": "新しい会話",
     "noteDeleteConfirmContent": "この智記を削除してもよろしいですか？",
     "noteDeleteConfirmTitle": "削除の確認",
-    "noteSaveFailed": "智記の保存に失敗しました：{error}",
     "noteSaved": "智記を保存しました",
+    "noteSaveFailed": "智記の保存に失敗しました：{error}",
     "noteTags": "タグ",
     "noteTagsPlaceholder": "複数のタグはカンマで区切ってください",
     "noteTagsRequired": "タグを入力してください",
@@ -84,11 +66,29 @@
     "showFavoriteConversations": "お気に入りの会話のタイトルを表示",
     "skills": "スキル",
     "takeNote": "智記に保存",
+    "translationSkillPromptEmpty": "翻訳スキルのプロンプトは必須です",
+    "date": {
+      "earlier": "さらに前",
+      "lastMonth": "先月",
+      "lastWeek": "先週",
+      "lastYear": "昨年",
+      "thisMonth": "今月",
+      "thisWeek": "今週",
+      "thisYear": "今年",
+      "today": "今日",
+      "twoDaysAgo": "一昨日",
+      "yesterday": "昨日"
+    },
+    "metadata": {
+      "completion": "出力",
+      "prompt": "入力",
+      "speed": "出力速度：{speed} トークン/秒",
+      "tokens": "累計トークン"
+    },
     "transaction": {
       "autoDetection": "自動検出",
       "errorOnDetectLanguage": "言語の検出に失敗しました。手動で元の言語を選択してください。エラー: {error}"
-    },
-    "translationSkillPromptEmpty": "翻訳スキルのプロンプトは必須です"
+    }
   },
   "common": {
     "autoHide": "ウィンドウを「フォーカスを失うと自動的に非表示」に設定する",
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "プロキシサーバーのアドレスが無効です",
       "proxyServerPlaceholder": "例：http://127.0.0.1:8080",
       "proxyType": "プロキシタイプ",
-      "proxyTypes": {
-        "http": "HTTPプロキシ",
-        "none": "プロキシを使用しない",
-        "system": "システムに従う"
-      },
       "proxyUsername": "プロキシユーザー名",
       "proxyUsernamePlaceholder": "認証が不要な場合は空白にしてください",
       "restore": "バックアップを復元",
@@ -203,13 +198,18 @@
       "websearchModel": "ウェブ検索モデル",
       "websearchModelTooltip": "会話から検索キーワードを生成するために使用します。推論モデルを使用しないでください。遅くなります！",
       "wordSelectionToolbar": "AI単語選択ツールバー",
+      "workflowSettings": "ワークフロー設定",
+      "proxyTypes": {
+        "http": "HTTPプロキシ",
+        "none": "プロキシを使用しない",
+        "system": "システムに従う"
+      },
       "workflow": {
         "general": "汎用モデル",
         "generalTooltip": "テキスト要約、情報抽出など、ワークフローの簡単なタスクに使用します",
         "reasoning": "推論モデル",
         "reasoningTooltip": "計画、集計分析結果など、ワークフローの複雑なタスクに主に使用します"
-      },
-      "workflowSettings": "ワークフロー設定"
+      }
     },
     "mcp": {
       "added": "追加済み",
@@ -238,13 +238,13 @@
       "noServersFound": "MCPサーバーが見つかりません。",
       "noTools": "利用可能なツールがないか、まだ取得されていません。",
       "operationFailed": "操作に失敗しました：{error}",
-      "restart": "再起動",
-      "restartSuccess": "MCPサーバー「{name}」が再起動しました。",
-      "restartFailed": "MCPサーバー「{name}」の再起動に失敗しました: {error}",
       "presetTitle": "プリセットMCPサーバーを選択",
+      "restart": "再起動",
+      "restartFailed": "MCPサーバー「{name}」の再起動に失敗しました: {error}",
+      "restartSuccess": "MCPサーバー「{name}」が再起動しました。",
       "start": "開始",
-      "statusError": "起動エラー: {error}",
       "statusConnected": "接続済み、起動中...",
+      "statusError": "起動エラー: {error}",
       "statusRunning": "実行中",
       "statusStarting": "起動中",
       "statusStopped": "未起動",
@@ -279,18 +279,19 @@
         "validationFailed": "フォームの検証に失敗しました。入力を確認してください。"
       },
       "validation": {
+        "argsPlaceholder": "引数にプレースホルダーが含まれています：{placeholders}",
         "argsRequired": "引数は空にできません。",
+        "bearerTokenPlaceholder": "Bearerトークンにプレースホルダーが含まれています：{placeholders}",
+        "commandPlaceholder": "コマンドにプレースホルダーが含まれています：{placeholders}",
         "commandRequired": "Stdioタイプにはコマンドが必要です。",
         "configNameRequired": "設定名は空にできません。",
-        "nameRequired": "サーバー名は空にできません。",
-        "typeRequired": "サーバータイプは空にできません。",
-        "urlRequired": "SSEタイプにはURLが必要です。",
-        "placeholderError": "設定に未設定のプレースホルダーが含まれています。実際の値を設定してください：",
-        "bearerTokenPlaceholder": "Bearerトークンにプレースホルダーが含まれています：{placeholders}",
         "envPlaceholder": "環境変数にプレースホルダーが含まれています：{placeholders}",
+        "invalidName": "無効なMCP名：{name}",
+        "nameRequired": "サーバー名は空にできません。",
+        "placeholderError": "設定に未設定のプレースホルダーが含まれています。実際の値を設定してください：",
+        "typeRequired": "サーバータイプは空にできません。",
         "urlPlaceholder": "URLにプレースホルダーが含まれています：{placeholders}",
-        "commandPlaceholder": "コマンドにプレースホルダーが含まれています：{placeholders}",
-        "argsPlaceholder": "引数にプレースホルダーが含まれています：{placeholders}"
+        "urlRequired": "SSEタイプにはURLが必要です。"
       }
     },
     "model": {
@@ -318,6 +319,8 @@
       "disabled": "無効にする",
       "documentation": "ドキュメント",
       "edit": "モデルを編集",
+      "frequencyPenalty": "頻度ペナルティ",
+      "frequencyPenaltyPlaceholder": "モデルが同じ単語を繰り返す頻度を調整します。値が大きいほど、繰り返しが少なくなります。0に設定するか、空白のままにすると無効になります。",
       "functionCall": "関数呼び出し",
       "imageInput": "画像入力",
       "import": "モデルをインポート",
@@ -335,19 +338,18 @@
       "modelsRequired": "少なくとも1つのモデルを追加する必要があります",
       "nameRequired": "サプライヤー名を入力してください",
       "noModels": "利用可能なモデルはありません。先に追加してください",
-      "noModelsFound": "モデルが見つかりません",
       "noModelSelected": "少なくとも1つのモデルを選択してください",
+      "noModelsFound": "モデルが見つかりません",
       "notFound": "モデルが見つかりません、または削除されました",
+      "presencePenalty": "存在ペナルティ",
+      "presencePenaltyPlaceholder": "モデルが既に出現した単語を繰り返す可能性を調整します。値が大きいほど、繰り返しにくくなります。0に設定するか、空白のままにすると無効になります。",
       "presetModels": "プリセットモデル",
       "provider": "サプライヤー",
-      "proxyTypes": {
-        "bySetting": "ネットワーク設定に従う",
-        "http": "HTTPプロキシ",
-        "none": "プロキシを使用しない"
-      },
       "proxyServerRequired": "プロキシサーバーのアドレスを入力してください",
       "reasoning": "推論モデル",
       "searchByIdOrName": "IDまたは名前で検索",
+      "stop": "停止トークン",
+      "stopPlaceholder": "モデルがテキストの生成を停止するトークンを設定します。複数ある場合は改行で区切ってください。",
       "temperature": "温度",
       "temperaturePlaceholder": "モデルの出力のランダム性を制御します。値が大きいほど、出力はよりランダムになります。",
       "topK": "Top K",
@@ -356,12 +358,11 @@
       "topPPlaceholder": "モデルが最も可能性の高いP個の単語から選択するように制御します。値が小さいほど、出力はより確定的になります。0に設定するか、空白のままにすると無効になります。",
       "ungrouped": "未分類",
       "updateSuccess": "モデルを更新しました",
-      "frequencyPenalty": "頻度ペナルティ",
-      "frequencyPenaltyPlaceholder": "モデルが同じ単語を繰り返す頻度を調整します。値が大きいほど、繰り返しが少なくなります。0に設定するか、空白のままにすると無効になります。",
-      "presencePenalty": "存在ペナルティ",
-      "presencePenaltyPlaceholder": "モデルが既に出現した単語を繰り返す可能性を調整します。値が大きいほど、繰り返しにくくなります。0に設定するか、空白のままにすると無効になります。",
-      "stop": "停止トークン",
-      "stopPlaceholder": "モデルがテキストの生成を停止するトークンを設定します。複数ある場合は改行で区切ってください。"
+      "proxyTypes": {
+        "bySetting": "ネットワーク設定に従う",
+        "http": "HTTPプロキシ",
+        "none": "プロキシを使用しない"
+      }
     },
     "proxy": {
       "addNow": "今すぐ追加",
@@ -433,18 +434,18 @@
         "saveSuccess": "プロキシ設定が正常に保存されました",
         "title": "プロキシ設定",
         "api": {
-          "title": "APIリスト",
-          "protocol": "プロトコル",
-          "group": "グループ",
-          "compat": "互換性のある形式",
           "apiUrl": "APIアドレス",
-          "note": "注釈",
+          "compat": "互換性のある形式",
           "example": "このマシンでは、{baseUrl}を介してインターフェースにアクセスできます。たとえば、一般的なOpenai互換インターフェースには、{baseUrl}/v1/chat/completionsを介してアクセスできます",
-          "type": "インターフェースタイプ",
+          "group": "グループ",
+          "note": "注釈",
+          "protocol": "プロトコル",
           "replaceGroup": "{group}をグループ名に置き換えます",
-          "replaceModelAndKey": "{model}をモデル名に、{key}をAPIキーに置き換えます",
           "replaceGroupModelKey": "{group}をグループ名に、{model}をモデル名に、{key}をAPIキーに置き換えます",
-          "supportGroupAndCompat": "グループと互換モードをサポート"
+          "replaceModelAndKey": "{model}をモデル名に、{key}をAPIキーに置き換えます",
+          "supportGroupAndCompat": "グループと互換モードをサポート",
+          "title": "APIリスト",
+          "type": "インターフェースタイプ"
         }
       },
       "tabs": {
@@ -501,6 +502,7 @@
       }
     },
     "skill": {
+      "updateSuccess": "スキルを更新しました",
       "add": "スキルを追加",
       "addSuccess": "スキルを追加しました",
       "basicInfo": "基本情報",
@@ -512,7 +514,6 @@
       "deleteTitle": "スキルを削除",
       "description": "スキルの説明",
       "disabled": "無効にする",
-      "toolsEnabled": "ツール呼び出しを許可する",
       "edit": "スキルを編集",
       "icon": "アイコン",
       "iconOrLogoRequired": "アイコンを選択するか、画像をアップロードしてください",
@@ -534,6 +535,8 @@
       "selectIcon": "アイコンを選択してください",
       "selectSkill": "スキルを選択",
       "selectType": "スキルの種類を選択してください",
+      "toolsEnabled": "ツール呼び出しを許可する",
+      "useSystemRole": "システムロールを使用する",
       "type": {
         "chat": "チャット",
         "coding": "プログラミング",
@@ -549,9 +552,7 @@
         "translation": "翻訳",
         "voiceRecognition": "音声認識",
         "writing": "執筆"
-      },
-      "updateSuccess": "スキルを更新しました",
-      "useSystemRole": "システムロールを使用する"
+      }
     },
     "type": {
       "about": "バージョン情報",

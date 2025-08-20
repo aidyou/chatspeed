@@ -15,21 +15,9 @@
     "conversationTitle": "对话主题",
     "conversationTitleUpdated": "对话主题已更新",
     "copyMessage": "复制消息",
-    "date": {
-      "earlier": "更早",
-      "lastMonth": "上月",
-      "lastWeek": "上周",
-      "lastYear": "去年",
-      "thisMonth": "本月",
-      "thisWeek": "本周",
-      "thisYear": "今年",
-      "today": "今天",
-      "twoDaysAgo": "前天",
-      "yesterday": "昨天"
-    },
+    "deepsearch": "深度搜索",
     "deepSearchDisabled": "关闭深度搜索",
     "deepSearchEnabled": "开启深度搜索：AI 将深入分析问题并联网搜索相关信息",
-    "deepsearch": "深度搜索",
     "deleteMessage": "删除消息",
     "diagramError": "流程图渲染失败",
     "disableContext": "点击关闭上下文记忆",
@@ -53,12 +41,6 @@
     "haveNoModel": "您尚未添加任何模型，请点击标题栏的 “添加模型+” 按钮添加",
     "inputMessagePlaceholder": "输入 {at} 可呼出技能",
     "messageCopied": "消息已复制",
-    "metadata": {
-      "completion": "输出",
-      "prompt": "输入",
-      "speed": "输出速率：{speed} 令牌/秒",
-      "tokens": "累计令牌"
-    },
     "mindmapError": "思维导图渲染失败",
     "network": "联网",
     "networkDisabled": "关闭联网",
@@ -66,8 +48,8 @@
     "newConversation": "新对话",
     "noteDeleteConfirmContent": "确定要删除这条智记吗？",
     "noteDeleteConfirmTitle": "删除确认",
-    "noteSaveFailed": "智记保存失败：{error}",
     "noteSaved": "智记已保存",
+    "noteSaveFailed": "智记保存失败：{error}",
     "noteTags": "标签",
     "noteTagsPlaceholder": "多个标签请用逗号分隔",
     "noteTagsRequired": "请输入标签",
@@ -84,11 +66,29 @@
     "showFavoriteConversations": "显示收藏的对话主题",
     "skills": "技能",
     "takeNote": "保存到智记",
+    "translationSkillPromptEmpty": "翻译技能的提示词不能为空",
+    "date": {
+      "earlier": "更早",
+      "lastMonth": "上月",
+      "lastWeek": "上周",
+      "lastYear": "去年",
+      "thisMonth": "本月",
+      "thisWeek": "本周",
+      "thisYear": "今年",
+      "today": "今天",
+      "twoDaysAgo": "前天",
+      "yesterday": "昨天"
+    },
+    "metadata": {
+      "completion": "输出",
+      "prompt": "输入",
+      "speed": "输出速率：{speed} 令牌/秒",
+      "tokens": "累计令牌"
+    },
     "transaction": {
       "autoDetection": "自动检测",
       "errorOnDetectLanguage": "检测语言失败，请手动选择源语言，错误: {error}"
-    },
-    "translationSkillPromptEmpty": "翻译技能的提示词不能为空"
+    }
   },
   "common": {
     "autoHide": "将窗口设置为「失去焦点后自动隐藏」",
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "代理服务器地址无效",
       "proxyServerPlaceholder": "如：http://127.0.0.1:8080",
       "proxyType": "代理类型",
-      "proxyTypes": {
-        "http": "HTTP代理",
-        "none": "不使用代理",
-        "system": "跟随系统"
-      },
       "proxyUsername": "代理用户名",
       "proxyUsernamePlaceholder": "若代理需要验证则填写",
       "restore": "恢复备份",
@@ -203,13 +198,18 @@
       "websearchModel": "网络搜索模型",
       "websearchModelTooltip": "用于将你的对话生成搜索关键词，请不要用推理模型，否则会很慢！",
       "wordSelectionToolbar": "AI划词工具栏",
+      "workflowSettings": "工作流设置",
+      "proxyTypes": {
+        "http": "HTTP代理",
+        "none": "不使用代理",
+        "system": "跟随系统"
+      },
       "workflow": {
         "general": "通用模型",
         "generalTooltip": "用于工作流中简单的任务，如文本摘要、信息提取等",
         "reasoning": "推理模型",
         "reasoningTooltip": "主要用于工作流中复杂的任务，包括计划、汇总分析结果等"
-      },
-      "workflowSettings": "工作流设置"
+      }
     },
     "mcp": {
       "added": "已添加",
@@ -279,18 +279,19 @@
         "validationFailed": "表单验证失败，请检查输入。"
       },
       "validation": {
+        "argsPlaceholder": "参数包含占位符：{placeholders}",
         "argsRequired": "参数不能为空。",
+        "bearerTokenPlaceholder": "Bearer Token 包含占位符：{placeholders}",
+        "commandPlaceholder": "命令包含占位符：{placeholders}",
         "commandRequired": "Stdio 类型需要命令。",
         "configNameRequired": "配置名称不能为空。",
-        "nameRequired": "服务器名称不能为空。",
-        "typeRequired": "服务器类型不能为空。",
-        "urlRequired": "SSE 类型需要 URL。",
-        "placeholderError": "配置中包含未设置的占位符，请设置实际值：",
-        "bearerTokenPlaceholder": "Bearer Token 包含占位符：{placeholders}",
         "envPlaceholder": "环境变量包含占位符：{placeholders}",
+        "invalidName": "MCP名称无效：{name}",
+        "nameRequired": "服务器名称不能为空。",
+        "placeholderError": "配置中包含未设置的占位符，请设置实际值：",
+        "typeRequired": "服务器类型不能为空。",
         "urlPlaceholder": "URL 包含占位符：{placeholders}",
-        "commandPlaceholder": "命令包含占位符：{placeholders}",
-        "argsPlaceholder": "参数包含占位符：{placeholders}"
+        "urlRequired": "SSE 类型需要 URL。"
       }
     },
     "model": {

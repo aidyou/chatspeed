@@ -17,9 +17,10 @@
           <div class="item">
             <div class="server-left">
               <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
-                <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded && server.status === 'running'
-                  ? 'caret-down'
-                  : 'caret-right'
+                <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded &&
+                    server.status === 'running'
+                    ? 'caret-down'
+                    : 'caret-right'
                   " />
               </div>
               <avatar :text="server.name" :size="32" />
@@ -109,8 +110,22 @@
           <!-- Ensure activeTabName is used here if defined in script -->
           <el-tab-pane :label="$t('settings.mcp.form.tabForm')" name="formEditor">
             <el-form :model="currentServerForm" label-width="150px" ref="serverFormRef" style="padding-top: 20px">
-              <el-form-item :label="$t('settings.mcp.form.name')" prop="name"
-                :rules="[{ required: true, message: $t('settings.mcp.validation.nameRequired') }]">
+              <el-form-item :label="$t('settings.mcp.form.name')" prop="name" :rules="[
+                { required: true, message: $t('settings.mcp.validation.nameRequired') },
+                {
+                  validator: (rule, value, callback) => {
+                    const regex = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
+                    if (!value || regex.test(value)) {
+                      callback()
+                    } else {
+                      callback(
+                        new Error(t('settings.mcp.validation.invalidName', { name: value }))
+                      )
+                    }
+                  },
+                  trigger: 'blur'
+                }
+              ]">
                 <el-input v-model="currentServerForm.name" />
               </el-form-item>
               <el-form-item :label="$t('settings.mcp.form.description')" prop="description">
@@ -225,7 +240,8 @@
                   }}
                 </el-button>
                 <el-button size="small" round @click="openUrl(preset.website)" v-if="preset.website">{{
-                  $t('common.detail') }}</el-button>
+                  $t('common.detail')
+                  }}</el-button>
               </el-space>
             </div>
           </el-card>
@@ -808,9 +824,11 @@ const validatePlaceholders = () => {
     const bearerToken = currentServerForm.config.bearer_token.trim()
     if (bearerToken && placeholderRegex.test(bearerToken)) {
       const matches = bearerToken.match(placeholderRegex)
-      errors.push(t('settings.mcp.validation.bearerTokenPlaceholder', {
-        placeholders: matches.join(', ')
-      }))
+      errors.push(
+        t('settings.mcp.validation.bearerTokenPlaceholder', {
+          placeholders: matches.join(', ')
+        })
+      )
     }
   }
 
@@ -819,9 +837,11 @@ const validatePlaceholders = () => {
     const envString = currentServerForm.config.envString.trim()
     if (envString && placeholderRegex.test(envString)) {
       const matches = envString.match(placeholderRegex)
-      errors.push(t('settings.mcp.validation.envPlaceholder', {
-        placeholders: matches.join(', ')
-      }))
+      errors.push(
+        t('settings.mcp.validation.envPlaceholder', {
+          placeholders: matches.join(', ')
+        })
+      )
     }
   }
 
@@ -830,26 +850,38 @@ const validatePlaceholders = () => {
     const url = currentServerForm.config.url.trim()
     if (url && placeholderRegex.test(url)) {
       const matches = url.match(placeholderRegex)
-      errors.push(t('settings.mcp.validation.urlPlaceholder', {
-        placeholders: matches.join(', ')
-      }))
+      errors.push(
+        t('settings.mcp.validation.urlPlaceholder', {
+          placeholders: matches.join(', ')
+        })
+      )
     }
   }
 
   // The stdio may has placeholder in command
   if (currentServerForm.config.type === 'stdio') {
-    if (currentServerForm.config.command && placeholderRegex.test(currentServerForm.config.command)) {
+    if (
+      currentServerForm.config.command &&
+      placeholderRegex.test(currentServerForm.config.command)
+    ) {
       const matches = currentServerForm.config.command.match(placeholderRegex)
-      errors.push(t('settings.mcp.validation.commandPlaceholder', {
-        placeholders: matches.join(', ')
-      }))
+      errors.push(
+        t('settings.mcp.validation.commandPlaceholder', {
+          placeholders: matches.join(', ')
+        })
+      )
     }
 
-    if (currentServerForm.config.argsString && placeholderRegex.test(currentServerForm.config.argsString)) {
+    if (
+      currentServerForm.config.argsString &&
+      placeholderRegex.test(currentServerForm.config.argsString)
+    ) {
       const matches = currentServerForm.config.argsString.match(placeholderRegex)
-      errors.push(t('settings.mcp.validation.argsPlaceholder', {
-        placeholders: matches.join(', ')
-      }))
+      errors.push(
+        t('settings.mcp.validation.argsPlaceholder', {
+          placeholders: matches.join(', ')
+        })
+      )
     }
   }
 

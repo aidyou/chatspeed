@@ -15,21 +15,9 @@
     "conversationTitle": "Dialogtitel",
     "conversationTitleUpdated": "Dialogtitel aktualisiert",
     "copyMessage": "Nachricht kopieren",
-    "date": {
-      "earlier": "Früher",
-      "lastMonth": "Letzten Monat",
-      "lastWeek": "Letzte Woche",
-      "lastYear": "Letztes Jahr",
-      "thisMonth": "Diesen Monat",
-      "thisWeek": "Diese Woche",
-      "thisYear": "Dieses Jahr",
-      "today": "Heute",
-      "twoDaysAgo": "Vorgestern",
-      "yesterday": "Gestern"
-    },
+    "deepsearch": "Tiefensuche",
     "deepSearchDisabled": "Tiefensuche deaktiviert",
     "deepSearchEnabled": "Tiefensuche aktiviert: Die KI analysiert das Problem eingehend und sucht im Internet nach relevanten Informationen.",
-    "deepsearch": "Tiefensuche",
     "deleteMessage": "Nachricht löschen",
     "diagramError": "Fehler beim Rendern des Flussdiagramms",
     "disableContext": "Klicke, um die Kontextspeicherung zu deaktivieren",
@@ -53,12 +41,6 @@
     "haveNoModel": "Du hast noch keine Modelle hinzugefügt. Klicke auf die Schaltfläche „Modell hinzufügen +“ in der Titelleiste, um sie hinzuzufügen.",
     "inputMessagePlaceholder": "Eingabe {at} zur Aktivierung von Fähigkeiten",
     "messageCopied": "Nachricht kopiert",
-    "metadata": {
-      "completion": "Ausgabe",
-      "prompt": "Eingabe",
-      "speed": "Ausgaberate: {speed} Tokens/Sekunde",
-      "tokens": "Kumulierte Tokens"
-    },
     "mindmapError": "Fehler beim Rendern der Mindmap",
     "network": "Netzwerk",
     "networkDisabled": "Netzwerk deaktiviert",
@@ -66,8 +48,8 @@
     "newConversation": "Neuer Dialog",
     "noteDeleteConfirmContent": "Möchtest du diese Notiz wirklich löschen?",
     "noteDeleteConfirmTitle": "Löschbestätigung",
-    "noteSaveFailed": "Fehler beim Speichern der Notiz: {error}",
     "noteSaved": "Notiz gespeichert",
+    "noteSaveFailed": "Fehler beim Speichern der Notiz: {error}",
     "noteTags": "Tags",
     "noteTagsPlaceholder": "Mehrere Tags bitte durch Komma trennen",
     "noteTagsRequired": "Bitte gib Tags ein",
@@ -84,11 +66,29 @@
     "showFavoriteConversations": "Favorisierte Dialoge anzeigen",
     "skills": "Fähigkeiten",
     "takeNote": "In Notiz speichern",
+    "translationSkillPromptEmpty": "Der Prompt für die Übersetzungsfähigkeit darf nicht leer sein.",
+    "date": {
+      "earlier": "Früher",
+      "lastMonth": "Letzten Monat",
+      "lastWeek": "Letzte Woche",
+      "lastYear": "Letztes Jahr",
+      "thisMonth": "Diesen Monat",
+      "thisWeek": "Diese Woche",
+      "thisYear": "Dieses Jahr",
+      "today": "Heute",
+      "twoDaysAgo": "Vorgestern",
+      "yesterday": "Gestern"
+    },
+    "metadata": {
+      "completion": "Ausgabe",
+      "prompt": "Eingabe",
+      "speed": "Ausgaberate: {speed} Tokens/Sekunde",
+      "tokens": "Kumulierte Tokens"
+    },
     "transaction": {
       "autoDetection": "Automatische Erkennung",
       "errorOnDetectLanguage": "Fehler beim Erkennen der Sprache. Bitte wähle die Quellsprache manuell aus, Fehler: {error}"
-    },
-    "translationSkillPromptEmpty": "Der Prompt für die Übersetzungsfähigkeit darf nicht leer sein."
+    }
   },
   "common": {
     "autoHide": "Fenster auf „Automatisch ausblenden, wenn der Fokus verloren geht“ setzen",
@@ -172,11 +172,6 @@
       "proxyServerInvalid": "Proxy-Server-Adresse ist ungültig",
       "proxyServerPlaceholder": "Z.B.: http://127.0.0.1:8080",
       "proxyType": "Proxy-Typ",
-      "proxyTypes": {
-        "http": "HTTP-Proxy",
-        "none": "Kein Proxy",
-        "system": "System verwenden"
-      },
       "proxyUsername": "Proxy-Benutzername",
       "proxyUsernamePlaceholder": "Lass dieses Feld leer, wenn keine Authentifizierung erforderlich ist",
       "restore": "Sicherung wiederherstellen",
@@ -203,13 +198,18 @@
       "websearchModel": "Websuche Modell",
       "websearchModelTooltip": "Wird verwendet, um Suchbegriffe aus deinem Dialog zu generieren. Verwende kein Inferenzmodell, da dies sehr langsam ist!",
       "wordSelectionToolbar": "KI-Textauswahl-Symbolleiste",
+      "workflowSettings": "Workflow-Einstellungen",
+      "proxyTypes": {
+        "http": "HTTP-Proxy",
+        "none": "Kein Proxy",
+        "system": "System verwenden"
+      },
       "workflow": {
         "general": "Allgemeines Modell",
         "generalTooltip": "Wird für einfache Aufgaben im Workflow verwendet, z. B. Textzusammenfassung, Informationsentnahme usw.",
         "reasoning": "Inferenzmodell",
         "reasoningTooltip": "Wird hauptsächlich für komplexe Aufgaben im Workflow verwendet, einschließlich Planung, Zusammenfassung von Analyseergebnissen usw."
-      },
-      "workflowSettings": "Workflow-Einstellungen"
+      }
     },
     "mcp": {
       "added": "Hinzugefügt",
@@ -238,13 +238,13 @@
       "noServersFound": "Keine MCP-Server gefunden.",
       "noTools": "Keine Werkzeuge verfügbar oder noch nicht abgerufen.",
       "operationFailed": "Operation fehlgeschlagen: {error}",
-      "restart": "Neustart",
-      "restartSuccess": "MCP-Server „{name}“ wurde neu gestartet.",
-      "restartFailed": "Neustart des MCP-Servers „{name}“ fehlgeschlagen: {error}",
       "presetTitle": "Voreingestellten MCP-Server auswählen",
+      "restart": "Neustart",
+      "restartFailed": "Neustart des MCP-Servers „{name}“ fehlgeschlagen: {error}",
+      "restartSuccess": "MCP-Server „{name}“ wurde neu gestartet.",
       "start": "Start",
-      "statusError": "Startfehler: {error}",
       "statusConnected": "Verbunden, wird gestartet...",
+      "statusError": "Startfehler: {error}",
       "statusRunning": "Wird ausgeführt",
       "statusStarting": "Wird gestartet",
       "statusStopped": "Nicht gestartet",
@@ -279,18 +279,19 @@
         "validationFailed": "Formularüberprüfung fehlgeschlagen, bitte Eingabe überprüfen."
       },
       "validation": {
+        "argsPlaceholder": "Argumente enthalten Platzhalter: {placeholders}",
         "argsRequired": "Argumente dürfen nicht leer sein.",
+        "bearerTokenPlaceholder": "Bearer-Token enthält Platzhalter: {placeholders}",
+        "commandPlaceholder": "Befehl enthält Platzhalter: {placeholders}",
         "commandRequired": "Stdio-Typ erfordert einen Befehl.",
         "configNameRequired": "Konfigurationsname darf nicht leer sein.",
-        "nameRequired": "Servername darf nicht leer sein.",
-        "typeRequired": "Servertyp darf nicht leer sein.",
-        "urlRequired": "SSE-Typ erfordert eine URL。",
-        "placeholderError": "Die Konfiguration enthält nicht gesetzte Platzhalter, bitte setze tatsächliche Werte:",
-        "bearerTokenPlaceholder": "Bearer-Token enthält Platzhalter: {placeholders}",
         "envPlaceholder": "Umgebungsvariablen enthalten Platzhalter: {placeholders}",
+        "invalidName": "Ungültiger MCP-Name: {name}",
+        "nameRequired": "Servername darf nicht leer sein.",
+        "placeholderError": "Die Konfiguration enthält nicht gesetzte Platzhalter, bitte setze tatsächliche Werte:",
+        "typeRequired": "Servertyp darf nicht leer sein.",
         "urlPlaceholder": "URL enthält Platzhalter: {placeholders}",
-        "commandPlaceholder": "Befehl enthält Platzhalter: {placeholders}",
-        "argsPlaceholder": "Argumente enthalten Platzhalter: {placeholders}"
+        "urlRequired": "SSE-Typ erfordert eine URL。"
       }
     },
     "model": {
@@ -318,6 +319,8 @@
       "disabled": "Deaktiviert?",
       "documentation": "Dokumentation",
       "edit": "Modell bearbeiten",
+      "frequencyPenalty": "Frequenzstrafe",
+      "frequencyPenaltyPlaceholder": "Passt die Häufigkeit an, mit der das Modell dieselben Wörter wiederholt. Ein höherer Wert führt zu weniger Wiederholungen. Bei 0 oder leer wird es nicht verwendet.",
       "functionCall": "Funktionsaufruf",
       "imageInput": "Bildeingabe",
       "import": "Modell importieren",
@@ -335,19 +338,18 @@
       "modelsRequired": "Es muss mindestens ein Modell hinzugefügt werden",
       "nameRequired": "Bitte gib den Namen des Anbieters ein",
       "noModels": "Keine Modelle verfügbar. Bitte füge zuerst welche hinzu.",
-      "noModelsFound": "Keine Modelle gefunden",
       "noModelSelected": "Bitte wähle mindestens ein Modell aus",
+      "noModelsFound": "Keine Modelle gefunden",
       "notFound": "Modell nicht gefunden oder gelöscht",
+      "presencePenalty": "Anwesenheitsstrafe",
+      "presencePenaltyPlaceholder": "Passt die Wahrscheinlichkeit an, mit der das Modell bereits erschienene Wörter wiederholt. Ein höherer Wert macht Wiederholungen unwahrscheinlicher. Bei 0 oder leer wird es nicht verwendet.",
       "presetModels": "Voreingestellte Modelle",
       "provider": "Anbieter",
-      "proxyTypes": {
-        "bySetting": "Netzwerkeinstellungen verwenden",
-        "http": "HTTP-Proxy",
-        "none": "Kein Proxy"
-      },
       "proxyServerRequired": "Bitte gib die Proxy-Server-Adresse ein",
       "reasoning": "Inferenzmodell",
       "searchByIdOrName": "Nach ID oder Name suchen",
+      "stop": "Stoppzeichen",
+      "stopPlaceholder": "Legt die Zeichen fest, bei denen das Modell die Textgenerierung beenden soll. Mehrere durch Zeilenumbrüche trennen.",
       "temperature": "Temperatur",
       "temperaturePlaceholder": "Steuert die Zufälligkeit der Modellausgabe. Ein höherer Wert führt zu einer zufälligeren Ausgabe.",
       "topK": "Top K",
@@ -356,12 +358,11 @@
       "topPPlaceholder": "Steuert die Auswahl des Modells aus den P wahrscheinlichsten Wörtern. Ein kleinerer Wert führt zu einer deterministischeren Ausgabe. Bei 0 oder leer wird es nicht verwendet.",
       "ungrouped": "Nicht gruppiert",
       "updateSuccess": "Modell aktualisiert",
-      "frequencyPenalty": "Frequenzstrafe",
-      "frequencyPenaltyPlaceholder": "Passt die Häufigkeit an, mit der das Modell dieselben Wörter wiederholt. Ein höherer Wert führt zu weniger Wiederholungen. Bei 0 oder leer wird es nicht verwendet.",
-      "presencePenalty": "Anwesenheitsstrafe",
-      "presencePenaltyPlaceholder": "Passt die Wahrscheinlichkeit an, mit der das Modell bereits erschienene Wörter wiederholt. Ein höherer Wert macht Wiederholungen unwahrscheinlicher. Bei 0 oder leer wird es nicht verwendet.",
-      "stop": "Stoppzeichen",
-      "stopPlaceholder": "Legt die Zeichen fest, bei denen das Modell die Textgenerierung beenden soll. Mehrere durch Zeilenumbrüche trennen."
+      "proxyTypes": {
+        "bySetting": "Netzwerkeinstellungen verwenden",
+        "http": "HTTP-Proxy",
+        "none": "Kein Proxy"
+      }
     },
     "proxy": {
       "addNow": "Jetzt hinzufügen",
@@ -433,18 +434,18 @@
         "saveSuccess": "Proxy-Einstellungen erfolgreich gespeichert",
         "title": "Proxy-Einstellungen",
         "api": {
-          "title": "API-Liste",
-          "protocol": "Protokoll",
-          "group": "Gruppe",
-          "compat": "Kompatibles Format",
           "apiUrl": "API-Adresse",
-          "note": "Hinweis",
+          "compat": "Kompatibles Format",
           "example": "Auf diesem Computer können Sie über {baseUrl} auf die Schnittstelle zugreifen. Beispielsweise können Sie auf die allgemeine Openai-kompatible Schnittstelle über {baseUrl}/v1/chat/completions zugreifen",
-          "type": "Schnittstellentyp",
+          "group": "Gruppe",
+          "note": "Hinweis",
+          "protocol": "Protokoll",
           "replaceGroup": "Ersetzen Sie {group} durch den Gruppennamen",
-          "replaceModelAndKey": "Ersetzen Sie {model} durch den Modellnamen und {key} durch den API-Schlüssel",
           "replaceGroupModelKey": "Ersetzen Sie {group} durch den Gruppennamen, {model} durch den Modellnamen und {key} durch den API-Schlüssel",
-          "supportGroupAndCompat": "Unterstützt Gruppen und Kompatibilitätsmodus"
+          "replaceModelAndKey": "Ersetzen Sie {model} durch den Modellnamen und {key} durch den API-Schlüssel",
+          "supportGroupAndCompat": "Unterstützt Gruppen und Kompatibilitätsmodus",
+          "title": "API-Liste",
+          "type": "Schnittstellentyp"
         }
       },
       "tabs": {
@@ -512,7 +513,6 @@
       "deleteTitle": "Fähigkeit löschen",
       "description": "Fähigkeitsbeschreibung",
       "disabled": "Deaktiviert?",
-      "toolsEnabled": "Werkzeugaufrufe zulassen",
       "edit": "Fähigkeit bearbeiten",
       "icon": "Symbol",
       "iconOrLogoRequired": "Bitte wähle ein Symbol oder lade ein Bild hoch",
@@ -534,6 +534,9 @@
       "selectIcon": "Bitte wähle ein Symbol aus",
       "selectSkill": "Fähigkeit auswählen",
       "selectType": "Bitte wähle einen Fähigkeitstyp aus",
+      "toolsEnabled": "Werkzeugaufrufe zulassen",
+      "updateSuccess": "Fähigkeit aktualisiert",
+      "useSystemRole": "Systemrolle verwenden",
       "type": {
         "chat": "Chat",
         "coding": "Programmierung",
@@ -549,9 +552,7 @@
         "translation": "Übersetzung",
         "voiceRecognition": "Spracherkennung",
         "writing": "Schreiben"
-      },
-      "updateSuccess": "Fähigkeit aktualisiert",
-      "useSystemRole": "Systemrolle verwenden"
+      }
     },
     "type": {
       "about": "Über",
