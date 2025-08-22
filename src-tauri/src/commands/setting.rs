@@ -41,8 +41,7 @@ use rust_i18n::{set_locale, t};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
 use tauri::State;
 use tauri::{command, AppHandle};
 
@@ -71,10 +70,10 @@ use tauri::{command, AppHandle};
 /// ```
 #[command]
 pub fn get_all_config(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
 ) -> Result<HashMap<String, Value>, String> {
     let config_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     let mut settings = config_store.config.settings.clone();
     settings.insert(
@@ -129,12 +128,12 @@ pub fn get_all_config(
 /// ```
 #[command]
 pub fn set_config(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     key: &str,
     value: Value,
 ) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     // Set the configuration value
@@ -158,9 +157,9 @@ pub fn set_config(
 
 /// Reload the configuration from the database
 #[command]
-pub fn reload_config(state: State<Arc<Mutex<MainStore>>>) -> Result<(), String> {
+pub fn reload_config(state: State<Arc<RwLock<MainStore>>>) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.reload_config().map_err(|e| e.to_string())
 }
@@ -180,9 +179,9 @@ pub fn reload_config(state: State<Arc<Mutex<MainStore>>>) -> Result<(), String> 
 /// # Returns
 /// * `Result<AiModel, String>` - The AI model or an error message
 #[command]
-pub fn get_ai_model_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<AiModel, String> {
+pub fn get_ai_model_by_id(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<AiModel, String> {
     let config_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .config
@@ -210,9 +209,9 @@ pub fn get_ai_model_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 /// console.log(aiModels);
 /// ```
 #[command]
-pub fn get_all_ai_models(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiModel>, String> {
+pub fn get_all_ai_models(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<AiModel>, String> {
     let config_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     Ok(config_store.config.get_ai_models())
 }
@@ -255,7 +254,7 @@ pub fn get_all_ai_models(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiMo
 /// ```
 #[command]
 pub fn add_ai_model(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     name: String,
     models: Vec<ModelConfig>,
     default_model: String,
@@ -270,7 +269,7 @@ pub fn add_ai_model(
     metadata: Option<Value>,
 ) -> Result<AiModel, String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     // First add the model to get the ID
@@ -343,7 +342,7 @@ pub fn add_ai_model(
 /// ```
 #[command]
 pub fn update_ai_model(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     id: i64,
     name: String,
     models: Vec<ModelConfig>,
@@ -359,7 +358,7 @@ pub fn update_ai_model(
     metadata: Option<Value>,
 ) -> Result<AiModel, String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     config_store
@@ -407,11 +406,11 @@ pub fn update_ai_model(
 /// console.log('AI Model order updated successfully');
 #[command]
 pub fn update_ai_model_order(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     model_ids: Vec<i64>,
 ) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .update_ai_model_order(model_ids)
@@ -439,9 +438,9 @@ pub fn update_ai_model_order(
 /// console.log('AI Model deleted successfully');
 /// ```
 #[command]
-pub fn delete_ai_model(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
+pub fn delete_ai_model(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.delete_ai_model(id).map_err(|e| e.to_string())
 }
@@ -461,9 +460,9 @@ pub fn delete_ai_model(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(
 /// # Returns
 /// * `Result<AiSkill, String>` - The AI skill or an error message
 #[command]
-pub fn get_ai_skill_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<AiSkill, String> {
+pub fn get_ai_skill_by_id(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<AiSkill, String> {
     let config_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .config
@@ -491,9 +490,9 @@ pub fn get_ai_skill_by_id(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resul
 /// console.log(aiSkills);
 /// ```
 #[command]
-pub fn get_all_ai_skills(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiSkill>, String> {
+pub fn get_all_ai_skills(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<AiSkill>, String> {
     let config_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     Ok(config_store.config.get_ai_skills())
 }
@@ -520,7 +519,7 @@ pub fn get_all_ai_skills(state: State<Arc<Mutex<MainStore>>>) -> Result<Vec<AiSk
 /// ```
 #[command]
 pub fn add_ai_skill(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     name: String,
     icon: Option<String>,
     logo: Option<String>,
@@ -529,7 +528,7 @@ pub fn add_ai_skill(
     metadata: Option<Value>,
 ) -> Result<AiSkill, String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     let logo_url = if let Some(logo) = logo {
@@ -565,7 +564,7 @@ pub fn add_ai_skill(
 /// ```
 #[command]
 pub fn update_ai_skill(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     id: i64,
     name: String,
     icon: Option<String>,
@@ -575,7 +574,7 @@ pub fn update_ai_skill(
     metadata: Option<Value>,
 ) -> Result<AiSkill, String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
     let logo_url = if let Some(logo) = logo {
@@ -601,11 +600,11 @@ pub fn update_ai_skill(
 /// * `Result<(), String>` - Ok if successful or an error message
 #[command]
 pub fn update_ai_skill_order(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     skill_ids: Vec<i64>,
 ) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store
         .update_ai_skill_order(skill_ids)
@@ -633,9 +632,9 @@ pub fn update_ai_skill_order(
 /// console.log('AI Skill deleted successfully');
 /// ```
 #[command]
-pub fn delete_ai_skill(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
+pub fn delete_ai_skill(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
     let mut config_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     config_store.delete_ai_skill(id).map_err(|e| e.to_string())
 }

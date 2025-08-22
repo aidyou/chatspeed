@@ -145,8 +145,6 @@
       "backupDir": "Répertoire de sauvegarde",
       "backupSettings": "Paramètres de sauvegarde",
       "backupSuccess": "Sauvegarde réussie",
-      "chatspeedCrawler": "Chatspeed Crawler",
-      "chatspeedCrawlerTooltip": "Le ChatSpeed Crawler récupère automatiquement le contenu des liens de conversation, un composant essentiel pour la recherche.",
       "codeDarkTheme": "Thème sombre pour le code",
       "codeLightTheme": "Thème clair pour le code",
       "comingSoon": "D'autres paramètres seront bientôt disponibles...",
@@ -203,6 +201,17 @@
         "http": "Proxy HTTP",
         "none": "Pas de proxy",
         "system": "Proxy système"
+      },
+      "search": {
+        "apply": "Demander",
+        "clickHere": "Cliquez ici pour demander une clé API",
+        "google": "Google",
+        "googleApiKey": "Clé API de recherche Google",
+        "googleSearchId": "ID du moteur de recherche Google",
+        "serper": "Serper",
+        "serperApiKey": "Clé API Serper",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Clé API Tavily"
       },
       "workflow": {
         "general": "Modèle général",
@@ -429,7 +438,7 @@
         "logToFileNote": "Enregistrer les requêtes et les réponses dans un fichier pour le débogage et l'analyse",
         "openLogFile": "Ouvrir le fichier journal",
         "port": "Port du proxy",
-        "portChangedRestartRequired": "Les modifications apportées au numéro de port nécessitent un redémarrage de l'application pour prendre effet",
+        "portChangedRestartRequired": "Après modification du numéro de port, l'application doit être redémarrée pour prendre effet",
         "saveFailed": "Échec de l'enregistrement des paramètres du proxy : {error}",
         "saveSuccess": "Paramètres du proxy enregistrés avec succès",
         "title": "Paramètres du proxy",

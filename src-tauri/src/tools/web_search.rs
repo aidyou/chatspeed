@@ -1,22 +1,132 @@
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::{str::FromStr, sync::Arc};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    http::chp::Chp,
-    search::SearchProviderName,
+    db::MainStore,
+    search::{
+        GoogleSearch, SearchFactory, SearchPeriod, SearchProvider, SearchProviderName,
+        SerperSearch, TavilySearch,
+    },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
-pub struct Search {
-    // chatspeed bot server url
-    chp_server: String,
+pub struct Auth {
+    pub api_key: String,
+    pub cx: Option<String>, // google search id
+}
+impl Auth {
+    pub fn new(api_key: String) -> Self {
+        Auth { api_key, cx: None }
+    }
+    pub fn new_with_cx(api_key: String, cx: Option<String>) -> Self {
+        Auth { api_key, cx }
+    }
 }
 
-impl Search {
-    pub fn new(chp_server: String) -> Self {
-        Self { chp_server }
+pub struct WebSearch {
+    // chatspeed bot server url
+    searcher: SearchFactory,
+}
+
+impl WebSearch {
+    pub fn new(
+        search_engine: String,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
+    ) -> Result<Arc<Self>, ToolError> {
+        let store = main_store.read().map_err(|e| {
+            ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
+        })?;
+
+        let proxy_type = store.get_config("proxy_type", "".to_string());
+        let proxy = if proxy_type == "http" {
+            let s = store.get_config("proxy_server", "".to_string());
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        } else {
+            None
+        };
+        let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+
+        let provider_name = SearchProviderName::from_str(&search_engine)
+            .map_err(|e| ToolError::Initialization(e))?;
+        let searcher = match provider_name {
+            SearchProviderName::Google => SearchFactory::Google(
+                GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy)
+                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
+            ),
+            SearchProviderName::Tavily => SearchFactory::Tavily(
+                TavilySearch::new(auth.api_key, proxy)
+                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
+            ),
+            SearchProviderName::Serper => SearchFactory::Serper(
+                SerperSearch::new(auth.api_key, proxy)
+                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
+            ),
+        };
+
+        Ok(Arc::new(Self { searcher }))
+    }
+
+    /// Get and check authentication for the search engine.
+    pub fn get_and_check_auth(
+        search_engine: &str,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
+    ) -> Result<Auth, ToolError> {
+        let store = main_store.read().map_err(|e| {
+            ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
+        })?;
+        let provider_name = SearchProviderName::from_str(search_engine)
+            .map_err(|e| ToolError::Initialization(e))?;
+        let auth = match provider_name {
+            SearchProviderName::Google => {
+                let api_key = store.get_config("google_api_key", "".to_string());
+                let cx = store.get_config("google_search_id", "".to_string());
+                if api_key.is_empty() {
+                    return Err(ToolError::Config(
+                        t!("tools.search.google_api_key_empty").to_string(),
+                    ));
+                }
+                if cx.is_empty() {
+                    return Err(ToolError::Config(
+                        t!("tools.search.google_cx_empty").to_string(),
+                    ));
+                }
+                Auth::new_with_cx(api_key, Some(cx))
+            }
+            SearchProviderName::Tavily => {
+                let api_key = store.get_config("tavily_api_key", "".to_string());
+                if api_key.is_empty() {
+                    return Err(ToolError::Config(
+                        t!("tools.search.tavily_api_key_empty").to_string(),
+                    ));
+                }
+                Auth::new(api_key)
+            }
+            SearchProviderName::Serper => {
+                let api_key = store.get_config("serper_api_key", "".to_string());
+                if api_key.is_empty() {
+                    return Err(ToolError::Config(
+                        t!("tools.search.serper_api_key_empty").to_string(),
+                    ));
+                }
+                Auth::new(api_key)
+            } // _ => {
+              //     return Err(ToolError::Initialization(
+              //         t!(
+              //             "tools.search.provider_no_support",
+              //             name = provider_name.to_string()
+              //         )
+              //         .to_string(),
+              //     ))
+              // }
+        };
+        Ok(auth)
     }
 
     /// Extract keywords from params
@@ -61,15 +171,15 @@ impl Search {
 }
 
 #[async_trait]
-impl ToolDefinition for Search {
+impl ToolDefinition for WebSearch {
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "web_search"
+        "webSearch"
     }
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "Perform a search query"
+        "A powerful web search tool that performs a web search query"
     }
 
     /// Returns the function calling spec.
@@ -80,11 +190,6 @@ impl ToolDefinition for Search {
             input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "provider": {
-                            "type": "string",
-                            "enum": ["google", "google_news", "baidu", "baidu_news", "bing"],
-                            "description": "Search provider"
-                        },
                         "kw": {
                             "type": "string",
                             "description": "Search keyword"
@@ -103,11 +208,6 @@ impl ToolDefinition for Search {
                             "type": "string",
                             "enum": ["day", "week", "month", "year"],
                             "description": "Time range filter"
-                        },
-                        "resolve_baidu_links": {
-                            "type": "boolean",
-                            "default": true,
-                            "description": "Resolve Baidu links"
                         }
                     },
                     "required": ["provider", "kw"]
@@ -125,25 +225,7 @@ impl ToolDefinition for Search {
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
     async fn call(&self, params: Value) -> NativeToolResult {
-        let provider: SearchProviderName = params["provider"]
-            .as_str()
-            .ok_or_else(|| {
-                ToolError::FunctionParamError(t!("tools.provider_must_be_string").to_string())
-            })?
-            .try_into()
-            .map_err(|e_str| {
-                ToolError::FunctionParamError(
-                    t!(
-                        "tools.invalid_search_provider",
-                        provider_name = params["provider"].as_str().unwrap_or("unknown"),
-                        details = e_str
-                    )
-                    .to_string(),
-                )
-            })?;
-
         let kw = Self::extract_keywords(&params)?;
-
         if kw.is_empty() {
             return Err(ToolError::FunctionParamError(
                 t!("tools.keyword_must_be_non_empty").to_string(),
@@ -152,31 +234,39 @@ impl ToolDefinition for Search {
 
         let number = params["number"].as_i64().unwrap_or(10);
         let page = params["page"].as_i64().unwrap_or(1);
-        let resolve_baidu_links = params["resolve_baidu_links"].as_bool().unwrap_or(true);
+        // let resolve_baidu_links = params["resolve_baidu_links"].as_bool().unwrap_or(true);
         let time_period = params["time_period"].as_str().unwrap_or("");
 
-        let crawler = Chp::new(self.chp_server.clone(), None);
-        let results = crawler
-            .web_search(
-                provider.clone(),
-                &[&kw],
-                Some(page),
-                Some(number),
-                Some(time_period),
-                resolve_baidu_links,
-            )
-            .await
-            .map_err(|e_str| {
-                ToolError::Execution(
-                    t!(
-                        "tools.web_search_failed",
-                        provider = provider.to_string(),
-                        keyword = kw,
-                        details = e_str
-                    )
-                    .to_string(),
+        // Convert time_period string to SearchPeriod enum
+        let period = match time_period {
+            "day" => Some(SearchPeriod::Day),
+            "week" => Some(SearchPeriod::Week),
+            "month" => Some(SearchPeriod::Month),
+            "year" => Some(SearchPeriod::Year),
+            _ => None,
+        };
+
+        // Create search parameters
+        let search_params = json!({
+            "query": kw,
+            "count": number,
+            "period": period,
+            "page": page,
+        });
+
+        // Execute search using the factory
+        let results = self.searcher.search(&search_params).await.map_err(|e| {
+            ToolError::Execution(
+                t!(
+                    "tools.search.web_search_failed",
+                    provider = self.searcher.to_string(),
+                    keyword = kw,
+                    details = e.to_string()
                 )
-            })?;
+                .to_string(),
+            )
+        })?;
+
         Ok(ToolCallResult::success(
             Some(
                 results
@@ -185,45 +275,61 @@ impl ToolDefinition for Search {
                     .collect::<Vec<_>>()
                     .join("\n===============\n"),
             ),
-            Some(json!(results)),
+            Some(json!({
+                "query": &search_params,
+                "results": results
+            })),
         ))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::db;
+
     use super::*;
     use serde_json::json;
 
+    fn get_store() -> MainStore {
+        let db_path = {
+            let dev_dir = &*crate::STORE_DIR.read();
+            dev_dir.join("chatspeed.db")
+        };
+
+        // Setup language
+        MainStore::new(db_path)
+            .map_err(|e| db::StoreError::IoError(e.to_string()))
+            .expect("Failed to create main store")
+    }
+
     #[tokio::test]
     async fn test_search() {
-        let search = Search::new("http://127.0.0.1:12321".to_string());
-        let provider = ["google", "google_news", "bing", "baidu", "baidu_news"];
-        for p in provider {
+        let store = Arc::new(std::sync::RwLock::new(get_store()));
+        for provider in vec!["google", "tavily", "serper"] {
+            let search = WebSearch::new(provider.to_string(), store.clone()).unwrap();
             let params = json!({
-                    "provider": p,
                     "kw": "deepseek",
                     "number": 10,
                     "page": 1,
                     "time_period": "week"
             });
-            let result = search.call(params).await;
-            println!("{:?}", result);
-            assert!(result.is_ok());
+            let result = search.call(params).await.unwrap();
+            assert!(result.content.is_some());
+            println!("{}", result.content.as_ref().unwrap());
         }
     }
 
     #[tokio::test]
     async fn test_search_error() {
-        let search = Search::new("http://127.0.0.1:12321".to_string());
+        let store = Arc::new(std::sync::RwLock::new(get_store()));
+        let search = WebSearch::new("google".to_string(), store.clone()).unwrap();
         let params = json!({
-            "provider": "duckduckgo",
             "kw": "rust lifetime",
             "number": 10,
             "page": 1
         });
-        let result = search.call(params).await;
-        println!("{:?}", result);
-        assert!(!result.is_ok());
+        let result = search.call(params).await.unwrap();
+        assert!(result.content.is_some());
+        println!("{}", result.content.as_ref().unwrap());
     }
 }

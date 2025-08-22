@@ -49,7 +49,7 @@ impl PluginManager {
 
     /// register all available runtime plugins
     fn register_runtime_factories(&self, app_handle: &tauri::AppHandle) -> Result<(), PluginError> {
-        let store = app_handle.state::<Arc<Mutex<MainStore>>>();
+        let store = app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
         if let Ok(store) = store.clone().lock() {
             if let Ok(plugins) = store.get_plugin_list() {
                 for plugin in plugins {

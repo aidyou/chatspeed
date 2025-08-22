@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Error en la ejecución de la finalización del chat: %{details}"
   chat_completion_no_content: "El modelo de IA no devolvió ningún contenido. Compruebe la entrada o vuelva a intentarlo."
+  execution_failed: "Llamada a la herramienta fallida, nombre de la herramienta: %{name}, error: %{error}"
   failed_to_get_model: "Error al obtener el modelo %{model_type}"
   function_already_exists: "La función ya existe: %{name}"
   function_not_found: "No se encontró la función de la herramienta en el flujo de trabajo: %{name}"
-  invalid_search_provider: "Proveedor de servicios de búsqueda no válido '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "El parámetro de palabra clave (kw) debe ser una cadena no vacía o una matriz no vacía"
   invalid_model_name: "Nombre de modelo no válido: %{model_name}"
   max_retries_exceeded: "Se superó el número máximo de reintentos: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "El parámetro de URL debe ser una cadena"
   url_must_not_be_empty: "El parámetro de URL no puede estar vacío"
   web_scraper_failed: "Error al rastrear la web (URL: %{url}): %{details}"
-  web_search_failed: "Error en la búsqueda web (proveedor: %{provider}, palabra clave: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ Error al extraer la información de la web, título: %{title}, url: %{url}"
     crawler_success: "✔ Información de la web extraída correctamente, título: %{title}, url: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ Análisis de '%{title}' completado"
     summarizing_webpage: "▷ Analizando '%{title}'"
     summarizing: "☞ Analizando el contenido de la web"
+  search:
+    google_api_key_empty: "La clave de API de búsqueda de Google no puede estar vacía"
+    google_cx_empty: "El ID del motor de búsqueda de Google no puede estar vacío"
+    serper_api_key_empty: "La clave de API de Serper no puede estar vacía"
+    tavily_api_key_empty: "La clave de API de Tavily no puede estar vacía"
+    provider_no_support: "Motor de búsqueda no compatible: {name}"
+    web_search_failed: "Error en la búsqueda web (proveedor: %{provider}, palabra clave: %{keyword}): %{details}"
 
 tray:
   about: "Acerca de"

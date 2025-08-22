@@ -1,5 +1,5 @@
 pub mod chat;
-pub mod chat_web_search;
+// pub mod chat_web_search;
 pub mod clipboard;
 pub mod constants;
 pub mod dev_tool;

@@ -53,7 +53,7 @@ fn get_shell_path() -> Option<String> {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
-                    log::debug!("Using {} to get PATH: {}", shell, path);
+                    // log::debug!("Using {} to get PATH: {}", shell, path);
                     return Some(path);
                 }
             }
@@ -136,13 +136,11 @@ fn setup_environment_variables() -> Result<(), String> {
 
     // Save original PATH as backup
     let original_path = env::var("PATH").unwrap_or_default();
-    log::debug!("Original PATH: {}", original_path);
+    // log::debug!("Original PATH: {}", original_path);
 
     // Try to get full PATH
     match get_shell_path() {
         Some(full_path) => {
-            log::debug!("Obtained full PATH: {}", full_path);
-
             // Merge PATHs, avoiding duplicates
             let merged_path = merge_paths(&original_path, &full_path);
             env::set_var("PATH", &merged_path);

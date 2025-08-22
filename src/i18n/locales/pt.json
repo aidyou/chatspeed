@@ -145,8 +145,6 @@
       "backupDir": "Diretório de backup",
       "backupSettings": "Configurações de backup",
       "backupSuccess": "Backup realizado com sucesso",
-      "chatspeedCrawler": "Web Crawler ChatSpeed",
-      "chatspeedCrawlerTooltip": "O Web Crawler ChatSpeed obtém automaticamente o conteúdo dos links da conversa, sendo um componente essencial para a pesquisa.",
       "codeDarkTheme": "Tema escuro do código",
       "codeLightTheme": "Tema claro do código",
       "comingSoon": "Mais configurações em breve...",
@@ -203,6 +201,17 @@
         "http": "Proxy HTTP",
         "none": "Não usar proxy",
         "system": "Seguir o sistema"
+      },
+      "search": {
+        "apply": "Aplicar",
+        "clickHere": "Clique aqui para solicitar uma chave API",
+        "google": "Google",
+        "googleApiKey": "Chave API de pesquisa do Google",
+        "googleSearchId": "ID do mecanismo de pesquisa do Google",
+        "serper": "Serper",
+        "serperApiKey": "Chave API do Serper",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Chave API do Tavily"
       },
       "workflow": {
         "general": "Modelo geral",
@@ -429,7 +438,7 @@
         "logToFileNote": "Registrar solicitações e respostas em um arquivo para depuração e análise",
         "openLogFile": "Abrir arquivo de log",
         "port": "Porta do proxy",
-        "portChangedRestartRequired": "As alterações no número da porta exigem uma reinicialização do aplicativo para entrar em vigor",
+        "portChangedRestartRequired": "Após a alteração do número da porta, é necessário reiniciar o aplicativo para entrar em vigor",
         "saveFailed": "Falha ao salvar as configurações do proxy: {error}",
         "saveSuccess": "Configurações do proxy salvas com sucesso",
         "title": "Configurações do proxy",

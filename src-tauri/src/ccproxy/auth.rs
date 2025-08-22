@@ -8,15 +8,14 @@ use crate::{
 };
 
 use http::HeaderMap;
-use rust_i18n::t;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Authenticates the request based on the Authorization Bearer token or x-api-key.
 /// Reads `chat_completion_proxy_keys` from `MainStore`.
 pub async fn authenticate_request(
     headers: HeaderMap,
     query: CcproxyQuery,
-    main_store: Arc<Mutex<MainStore>>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
     is_local: bool,
 ) -> ProxyResult<()> {
     if is_local {
@@ -65,19 +64,10 @@ pub async fn authenticate_request(
         return Err(CCProxyError::MissingToken);
     }
 
-    let proxy_keys: ChatCompletionProxyKeysConfig = {
-        if let Ok(store_guard) = main_store.lock() {
-            // Get the raw string value for chat_completion_proxy_keys
-            let keys_config: ChatCompletionProxyKeysConfig =
-                store_guard.get_config("chat_completion_proxy_keys", vec![]);
-            drop(store_guard);
-
-            keys_config
-        } else {
-            log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
-            vec![]
-        }
-    };
+    let proxy_keys: ChatCompletionProxyKeysConfig = main_store
+        .read()
+        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
+        .get_config("chat_completion_proxy_keys", vec![]);
 
     if proxy_keys.is_empty() {
         log::warn!("Proxy authentication: 'chat_completion_proxy_keys' is configured but the list is empty.");

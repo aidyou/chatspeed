@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::search::{GoogleSearch, SerperSearch, TavilySearch};
+
 /// Defines a single search result item.
 /// The `skip_serializing_if` attribute ensures that `Option` fields
 /// are omitted from the JSON output when they are `None`.
@@ -59,21 +61,19 @@ fn is_zero<T: PartialEq + From<u8>>(value: &T) -> bool {
 
 #[derive(PartialEq, Clone)]
 pub enum SearchProviderName {
-    Baidu,
-    BaiduNews,
+    // Bing,
     Google,
-    GoogleNews,
-    Bing,
+    Serper,
+    Tavily,
 }
 
 impl Display for SearchProviderName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Baidu => write!(f, "baidu"),
-            Self::BaiduNews => write!(f, "baidu_news"),
+            // Self::Bing => write!(f, "bing"),
             Self::Google => write!(f, "google"),
-            Self::GoogleNews => write!(f, "google_news"),
-            Self::Bing => write!(f, "bing"),
+            Self::Serper => write!(f, "serper"),
+            Self::Tavily => write!(f, "tavily"),
         }
     }
 }
@@ -97,11 +97,10 @@ impl TryFrom<&str> for SearchProviderName {
 
     fn try_from(provider: &str) -> Result<Self, Self::Error> {
         match provider {
-            "baidu" => Ok(Self::Baidu),
-            "baidu_news" => Ok(Self::BaiduNews),
+            // "bing" => Ok(Self::Bing),
+            "tavily" => Ok(Self::Tavily),
             "google" => Ok(Self::Google),
-            "google_news" => Ok(Self::GoogleNews),
-            "bing" => Ok(Self::Bing),
+            "serper" => Ok(Self::Serper),
             _ => Err(format!("Invalid search provider: {}", provider)),
         }
     }
@@ -139,6 +138,7 @@ pub struct SearchParams {
     pub language: Option<String>,
     /// The time period for the search, e.g., "week", "month".
     pub period: Option<SearchPeriod>,
+    pub page: Option<u32>,
 }
 
 impl TryFrom<&Value> for SearchParams {
@@ -165,4 +165,32 @@ pub trait SearchProvider {
     ///
     /// A `Result` containing a vector of `SearchResult` items or an error.
     async fn search(&self, params: &Value) -> Result<Vec<SearchResult>>;
+}
+
+pub enum SearchFactory {
+    Google(GoogleSearch),
+    Serper(SerperSearch),
+    Tavily(TavilySearch),
+}
+
+#[async_trait]
+impl SearchProvider for SearchFactory {
+    async fn search(&self, params: &Value) -> Result<Vec<SearchResult>> {
+        let result = match self {
+            Self::Google(gs) => gs.search(params).await,
+            Self::Serper(sp) => sp.search(params).await,
+            Self::Tavily(t) => t.search(params).await,
+        };
+        result
+    }
+}
+
+impl Display for SearchFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Google(_) => write!(f, "Google"),
+            Self::Serper(_) => write!(f, "Serper"),
+            Self::Tavily(_) => write!(f, "Tavily"),
+        }
+    }
 }

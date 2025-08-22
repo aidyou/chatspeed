@@ -26,7 +26,6 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 // chatspeed crawler api name
-pub const CFG_CHP_SERVER: &str = "chatspeed_crawler";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
 pub const CFG_CCPROXY_PORT: &str = "chat_completion_proxy_port";
@@ -53,6 +52,9 @@ pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // on mouse event status
 pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
+
+// web search tool
+pub static WEB_SEARCH_TOOL: &str = "webSearch";
 
 // The following static variables are used to store the paths of the http server and related directories
 // They are initialized after the http server is initialized,

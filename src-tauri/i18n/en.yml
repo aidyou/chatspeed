@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Chat completion execution failed: %{details}"
   chat_completion_no_content: "AI model returned no content, please check input or retry"
+  execution_failed: "Tool call failed, tool name: %{name}, error: %{error}"
   failed_to_get_model: "Failed to get %{model_type} model"
   function_already_exists: "Function already exists: %{name}"
   function_not_found: "Tool function not found in workflow: %{name}"
-  invalid_search_provider: "Invalid search service provider '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "Keyword (kw) parameter must be non-empty string or non-empty array"
   invalid_model_name: "Invalid model name: %{model_name}"
   max_retries_exceeded: "Maximum retry count exceeded: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "URL parameter must be a string"
   url_must_not_be_empty: "URL parameter cannot be empty"
   web_scraper_failed: "Web scraping failed (URL: %{url}): %{details}"
-  web_search_failed: "Web search failed (Provider: %{provider}, Keyword: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ Web information extraction failed, title: %{title}, url: %{url}"
     crawler_success: "✔ Web information extraction successful, title: %{title}, url: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ '%{title}' analysis completed"
     summarizing_webpage: "▷ Analyzing '%{title}'"
     summarizing: "☞ Analyzing web content"
+  search:
+    google_api_key_empty: "Google Search API key cannot be empty"
+    google_cx_empty: "Google Search Engine ID cannot be empty"
+    serper_api_key_empty: "Serper API key cannot be empty"
+    tavily_api_key_empty: "Tavily API key cannot be empty"
+    provider_no_support: "Search engine not supported: {name}"
+    web_search_failed: "Web search failed (Provider: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:
   about: "About"

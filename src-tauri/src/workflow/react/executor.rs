@@ -9,7 +9,7 @@ use crate::{
     db::MainStore,
     libs::util::format_json_str,
     search::SearchResult,
-    tools::{ModelName, Search, ToolManager},
+    tools::{ModelName, ToolManager, WebSearch},
     workflow::{
         error::WorkflowError,
         react::{
@@ -46,7 +46,7 @@ impl ReactExecutor {
     /// # Returns
     /// A new ReAct executor
     pub async fn new(
-        main_store: Arc<std::sync::Mutex<MainStore>>,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
         chat_state: Arc<ChatState>,
         max_retries: u32,
     ) -> Result<Self, WorkflowError> {
@@ -981,7 +981,7 @@ impl ReactExecutor {
                         match function_call.name.as_str() {
                             "web_search" => {
                                 if let Some(arguments) = &function_call.arguments {
-                                    let kw = Search::extract_keywords(arguments)?;
+                                    let kw = WebSearch::extract_keywords(arguments)?;
                                     let dedup_tool = self
                                         .context
                                         .function_manager
@@ -1575,7 +1575,7 @@ mod tests {
             .read()
             .clone()
             .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
+        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
         let chat_state =
             ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let mut exe = ReactExecutor::new(main_store, chat_state, 10)
@@ -1594,7 +1594,7 @@ mod tests {
             .read()
             .clone()
             .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
+        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
         let chat_state =
             ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let exe = ReactExecutor::new(main_store, chat_state, 10)
@@ -1619,7 +1619,7 @@ mod tests {
             .read()
             .clone()
             .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::Mutex::new(MainStore::new(db_path).unwrap()));
+        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
         let chat_state =
             ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
         let exe = ReactExecutor::new(main_store, chat_state, 10)

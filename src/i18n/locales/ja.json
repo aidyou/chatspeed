@@ -145,8 +145,6 @@
       "backupDir": "バックアップディレクトリ",
       "backupSettings": "バックアップ設定",
       "backupSuccess": "バックアップが完了しました",
-      "chatspeedCrawler": "Chatspeedクローラー",
-      "chatspeedCrawlerTooltip": "ChatSpeedクローラーは、会話リンクの内容を自動的に取得します。検索に必須のコンポーネントです。",
       "codeDarkTheme": "コードのダークテーマ",
       "codeLightTheme": "コードのライトテーマ",
       "comingSoon": "近日公開…",
@@ -203,6 +201,17 @@
         "http": "HTTPプロキシ",
         "none": "プロキシを使用しない",
         "system": "システムに従う"
+      },
+      "search": {
+        "apply": "申請",
+        "clickHere": "ここをクリックしてAPIキーを申請",
+        "google": "Google",
+        "googleApiKey": "Google検索APIキー",
+        "googleSearchId": "Google検索エンジンID",
+        "serper": "Serper",
+        "serperApiKey": "Serper APIキー",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Tavily APIキー"
       },
       "workflow": {
         "general": "汎用モデル",
@@ -429,7 +438,7 @@
         "logToFileNote": "デバッグと分析のために、リクエストとレスポンスをファイルにログに記録します",
         "openLogFile": "ログファイルを開く",
         "port": "プロキシポート",
-        "portChangedRestartRequired": "ポート番号の変更を有効にするには、アプリケーションを再起動する必要があります",
+        "portChangedRestartRequired": "ポート番号の変更後はアプリケーションを再起動する必要があります",
         "saveFailed": "プロキシ設定の保存に失敗しました: {error}",
         "saveSuccess": "プロキシ設定が正常に保存されました",
         "title": "プロキシ設定",

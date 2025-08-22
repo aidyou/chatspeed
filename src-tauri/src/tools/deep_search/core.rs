@@ -1225,9 +1225,9 @@ mod test {
             let dev_dir = &*crate::STORE_DIR.read();
             dev_dir.join("chatspeed.db")
         };
-        let main_store: Arc<std::sync::Mutex<crate::db::MainStore>> = Arc::new(
-            std::sync::Mutex::new(crate::db::MainStore::new(db_path).unwrap()),
-        );
+        let main_store = Arc::new(std::sync::RwLock::new(
+            crate::db::MainStore::new(db_path).unwrap(),
+        ));
 
         let channel = crate::libs::window_channels::WindowChannels::new();
         let chat_state =
@@ -1240,17 +1240,17 @@ mod test {
             chat_state,
             None,
             "http://127.0.0.1:12321".to_string(),
-            vec![SearchProviderName::Google, SearchProviderName::Bing],
+            vec![SearchProviderName::Google],
             process_callback,
         );
         ds.add_model(
             ModelName::Reasoning,
-            ToolManager::get_model(&main_store, ModelName::General.as_ref()).unwrap(),
+            ToolManager::get_model(main_store.clone(), ModelName::General.as_ref()).unwrap(),
         )
         .await;
         ds.add_model(
             ModelName::Reasoning,
-            ToolManager::get_model(&main_store, ModelName::Reasoning.as_ref()).unwrap(),
+            ToolManager::get_model(main_store, ModelName::Reasoning.as_ref()).unwrap(),
         )
         .await;
 

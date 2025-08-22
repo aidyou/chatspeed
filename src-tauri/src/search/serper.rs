@@ -69,12 +69,12 @@ struct SerperOrganicResult {
 }
 
 /// The Serper search provider.
-pub struct SerperProvider {
+pub struct SerperSearch {
     api_key: String,
     http_client: HttpClient,
 }
 
-impl SerperProvider {
+impl SerperSearch {
     /// Creates a new instance of the Serper provider.
     ///
     /// # Arguments
@@ -91,7 +91,7 @@ impl SerperProvider {
 }
 
 #[async_trait]
-impl SearchProvider for SerperProvider {
+impl SearchProvider for SerperSearch {
     async fn search(&self, params: &Value) -> Result<Vec<SearchResult>> {
         // 1. Deserialize the generic Value into our specific SearchParams.
         let search_params = SearchParams::try_from(params)?;
@@ -167,7 +167,7 @@ mod tests {
         };
 
         // create a serper provider instance.
-        let client = SerperProvider::new(api_key, None).expect("Failed to create SerperClient");
+        let client = SerperSearch::new(api_key, None).expect("Failed to create SerperClient");
 
         // execute a search request.
         let query = "what is rust programming language?";

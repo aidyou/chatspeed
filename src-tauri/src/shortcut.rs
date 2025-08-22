@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use arboard::Clipboard;
 use rust_i18n::t;
@@ -32,10 +32,10 @@ use crate::{
 /// # Returns
 /// Returns a HashMap containing shortcut types as keys and their corresponding shortcut strings as values.
 /// If a shortcut is not set in the configuration, it will use the default value.
-fn get_shortcuts(config_store: &Arc<Mutex<MainStore>>) -> HashMap<String, String> {
+fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<String, String> {
     let mut shortcuts = HashMap::new();
 
-    if let Ok(c) = config_store.lock() {
+    if let Ok(c) = config_store.read() {
         // Main window shortcut
         shortcuts.insert(
             CFG_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
@@ -192,8 +192,8 @@ fn register_shortcuts(
 /// # Returns
 /// Returns Ok(()) if registration is successful, or an error if registration fails
 pub fn register_desktop_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let config_store = app.state::<Arc<Mutex<MainStore>>>();
-    let shortcuts = get_shortcuts(&config_store);
+    let config_store = app.state::<Arc<RwLock<MainStore>>>();
+    let shortcuts = get_shortcuts(config_store.inner().clone());
     register_shortcuts(app, shortcuts)
 }
 
@@ -222,8 +222,8 @@ pub fn update_shortcut(
         new_shortcut
     );
 
-    let config_store = app.state::<Arc<Mutex<MainStore>>>();
-    let shortcuts = get_shortcuts(&config_store);
+    let config_store = app.state::<Arc<RwLock<MainStore>>>();
+    let shortcuts = get_shortcuts(config_store.inner().clone());
     let shortcut_manager = app.global_shortcut();
     dbg!(&shortcuts);
 

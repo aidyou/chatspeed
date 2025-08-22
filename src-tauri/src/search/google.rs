@@ -1,10 +1,12 @@
+use std::cmp::max;
+
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize}; // 导入 Deserialize
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::http::client::HttpClient; // 导入 HttpClient
-use crate::http::types::HttpConfig; // 导入 HttpConfig
+use crate::http::client::HttpClient;
+use crate::http::types::HttpConfig;
 
 use super::search::{SearchParams, SearchPeriod, SearchProvider, SearchResult};
 
@@ -18,6 +20,8 @@ struct GoogleSearchRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     num: Option<u32>, // max_results
     #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<u32>, // start index for pagination
+    #[serde(skip_serializing_if = "Option::is_none")]
     hl: Option<String>, // language
     #[serde(skip_serializing_if = "Option::is_none")]
     sort: Option<String>, // time_range, e.g., "date:r:20230101:20231231"
@@ -30,14 +34,14 @@ impl From<GoogleSearchRequest<'_>> for String {
     }
 }
 
-#[derive(Debug, Deserialize)] // 添加 Deserialize
+#[derive(Debug, Deserialize)]
 struct GoogleItem {
     title: String,
     link: String,
     snippet: String,
 }
 
-#[derive(Debug, Deserialize)] // 添加 Deserialize
+#[derive(Debug, Deserialize)]
 struct GoogleSearchResponse {
     items: Option<Vec<GoogleItem>>,
 }
@@ -45,7 +49,7 @@ struct GoogleSearchResponse {
 pub struct GoogleSearch {
     api_key: String,
     cx: String,
-    http_client: HttpClient, // 添加 HttpClient 字段
+    http_client: HttpClient,
 }
 
 impl GoogleSearch {
@@ -72,21 +76,27 @@ impl SearchProvider for GoogleSearch {
             SearchPeriod::Year => "date:y".to_string(),
         });
 
+        let num = search_params.count.unwrap_or(10);
+        let start = search_params
+            .page
+            .and_then(|p| Some(max(0, p - 1) * num + 1));
+
         let request_body = GoogleSearchRequest {
             q: &search_params.query,
             key: &self.api_key,
             cx: &self.cx,
             num: search_params.count,
+            start,
             hl: search_params.language.clone(),
             sort: sort_param,
         };
 
-        // 构建请求配置
+        // build request config
         let config = HttpConfig::get(GOOGLE_API_URL)
             .query(json!(&request_body))
             .header("Content-Type", "application/json");
 
-        // 发送请求
+        // send request
         let response = self.http_client.send_request(config).await?;
 
         if !response.is_success() {
@@ -169,7 +179,7 @@ mod tests {
         assert!(!response.is_empty(), "Search returned no results.");
 
         if let Some(first_result) = response.first() {
-            println!("Top search result: {:?}", first_result);
+            println!("Top search result: {}", first_result.to_string());
         }
     }
 }

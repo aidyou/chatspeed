@@ -145,8 +145,6 @@
       "backupDir": "Папка для резервных копий",
       "backupSettings": "Настройки резервного копирования",
       "backupSuccess": "Резервная копия создана",
-      "chatspeedCrawler": "Chatspeed Crawler",
-      "chatspeedCrawlerTooltip": "ChatSpeed Crawler автоматически получает содержимое ссылок на диалоги. Необходимый компонент для поиска.",
       "codeDarkTheme": "Тёмная тема для кода",
       "codeLightTheme": "Светлая тема для кода",
       "comingSoon": "Больше настроек скоро появится...",
@@ -203,6 +201,17 @@
         "http": "HTTP-прокси",
         "none": "Без прокси",
         "system": "Системные настройки"
+      },
+      "search": {
+        "apply": "Подать заявку",
+        "clickHere": "Нажмите здесь, чтобы подать заявку на API-ключ",
+        "google": "Google",
+        "googleApiKey": "API-ключ поиска Google",
+        "googleSearchId": "ID поисковой системы Google",
+        "serper": "Serper",
+        "serperApiKey": "API-ключ Serper",
+        "tavily": "Tavily",
+        "tavilyApiKey": "API-ключ Tavily"
       },
       "workflow": {
         "general": "Универсальная модель",
@@ -429,7 +438,7 @@
         "logToFileNote": "Записывать запросы и ответы в файл для отладки и анализа",
         "openLogFile": "Открыть файл журнала",
         "port": "Порт прокси",
-        "portChangedRestartRequired": "Изменения номера порта требуют перезапуска приложения для вступления в силу",
+        "portChangedRestartRequired": "После изменения номера порта необходимо перезапустить приложение для вступления в силу",
         "saveFailed": "Не удалось сохранить настройки прокси: {error}",
         "saveSuccess": "Настройки прокси успешно сохранены",
         "title": "Настройки прокси",

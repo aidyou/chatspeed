@@ -89,14 +89,14 @@ use axum::{
 use bytes::Bytes;
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const TOOL_COMPAT_MODE_PREFIX: &str = "compat_mode";
 
 // A struct to hold the shared state, which is passed to all route handlers.
 pub struct SharedState {
     pub app_handle: tauri::AppHandle,
-    pub main_store: Arc<Mutex<MainStore>>,
+    pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub chat_state: Arc<ChatState>,
 }
 
@@ -431,7 +431,7 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
 /// Defines all routes for the ccproxy module.
 pub async fn routes(
     app_handle: tauri::AppHandle,
-    main_store_arc: Arc<Mutex<MainStore>>,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
     chat_state: Arc<ChatState>,
 ) -> Router {
     let shared_state = Arc::new(SharedState {

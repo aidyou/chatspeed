@@ -116,66 +116,91 @@
     </main>
 
     <!-- chat message -->
-    <main class="main" v-else>
-      <div class="chat" v-if="currentAssistantMessage || isChatting">
-        <div class="message">
-          <div class="content-container">
-            <!-- todo: use markdown component -->
-            <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
-            <div class="content" ref="chatMessagesRef">
-              <div class="chat-reference" v-if="chatState.reference.length > 0">
-                <div
-                  class="chat-reference-title"
-                  :class="{ expanded: showReference }"
-                  @click="showReference = !showReference">
-                  <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
+    <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
+      <!-- Left Sidebar: Compact Skill List (only in split-view) -->
+      <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
+        <el-tooltip
+          v-for="(skill, index) in skills"
+          :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description"
+          placement="top"
+          :hide-after="0"
+          :disabled="!skill.metadata.description"
+          transition="none">
+          <div
+            class="skill-item-compact"
+            :class="{ active: skillIndex === index }"
+            @click="onSelectSkill(index)">
+            <div class="icon">
+              <cs :name="skill.icon" />
+            </div>
+            <!-- <span class="name">{{ skill.name }}</span> -->
+          </div>
+        </el-tooltip>
+      </div>
+
+      <!-- Main Content Area -->
+      <div class="main-content-area">
+        <div class="chat" v-if="currentAssistantMessage || isChatting">
+          <div class="message">
+            <div class="content-container">
+              <!-- todo: use markdown component -->
+              <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
+              <div class="content" ref="chatMessagesRef">
+                <div class="chat-reference" v-if="chatState.reference.length > 0">
+                  <div
+                    class="chat-reference-title"
+                    :class="{ expanded: showReference }"
+                    @click="showReference = !showReference">
+                    <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
+                  </div>
+                  <ul class="chat-reference-list" v-show="showReference" v-link>
+                    <li v-for="item in chatState.reference" :key="item.id">
+                      <a :href="item.url" :title="item.title.trim()">{{ item.title.trim() }}</a>
+                    </li>
+                  </ul>
                 </div>
-                <ul class="chat-reference-list" v-show="showReference" v-link>
-                  <li v-for="item in chatState.reference" :key="item.id">
-                    <a :href="item.url" :title="item.title.trim()">{{ item.title.trim() }}</a>
-                  </li>
-                </ul>
-              </div>
-              <div class="chat-think" v-if="chatState.reasoning != ''">
-                <div
-                  class="chat-think-title"
-                  :class="{ expanded: showThink }"
-                  @click="showThink = !showThink">
-                  <span>{{
-                    $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
-                  }}</span>
+                <div class="chat-think" v-if="chatState.reasoning != ''">
+                  <div
+                    class="chat-think-title"
+                    :class="{ expanded: showThink }"
+                    @click="showThink = !showThink">
+                    <span>{{
+                      $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
+                    }}</span>
+                  </div>
+                  <div
+                    v-show="showThink"
+                    class="think-content"
+                    v-highlight
+                    v-link
+                    v-table
+                    v-katex
+                    v-html="parseMarkdown(chatState.reasoning)"></div>
                 </div>
                 <div
-                  v-show="showThink"
-                  class="think-content"
+                  v-html="currentAssistantMessageHtml"
                   v-highlight
                   v-link
                   v-table
                   v-katex
-                  v-html="parseMarkdown(chatState.reasoning)"></div>
+                  v-think
+                  v-mermaid />
               </div>
-              <div
-                v-html="currentAssistantMessageHtml"
-                v-highlight
-                v-link
-                v-table
-                v-katex
-                v-think
-                v-mermaid />
             </div>
           </div>
         </div>
-      </div>
-      <div class="skill-list" v-else>
-        <div
-          class="skill-item"
-          v-for="(skill, index) in skills"
-          :key="skill.id"
-          :class="{ active: skillIndex === index }"
-          @click="onSkillItemClick(index)">
-          <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
-          <div class="icon">
-            <cs name="enter" v-if="skillIndex === index" />
+        <div class="skill-list" v-else>
+          <div
+            class="skill-item"
+            v-for="(skill, index) in skills"
+            :key="skill.id"
+            :class="{ active: skillIndex === index }"
+            @click="onSkillItemClick(index)">
+            <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
+            <div class="icon">
+              <cs name="enter" v-if="skillIndex === index" />
+            </div>
           </div>
         </div>
       </div>
@@ -383,11 +408,11 @@ const toolsEnabled = computed(() => {
     return false
   }
   // 1. If no skill is selected, tools can be enabled (global tools or default behavior)
-  if (!selectedSkill.value) {
+  if (!currentSkill.value) {
     return true // Or based on a global setting if you have one for non-skill scenarios
   }
   // 2. If a skill is selected, it must not be a translation skill AND its metadata must allow tools
-  return !isTranslation.value && !!selectedSkill.value.metadata?.toolsEnabled
+  return !isTranslation.value && !!currentSkill.value.metadata?.toolsEnabled
 })
 
 const cicleIndex = ref(0)
@@ -400,8 +425,8 @@ const currentAssistantMessageHtml = computed(() =>
         chatState.value?.reference || []
       ))
     : isChatting.value
-    ? '<div class="cs cs-loading cs-spin cs-md"></div>'
-    : ''
+      ? '<div class="cs cs-loading cs-spin cs-md"></div>'
+      : ''
 )
 
 /**
@@ -723,20 +748,14 @@ const scrollToBottomIfNeeded = () => {
  * Handle scroll event of chat messages container
  */
 const onScroll = () => {
-  console.log('Scroll event triggered')
-
   if (!chatMessagesRef.value) {
-    console.log('No chat messages ref')
     return
   }
 
   const element = chatMessagesRef.value
   const { scrollTop, scrollHeight, clientHeight } = element
 
-  console.log('Scroll values:', { scrollTop, scrollHeight, clientHeight })
-
   isScrolledToBottom.value = Math.abs(scrollTop + clientHeight - scrollHeight) <= 2
-  console.log('isScrolledToBottom', isScrolledToBottom.value)
 
   if (isScrolledToBottom.value) {
     userHasScrolled.value = false
@@ -789,6 +808,15 @@ const onSubModelSelect = model => {
 const onSkillItemClick = index => {
   skillIndex.value = index
   dispatchChatCompletion()
+}
+
+/**
+ * Select skill when in conversation view
+ * @param {Number} index skill index
+ */
+const onSelectSkill = index => {
+  skillIndex.value = index
+  inputRef.value?.focus()
 }
 
 /**
@@ -883,7 +911,9 @@ const onCompositionEnd = () => {
 }
 
 const onInput = () => {
-  if (inputMessage.value.trim()) {
+  // When in split-view mode (indicated by a previous userMessage),
+  // typing should not reset the view to the initial skill list.
+  if (inputMessage.value.trim() && !userMessage.value) {
     currentAssistantMessage.value = ''
   }
 }
@@ -1069,12 +1099,60 @@ const onAddModel = () => {
     overflow: hidden;
     padding: 0;
 
+    &.split-view {
+      display: flex;
+      flex-direction: row;
+    }
+
+    .skill-list-sidebar {
+      width: 45px;
+      flex-shrink: 0;
+      border-right: 0.5px solid var(--cs-border-color);
+      padding: var(--cs-space-sm) var(--cs-space-xs);
+      box-sizing: border-box;
+      overflow-y: auto;
+      /* box-shadow: 1px 0 2px var(--cs-shadow-color); */
+
+      .skill-item-compact {
+        display: flex;
+        align-items: center;
+        gap: var(--cs-space-sm);
+        padding: var(--cs-space-xs) var(--cs-space-sm);
+        border-radius: var(--cs-border-radius);
+        cursor: pointer;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+
+        .name {
+          font-size: var(--cs-font-size-sm);
+        }
+
+        .icon {
+          flex-shrink: 0;
+        }
+
+        &:hover,
+        &.active {
+          color: var(--cs-color-primary) !important;
+          background-color: var(--cs-bg-color-deep);
+        }
+      }
+    }
+
+    .main-content-area {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+    }
+
     .skill-list {
       display: flex;
       flex-direction: column;
       gap: var(--cs-space-xxs);
       padding: var(--cs-space-sm) var(--cs-space-xs);
       box-sizing: border-box;
+      height: 100%;
 
       .skill-item {
         cursor: pointer;
@@ -1163,6 +1241,7 @@ const onAddModel = () => {
 
   footer {
     padding: var(--cs-space-xs);
+    border-top: 0.5px solid var(--cs-border-color);
 
     .metadata {
       display: flex;

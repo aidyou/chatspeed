@@ -2,8 +2,8 @@ use reqwest::{Client, StatusCode};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use url::form_urlencoded::byte_serialize;
 
+use crate::libs::util;
 use crate::search::SearchResult;
 use crate::{
     http::{
@@ -91,7 +91,7 @@ impl Chp {
                                 serde_json::Value::String(s) => s.clone(),
                                 _ => v.to_string().trim_matches('"').to_string(),
                             };
-                            format!("{}={}", Self::urlencode(k), Self::urlencode(&value_str))
+                            format!("{}={}", util::urlencode(k), util::urlencode(&value_str))
                         })
                         .collect();
                     query_url.push_str(&query_string.join("&"));
@@ -268,13 +268,12 @@ impl Chp {
             });
         }
 
-        if resolve_baidu_links
-            && (provider == SearchProviderName::Baidu || provider == SearchProviderName::BaiduNews)
-        {
-            Ok(Self::resolve_all_baidu_links(results).await)
-        } else {
-            Ok(results)
-        }
+        // if resolve_baidu_links && (provider == SearchProviderName::Baidu) {
+        //     Ok(Self::resolve_all_baidu_links(results).await)
+        // } else {
+        //     Ok(results)
+        // }
+        Ok(results)
     }
 
     /// Resolves Baidu short URL with retry mechanism
@@ -323,17 +322,6 @@ impl Chp {
             resolved_results.push(result);
         }
         resolved_results
-    }
-
-    /// URL encode a string
-    ///
-    /// # Arguments
-    /// * `s` - The string to encode
-    ///
-    /// # Returns
-    /// * `String` - The encoded string
-    fn urlencode(s: &str) -> String {
-        byte_serialize(s.as_bytes()).collect::<String>()
     }
 }
 

@@ -44,15 +44,12 @@
 //! - Then add new states to the `ChatState`::new method.
 //! - Finally, add the new AI provider to the `init_chats!` macro.
 
-use super::chat_web_search::chat_completion_with_search;
 use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatProtocol, ChatState,
 };
-use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType, ModelDetails};
-use crate::commands::constants::URL_REGEX;
-use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
+use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, ModelDetails};
+use crate::constants::CFG_SEARCH_ENGINE;
 use crate::db::MainStore;
-use crate::http::chp::Chp;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::search::SearchProviderName;
 use crate::tools::{DeepSearch, ModelName, ToolManager};
@@ -65,7 +62,7 @@ use tauri::State;
 use whatlang::detect;
 
 pub fn setup_chat_proxy(
-    main_state: &Arc<std::sync::Mutex<MainStore>>,
+    main_state: Arc<std::sync::RwLock<MainStore>>,
     metadata: &mut Option<Value>,
 ) -> Result<(), String> {
     // If the proxy type is http, get the proxy server and username/password from the config
@@ -90,7 +87,7 @@ pub fn setup_chat_proxy(
         // 如果代理类型是"bySetting"，从配置中获取
         // if proxy_type is "bySetting", get proxy type from config
         if proxy_type == "bySetting" {
-            let config_store = main_state.lock().map_err(|e| {
+            let config_store = main_state.read().map_err(|e| {
                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
             })?;
             proxy_type = config_store.get_config("proxy_type", "none".to_string());
@@ -99,7 +96,7 @@ pub fn setup_chat_proxy(
             }
         }
         if proxy_type == "http" {
-            let config_store = main_state.lock().map_err(|e| {
+            let config_store = main_state.read().map_err(|e| {
                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
             })?;
             let proxy_server = config_store.get_config("proxy_server", String::new());
@@ -123,13 +120,13 @@ pub fn setup_chat_proxy(
 
 #[tauri::command]
 pub async fn list_models(
-    main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     api_protocol: String,
     api_url: Option<String>,
     api_key: Option<String>,
 ) -> Result<Vec<ModelDetails>, String> {
     let mut metadata = Some(json!({"proxyType":"bySetting"}));
-    setup_chat_proxy(&main_state, &mut metadata)?;
+    setup_chat_proxy(main_state.inner().clone(), &mut metadata)?;
 
     list_models_async(api_protocol, api_url, api_key, metadata).await
 }
@@ -156,14 +153,14 @@ pub async fn list_models(
 pub async fn chat_completion(
     window: tauri::Window,
     chat_state: State<'_, Arc<ChatState>>,
-    main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     api_protocol: String,
     api_url: Option<String>, // Changed to Option<String> to match JS invoke
     model: String,
     api_key: Option<String>, // Changed to Option<String>
     chat_id: String,
-    mut messages: Vec<Value>,
-    network_enabled: Option<bool>,
+    messages: Vec<Value>,
+    _network_enabled: Option<bool>,
     mut metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
 ) -> Result<(), String> {
     #[cfg(debug_assertions)]
@@ -189,84 +186,65 @@ pub async fn chat_completion(
         .await
         .map_err(|e| format!("Failed to get or create window channel: {}", e))?;
 
-    setup_chat_proxy(&main_state, &mut metadata)
+    setup_chat_proxy(main_state.inner().clone(), &mut metadata)
         .map_err(|e| t!("chat.failed_to_setup_proxy", error = e).to_string())?;
 
     // 如果网络搜索已启用，匹配出最后一条用户提问的信息中的 url
     // 将 url 的内容抓取出来拼接到最后一条用户消息中
-    if network_enabled == Some(true) {
-        // 获取爬虫接口地址
-        let crawler_url = main_state
-            .lock()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
-            .get_config(CFG_CHP_SERVER, String::new());
+    // if network_enabled == Some(true) {
+    //     let content_to_search = messages
+    //         .iter()
+    //         .rev()
+    //         .find(|m| m["role"] == "user")
+    //         .and_then(|m| m["content"].as_str())
+    //         .map(|s| s.to_string());
 
-        let content_to_search = messages
-            .iter()
-            .rev()
-            .find(|m| m["role"] == "user")
-            .and_then(|m| m["content"].as_str())
-            .map(|s| s.to_string());
+    //     if let Some(content) = content_to_search {
+    //         let urls: Vec<String> = URL_REGEX
+    //             .find_iter(&content)
+    //             .map(|m| m.as_str().to_string())
+    //             .collect();
 
-        if let Some(content) = content_to_search {
-            let urls: Vec<String> = URL_REGEX
-                .find_iter(&content)
-                .map(|m| m.as_str().to_string())
-                .collect();
-
-            if urls.is_empty() {
-                // If no URLs, proceed to chat_completion_with_search
-                // Note: chat_completion_with_search might need similar adjustments
-                // to call start_new_chat_interaction eventually.
-                // For now, assuming it handles its own flow or will be refactored.
-                return chat_completion_with_search(
-                    window,
-                    chat_state,
-                    main_state,
-                    protocol,
-                    api_url.as_deref(),
-                    model,
-                    api_key.as_deref(),
-                    chat_id,
-                    messages,
-                    metadata,
-                )
-                .await;
-            }
-
-            match crawler_from_content(&crawler_url, urls).await {
-                Ok(crawled_contents) => {
-                    if !crawled_contents.is_empty() {
-                        if let Some(last_message) = messages.last_mut() {
-                            if last_message.get("role").and_then(Value::as_str) == Some("user") {
-                                let new_content = t!(
-                                    "chat.user_message_with_references",
-                                    content = content,
-                                    crawl_content = &crawled_contents
-                                )
-                                .to_string();
-                                if let Some(obj) = last_message.as_object_mut() {
-                                    obj.insert("content".to_string(), Value::String(new_content));
-                                }
-                            }
-                        }
-                    }
-                    if let Some(sender) = chat_state.channels.get_sender(&window.label()).await {
-                        let _ = sender.try_send(ChatResponse::new_with_arc(
-                            chat_id.clone(),
-                            crawled_contents,
-                            MessageType::Reference,
-                            metadata.clone(),
-                            None,
-                        ));
-                    }
-                }
-                Err(err) => {
-                    log::error!("Failed to crawl content: {}", err);
-                }
-            }
-        }
-    }
+    //         if !urls.is_empty() {
+    //             match crawler_from_content(&crawler_url, urls).await {
+    //                 Ok(crawled_contents) => {
+    //                     if !crawled_contents.is_empty() {
+    //                         if let Some(last_message) = messages.last_mut() {
+    //                             if last_message.get("role").and_then(Value::as_str) == Some("user")
+    //                             {
+    //                                 let new_content = t!(
+    //                                     "chat.user_message_with_references",
+    //                                     content = content,
+    //                                     crawl_content = &crawled_contents
+    //                                 )
+    //                                 .to_string();
+    //                                 if let Some(obj) = last_message.as_object_mut() {
+    //                                     obj.insert(
+    //                                         "content".to_string(),
+    //                                         Value::String(new_content),
+    //                                     );
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
+    //                     if let Some(sender) = chat_state.channels.get_sender(&window.label()).await
+    //                     {
+    //                         let _ = sender.try_send(ChatResponse::new_with_arc(
+    //                             chat_id.clone(),
+    //                             crawled_contents,
+    //                             MessageType::Reference,
+    //                             metadata.clone(),
+    //                             None,
+    //                         ));
+    //                     }
+    //                 }
+    //                 Err(err) => {
+    //                     log::error!("Failed to crawl content: {}", err);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     // Prepare final_metadata: ensure windowLabel is present.
     // Frontend JS sends metadata with `windowLabel`.
@@ -319,51 +297,51 @@ pub async fn chat_completion(
 /// Use the crawler_url server interface to fetch information about the URLs contained in the content.
 ///
 /// # Arguments
-/// * `crawler_url` - The URL of the crawler server.
 /// * `content` - The content to be searched.
 ///
 /// # Returns
 ///
 /// A JSON string containing information about the URLs found in the content.
-pub async fn crawler_from_content(crawler_url: &str, urls: Vec<String>) -> Result<String, String> {
-    if urls.is_empty() {
-        return Ok("".to_string());
-    }
+// pub async fn crawler_from_content(urls: Vec<String>) -> Result<String, String> {
+//     if urls.is_empty() {
+//         return Ok("".to_string());
+//     }
 
-    // 抓取每个 URL 的内容
-    let mut crawled_contents = Vec::new();
-    let crawler = Chp::new(crawler_url.to_string(), None);
-    let mut i = 1;
-    for url in urls {
-        match crawler.web_crawler(&url, None).await {
-            Ok(data) => {
-                if !data.content.is_empty() {
-                    crawled_contents.push(json!({
-                        "id": i,
-                        "url": url,
-                        "title": data.title,
-                        "content": data.content
-                    }));
-                    i += 1;
-                }
-            }
-            Err(err) => {
-                log::error!("Failed to crawl URL {}: {}", url, err);
-            }
-        }
-    }
-    if crawled_contents.is_empty() {
-        return Ok("".to_string());
-    }
+//     // 抓取每个 URL 的内容
+//     let crawled_contents: Vec<Value> = Vec::new();
+//     // TODO: Implement URL crawling logic here
+//     // let crawler = Chp::new(crawler_url.to_string(), None);
+//     // let mut i = 1;
+//     // for url in urls {
+//     //     match crawler.web_crawler(&url, None).await {
+//     //         Ok(data) => {
+//     //             if !data.content.is_empty() {
+//     //                 crawled_contents.push(json!({
+//     //                     "id": i,
+//     //                     "url": url,
+//     //                     "title": data.title,
+//     //                     "content": data.content
+//     //                 }));
+//     //                 i += 1;
+//     //             }
+//     //         }
+//     //         Err(err) => {
+//     //             log::error!("Failed to crawl URL {}: {}", url, err);
+//     //         }
+//     //     }
+//     // }
+//     if crawled_contents.is_empty() {
+//         return Ok("".to_string());
+//     }
 
-    serde_json::to_string(&crawled_contents).map_err(|e| {
-        t!(
-            "chat.json_serialize_crawler_results_failed",
-            error = e.to_string()
-        )
-        .to_string()
-    })
-}
+//     serde_json::to_string(&crawled_contents).map_err(|e| {
+//         t!(
+//             "chat.json_serialize_crawler_results_failed",
+//             error = e.to_string()
+//         )
+//         .to_string()
+//     })
+// }
 
 /// Tauri command to stop the ongoing chat for a specific API provider.
 /// This command sets the stop flag for the selected chat interface.
@@ -478,21 +456,21 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
 pub async fn deep_search(
     window: tauri::Window,
     chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_id: &str,
     question: &str,
     metadata: Option<Value>,
 ) -> Result<(), String> {
     // Get crawler URL, it use to fetch web page contents
     let crawler_url = main_store
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
-        .get_config(CFG_CHP_SERVER, String::new());
+        .get_config("chatspeedCrawlerUrl", String::new());
 
     // Get search engine providers from config
     // e.g. ["google", "bing", "duckduckgo"]
     let search_providers = main_store
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
         .get_config(CFG_SEARCH_ENGINE, vec![])
         .into_iter()
@@ -520,25 +498,29 @@ pub async fn deep_search(
         .insert(chat_id.to_string(), stop_flag);
 
     // Get the model configured for the deep search
-    let reasoning_model = ToolManager::get_model(main_store.inner(), ModelName::Reasoning.as_ref())
-        .map_err(|e| {
-            t!(
-                "tools.failed_to_get_model",
-                model_type = ModelName::Reasoning.as_ref(),
-                error = e.to_string()
-            )
-            .to_string()
-        })?;
+    let reasoning_model =
+        ToolManager::get_model(main_store.inner().clone(), ModelName::Reasoning.as_ref()).map_err(
+            |e| {
+                t!(
+                    "tools.failed_to_get_model",
+                    model_type = ModelName::Reasoning.as_ref(),
+                    error = e.to_string()
+                )
+                .to_string()
+            },
+        )?;
     ds.add_model(ModelName::Reasoning, reasoning_model).await;
-    let general_model = ToolManager::get_model(main_store.inner(), ModelName::General.as_ref())
-        .map_err(|e| {
-            t!(
-                "tools.failed_to_get_model",
-                model_type = ModelName::General.as_ref(),
-                error = e.to_string()
-            )
-            .to_string()
-        })?;
+    let general_model =
+        ToolManager::get_model(main_store.inner().clone(), ModelName::General.as_ref()).map_err(
+            |e| {
+                t!(
+                    "tools.failed_to_get_model",
+                    model_type = ModelName::General.as_ref(),
+                    error = e.to_string()
+                )
+                .to_string()
+            },
+        )?;
     ds.add_model(ModelName::General, general_model).await;
 
     let _ = ds
@@ -581,7 +563,7 @@ pub async fn stop_deep_search(
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::chat::URL_REGEX;
+    use crate::commands::constants::URL_REGEX;
 
     #[test]
     fn test_url_regex() {

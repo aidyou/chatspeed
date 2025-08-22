@@ -380,6 +380,20 @@ impl HttpConfig {
         self
     }
 
+    /// Add Bearer token header
+    pub fn authorization(mut self, token: &str) -> Self {
+        self.headers
+            .insert("Authorization".to_string(), format!("Bearer {}", token));
+        self
+    }
+
+    pub fn json_request(mut self) -> Self {
+        self.headers
+            .insert("Content-Type".to_owned(), "application/json".to_owned());
+
+        self
+    }
+
     /// Adds a request header if it doesn't exist
     pub fn header_if_not_exists(
         mut self,

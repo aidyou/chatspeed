@@ -33,7 +33,7 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 use tauri::{command, Emitter, Manager, State};
 
@@ -58,10 +58,10 @@ use tauri::{command, Emitter, Manager, State};
 /// ```
 #[command]
 pub fn get_all_conversations(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
 ) -> Result<Vec<Conversation>, String> {
     let main_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .get_all_conversations()
@@ -90,11 +90,11 @@ pub fn get_all_conversations(
 /// ```
 #[command]
 pub fn get_conversation_by_id(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     id: i64,
 ) -> Result<Conversation, String> {
     let main_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .get_conversation_by_id(id)
@@ -122,9 +122,12 @@ pub fn get_conversation_by_id(
 /// console.log(`Added Conversation with ID: ${newConversationId}`);
 /// ```
 #[command]
-pub fn add_conversation(state: State<Arc<Mutex<MainStore>>>, title: String) -> Result<i64, String> {
+pub fn add_conversation(
+    state: State<Arc<RwLock<MainStore>>>,
+    title: String,
+) -> Result<i64, String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .add_conversation(title)
@@ -154,13 +157,13 @@ pub fn add_conversation(state: State<Arc<Mutex<MainStore>>>, title: String) -> R
 /// ```
 #[command]
 pub fn update_conversation(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     id: i64,
     title: Option<String>,
     is_favorite: Option<bool>,
 ) -> Result<(), String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .update_conversation(id, title, is_favorite)
@@ -188,9 +191,9 @@ pub fn update_conversation(
 /// console.log('Conversation deleted successfully');
 /// ```
 #[command]
-pub fn delete_conversation(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
+pub fn delete_conversation(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .delete_conversation(id)
@@ -220,13 +223,13 @@ pub fn delete_conversation(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Resu
 #[command]
 pub fn get_messages_for_conversation(
     window: tauri::Window,
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     conversation_id: i64,
     window_label: Option<String>,
 ) -> Result<(), String> {
     let label = window_label.unwrap_or(window.label().to_string());
     let main_store = state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     let messages = main_store
         .get_messages_for_conversation(conversation_id)
@@ -268,14 +271,14 @@ pub fn get_messages_for_conversation(
 /// ```
 #[command]
 pub fn add_message(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     conversation_id: i64,
     role: String,
     content: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<i64, String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .add_message(conversation_id, role, content, metadata)
@@ -303,9 +306,9 @@ pub fn add_message(
 /// console.log('Message deleted successfully');
 /// ```
 #[command]
-pub fn delete_message(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<(), String> {
+pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store.delete_message(id).map_err(|e| e.to_string())
 }
@@ -331,12 +334,12 @@ pub fn delete_message(state: State<Arc<Mutex<MainStore>>>, id: i64) -> Result<()
 /// console.log('Message metadata updated successfully');
 #[command]
 pub fn update_message_metadata(
-    state: State<Arc<Mutex<MainStore>>>,
+    state: State<Arc<RwLock<MainStore>>>,
     id: i64,
     metadata: serde_json::Value,
 ) -> Result<(), String> {
     let main_store = state
-        .lock()
+        .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
     main_store
         .update_message_metadata(id, Some(metadata))

@@ -1,13 +1,9 @@
 use axum::Json;
 use lazy_static::*;
 use regex::Regex;
-use rust_i18n::t;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     ccproxy::{
@@ -24,30 +20,30 @@ use crate::{
 /// Reads `chat_completion_proxy` from `MainStore`.
 pub async fn handle_list_models(
     group_name: Option<String>,
-    main_store: Arc<Mutex<MainStore>>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
-                store_guard.get_config("chat_completion_proxy", HashMap::new());
-            drop(store_guard);
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
+            .read()
+            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
+            .get_config("chat_completion_proxy", HashMap::new());
 
-            cfg.get(group)
-                .cloned()
-                .ok_or_else(|| {
-                    log::warn!("Proxy group '{}' not found.", group);
-                    CCProxyError::ModelAliasNotFound(group.to_string())
-                })
-                .unwrap_or(HashMap::new())
-        } else {
-            log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
-            HashMap::new()
-        }
+        cfg.get(group)
+            .cloned()
+            .ok_or_else(|| {
+                log::warn!("Proxy group '{}' not found.", group);
+                CCProxyError::ModelAliasNotFound(group.to_string())
+            })
+            .unwrap_or(HashMap::new())
     };
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models_info: HashMap<String, (i32, String)> = HashMap::new();
+    let store = main_store
+        .read()
+        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+
     for (alias, target) in config.into_iter() {
         // If the alias has already been processed and added to `models_info`, skip it.
         // This prevents re-processing the same alias.
@@ -55,22 +51,19 @@ pub async fn handle_list_models(
             continue;
         }
 
-        // Attempt to acquire a lock on the `main_store`.
-        if let Ok(store) = main_store.lock() {
-            // Iterate through the `target` items associated with the current `alias`.
-            for t in target.into_iter() {
-                // Only consider target items with a positive ID.
-                if t.id > 0 {
-                    // Attempt to retrieve the AI model from the store using the target item's ID.
-                    if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
-                        // If a model is successfully retrieved, insert its details into `models_info`.
-                        // We clone `alias` because the `for` loop consumes it by value,
-                        // and we need to move it into the HashMap.
-                        models_info.insert(alias.clone(), (model.max_tokens, model.name.clone()));
-                        // Since we found a model for this alias, we can stop searching
-                        // further in `target` for this specific alias.
-                        break;
-                    }
+        // Iterate through the `target` items associated with the current `alias`.
+        for t in target.into_iter() {
+            // Only consider target items with a positive ID.
+            if t.id > 0 {
+                // Attempt to retrieve the AI model from the store using the target item's ID.
+                if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
+                    // If a model is successfully retrieved, insert its details into `models_info`.
+                    // We clone `alias` because the `for` loop consumes it by value,
+                    // and we need to move it into the HashMap.
+                    models_info.insert(alias.clone(), (model.max_tokens, model.name.clone()));
+                    // Since we found a model for this alias, we can stop searching
+                    // further in `target` for this specific alias.
+                    break;
                 }
             }
         }
@@ -135,29 +128,30 @@ pub async fn handle_list_models(
 /// GET `/api/tags`
 pub async fn handle_ollama_tags(
     group_name: Option<String>,
-    main_store: Arc<Mutex<MainStore>>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
-                store_guard.get_config("chat_completion_proxy", HashMap::new());
-            drop(store_guard);
-            cfg.get(group)
-                .cloned()
-                .ok_or_else(|| {
-                    log::warn!("Proxy group '{}' not found.", group);
-                    CCProxyError::ModelAliasNotFound(group.to_string())
-                })
-                .unwrap_or(HashMap::new())
-        } else {
-            log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
-            HashMap::new()
-        }
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
+            .read()
+            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
+            .get_config("chat_completion_proxy", HashMap::new());
+
+        cfg.get(group)
+            .cloned()
+            .ok_or_else(|| {
+                log::warn!("Proxy group '{}' not found.", group);
+                CCProxyError::ModelAliasNotFound(group.to_string())
+            })
+            .unwrap_or(HashMap::new())
     };
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models: HashMap<String, (i32, String)> = HashMap::new();
+    let store = main_store
+        .read()
+        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+
     for (alias, target) in config.into_iter() {
         // If the alias has already been processed and added to `models`, skip it.
         // This prevents re-processing the same alias.
@@ -165,22 +159,19 @@ pub async fn handle_ollama_tags(
             continue;
         }
 
-        // Attempt to acquire a lock on the `main_store`.
-        if let Ok(store) = main_store.lock() {
-            // Iterate through the `target` items associated with the current `alias`.
-            for t in target.into_iter() {
-                // Only consider target items with a positive ID.
-                if t.id > 0 {
-                    // Attempt to retrieve the AI model from the store using the target item's ID.
-                    if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
-                        // If a model is successfully retrieved, insert its details into `models`.
-                        // We clone `alias` because the `for` loop consumes it by value,
-                        // and we need to move it into the HashMap.
-                        models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
-                        // Since we found a model for this alias, we can stop searching
-                        // further in `target` for this specific alias.
-                        break;
-                    }
+        // Iterate through the `target` items associated with the current `alias`.
+        for t in target.into_iter() {
+            // Only consider target items with a positive ID.
+            if t.id > 0 {
+                // Attempt to retrieve the AI model from the store using the target item's ID.
+                if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
+                    // If a model is successfully retrieved, insert its details into `models`.
+                    // We clone `alias` because the `for` loop consumes it by value,
+                    // and we need to move it into the HashMap.
+                    models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
+                    // Since we found a model for this alias, we can stop searching
+                    // further in `target` for this specific alias.
+                    break;
                 }
             }
         }
@@ -294,42 +285,40 @@ fn determine_quantization_level(model_name: &str, provider: &str) -> String {
 /// Handles the `/v1beta/models` (list models) request for gemini.
 pub async fn handle_gemini_list_models(
     group_name: Option<String>,
-    main_store: Arc<Mutex<MainStore>>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        if let Ok(store_guard) = main_store.lock() {
-            let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
-                store_guard.get_config("chat_completion_proxy", HashMap::new());
-            drop(store_guard);
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
+            .read()
+            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
+            .get_config("chat_completion_proxy", HashMap::new());
 
-            cfg.get(group)
-                .cloned()
-                .ok_or_else(|| {
-                    log::warn!("Proxy group '{}' not found.", group);
-                    CCProxyError::ModelAliasNotFound(group.to_string())
-                })
-                .unwrap_or(HashMap::new())
-        } else {
-            log::error!("{}", t!("db.failed_to_lock_main_store").to_string());
-            HashMap::new()
-        }
+        cfg.get(group)
+            .cloned()
+            .ok_or_else(|| {
+                log::warn!("Proxy group '{}' not found.", group);
+                CCProxyError::ModelAliasNotFound(group.to_string())
+            })
+            .unwrap_or(HashMap::new())
     };
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models: HashMap<String, (i32, String)> = HashMap::new();
+    let store = main_store
+        .read()
+        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+
     for (alias, target) in config.into_iter() {
         if models.contains_key(&alias) {
             continue;
         }
 
-        if let Ok(store) = main_store.lock() {
-            for t in target.into_iter() {
-                if t.id > 0 {
-                    if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
-                        models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
-                        break;
-                    }
+        for t in target.into_iter() {
+            if t.id > 0 {
+                if let Ok(model) = store.config.get_ai_model_by_id(t.id) {
+                    models.insert(alias.clone(), (model.max_tokens, model.name.clone()));
+                    break;
                 }
             }
         }

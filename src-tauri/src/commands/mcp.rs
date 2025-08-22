@@ -1,4 +1,4 @@
-//!
+//
 //! This module contains Tauri commands for managing MCP (Model Context Protocol) servers.
 //! It provides functionalities to list, add, update, delete, and connect/disconnect MCP servers,
 //! as well as to retrieve the tools provided by each server.
@@ -25,7 +25,7 @@ use crate::{
 use rust_i18n::t;
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 use tauri::State;
 
@@ -51,19 +51,18 @@ use tauri::State;
 /// ```
 #[tauri::command]
 pub async fn list_mcp_servers(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
 ) -> Result<Vec<Mcp>, String> {
     // First, get the MCPs from the main_store.
     let mut mcps = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard.config.get_mcps()
-    }; // store_guard is dropped here, releasing the lock.
+    };
 
     // Get the status of each MCP server and update the status field
-    // This part involves async operations, so the lock on main_store must be released.
     if let Ok(status_map) = chat_state
         .tool_manager
         .clone()
@@ -148,7 +147,7 @@ fn check_form(name: &str, config: &McpServerConfig) -> Result<(), String> {
 /// ```
 #[tauri::command]
 pub async fn add_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     name: String,
     description: String,
@@ -157,22 +156,15 @@ pub async fn add_mcp_server(
 ) -> Result<Mcp, String> {
     check_form(&name, &config)?;
 
-    // This variable will hold the Mcp data to be returned.
-    // It's populated after the database interaction and before async operations.
-    let mcp_data;
-    // Scope for main_store lock: add the MCP to the database and retrieve its data.
-    // User confirmed db.failed_to_lock_main_store
-    {
-        let mut store_guard = main_store.lock().map_err(|e| e.to_string())?;
-        mcp_data = store_guard
-            .add_mcp(name, description, config.clone(), disabled) // Clone config for db
-            .map_err(|e| e.to_string())?;
-    }
+    let mcp_data = {
+        let mut store_guard = main_store
+            .write()
+            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        store_guard
+            .add_mcp(name, description, config.clone(), disabled)
+            .map_err(|e| e.to_string())?
+    };
 
-    // Register the MCP server with the function manager if it's not disabled.
-    // This is an async operation, so it must happen after the main_store lock is released.
-    // We spawn this as a background task to avoid blocking the add operation.
-    // If MCP server startup fails, the data is still saved in the database.
     if !mcp_data.disabled {
         let tool_manager = chat_state.tool_manager.clone();
         let config = mcp_data.config.clone();
@@ -185,7 +177,6 @@ pub async fn add_mcp_server(
                     server_name,
                     e
                 );
-                // Note: The server data is still in the database and can be manually started later
             } else {
                 log::info!(
                     "MCP server '{}' started successfully after being added to database",
@@ -241,7 +232,7 @@ pub async fn add_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn update_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
     name: &str,
@@ -251,43 +242,31 @@ pub async fn update_mcp_server(
 ) -> Result<Mcp, String> {
     check_form(&name, &config)?;
 
-    // Scope for the first main_store lock: update the database.
     {
         let mut store_guard = main_store
-            .lock()
+            .write()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
-            .update_mcp(
-                id,
-                name,
-                description,
-                config.clone(), // Clone config for the database update
-                disabled,
-            )
+            .update_mcp(id, name, description, config.clone(), disabled)
             .map_err(|e| e.to_string())?;
-    } // store_guard is dropped here
+    }
 
-    // Get the updated MCP data first before async operations
     let updated_mcp = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
             .get_mcp_by_id(id)
             .map_err(|e| e.to_string())?
-    }; // store_guard is dropped here
+    };
 
-    // Scope for chat_state async operations: reregister the MCP server.
-    // We spawn this as a background task to avoid blocking the update operation.
-    // If MCP server restart fails, the data is still updated in the database.
     {
         let fm = chat_state.tool_manager.clone();
         let server_name = name.to_string();
         let config_clone = config.clone();
 
         tokio::spawn(async move {
-            // First unregister the old server
             if let Err(e) = fm.unregister_mcp_server(&server_name).await {
                 log::warn!(
                     "Failed to unregister MCP server '{}' during update: {}",
@@ -296,7 +275,6 @@ pub async fn update_mcp_server(
                 );
             }
 
-            // Then register the new configuration if not disabled
             if !disabled {
                 if let Err(e) = fm.register_mcp_server(config_clone).await {
                     log::error!(
@@ -304,7 +282,6 @@ pub async fn update_mcp_server(
                         server_name,
                         e
                     );
-                    // Note: The server data is still updated in the database and can be manually started later
                 } else {
                     log::info!(
                         "MCP server '{}' restarted successfully after update",
@@ -341,33 +318,28 @@ pub async fn update_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn delete_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Get the MCP name first to use it for unregistering after releasing the main_store lock.
     let mcp_name = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         let mcp = store_guard
             .config
             .get_mcp_by_id(id)
             .map_err(|e| e.to_string())?;
         mcp.name.clone()
-    }; // store_guard is dropped here
+    };
 
-    // Delete from database first
     {
         let mut store_guard = main_store
-            .lock()
+            .write()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard.delete_mcp(id).map_err(|e| e.to_string())?;
-    } // store_guard is dropped here
+    }
 
-    // Unregister the MCP server from function manager (async operation).
-    // We spawn this as a background task to avoid blocking the delete operation.
-    // The server data is already deleted from the database.
     let tool_manager = chat_state.tool_manager.clone();
     let server_name = mcp_name.clone();
 
@@ -378,7 +350,6 @@ pub async fn delete_mcp_server(
                 server_name,
                 e
             );
-            // Note: The server data is deleted from the database but may still be running
         } else {
             log::info!(
                 "MCP server '{}' unregistered successfully after being deleted",
@@ -411,11 +382,10 @@ pub async fn delete_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn enable_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Acquire operation lock for this server ID to prevent race conditions.
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
@@ -423,23 +393,20 @@ pub async fn enable_mcp_server(
         }
     }
 
-    // STEP 1: Extract all needed data from the main_store, then drop the lock.
     let server_info = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
             .get_mcp_by_id(id)
-            .map(|mcp| (mcp.config.clone(), !mcp.disabled)) // Extract config and enabled status
+            .map(|mcp| (mcp.config.clone(), !mcp.disabled))
             .map_err(|e| e.to_string())
     };
 
-    // STEP 2: Perform logic and awaits *after* the lock is released.
     let mcp_config = match server_info {
         Ok((config, already_enabled)) => {
             if already_enabled {
-                // It's safe to await here because the store_guard is dropped.
                 chat_state
                     .tool_manager
                     .ops_in_progress
@@ -451,7 +418,6 @@ pub async fn enable_mcp_server(
             config
         }
         Err(e) => {
-            // If get_mcp_by_id failed, release the op lock before returning.
             chat_state
                 .tool_manager
                 .ops_in_progress
@@ -467,17 +433,15 @@ pub async fn enable_mcp_server(
         log::debug!("enabling mcp server, mcp_config: {:?}", mcp_config);
     }
 
-    // Update the database status first to mark it as enabled
     {
         let mut store_guard = main_store
-            .lock()
+            .write()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .change_mcp_status(id, false)
             .map_err(|e| e.to_string())?;
     }
 
-    // Start the MCP server using the function manager (async operation).
     let tool_manager = chat_state.tool_manager.clone();
 
     tokio::spawn(async move {
@@ -486,7 +450,6 @@ pub async fn enable_mcp_server(
             log::debug!("enabling mcp server, mcp_config: {:?}", mcp_config);
         }
 
-        // The start_mcp_server function consumes the Arc, so we clone it for the call.
         if let Err(e) = tool_manager
             .clone()
             .start_mcp_server(mcp_config.clone())
@@ -507,7 +470,6 @@ pub async fn enable_mcp_server(
                 log::debug!("mcp server started");
             }
         }
-        // Release the operation lock once the task is complete.
         tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
@@ -535,11 +497,10 @@ pub async fn enable_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn disable_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Acquire operation lock for this server ID to prevent race conditions.
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
@@ -547,23 +508,20 @@ pub async fn disable_mcp_server(
         }
     }
 
-    // STEP 1: Extract all needed data from the main_store, then drop the lock.
     let server_info = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
             .get_mcp_by_id(id)
-            .map(|mcp| (mcp.name.clone(), mcp.disabled)) // Extract name and disabled status
+            .map(|mcp| (mcp.name.clone(), mcp.disabled))
             .map_err(|e| e.to_string())
     };
 
-    // STEP 2: Perform logic and awaits *after* the lock is released.
     let mcp_name = match server_info {
         Ok((name, disabled)) => {
             if disabled {
-                // It's safe to await here because the store_guard is dropped.
                 chat_state
                     .tool_manager
                     .ops_in_progress
@@ -575,7 +533,6 @@ pub async fn disable_mcp_server(
             name
         }
         Err(e) => {
-            // If get_mcp_by_id failed, release the op lock before returning.
             chat_state
                 .tool_manager
                 .ops_in_progress
@@ -586,17 +543,15 @@ pub async fn disable_mcp_server(
         }
     };
 
-    // Update the database status first to mark it as disabled
     {
         let mut store_guard = main_store
-            .lock()
+            .write()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .change_mcp_status(id, true)
             .map_err(|e| e.to_string())?;
     }
 
-    // Stop the MCP server using the function manager (async operation).
     let tool_manager = chat_state.tool_manager.clone();
 
     tokio::spawn(async move {
@@ -619,7 +574,6 @@ pub async fn disable_mcp_server(
         }
 
         log::info!("Finished stopping MCP server '{}'", mcp_name);
-        // Release the operation lock once the task is complete.
         tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
@@ -628,11 +582,10 @@ pub async fn disable_mcp_server(
 
 #[tauri::command]
 pub async fn restart_mcp_server(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<(), String> {
-    // Acquire operation lock for this server ID to prevent race conditions.
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
@@ -640,10 +593,9 @@ pub async fn restart_mcp_server(
         }
     }
 
-    // STEP 1: Extract all needed data from the main_store, then drop the lock.
     let server_info = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
@@ -652,11 +604,9 @@ pub async fn restart_mcp_server(
             .map_err(|e| e.to_string())
     };
 
-    // STEP 2: Perform logic and awaits *after* the lock is released.
     let server_name = match server_info {
         Ok((name, disabled)) => {
             if disabled {
-                // It's safe to await here because the store_guard is dropped.
                 chat_state
                     .tool_manager
                     .ops_in_progress
@@ -670,7 +620,6 @@ pub async fn restart_mcp_server(
             name
         }
         Err(e) => {
-            // If get_mcp_by_id failed, release the op lock before returning.
             chat_state
                 .tool_manager
                 .ops_in_progress
@@ -681,13 +630,10 @@ pub async fn restart_mcp_server(
         }
     };
 
-    // Clone Arcs for the background task.
     let tool_manager = chat_state.tool_manager.clone();
     let main_store_clone = main_store.inner().clone();
 
-    // Restart the MCP server in a background task to avoid blocking the UI.
     tokio::spawn(async move {
-        // First, stop the server.
         if let Err(e) = tool_manager.stop_mcp_server(&server_name).await {
             log::warn!(
                 "Failed to stop MCP server '{}' during restart: {}",
@@ -696,35 +642,32 @@ pub async fn restart_mcp_server(
             );
         }
 
-        // Then, get the latest config from the database right before starting.
-        // This is carefully structured to not hold the std::sync::MutexGuard across an await.
         let config_to_start: Option<McpServerConfig> = {
-            match main_store_clone.lock() {
-                Ok(store_guard) => {
-                    // Lock succeeded, now check the config
-                    match store_guard.config.get_mcp_by_id(id) {
-                        Ok(mcp) => {
-                            if mcp.disabled {
-                                log::info!("MCP server '{}' was disabled before it could be restarted. Aborting restart.", server_name);
-                                None // Abort if disabled
-                            } else {
-                                Some(mcp.config) // Success!
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("Failed to get MCP config for id {} during restart: {}. Aborting restart.", id, e);
-                            None // Config lookup failed
+            let store_guard = main_store_clone
+                .read()
+                .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string());
+            match store_guard {
+                Ok(guard) => match guard.config.get_mcp_by_id(id) {
+                    Ok(mcp) => {
+                        if mcp.disabled {
+                            log::info!("MCP server '{}' was disabled before it could be restarted. Aborting restart.", server_name);
+                            None
+                        } else {
+                            Some(mcp.config)
                         }
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to get MCP config for id {} during restart: {}. Aborting restart.", id, e);
+                        None
+                    }
+                },
                 Err(e) => {
                     log::error!("Failed to lock main_store during restart: {}", e);
-                    None // Locking failed
+                    None
                 }
             }
-        }; // store_guard is dropped here.
+        };
 
-        // Now, with the lock released, we can use the config and await other operations.
         if let Some(mcp_config) = config_to_start {
             if let Err(e) = tool_manager.clone().start_mcp_server(mcp_config).await {
                 log::error!(
@@ -737,7 +680,6 @@ pub async fn restart_mcp_server(
             }
         }
 
-        // Finally, release the operation lock.
         tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
@@ -759,10 +701,9 @@ pub async fn restart_mcp_server(
 #[tauri::command]
 pub async fn refresh_mcp_server(
     chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     id: i64,
 ) -> Result<(), String> {
-    // Acquire operation lock for this server ID to prevent race conditions.
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
@@ -770,10 +711,9 @@ pub async fn refresh_mcp_server(
         }
     }
 
-    // STEP 1: Extract all needed data from the main_store, then drop the lock.
     let server_info = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         store_guard
             .config
@@ -782,11 +722,9 @@ pub async fn refresh_mcp_server(
             .map_err(|e| e.to_string())
     };
 
-    // STEP 2: Perform logic and awaits *after* the lock is released.
     let server_name = match server_info {
         Ok((name, disabled)) => {
             if disabled {
-                // It's safe to await here because the store_guard is dropped.
                 chat_state
                     .tool_manager
                     .ops_in_progress
@@ -798,7 +736,6 @@ pub async fn refresh_mcp_server(
             name
         }
         Err(e) => {
-            // If get_mcp_by_id failed, release the op lock before returning.
             chat_state
                 .tool_manager
                 .ops_in_progress
@@ -809,7 +746,6 @@ pub async fn refresh_mcp_server(
         }
     };
 
-    // Spawn a background task to do the refresh, so the UI is not blocked.
     let tool_manager = chat_state.tool_manager.clone();
     log::info!("Triggered tool refresh for MCP server '{}'", server_name);
 
@@ -821,7 +757,6 @@ pub async fn refresh_mcp_server(
                 e
             );
         }
-        // Release the operation lock once the task is complete.
         tool_manager.ops_in_progress.lock().await.remove(&id);
     });
 
@@ -851,23 +786,21 @@ pub async fn refresh_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn get_mcp_server_tools(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<Vec<MCPToolDeclaration>, String> {
-    // Get the MCP name.
     let mcp_name = {
         let store_guard = main_store
-            .lock()
+            .read()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         let mcp = store_guard
             .config
             .get_mcp_by_id(id)
             .map_err(|e| e.to_string())?;
         mcp.name.clone()
-    }; // store_guard is dropped here
+    };
 
-    // Get tools from the MCP server using the function manager (async operation).
     chat_state
         .tool_manager
         .clone()
@@ -878,7 +811,7 @@ pub async fn get_mcp_server_tools(
 
 #[tauri::command]
 pub async fn update_mcp_tool_status(
-    main_store: State<'_, Arc<Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
     tool_name: &str,
@@ -886,7 +819,7 @@ pub async fn update_mcp_tool_status(
 ) -> Result<Mcp, String> {
     let mcp = {
         let mut store_guard = main_store
-            .lock()
+            .write()
             .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
         let mut mcp = store_guard
             .config

@@ -22,12 +22,8 @@ const defaultSettings = {
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
   // chat settings
-  chatspeedCrawler: '',
   historyMessages: 1,
   conversationTitleGenModel: { id: '', model: '' },
-  websearchModel: { id: '', model: '' },
-  searchEngine: [],
-  searchResultCount: 20,
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
   noteWindowVisibleShortcut: 'ALT+N',
@@ -91,6 +87,14 @@ const defaultSettings = {
   chatCompletionProxyKeys: [],
   chatCompletionProxyPort: 11434,
   chatCompletionProxyLogToFile: false,
+  // Search
+  googleApiKey: '',
+  googleSearchId: "",
+  serperApiKey: "",
+  tavilyApiKey:"",
+  websearchModel: { id: '', model: '' },
+  searchEngine: '',
+  searchResultCount: 10
 }
 
 /**

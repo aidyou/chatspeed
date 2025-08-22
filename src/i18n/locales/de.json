@@ -145,8 +145,6 @@
       "backupDir": "Sicherungsverzeichnis",
       "backupSettings": "Sicherungseinstellungen",
       "backupSuccess": "Sicherung erfolgreich",
-      "chatspeedCrawler": "Chatspeed Crawler",
-      "chatspeedCrawlerTooltip": "Der ChatSpeed-Crawler ruft automatisch die Inhalte von Dialoglinks ab und ist eine wesentliche Komponente für die Suche.",
       "codeDarkTheme": "Code-Dark-Theme",
       "codeLightTheme": "Code-Light-Theme",
       "comingSoon": "Weitere Einstellungen folgen in Kürze …",
@@ -203,6 +201,17 @@
         "http": "HTTP-Proxy",
         "none": "Kein Proxy",
         "system": "System verwenden"
+      },
+      "search": {
+        "apply": "Beantragen",
+        "clickHere": "Klicken Sie hier, um einen API-Schlüssel zu beantragen",
+        "google": "Google",
+        "googleApiKey": "Google-Suche API-Schlüssel",
+        "googleSearchId": "Google-Suchmaschinen-ID",
+        "serper": "Serper",
+        "serperApiKey": "Serper API-Schlüssel",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Tavily API-Schlüssel"
       },
       "workflow": {
         "general": "Allgemeines Modell",
@@ -429,7 +438,7 @@
         "logToFileNote": "Anfragen und Antworten zur Fehlerbehebung und Analyse in einer Datei protokollieren",
         "openLogFile": "Protokolldatei öffnen",
         "port": "Proxy-Port",
-        "portChangedRestartRequired": "Änderungen der Portnummer erfordern einen Neustart der Anwendung, um wirksam zu werden",
+        "portChangedRestartRequired": "Nach Änderung der Portnummer muss die Anwendung neu gestartet werden, um wirksam zu werden",
         "saveFailed": "Proxy-Einstellungen konnten nicht gespeichert werden: {error}",
         "saveSuccess": "Proxy-Einstellungen erfolgreich gespeichert",
         "title": "Proxy-Einstellungen",

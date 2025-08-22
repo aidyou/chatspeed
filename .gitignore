@@ -59,6 +59,7 @@ src-tauri/src/plugins
 .roo
 .claude
 .trae
+.crush
 
 test/
 work/

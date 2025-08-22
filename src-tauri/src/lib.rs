@@ -25,10 +25,10 @@ use rust_i18n::{i18n, set_locale, t};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::Mutex as StdMutex;
+use std::sync::RwLock;
+use std::time::Duration;
 use std::time::Instant;
-use tokio::time::{sleep, Duration};
 
 use commands::updater::install_and_restart;
 use tauri::async_runtime::{spawn, JoinHandle};
@@ -97,8 +97,8 @@ static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
 // Define a static variable outside the run function to store the timer handle
 static HIDE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
-static MOVE_TIMER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
+static MOVE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
+static LAST_MOVE: StdMutex<Option<Instant>> = StdMutex::new(None);
 
 pub async fn run() -> Result<()> {
     // let system_locale = libs::lang::get_system_locale();
@@ -247,7 +247,7 @@ pub async fn run() -> Result<()> {
                                 // Wait for a short duration. This delay is the key to solving the race condition.
                                 // It allows the `mousedown` event from the frontend (which indicates a drag start)
                                 // to be processed and set the ON_MOUSE_EVENT flag before we check it.
-                                sleep(Duration::from_millis(200)).await;
+                                tokio::time::sleep(Duration::from_millis(200)).await;
 
                                 // After the delay, we perform the definitive checks.
                                 let is_pinned =
@@ -322,8 +322,8 @@ pub async fn run() -> Result<()> {
                     return;
                 }
                 if window.label() == "main" {
-                    let config_state = window.state::<Arc<Mutex<MainStore>>>();
-                    let window_size = get_saved_window_size(&config_state).unwrap_or_default();
+                    let config_state = window.state::<Arc<RwLock<MainStore>>>();
+                    let window_size = get_saved_window_size(config_state.inner().clone()).unwrap_or_default();
                     if (window_size.width != size.width as f64
                         || window_size.height != size.height as f64)
                         && (size.width > 0 && size.height > 0)
@@ -333,7 +333,7 @@ pub async fn run() -> Result<()> {
                         // Convert physical size to logical size.
                         let logical_size = size.to_logical(scale_factor);
                         // Store the window size when the user resizes it to remember for the next startup.
-                        if let Ok(mut store) = config_state.lock() {
+                        if let Ok(mut store) = config_state.write() {
                             if let Err(e) = store.set_window_size(WindowSize {
                                 width: logical_size.width,
                                 height: logical_size.height,
@@ -352,7 +352,7 @@ pub async fn run() -> Result<()> {
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
                     // This is important for restoring the window position on the next startup.
-                    let config_store = &window.state::<Arc<Mutex<MainStore>>>();
+                    let config_store = &window.state::<Arc<RwLock<MainStore>>>();
                     let old_pos = get_saved_window_position(config_store);
                     let screen_name = get_screen_name(&window);
 
@@ -364,7 +364,7 @@ pub async fn run() -> Result<()> {
                             x: position.x,
                             y: position.y,
                         };
-                        if let Ok(mut store) = config_store.lock() {
+                        if let Ok(mut store) = config_store.write() {
                             if let Err(e) = store.save_window_position(pos) {
                                 error!("Failed to set window position: {}", e);
                             }
@@ -401,7 +401,7 @@ pub async fn run() -> Result<()> {
                     let window_clone = window.clone();
                     let new_timer = spawn(async move {
                         // Increase detection time to 1 second to accommodate actual dragging
-                        sleep(Duration::from_secs(1)).await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
 
                         // Check if movement has ended
                         let movement_ended = if let Ok(last_move) = LAST_MOVE.lock() {
@@ -462,7 +462,7 @@ pub async fn run() -> Result<()> {
                     .map_err(|e| db::StoreError::StringError(e.to_string()))?;
                 app_local_data_dir.join("chatspeed.db")
             };
-            let main_store = Arc::new(Mutex::new(MainStore::new(db_path).map_err(|e| {
+            let main_store = Arc::new(RwLock::new(MainStore::new(db_path).map_err(|e| {
                 error!("Create main store error: {}", e);
                 anyhow!(t!(
                     "main.failed_to_create_main_store",
@@ -473,7 +473,7 @@ pub async fn run() -> Result<()> {
             app.manage(main_store.clone());
 
             // Setup language
-            if let Ok(c) = main_store.clone().lock() {
+            if let Ok(c) = main_store.clone().read() {
                 let user_lang =
                     c.get_config(CFG_INTERFACE_LANGUAGE, libs::lang::get_system_locale());
                 if !user_lang.is_empty() {
@@ -516,7 +516,7 @@ pub async fn run() -> Result<()> {
 
             // Read and set the main window size from the configuration
             if let Some(main_window) = app.get_webview_window("main") {
-                restore_window_config(&main_window, &main_store.clone());
+                restore_window_config(&main_window, main_store.clone());
             }
 
             let handle = app.handle().clone();
@@ -534,11 +534,12 @@ pub async fn run() -> Result<()> {
             let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
             app.manage(update_manager.clone());
 
-            let auto_update = if let Ok(c) = main_store.clone().lock() {
+            let auto_update = if let Ok(c) = main_store.read() {
                 c.get_config(CFG_AUTO_UPDATE, true)
             } else {
                 true
             };
+
             if auto_update {
                 let update_manager_clone = update_manager.clone();
                 tauri::async_runtime::spawn(async move {
@@ -589,8 +590,8 @@ pub async fn run() -> Result<()> {
 ///
 /// # Returns
 /// A tuple containing the saved window width and height.
-fn get_saved_window_size(config_store: &Arc<Mutex<MainStore>>) -> Option<WindowSize> {
-    if let Ok(c) = config_store.lock() {
+fn get_saved_window_size(config_store: Arc<RwLock<MainStore>>) -> Option<WindowSize> {
+    if let Ok(c) = config_store.read() {
         c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
     } else {
         None
@@ -604,8 +605,8 @@ fn get_saved_window_size(config_store: &Arc<Mutex<MainStore>>) -> Option<WindowS
 ///
 /// # Returns
 /// A tuple containing the saved window x and y positions.
-fn get_saved_window_position(config_store: &Arc<Mutex<MainStore>>) -> Option<MainWindowPosition> {
-    if let Ok(c) = config_store.lock() {
+fn get_saved_window_position(config_store: &Arc<RwLock<MainStore>>) -> Option<MainWindowPosition> {
+    if let Ok(c) = config_store.read() {
         c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
     } else {
         None

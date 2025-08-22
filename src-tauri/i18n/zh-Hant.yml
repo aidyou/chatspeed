@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "聊天補全執行失敗: %{details}"
   chat_completion_no_content: "AI 模型未傳回任何內容，請檢查輸入或重試"
+  execution_failed: "工具調用失敗，工具名稱：%{name}，錯誤: %{error}"
   failed_to_get_model: "獲取 %{model_type} 模型失敗"
   function_already_exists: "函數已存在: %{name}"
   function_not_found: "工作流程中未找到工具函數: %{name}"
-  invalid_search_provider: "無效的搜尋服務提供者 '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "關鍵詞(kw)參數必須是非空字串或非空陣列"
   invalid_model_name: "無效的模型名稱: %{model_name}"
   max_retries_exceeded: "超過最大重試次數: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "url參數必須是字串"
   url_must_not_be_empty: "url參數不可為空"
   web_scraper_failed: "網頁抓取失敗 (URL: %{url}): %{details}"
-  web_search_failed: "網路搜尋失敗 (服務商: %{provider}, 關鍵詞: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ 網頁資訊擷取失敗, title: %{title}, url: %{url}"
     crawler_success: "✔ 網頁資訊擷取成功, title: %{title}, url: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ 「%{title}」分析完成"
     summarizing_webpage: "▷ 正在分析「%{title}」"
     summarizing: "☞ 正在分析網頁內容"
+  search:
+    google_api_key_empty: "Google 搜尋 API 金鑰不可為空"
+    google_cx_empty: "Google 搜尋引擎 ID 不可為空"
+    serper_api_key_empty: "Serper API 金鑰不可為空"
+    tavily_api_key_empty: "Tavily API 金鑰不可為空"
+    provider_no_support: "搜尋引擎不支援：{name}"
+    web_search_failed: "網路搜尋失敗 (服務商: %{provider}, 關鍵詞: %{keyword}): %{details}"
 
 tray:
   about: "關於"

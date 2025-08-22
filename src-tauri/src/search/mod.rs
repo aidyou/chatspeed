@@ -4,5 +4,6 @@ mod serper;
 mod tavily;
 
 pub use google::GoogleSearch;
-pub use search::{SearchProvider, SearchProviderName, SearchResult};
-pub use serper::SerperProvider;
+pub use search::{SearchFactory, SearchPeriod, SearchProvider, SearchProviderName, SearchResult};
+pub use serper::SerperSearch;
+pub use tavily::TavilySearch;

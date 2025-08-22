@@ -1,12 +1,15 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::http::{client::HttpClient, types::HttpConfig};
 
 use super::search::{SearchParams, SearchPeriod, SearchProvider, SearchResult};
 
 const TAVILY_API_URL: &str = "https://api.tavily.com/search";
 
+/// https://app.tavily.com/playground
 #[derive(Debug, Serialize)]
 struct TavilySearchRequest<'a> {
     query: &'a str,
@@ -17,7 +20,7 @@ struct TavilySearchRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     include_answer: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    include_raw_content: Option<bool>, // 添加此行
+    include_raw_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,6 +29,13 @@ struct TavilySearchRequest<'a> {
     country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     language: Option<String>,
+}
+
+impl<'a> From<TavilySearchRequest<'a>> for String {
+    fn from(request: TavilySearchRequest<'a>) -> Self {
+        // Serialization of this struct is not expected to fail.
+        serde_json::to_string(&request).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,11 +56,16 @@ struct TavilySearchResponse {
 
 pub struct TavilySearch {
     api_key: String,
+    http_client: HttpClient,
 }
 
 impl TavilySearch {
-    pub fn new(api_key: String) -> Self {
-        Self { api_key }
+    pub fn new(api_key: String, proxy: Option<String>) -> Result<Self> {
+        let http_client = HttpClient::new(proxy)?;
+        Ok(Self {
+            api_key,
+            http_client,
+        })
     }
 }
 
@@ -58,7 +73,6 @@ impl TavilySearch {
 impl SearchProvider for TavilySearch {
     async fn search(&self, params: &Value) -> Result<Vec<SearchResult>> {
         let search_params = SearchParams::try_from(params)?;
-        let client = reqwest::Client::new();
 
         // 转换时间范围参数
         let time_range = search_params.period.as_ref().map(|p| match p {
@@ -81,16 +95,16 @@ impl SearchProvider for TavilySearch {
             language: search_params.language.clone(),
         };
 
-        let response = client
-            .post(TAVILY_API_URL)
-            .bearer_auth(&self.api_key)
-            .json(&request_body)
-            .send()
-            .await?;
+        let config = HttpConfig::post(TAVILY_API_URL, request_body)
+            .authorization(&self.api_key)
+            .json_request();
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_body = response.text().await?;
+        // Send the request using the http client.
+        let response = self.http_client.send_request(config).await?;
+
+        if !response.is_success() {
+            let status = response.status;
+            let error_body = response.error.unwrap_or_default();
             return Err(anyhow!(
                 "Tavily API request failed with status: {}, body: {}",
                 status,
@@ -98,9 +112,14 @@ impl SearchProvider for TavilySearch {
             ));
         }
 
-        let tavily_response: TavilySearchResponse = response.json().await?;
+        let body = response
+            .body
+            .context("Response body was empty, but a successful status was returned.")?;
 
-        let results = tavily_response
+        let serper_response: TavilySearchResponse = serde_json::from_str(&body)
+            .context("Failed to deserialize Serper response from JSON body")?;
+
+        let results = serper_response
             .results
             .into_iter()
             .map(|item| SearchResult {
@@ -140,7 +159,7 @@ mod tests {
             }
         };
 
-        let client = TavilySearch::new(api_key);
+        let client = TavilySearch::new(api_key, None).unwrap();
 
         let query = "what is rust programming language?";
         let search_result = client.search(&json!({ "query": query, "count": 5 })).await;
@@ -155,7 +174,7 @@ mod tests {
         assert!(!response.is_empty(), "Search returned no results.");
 
         if let Some(first_result) = response.first() {
-            println!("Top search result: {:?}", first_result);
+            println!("Top search result: {}", first_result.to_string());
         }
     }
 }

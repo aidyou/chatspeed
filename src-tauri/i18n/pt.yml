@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Falha na execução da conclusão do chat: %{details}"
   chat_completion_no_content: "O modelo de IA não retornou conteúdo, verifique a entrada ou tente novamente"
+  execution_failed: "Falha na chamada da ferramenta, nome da ferramenta: %{name}, erro: %{error}"
   failed_to_get_model: "Falha ao obter o modelo %{model_type}"
   function_already_exists: "A função já existe: %{name}"
   function_not_found: "Função de ferramenta não encontrada no fluxo de trabalho: %{name}"
-  invalid_search_provider: "Provedor de serviço de pesquisa inválido '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "O parâmetro palavra-chave (kw) deve ser uma string não vazia ou um array não vazio"
   invalid_model_name: "Nome de modelo inválido: %{model_name}"
   max_retries_exceeded: "Número máximo de tentativas excedido: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "O parâmetro de URL deve ser uma string"
   url_must_not_be_empty: "O parâmetro de URL não pode estar vazio"
   web_scraper_failed: "Falha na raspagem da web (URL: %{url}): %{details}"
-  web_search_failed: "Falha na pesquisa na web (provedor: %{provider}, palavra-chave: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ Falha na extração de informações da web, título: %{title}, url: %{url}"
     crawler_success: "✔ Informações da web extraídas com sucesso, título: %{title}, url: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ Análise de '%{title}' concluída"
     summarizing_webpage: "▷ Analisando '%{title}'"
     summarizing: "☞ Analisando conteúdo da web"
+  search:
+    google_api_key_empty: "A chave de API do Google Search não pode estar vazia"
+    google_cx_empty: "O ID do mecanismo de busca do Google não pode estar vazio"
+    serper_api_key_empty: "A chave de API do Serper não pode estar vazia"
+    tavily_api_key_empty: "A chave de API do Tavily não pode estar vazia"
+    provider_no_support: "Mecanismo de busca não suportado: {name}"
+    web_search_failed: "Falha na pesquisa na web (provedor: %{provider}, palavra-chave: %{keyword}): %{details}"
 
 tray:
   about: "Sobre"

@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Échec de l'exécution de la complétion de la discussion : %{details}"
   chat_completion_no_content: "Le modèle d'IA n'a renvoyé aucun contenu, veuillez vérifier l'entrée ou réessayer"
+  execution_failed: "Échec de l'appel de l'outil, nom de l'outil : %{name}, erreur : %{error}"
   failed_to_get_model: "Échec de l'obtention du modèle %{model_type}"
   function_already_exists: "La fonction existe déjà : %{name}"
   function_not_found: "Fonction d'outil non trouvée dans le flux de travail : %{name}"
-  invalid_search_provider: "Fournisseur de services de recherche non valide '%{provider_name}' : %{details}"
   keyword_must_be_non_empty: "Le paramètre de mot-clé (kw) doit être une chaîne non vide ou un tableau non vide"
   invalid_model_name: "Nom de modèle non valide : %{model_name}"
   max_retries_exceeded: "Nombre maximal de tentatives dépassé : %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "Le paramètre d'URL doit être une chaîne"
   url_must_not_be_empty: "Le paramètre d'URL ne peut pas être vide"
   web_scraper_failed: "Échec de l'exploration du Web (URL : %{url}) : %{details}"
-  web_search_failed: "Échec de la recherche sur le Web (fournisseur : %{provider}, mot-clé : %{keyword}) : %{details}"
   deep_search:
     crawler_failed: "✕ Échec de l'extraction des informations Web, titre : %{title}, url : %{url}"
     crawler_success: "✔ Informations Web extraites avec succès, titre : %{title}, url : %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ Analyse de '%{title}' terminée"
     summarizing_webpage: "▷ Analyse de '%{title}'"
     summarizing: "☞ Analyse du contenu Web"
+  search:
+    google_api_key_empty: "La clé API de recherche Google ne peut pas être vide"
+    google_cx_empty: "L'ID du moteur de recherche Google ne peut pas être vide"
+    serper_api_key_empty: "La clé API Serper ne peut pas être vide"
+    tavily_api_key_empty: "La clé API Tavily ne peut pas être vide"
+    provider_no_support: "Moteur de recherche non pris en charge : {name}"
+    web_search_failed: "Échec de la recherche sur le Web (fournisseur : %{provider}, mot-clé : %{keyword}) : %{details}"
 
 tray:
   about: "À propos"

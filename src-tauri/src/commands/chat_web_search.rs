@@ -9,7 +9,7 @@ use crate::ai::interaction::chat_completion::{
     complete_chat_async, complete_chat_blocking, ChatProtocol, ChatState,
 };
 use crate::ai::traits::chat::{ChatCompletionResult, MCPToolDeclaration, MessageType};
-use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE};
+use crate::constants::{CFG_CHP_SERVER, CFG_SEARCH_ENGINE, WEB_SEARCH_TOOL};
 use crate::http::chp::Chp;
 use crate::search::{SearchProviderName, SearchResult};
 use crate::{ai::traits::chat::ChatResponse, db::MainStore};
@@ -33,7 +33,7 @@ static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf_set! {
 pub async fn chat_completion_with_search(
     window: tauri::Window,
     chat_state: State<'_, Arc<ChatState>>,
-    main_state: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -57,34 +57,20 @@ pub async fn chat_completion_with_search(
         .channels
         .get_or_create_channel(window.clone())
         .await?;
-    // User confirmed db.failed_to_lock_main_store
-    let crawler_url = main_state
-        .lock()
-        .map_err(|e| e.to_string())?
-        .get_config(CFG_CHP_SERVER, String::new());
 
     let search_engines = main_state
-        .lock()
+        .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
-        .get_config(CFG_SEARCH_ENGINE, vec![])
-        .into_iter()
-        .filter_map(|s: String| {
-            let trimmed = s.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        })
-        .collect::<Vec<String>>();
+        .get_config(CFG_SEARCH_ENGINE, "");
 
     let mut content_clone = content.clone();
     let chat_state_clone = chat_state.inner().clone();
+    let has_web_search_tool = chat_state_clone
+        .tool_manager
+        .has_tool(WEB_SEARCH_TOOL)
+        .await;
 
-    // 只在用户设置了搜索配置时才进行搜索
-    // Only perform the search if the user has set up the search configuration
-    if !crawler_url.is_empty() && !search_engines.is_empty() {
-        // 设置搜索模型的配置
+    if has_web_search_tool {
         let search_config = setup_model(
             &main_state,
             api_protocol.clone(),
@@ -98,7 +84,7 @@ pub async fn chat_completion_with_search(
 
         dbg!(&metadata);
 
-        // 步骤1：生成搜索主题和关键词
+        // Step 1: Generate search topics and keywords
         let search_queries = if content.len() > 150 || messages.len() > 1 {
             generate_search_queries(
                 protocol.clone(),
@@ -123,9 +109,8 @@ pub async fn chat_completion_with_search(
         )
         .await?;
 
-        // 步骤2：并发执行多引擎搜索
-        let search_results =
-            execute_multi_search(crawler_url.clone(), &search_engines, &search_queries).await?;
+        // Step 2: Execute the search
+        let search_results = execute_web_search(chat_state_clone.clone(), &search_queries).await?;
 
         send_step_message(
             &tx,
@@ -136,7 +121,7 @@ pub async fn chat_completion_with_search(
         .await?;
 
         if !search_results.is_empty() {
-            // 步骤3：结果去重和排序
+            // Step 3: Deduplicate and sort the results
             send_step_message(
                 &tx,
                 chat_id.clone(),
@@ -145,7 +130,7 @@ pub async fn chat_completion_with_search(
             )
             .await?;
 
-            // 先过滤掉视频和图片网站，他们对文本对话没任何意义
+            // First filter out video and image websites, as they are meaningless for text conversations
             let filtered_results = search_results
                 .iter()
                 .filter(|result| {
@@ -160,7 +145,7 @@ pub async fn chat_completion_with_search(
             let mut ranked_results =
                 crate::libs::dedup::dedup_and_rank_results(filtered_results, &content_clone);
 
-            // 步骤4：获取最相关的搜索结果
+            // Step 4: Get the most relevant search results
             if let Ok(ai_ranked_results) = filter_and_rank_search_results(
                 protocol,
                 url.as_deref(),
@@ -268,7 +253,7 @@ pub async fn chat_completion_with_search(
 /// # Returns
 /// * `Result<(String, Option<String>, Option<String>, Option<Value>, String), String>` - The setup model result
 fn setup_model(
-    main_state: &State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_state: &State<'_, Arc<std::sync::RwLock<MainStore>>>,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,
@@ -294,7 +279,7 @@ fn setup_model(
 
     // Get the search model configuration
     let search_model = main_state
-        .lock()
+        .read()
         .map_err(|e| e.to_string())?
         .get_config("websearch_model", Value::Null);
 
@@ -469,7 +454,7 @@ async fn filter_and_rank_search_results(
     }
 
     let prompt = format!(
-        "[Task]\nExtract the top {} most relevant search results for the given topic, excluding video and image websites, and return them in JSON format.\n\n[Topic]\n{}\n\n[Search Results]\n{}",
+        "<cs:extract-task>\nExtract the top {} most relevant search results in `<cs:search-result></cs:search-result>` for a specified topic in `<cs:topic></cs:topic>`, excluding video and image websites, and return the results in JSON format.\n\n<cs:topic>\n{}\n</cs:topic>\n<cs:search-result>\n{}\n</cs:search-result>",
         MAX_SEARCH_RESULT,
         question,
         serde_json::to_string(&search_result).unwrap_or("".to_string())
@@ -538,7 +523,7 @@ async fn chat_with_retry(
                     return Err(e.to_string());
                 }
                 // Wait for 1 second before retrying
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2u64.pow((i + 1) as u32))).await;
             }
         };
     }
@@ -546,15 +531,10 @@ async fn chat_with_retry(
 }
 
 // Multi-engine concurrent search
-async fn execute_multi_search(
-    crawler_url: String,
-    search_engines: &[String],
+async fn execute_web_search(
+    chat_state: Arc<ChatState>,
     queries: &[String],
 ) -> Result<Vec<SearchResult>, String> {
-    if crawler_url.is_empty() {
-        return Err(t!("chat.crawler_url_not_found").to_string());
-    }
-
     // Prepare keywords - convert to owned strings to avoid lifetime issues
     let keywords_owned: Vec<String> = queries
         .iter()
@@ -562,55 +542,36 @@ async fn execute_multi_search(
         .map(|s| s.trim().to_string())
         .collect();
 
-    // Create crawler instance
-    let crawler = Chp::new(crawler_url.clone(), None);
-
     // Concurrently execute different search engines
-    let mut handles = Vec::new();
-
-    for engine_str in search_engines {
-        // Try to convert to SearchProvider
-        match SearchProviderName::try_from(engine_str.as_str()) {
-            Ok(provider) => {
-                let crawler_clone = crawler.clone();
-                let keywords_clone = keywords_owned.clone();
-
-                // Spawn async task
-                let handle = tokio::spawn(async move {
-                    // Get string slices from owned strings
-                    let keywords_refs: Vec<&str> =
-                        keywords_clone.iter().map(|s| s.as_str()).collect();
-                    crawler_clone
-                        .web_search(provider, &keywords_refs, None, Some(20), None, true)
-                        .await
-                });
-
-                handles.push(handle);
-            }
-            Err(e) => {
-                eprintln!("Invalid search engine: {}, error: {}", engine_str, e);
-            }
+    let web_search_tool = chat_state
+        .tool_manager
+        .get_tool(WEB_SEARCH_TOOL)
+        .await
+        .map_err(|e| e.to_string())?;
+    let params = json!({
+        "query": keywords_owned,
+        "count": 20,
+        "page": 1,
+    });
+    let results = match web_search_tool.call(params).await {
+        Ok(items) => {
+            let rs: Vec<SearchResult> = items
+                .structured_content
+                .and_then(|sc| serde_json::from_value(sc).ok())
+                .unwrap_or(vec![]);
+            rs
         }
-    }
-
-    // If no valid search engines, return error
-    if handles.is_empty() {
-        return Err(t!("chat.no_valid_search_engine_config").to_string());
-    }
-
-    // Wait for all searches to complete and merge results
-    let mut all_results = Vec::new();
-    let results = futures::future::join_all(handles).await;
-
-    for result in results {
-        match result {
-            Ok(Ok(items)) => all_results.extend(items),
-            Ok(Err(e)) => eprintln!("搜索引擎错误: {}", e),
-            Err(e) => eprintln!("任务执行错误: {}", e),
+        Err(e) => {
+            return Err(t!(
+                "tools.execution_failed",
+                name = WEB_SEARCH_TOOL,
+                error = e.to_string()
+            )
+            .to_string())
         }
-    }
+    };
 
-    Ok(all_results)
+    Ok(results)
 }
 
 // Prepare analysis content
@@ -671,7 +632,7 @@ async fn crawl_data(crawler_url: String, results: &[SearchResult]) -> String {
 }
 
 async fn generate_final_answer(
-    chat_state: Arc<ChatState>,
+    _chat_state: Arc<ChatState>,
     api_protocol: ChatProtocol,
     api_url: Option<&str>,
     model: String,

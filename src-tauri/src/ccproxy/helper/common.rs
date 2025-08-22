@@ -10,13 +10,9 @@ use crate::{
     db::{AiModel, MainStore, ProxyGroup},
 };
 use reqwest::Client;
+use rust_i18n::t;
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    str::FromStr,
-    sync::{Arc, Mutex},
-    vec,
-};
+use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 
 pub const DEFAULT_LOG_TO_FILE: bool = false;
 
@@ -45,17 +41,18 @@ impl ModelResolver {
     /// * The Actual model id
     /// ```
     pub async fn get_ai_model_by_alias(
-        main_store_arc: Arc<Mutex<MainStore>>,
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         proxy_alias: String,
         proxy_group: Option<&str>,
     ) -> ProxyResult<ProxyModel> {
         // First, ensure the global key pool is up to date
         let (backend_target, ai_model_detail) =
-            Self::update_global_key_pool(&main_store_arc, &proxy_alias, proxy_group).await?;
+            Self::update_global_key_pool(main_store_arc.clone(), &proxy_alias, proxy_group).await?;
 
         // Ollama hasn't api key
         if ai_model_detail.api_protocol == ChatProtocol::Ollama.to_string() {
-            let group = Self::get_proxy_group(&main_store_arc, proxy_group.unwrap_or("default"))?;
+            let group =
+                Self::get_proxy_group(main_store_arc.clone(), proxy_group.unwrap_or("default"))?;
 
             return Ok(ProxyModel {
                 provider: ai_model_detail.name.clone(),
@@ -96,7 +93,8 @@ impl ModelResolver {
             })?;
 
         // Get the AI model details for the selected provider
-        let ai_model_details = Self::get_ai_model_details(&main_store_arc, global_key.provider_id)?;
+        let ai_model_details =
+            Self::get_ai_model_details(main_store_arc.clone(), global_key.provider_id)?;
 
         log::info!(
             "chat_completion_proxy: alias={}, provider={}, base_url={}, protocol={}, selected={}",
@@ -120,7 +118,8 @@ impl ModelResolver {
             .map_err(|e| CCProxyError::InvalidProtocolError(e.to_string()))?;
 
         // Get the proxy group detail
-        let group_config = Self::get_proxy_group(&main_store_arc, proxy_group.unwrap_or("default"));
+        let group_config =
+            Self::get_proxy_group(main_store_arc.clone(), proxy_group.unwrap_or("default"));
         let prompt_injection = group_config
             .as_ref()
             .map_or("off".to_string(), |g| g.prompt_injection.clone());
@@ -167,11 +166,12 @@ impl ModelResolver {
     /// Update the global key pool for a proxy alias with all available keys from all providers.
     /// This method collects all keys from all backend targets and creates a global pool.
     async fn update_global_key_pool(
-        main_store_arc: &Arc<Mutex<MainStore>>,
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         proxy_alias: &str,
         proxy_group: Option<&str>,
     ) -> ProxyResult<(BackendModelTarget, AiModel)> {
-        let backend_targets = Self::get_backend_targets(main_store_arc, proxy_alias, proxy_group)?;
+        let backend_targets =
+            Self::get_backend_targets(main_store_arc.clone(), proxy_alias, proxy_group)?;
         let group_name = proxy_group.unwrap_or("default");
         let composite_key = format!("{}/{}", group_name, proxy_alias);
 
@@ -180,7 +180,7 @@ impl ModelResolver {
         let target = &backend_targets[index];
 
         // Get AI model details for this target
-        let ai_model = Self::get_ai_model_details(main_store_arc, target.id)?;
+        let ai_model = Self::get_ai_model_details(main_store_arc.clone(), target.id)?;
 
         // Ollama hasn't keys
         if ai_model.api_protocol == ChatProtocol::Ollama.to_string() && ai_model.api_key.is_empty()
@@ -227,13 +227,14 @@ impl ModelResolver {
 
     /// Get the list of backend targets corresponding to the model alias
     fn get_backend_targets(
-        main_store_arc: &Arc<Mutex<MainStore>>,
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         proxy_alias: &str,
         proxy_group: Option<&str>,
     ) -> ProxyResult<Vec<BackendModelTarget>> {
-        let store_guard = main_store_arc.lock().map_err(|e| {
-            let err_msg = format!("Failed to lock MainStore: {}", e);
-            CCProxyError::StoreLockError(err_msg)
+        let store_guard = main_store_arc.read().map_err(|e| {
+            CCProxyError::StoreLockError(
+                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+            )
         })?;
 
         let proxy_config: ChatCompletionProxyConfig =
@@ -260,12 +261,13 @@ impl ModelResolver {
 
     /// Get AI model details by provider_id
     fn get_ai_model_details(
-        main_store_arc: &Arc<Mutex<MainStore>>,
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         provider_id: i64,
     ) -> ProxyResult<AiModel> {
-        let store_guard = main_store_arc.lock().map_err(|e| {
-            let err_msg = format!("Failed to lock MainStore: {}", e);
-            CCProxyError::StoreLockError(err_msg)
+        let store_guard = main_store_arc.read().map_err(|e| {
+            CCProxyError::StoreLockError(
+                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+            )
         })?;
 
         store_guard
@@ -277,14 +279,14 @@ impl ModelResolver {
     }
 
     fn get_proxy_group(
-        main_store_arc: &Arc<Mutex<MainStore>>,
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         group_name: &str,
     ) -> ProxyResult<ProxyGroup> {
-        let store_guard = main_store_arc.lock().map_err(|e| {
-            let err_msg = format!("Failed to lock MainStore: {}", e);
-            CCProxyError::StoreLockError(err_msg)
+        let store_guard = main_store_arc.read().map_err(|e| {
+            CCProxyError::StoreLockError(
+                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+            )
         })?;
-
         store_guard
             .config
             .get_proxy_group_by_name(group_name)
@@ -293,12 +295,12 @@ impl ModelResolver {
             })
     }
 
-    pub async fn build_http_client(
-        main_store_arc: Arc<Mutex<MainStore>>,
+    pub fn build_http_client(
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         mut metadata: Option<serde_json::Value>,
     ) -> ProxyResult<Client> {
         let mut client_builder = Client::builder();
-        let _ = setup_chat_proxy(&main_store_arc, &mut metadata);
+        let _ = setup_chat_proxy(main_store_arc.clone(), &mut metadata);
         let proxy_type = get_proxy_type(metadata);
 
         match proxy_type {

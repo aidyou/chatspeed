@@ -223,7 +223,13 @@
             </el-option>
           </el-select>
         </div>
-      </div>
+      </div> -->
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">{{ $t('settings.general.searchEngine') }}</div>
+    <div class="list">
       <div class="item">
         <div class="label">
           <div class="label-text">
@@ -232,7 +238,7 @@
           </div>
         </div>
         <div class="value" style="width: 45%">
-          <el-select v-model="settings.searchEngine" @change="onSearchEngineChange" multiple>
+          <el-select v-model="settings.searchEngine" @change="onSearchEngineChange">
             <el-option
               v-for="engine in searchEngines"
               :key="engine"
@@ -258,17 +264,76 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
-            {{ $t('settings.general.chatspeedCrawler') }}
-            <small class="tooltip">{{ $t('settings.general.chatspeedCrawlerTooltip') }}</small>
+            {{ $t('settings.general.search.google') }}
+            <el-space>
+              <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
+              <a
+                class="small info"
+                href="javascript:"
+                @click="openUrl('https://programmablesearchengine.google.com/controlpanel/all')"
+                >{{ $t('settings.general.search.apply') }}</a
+              >
+            </el-space>
           </div>
         </div>
-        <div class="value" style="width: 45%">
+        <div class="value" style="width: 400px">
           <el-input
-            v-model="settings.chatspeedCrawler"
-            @input="onChatspeedCrawlerChange"
-            placeholder="http://localhost:12321" />
+            type="password"
+            v-model="settings.googleApiKey"
+            @input="onGoogleApiKeyChange"
+            :placeholder="$t('settings.general.search.googleApiKey')" />
+          <el-input
+            v-model="settings.googleSearchId"
+            @input="onGoogleSearchIdChange"
+            :placeholder="$t('settings.general.search.googleSearchId')" />
         </div>
-      </div> -->
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.search.serper') }}
+            <el-space>
+              <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
+              <a
+                class="small info"
+                href="javascript:"
+                @click="openUrl('https://serper.dev/api-keys')"
+                >{{ $t('settings.general.search.apply') }}</a
+              >
+            </el-space>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-input
+            type="password"
+            v-model="settings.serperApiKey"
+            @input="onSerperApiKeyChange"
+            :placeholder="$t('settings.general.search.serperApiKey')" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.search.tavily') }}
+            <el-space>
+              <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
+              <a
+                class="small info"
+                href="javascript:"
+                @click="openUrl('https://app.tavily.com/home')"
+                >{{ $t('settings.general.search.apply') }}</a
+              >
+            </el-space>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-input
+            type="password"
+            v-model="settings.tavilyApiKey"
+            @input="onTavilyApiKeyChange"
+            :placeholder="$t('settings.general.search.tavilyApiKey')" />
+        </div>
+      </div>
     </div>
   </div>
 
@@ -568,7 +633,7 @@ import {
   getSoftwareLanguages,
   mapBrowserLangToStandard
 } from '@/i18n/langUtils'
-import { showMessage } from '@/libs/util'
+import { showMessage, openUrl } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 
 const { t } = useI18n()
@@ -583,7 +648,7 @@ const { settings } = storeToRefs(settingStore)
 
 const backups = ref([])
 const restoreDir = ref('')
-const searchEngines = ['google', 'baidu', 'bing']
+const searchEngines = ['google', 'serper', 'tavily']
 
 const defaultBackupDir = ref('')
 
@@ -834,8 +899,20 @@ const onSearchResultCountChange = value => {
  * Handles the change of chatspeed crawler
  * @param {string} value - The value of chatspeed crawler
  */
-const onChatspeedCrawlerChange = value => {
-  setSetting('chatspeedCrawler', value || '')
+const onGoogleApiKeyChange = value => {
+  setSetting('googleApiKey', value ? value.trim() : '' || '')
+}
+
+const onGoogleSearchIdChange = value => {
+  setSetting('googleSearchId', value ? value.trim() : '' || '')
+}
+
+const onSerperApiKeyChange = value => {
+  setSetting('serperApiKey', value ? value.trim() : '' || '')
+}
+
+const onTavilyApiKeyChange = value => {
+  setSetting('tavilyApiKey', value ? value.trim() : '' || '')
 }
 
 // =================================================

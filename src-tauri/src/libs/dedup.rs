@@ -277,7 +277,6 @@ fn semantic_deduplicate(results: Vec<SearchResult>) -> Vec<SearchResult> {
 #[cfg(test)]
 mod tests {
     use super::SearchResult;
-    use crate::search::SearchProviderName;
 
     #[test]
     fn test_dynamic_urls() {
@@ -330,43 +329,5 @@ mod tests {
         let deduped = crate::libs::dedup::dedup_and_rank_results(results, "Rust编程");
 
         assert_eq!(deduped.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_dedup_and_rank_results() {
-        // crawl news from baidu news and google news
-        let keywords = "五粮液最近怎样，可以买吗？";
-        let mut result = vec![];
-        let providers = vec![SearchProviderName::Baidu, SearchProviderName::Google];
-        for provider in providers {
-            // The crawler is running in a separate process
-            // Must be install chatspeedbot
-            let crawler = crate::http::chp::Chp::new("http://127.0.0.1:12321".to_string(), None);
-            let res = crawler
-                .web_search(provider.clone(), &[keywords], Some(1), Some(30), None, true)
-                .await
-                .unwrap();
-            let search_count = res.len();
-            result.extend(res);
-            println!(
-                "{} search result count: {}",
-                provider.to_string(),
-                search_count
-            );
-        }
-        println!("Total search result count: {}", result.len());
-        // let json = serde_json::to_string_pretty(&result).expect("Failed to serialize results");
-        // std::fs::write("search.json", json).expect("Failed to write results to file");
-
-        // load from cache file
-        // let result = std::fs::read_to_string("search.json").unwrap();
-        // let result: Vec<SearchResult> = serde_json::from_str(&result).unwrap();
-        // println!("Total search result count: {}", result.len());
-        let deduped = crate::libs::dedup::dedup_and_rank_results(result, keywords);
-        println!("Deduplicated result count: {}", deduped.len());
-        assert!(deduped.len() > 0);
-
-        // let json = serde_json::to_string_pretty(&deduped).expect("Failed to serialize results");
-        // std::fs::write("search_deduped.json", json).expect("Failed to write results to file");
     }
 }

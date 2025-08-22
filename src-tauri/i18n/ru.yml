@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Ошибка выполнения завершения чата: %{details}"
   chat_completion_no_content: "ИИ-модель не вернула контент, проверьте ввод или повторите попытку"
+  execution_failed: "Ошибка вызова инструмента, имя инструмента: %{name}, ошибка: %{error}"
   failed_to_get_model: "Не удалось получить модель %{model_type}"
   function_already_exists: "Функция уже существует: %{name}"
   function_not_found: "Инструментальная функция не найдена в рабочем процессе: %{name}"
-  invalid_search_provider: "Недопустимый поставщик поисковых услуг '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "Параметр ключевое слово (kw) должен быть непустой строкой или непустым массивом"
   invalid_model_name: "Недопустимое имя модели: %{model_name}"
   max_retries_exceeded: "Превышено максимальное количество попыток для: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "Параметр URL должен быть строкой"
   url_must_not_be_empty: "Параметр URL не может быть пустым"
   web_scraper_failed: "Ошибка веб-скрапинга (URL: %{url}): %{details}"
-  web_search_failed: "Ошибка веб-поиска (Поставщик: %{provider}, Ключевое слово: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ Ошибка извлечения информации с веб-страницы, заголовок: %{title}, URL: %{url}"
     crawler_success: "✔ Информация с веб-страницы успешно извлечена, заголовок: %{title}, URL: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ Анализ «%{title}» завершен"
     summarizing_webpage: "▷ Анализ «%{title}»"
     summarizing: "☞ Анализ содержимого веб-страницы"
+  search:
+    google_api_key_empty: "Ключ API Google Search не может быть пустым"
+    google_cx_empty: "ID поисковой системы Google не может быть пустым"
+    serper_api_key_empty: "Ключ API Serper не может быть пустым"
+    tavily_api_key_empty: "Ключ API Tavily не может быть пустым"
+    provider_no_support: "Поисковая система не поддерживается: {name}"
+    web_search_failed: "Ошибка веб-поиска (Поставщик: %{provider}, Ключевое слово: %{keyword}): %{details}"
 
 tray:
   about: "О программе"

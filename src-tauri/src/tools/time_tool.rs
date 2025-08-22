@@ -18,7 +18,7 @@ impl TimeTool {
 #[async_trait]
 impl ToolDefinition for TimeTool {
     fn name(&self) -> &str {
-        "get_current_time"
+        "getCurrentTime"
     }
 
     fn description(&self) -> &str {

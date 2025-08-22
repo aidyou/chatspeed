@@ -145,8 +145,6 @@
       "backupDir": "Backup Directory",
       "backupSettings": "Backup Settings",
       "backupSuccess": "Backup successful",
-      "chatspeedCrawler": "Chatspeed Crawler",
-      "chatspeedCrawlerTooltip": "ChatSpeed crawler automatically retrieves content from conversation links, which is an essential component for searching.",
       "codeDarkTheme": "Code Dark Theme",
       "codeLightTheme": "Code Light Theme",
       "comingSoon": "More settings coming soon...",
@@ -203,6 +201,17 @@
         "http": "HTTP Proxy",
         "none": "No Proxy",
         "system": "System Proxy"
+      },
+      "search": {
+        "apply": "Apply",
+        "clickHere": "Click here to apply for an API key",
+        "google": "Google",
+        "googleApiKey": "Google Search API Key",
+        "googleSearchId": "Google Search Engine ID",
+        "serper": "Serper",
+        "serperApiKey": "Serper API Key",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Tavily API Key"
       },
       "workflow": {
         "general": "General Model",

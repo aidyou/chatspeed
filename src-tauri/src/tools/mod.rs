@@ -18,4 +18,4 @@ pub use tool_manager::{NativeToolResult, ToolDefinition, ToolManager, MCP_TOOL_N
 pub use types::{ModelName, ToolCallResult};
 pub use web_crawler::Crawler;
 pub use web_scraper::WebScraperTool;
-pub use web_search::Search;
+pub use web_search::WebSearch;

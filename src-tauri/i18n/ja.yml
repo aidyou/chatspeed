@@ -259,10 +259,10 @@ tray:
 tools:
   chat_completion_failed: "チャット補完の実行に失敗しました: %{details}"
   chat_completion_no_content: "AIモデルはコンテンツを返しませんでした。入力を確認するか、再試行してください"
+  execution_failed: "ツール呼び出しに失敗しました、ツール名: %{name}、エラー: %{error}"
   failed_to_get_model: "%{model_type} モデルの取得に失敗しました"
   function_already_exists: "関数は既に存在します: %{name}"
   function_not_found: "ワークフローにツール関数が見つかりません: %{name}"
-  invalid_search_provider: "無効な検索サービスプロバイダー '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "キーワード(kw)パラメータは空でない文字列または空でない配列である必要があります"
   invalid_model_name: "無効なモデル名: %{model_name}"
   max_retries_exceeded: "最大リトライ回数を超えました: %{item}"
@@ -278,7 +278,6 @@ tools:
   url_must_be_string: "URLパラメータは文字列である必要があります"
   url_must_not_be_empty: "URLパラメータは空にできません"
   web_scraper_failed: "ウェブスクレイピングに失敗しました (URL: %{url}): %{details}"
-  web_search_failed: "ウェブ検索に失敗しました (プロバイダー: %{provider}, キーワード: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ ウェブ情報抽出失敗、タイトル: %{title}, URL: %{url}"
     crawler_success: "✔ ウェブ情報抽出成功、タイトル: %{title}, URL: %{url}"
@@ -303,6 +302,13 @@ tools:
     summarization_success: "✔ 「%{title}」の分析が完了しました"
     summarizing_webpage: "▷ 「%{title}」を分析中"
     summarizing: "☞ ウェブコンテンツを分析中"
+  search:
+    google_api_key_empty: "Google検索APIキーは空にできません"
+    google_cx_empty: "Google検索エンジンIDは空にできません"
+    serper_api_key_empty: "Serper APIキーは空にできません"
+    tavily_api_key_empty: "Tavily APIキーは空にできません"
+    provider_no_support: "検索エンジンがサポートされていません: {name}"
+    web_search_failed: "ウェブ検索に失敗しました (プロバイダー: %{provider}, キーワード: %{keyword}): %{details}"
 
 updater:
   errors:

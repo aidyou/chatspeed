@@ -96,11 +96,16 @@
                     small,
                     a.small {
                         color: var(--cs-text-color-secondary);
-                        font-size: var(--cs-font-size-xxs);
+                        font-size: var(--cs-font-size-xs);
+
+                        &.info{
+                            color: var(--cs-info-color);
+                            font-size: var(--cs-font-size-sm);
+                        }
 
                         &.important {
                             color: var(--cs-color-primary-red);
-                            font-size: var(--cs-font-size-xs);
+                            font-size: var(--cs-font-size-sm);
                         }
                     }
                 }

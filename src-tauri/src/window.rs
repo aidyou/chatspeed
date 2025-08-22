@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use log::{debug, error, warn};
 use rust_i18n::t;
@@ -327,7 +326,7 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
         .decorations(false)
         .transparent(true)
         .skip_taskbar(true)
-        .min_inner_size(400.0, 500.0)
+        .min_inner_size(445.0, 500.0)
         .center()
         .build()
         {
@@ -614,7 +613,10 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 /// # Arguments
 /// * `window` - The window to apply configuration to
 /// * `main_store` - The main store
-pub fn restore_window_config(window: &WebviewWindow, main_store: &Arc<Mutex<MainStore>>) {
+pub fn restore_window_config(
+    window: &WebviewWindow,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
+) {
     let mut current_window_size = window.outer_size().unwrap_or_else(|e| {
         warn!(
             "Failed to get initial window outer size for '{}': {}. Using default 800x600.",
@@ -624,7 +626,7 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: &Arc<Mutex<Main
         PhysicalSize::new(800, 600) // Default size if current size cannot be obtained
     });
 
-    if let Ok(c) = main_store.lock() {
+    if let Ok(c) = main_store.read() {
         // restore window size
         // Since a Some(default) is provided, get_config should always return Some.
         // .unwrap() is safe here assuming get_config honors the default on missing/error.

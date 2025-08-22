@@ -22,12 +22,11 @@ pub async fn handle_direct_forward(
     client_request_body: bytes::Bytes,
     proxy_model: ProxyModel,
     is_streaming_request: bool,
-    main_store_arc: Arc<Mutex<MainStore>>,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
     log_to_file: bool,
 ) -> ProxyResult<Response> {
     let http_client =
-        ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())
-            .await?;
+        ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())?;
 
     let full_url = get_provider_chat_full_url(
         proxy_model.chat_protocol.clone(),

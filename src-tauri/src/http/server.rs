@@ -2,7 +2,7 @@ use rust_i18n::t;
 use std::{
     net::{AddrParseError, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Once},
+    sync::{Arc, Once},
 };
 use tauri::AppHandle;
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
@@ -53,7 +53,7 @@ static INIT: Once = Once::new();
 /// * `Result<(), String>` - Returns `Ok(())` on success, or an error message on failure.
 pub async fn start_http_server(
     app: &AppHandle,
-    main_store: Arc<Mutex<MainStore>>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
     chat_state: Arc<ChatState>,
 ) -> Result<(), String> {
     log::info!("start_http_server function entered.");
@@ -148,7 +148,7 @@ pub async fn start_http_server(
         .await
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
         .layer(cors); // Apply CORS to the ccproxy routes
-    let server_port = if let Ok(store) = main_store.lock() {
+    let server_port = if let Ok(store) = main_store.read() {
         store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
     } else {
         CFG_CCPROXY_PORT_DEFAULT

@@ -3,7 +3,7 @@ use axum::Json;
 use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::ai::interaction::ChatProtocol;
@@ -218,11 +218,11 @@ pub async fn handle_chat_completion(
     tool_compat_mode: bool,
     route_model_alias: String,
     generate_action: String,
-    main_store_arc: Arc<Mutex<MainStore>>,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
 ) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
 
-    let log_to_file = if let Ok(store) = main_store_arc.lock() {
+    let log_to_file = if let Ok(store) = main_store_arc.read() {
         store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
     } else {
         client_query
@@ -345,8 +345,7 @@ pub async fn handle_chat_completion(
 
     // Build HTTP client with proxy settings
     let http_client =
-        ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())
-            .await?;
+        ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())?;
 
     // 3. Adapt and send request to backend
     let mut onward_request_builder = backend_adapter

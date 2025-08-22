@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
@@ -11,7 +11,7 @@ use crate::workflow::error::WorkflowError;
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
-    main_store: Arc<std::sync::Mutex<MainStore>>,
+    main_store: Arc<RwLock<MainStore>>,
     chat_state: Arc<ChatState>,
     /// Function manager for handling function operations
     function_manager: Arc<ToolManager>,
@@ -22,7 +22,7 @@ pub struct WorkflowEngine {
 impl WorkflowEngine {
     /// Create a new workflow engine
     pub async fn new(
-        main_store: Arc<std::sync::Mutex<MainStore>>,
+        main_store: Arc<RwLock<MainStore>>,
         chat_state: Arc<ChatState>,
     ) -> Result<Self, WorkflowError> {
         let function_manager = Arc::new(ToolManager::new());
@@ -90,7 +90,7 @@ mod tests {
         let main_store =
             MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
         let engine = WorkflowEngine::new(
-            Arc::new(std::sync::Mutex::new(main_store)),
+            Arc::new(std::sync::RwLock::new(main_store)),
             ChatState::new(Arc::new(WindowChannels::new())),
         )
         .await?;
@@ -110,7 +110,7 @@ mod tests {
             MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
         // 创建工作流引擎
         let engine = WorkflowEngine::new(
-            Arc::new(std::sync::Mutex::new(main_store)),
+            Arc::new(std::sync::RwLock::new(main_store)),
             ChatState::new(Arc::new(WindowChannels::new())),
         )
         .await
@@ -383,7 +383,7 @@ mod tests {
 
         let main_store =
             MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
-        let engine = WorkflowEngine::new(Arc::new(std::sync::Mutex::new(main_store)), chat_state)
+        let engine = WorkflowEngine::new(Arc::new(std::sync::RwLock::new(main_store)), chat_state)
             .await
             .map_err(|e| format!("Failed to create workflow engine: {}", e))?;
 

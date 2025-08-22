@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tauri::{command, State};
 
@@ -11,7 +11,7 @@ use crate::{
 #[command]
 pub async fn run_dag_workflow(
     chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     workflow_config: &str,
 ) -> Result<(), String> {
     let engine = WorkflowEngine::new(main_store.inner().clone(), chat_state.inner().clone())
@@ -33,7 +33,7 @@ pub async fn run_dag_workflow(
 #[command]
 pub async fn run_react_workflow(
     chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<std::sync::Mutex<MainStore>>>,
+    main_store: State<'_, Arc<RwLock<MainStore>>>,
     query: &str,
 ) -> Result<(), String> {
     let mut exe = ReactExecutor::new(main_store.inner().clone(), chat_state.inner().clone(), 10)

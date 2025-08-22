@@ -8,6 +8,7 @@ use tokio::sync::{broadcast, RwLock};
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::commands::chat::setup_chat_proxy;
+use crate::constants::CFG_SEARCH_ENGINE;
 // use crate::constants::CFG_CHP_SERVER;
 use crate::db::{AiModel, MainStore};
 use crate::mcp::client::{
@@ -100,7 +101,7 @@ impl ToolManager {
     pub async fn register_available_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
         _chat_state: Arc<ChatState>,
-        main_store: Arc<std::sync::Mutex<MainStore>>,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
     ) -> Result<(), ToolError> {
         // =================================================
         // Built-in tools
@@ -108,6 +109,21 @@ impl ToolManager {
         // Register time tool
         self.register_tool(Arc::new(crate::tools::TimeTool::new()))
             .await?;
+
+        // Register search tool
+        let search_engine = main_store
+            .read()
+            .map_err(|e| {
+                ToolError::Store(
+                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                )
+            })?
+            .get_config(CFG_SEARCH_ENGINE, "".to_string());
+        if !search_engine.is_empty() {
+            if let Ok(ws) = crate::tools::WebSearch::new(search_engine, main_store.clone()) {
+                self.register_tool(ws).await?;
+            }
+        }
 
         // =================================================
         // Chat completion
@@ -157,7 +173,7 @@ impl ToolManager {
         // =================================================
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {
-            let main_store_guard = main_store.lock().map_err(|e| {
+            let main_store_guard = main_store.read().map_err(|e| {
                 ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
             })?;
             main_store_guard
@@ -167,7 +183,7 @@ impl ToolManager {
                 .filter(|mcp_db_config| !mcp_db_config.disabled)
                 .map(|mcp_db_config| mcp_db_config.config.clone()) // Clone the config
                 .collect()
-        }; // main_store_guard is dropped here
+        };
 
         for mcp_server_config in mcp_configs_to_process {
             // Clone self (Arc<FunctionManager>) for the call
@@ -326,15 +342,17 @@ impl ToolManager {
     /// # Returns
     /// * `Result<AiModel, ToolError>` - The AI model or an error
     pub fn get_model(
-        main_store: &Arc<std::sync::Mutex<MainStore>>,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
         model_type: &str,
     ) -> Result<AiModel, ToolError> {
         let model_name = format!("workflow_{}_model", model_type);
         // Get the model configured for the workflow
         let reasoning_model = main_store
-            .lock()
+            .read()
             .map_err(|e| {
-                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
+                ToolError::Store(
+                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                )
             })?
             .get_config(&model_name, Value::Null);
         if reasoning_model.is_null() {
@@ -358,9 +376,11 @@ impl ToolManager {
 
         // Get model detail by id
         let mut ai_model = main_store
-            .lock()
+            .read()
             .map_err(|e| {
-                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
+                ToolError::Store(
+                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                )
             })?
             .config
             .get_ai_model_by_id(model_id)
@@ -383,7 +403,7 @@ impl ToolManager {
                 m
             })?;
 
-        setup_chat_proxy(&main_store, &mut ai_model.metadata)
+        setup_chat_proxy(main_store.clone(), &mut ai_model.metadata)
             .map_err(|e| ToolError::Initialization(e.to_string()))?;
 
         Ok(ai_model)

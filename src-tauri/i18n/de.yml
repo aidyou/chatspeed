@@ -247,10 +247,10 @@ setting:
 tools:
   chat_completion_failed: "Chat-Vervollständigungsausführung fehlgeschlagen: %{details}"
   chat_completion_no_content: "Das KI-Modell hat keinen Inhalt zurückgegeben. Bitte prüfen Sie Ihre Eingabe oder versuchen Sie es erneut."
+  execution_failed: "Werkzeugaufruf fehlgeschlagen, Werkzeugname: %{name}, Fehler: %{error}"
   failed_to_get_model: "Abrufen des %{model_type}-Modells fehlgeschlagen"
   function_already_exists: "Funktion existiert bereits: %{name}"
   function_not_found: "Werkzeugfunktion im Workflow nicht gefunden: %{name}"
-  invalid_search_provider: "Ungültiger Suchdienstanbieter '%{provider_name}': %{details}"
   keyword_must_be_non_empty: "Keyword(kw)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein"
   invalid_model_name: "Ungültiger Modellname: %{model_name}"
   max_retries_exceeded: "Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}"
@@ -266,7 +266,6 @@ tools:
   url_must_be_string: "URL-Parameter muss ein String sein"
   url_must_not_be_empty: "URL-Parameter darf nicht leer sein"
   web_scraper_failed: "Web-Scraping fehlgeschlagen (URL: %{url}): %{details}"
-  web_search_failed: "Websuche fehlgeschlagen (Anbieter: %{provider}, Keyword: %{keyword}): %{details}"
   deep_search:
     crawler_failed: "✕ Web-Informationen konnten nicht extrahiert werden, Titel: %{title}, URL: %{url}"
     crawler_success: "✔ Web-Informationen erfolgreich extrahiert, Titel: %{title}, URL: %{url}"
@@ -291,6 +290,13 @@ tools:
     summarization_success: "✔ '%{title}'-Analyse abgeschlossen"
     summarizing_webpage: "▷ '%{title}' wird analysiert"
     summarizing: "☞ Webinhalt wird analysiert"
+  search:
+    google_api_key_empty: "Google Search API-Schlüssel darf nicht leer sein"
+    google_cx_empty: "Google Suchmaschinen-ID darf nicht leer sein"
+    serper_api_key_empty: "Serper API-Schlüssel darf nicht leer sein"
+    tavily_api_key_empty: "Tavily API-Schlüssel darf nicht leer sein"
+    provider_no_support: "Suchmaschine nicht unterstützt: {name}"
+    web_search_failed: "Websuche fehlgeschlagen (Anbieter: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:
   about: "Über"

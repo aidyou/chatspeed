@@ -145,8 +145,6 @@
       "backupDir": "備份目錄",
       "backupSettings": "備份設定",
       "backupSuccess": "備份成功",
-      "chatspeedCrawler": "Chatspeed 爬蟲",
-      "chatspeedCrawlerTooltip": "ChatSpeed 爬蟲自動取得對話連結內容，是搜尋必備的元件。",
       "codeDarkTheme": "程式碼暗色主題",
       "codeLightTheme": "程式碼亮色主題",
       "comingSoon": "更多設定即將推出……",
@@ -203,6 +201,17 @@
         "http": "HTTP 代理",
         "none": "不使用代理",
         "system": "跟隨系統"
+      },
+      "search": {
+        "apply": "申請",
+        "clickHere": "點擊這裡申請API金鑰",
+        "google": "谷歌",
+        "googleApiKey": "Google搜尋API金鑰",
+        "googleSearchId": "Google搜尋引擎 ID",
+        "serper": "Serper",
+        "serperApiKey": "Serper API金鑰",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Tavily API金鑰"
       },
       "workflow": {
         "general": "通用模型",
@@ -429,7 +438,7 @@
         "logToFileNote": "記錄請求和回應到檔案，用於偵錯和分析",
         "openLogFile": "開啟日誌檔案",
         "port": "代理連接埠",
-        "portChangedRestartRequired": "連接埠號變更後需要重啟應用程式才能生效",
+        "portChangedRestartRequired": "連接埠號變更後須重啟應用程式才能生效",
         "saveFailed": "代理設定儲存失敗: {error}",
         "saveSuccess": "代理設定儲存成功",
         "title": "代理設定",

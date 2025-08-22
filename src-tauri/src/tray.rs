@@ -1,5 +1,4 @@
-use std::sync::{Arc, Mutex};
-
+use std::sync::{Arc, RwLock};
 use tauri::Manager;
 
 use crate::{
@@ -21,13 +20,13 @@ use crate::{
 /// # Returns
 /// - `Result<(), String>`: A result indicating the success or failure of the operation
 pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<(), String> {
-    let main_store = app.state::<Arc<Mutex<MainStore>>>();
+    let main_store = app.state::<Arc<RwLock<MainStore>>>();
     let mut main_window_visible_shortcut = DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string();
     let mut assistant_window_visible_shortcut =
         DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string();
     let mut note_window_visible_shortcut = DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string();
     // Get shortcut config
-    if let Ok(c) = main_store.lock() {
+    if let Ok(c) = main_store.read() {
         // Main window shortcut
         main_window_visible_shortcut = c.get_config(
             CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,

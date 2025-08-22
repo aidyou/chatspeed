@@ -145,8 +145,6 @@
       "backupDir": "备份目录",
       "backupSettings": "备份设置",
       "backupSuccess": "备份成功",
-      "chatspeedCrawler": "Chatspeed爬虫",
-      "chatspeedCrawlerTooltip": "ChatSpeed爬虫自动获取对话链接内容，是搜索必备的组件。",
       "codeDarkTheme": "代码暗色主题",
       "codeLightTheme": "代码亮色主题",
       "comingSoon": "更多设置即将推出……",
@@ -203,6 +201,17 @@
         "http": "HTTP代理",
         "none": "不使用代理",
         "system": "跟随系统"
+      },
+      "search": {
+        "apply": "申请",
+        "clickHere": "点击这里申请API密钥",
+        "google": "谷歌",
+        "googleApiKey": "Google搜索API密钥",
+        "googleSearchId": "Google搜索引擎 ID",
+        "serper": "Serper",
+        "serperApiKey": "Serper API密钥",
+        "tavily": "Tavily",
+        "tavilyApiKey": "Tavily API密钥"
       },
       "workflow": {
         "general": "通用模型",
@@ -429,7 +438,7 @@
         "logToFileNote": "记录请求和响应到文件，用于调试和分析",
         "openLogFile": "打开日志文件",
         "port": "代理端口",
-        "portChangedRestartRequired": "端口号变更后需要重启应用才能生效",
+        "portChangedRestartRequired": "端口号变更后须重启应用才能生效",
         "saveFailed": "代理设置保存失败: {error}",
         "saveSuccess": "代理设置保存成功",
         "title": "代理设置",
