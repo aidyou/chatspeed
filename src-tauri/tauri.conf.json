@@ -92,7 +92,7 @@
     ],
     "withGlobalTauri": true,
     "security": {
-      "capabilities": []
+      "capabilities": ["default", "scraper"]
     }
   },
   "bundle": {
