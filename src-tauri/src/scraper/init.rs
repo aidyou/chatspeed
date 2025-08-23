@@ -5,7 +5,10 @@ use log::warn;
 use std::fs;
 use std::io;
 use std::path::Path;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Wry};
+
+#[allow(unused_imports)]
+use tauri::Manager;
 
 // Helper function to recursively copy a directory, only copying files that don't exist in the destination.
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
@@ -36,12 +39,12 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> 
 /// they are copied from the bundled application assets.
 ///
 /// This function is intended to be called at application startup.
-pub fn ensure_default_configs_exist(app: &AppHandle<Wry>) -> Result<()> {
+pub fn ensure_default_configs_exist(_app: &AppHandle<Wry>) -> Result<()> {
     #[cfg(debug_assertions)]
     let app_data_dir = { &*crate::STORE_DIR.read() };
 
     #[cfg(not(debug_assertions))]
-    let app_data_dir = app
+    let app_data_dir = _app
         .path()
         .app_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get application data directory, error: {:?}", e))?;
@@ -56,7 +59,7 @@ pub fn ensure_default_configs_exist(app: &AppHandle<Wry>) -> Result<()> {
 
     #[cfg(not(debug_assertions))]
     let schema_src_path = {
-        let resource_dir = app
+        let resource_dir = _app
             .path()
             .resource_dir()
             .map_err(|e| anyhow::anyhow!("Failed to get resource directory: {:?}", e))?;

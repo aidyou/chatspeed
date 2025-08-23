@@ -1,14 +1,17 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
-use uuid::Uuid;
+use tauri::{AppHandle, Listener, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+
+#[allow(unused_imports)]
+use tauri::Manager;
 
 use super::scraper_config::FullConfig;
 
-#[derive(Deserialize, Debug)]
-struct ScrapeResult {
+#[derive(Deserialize, Debug, Clone)]
+struct ScrapeResultMessage {
     success: Option<String>,
     error: Option<String>,
 }
@@ -20,203 +23,116 @@ pub struct WebviewScraper {
 }
 
 impl WebviewScraper {
-    /// Creates a new `WebviewScraper`.
     pub fn new(app_handle: AppHandle<Wry>) -> Self {
         Self {
             app_handle,
-            timeout: Duration::from_secs(60), // Increased timeout for complex pages
+            timeout: Duration::from_secs(60),
         }
     }
 
-    /// Scrapes a given URL using a specific configuration.
-    ///
-    /// It creates a hidden webview, injects the necessary JavaScript, and executes
-    /// the scraping logic based on the provided configuration.
-    ///
-    /// # Arguments
-    /// * `url` - The URL to scrape.
-    /// * `config` - An `Option<FullConfig>`. If `Some`, it performs schema-based
-    ///   scraping. If `None`, it performs generic content extraction.
-    ///
-    /// # Returns
-    /// A `Result<String>` containing the scraped data, usually as a JSON string.
     pub async fn scrape(&self, url: &str, config: Option<FullConfig>) -> Result<String> {
-        let webview = self.create_webview(url)?;
-
-        // Channel for page load signal
         let (tx_page_load, rx_page_load) = tokio::sync::oneshot::channel::<()>();
-        let tx_page_load = Arc::new(Mutex::new(Some(tx_page_load)));
+        let page_load_signal = Arc::new(Mutex::new(Some(tx_page_load)));
 
-        // Channel for the final scrape result
+        let (tx_dom_content_loaded, rx_dom_content_loaded) = tokio::sync::oneshot::channel::<()>();
+        let dom_content_loaded_signal = Arc::new(Mutex::new(Some(tx_dom_content_loaded)));
+
         let (tx_scrape_result, rx_scrape_result) =
             tokio::sync::oneshot::channel::<Result<String>>();
-        let tx_scrape_result = Arc::new(Mutex::new(Some(tx_scrape_result)));
+        let scrape_result_signal = Arc::new(Mutex::new(Some(tx_scrape_result)));
 
-        // Listen for the 'page_loaded' event from the injected script
-        let url_clone = url.to_string();
-        let page_load_listener = webview.listen("page_loaded", move |_event| {
-            log::debug!("page_loaded event received for URL: {}", url_clone);
-            if let Ok(mut guard) = tx_page_load.lock() {
-                if let Some(tx) = guard.take() {
-                    let _ = tx.send(());
-                }
-            } else {
-                log::error!("Failed to acquire tx_page_load lock");
-            }
-        });
+        let webview = self.create_webview(
+            url,
+            page_load_signal,
+            dom_content_loaded_signal,
+            scrape_result_signal,
+        )?;
 
-        // Wait for the page and our initial script to load
         if tokio::time::timeout(self.timeout, rx_page_load)
             .await
             .is_err()
         {
-            webview.unlisten(page_load_listener);
             let _ = webview.close();
-
-            return Err(anyhow!("Page script injection timed out for URL: {}", url));
+            return Err(anyhow!("Page load timed out for URL: {}", url));
         }
-        webview.unlisten(page_load_listener);
 
-        // Now that the page is ready, listen for the 'scrape_result' event
-        let tx_scrape_result_clone = tx_scrape_result.clone();
-        let url_clone = url.to_string();
-        let scrape_result_listener = webview.listen("scrape_result", move |event| {
-            #[cfg(debug_assertions)]
-            log::debug!(
-                "scrape_result event received for URL: {}, payload: {}",
-                url_clone,
-                event.payload()
-            );
+        // Wait for DOMContentLoaded before injecting and running the script
+        if tokio::time::timeout(self.timeout, rx_dom_content_loaded)
+            .await
+            .is_err()
+        {
+            let _ = webview.close();
+            return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
+        }
 
-            if let Ok(mut guard) = tx_scrape_result_clone.lock() {
-                if let Some(tx) = guard.take() {
-                    let payload = event.payload();
-                    match serde_json::from_str::<ScrapeResult>(payload) {
-                        Ok(result) => {
-                            if let Some(success) = result.success {
-                                let _ = tx.send(Ok(success));
-                            } else if let Some(error) = result.error {
-                                let _ = tx.send(Err(anyhow!(error)));
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Err(anyhow!("Failed to parse scrape result: {}", e)));
-                        }
-                    }
-                }
-            } else {
-                log::error!("Failed to acquire tx_scrape_result_clone lock");
-            }
-        });
+        self.inject_and_run_script(&webview, config)?;
 
-        // Prepare the JavaScript to be executed
-        let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
-        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.js");
-
-        // Serialize the config to pass to the JS function.
-        // It becomes "null" if config is None.
-        let config_json_str =
-            serde_json::to_string(&config).context("Failed to serialize scraper config to JSON")?;
-
-        let js_code = format!(
-            r#"
-            try {{
-                console.log('Starting script injection...');
-
-                // Inject libraries first
-                {turndown_js}
-                console.log('Turndown library loaded');
-
-                // Inject core logic
-                {scrape_logic_js}
-                console.log('Scrape logic loaded');
-
-                // Execute the scrape
-                console.log('Executing scrape with config: {config_json_str}');
-                window.performScrape({config_json_str});
-            }} catch (error) {{
-                console.error('Script injection failed:', error);
-                if (window.__TAURI__?.event) {{
-                    window.__TAURI__.event.emit('scrape_result', {{
-                        error: 'Script injection failed: ' + error.message
-                    }});
-                }}
-            }}
-            "#,
-        );
-
-        #[cfg(debug_assertions)]
-        log::debug!("JS code to be executed: {}", js_code);
-
-        webview.eval(&js_code)?;
-
-        // Wait for the scrape result from the event listener
         let result = match tokio::time::timeout(self.timeout, rx_scrape_result).await {
             Ok(Ok(res)) => res,
             Ok(Err(_)) => Err(anyhow!("Scrape result channel closed unexpectedly.")),
             Err(_) => Err(anyhow!("Scraping timed out for URL: {}", url)),
         };
 
-        webview.unlisten(scrape_result_listener);
         let _ = webview.close();
         result
     }
 
-    /// Creates a new hidden webview window navigated to the specified URL.
-    fn create_webview(&self, url: &str) -> Result<WebviewWindow<Wry>> {
-        // Use a simple counter-based approach for window naming
-        // This ensures the window names match those defined in scraper.json
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    fn inject_and_run_script(
+        &self,
+        webview: &WebviewWindow<Wry>,
+        config: Option<FullConfig>,
+    ) -> Result<()> {
+        let logger_js = include_str!("../../assets/scrape/utility.js");
+        let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
+        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.js");
 
-        let window_id = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed) % 10; // Cycle through 0-9
-        let window_label = format!("scraper{}", window_id);
+        let config_json_str =
+            serde_json::to_string(&config).context("Failed to serialize scraper config to JSON")?;
 
-        // This script will run as soon as the webview is created.
-        // It waits for Tauri API to be available and then emits the page_loaded event.
-        let init_script = r#"
-            function waitForTauriAPI() {
-                return new Promise((resolve) => {
-                    if (window.__TAURI__?.event) {
-                        resolve();
-                    } else {
-                        const checkInterval = setInterval(() => {
-                            if (window.__TAURI__?.event) {
-                                clearInterval(checkInterval);
-                                resolve();
-                            }
-                        }, 50);
-                        // Fallback timeout after 5 seconds
-                        setTimeout(() => {
-                            clearInterval(checkInterval);
-                            resolve();
-                        }, 5000);
-                    }
-                });
-            }
+        let js_code = format!(
+            r#"
+            try {{
+                console.debug('Starting script injection...');
+                {logger_js}
+                {turndown_js}
+                logger.debug('Turndown library loaded');
+                {scrape_logic_js}
+                logger.debug('Scrape logic loaded');
+                logger.debug('Executing scrape with config: {config_json_str}');
+                window.performScrape({config_json_str});
+            }} catch (error) {{
+                logger.error('Script injection failed:', error);
+            }}
+            "#,
+        );
 
-            // 监听页面加载状态
-            window.addEventListener('load', () => {
-                console.log('Page fully loaded');
-            });
+        webview.eval(&js_code)?;
+        Ok(())
+    }
 
-            window.addEventListener('error', (event) => {
-                console.error('Page load error:', event);
-            });
+    fn create_webview(
+        &self,
+        url: &str,
+        page_load_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+        dom_content_loaded_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+        scrape_result_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<String>>>>>,
+    ) -> Result<WebviewWindow<Wry>> {
+        let window_label = format!("scraper-{}", uuid::Uuid::new_v4().simple().to_string());
 
-            window.addEventListener('DOMContentLoaded', async () => {
-                console.log('DOMContentLoaded fired, waiting for Tauri API...');
-                await waitForTauriAPI();
-                if (window.__TAURI__?.event) {
-                    window.__TAURI__.event.emit('page_loaded');
-                    console.log('DOMContentLoaded event fired');
-                } else {
-                    console.warn('Tauri API not available');
-                }
-            });
-        "#;
+        let init_script = format!(
+            r#"
+            window.addEventListener('load', () => console.log('Page fully loaded'));
+            window.addEventListener('error', (event) => console.error('Page load error:', event));
+            window.addEventListener('DOMContentLoaded', () => {{
+                console.log('DOMContentLoaded fired');
+                if (window.__TAURI__?.event) {{
+                    window.__TAURI__.event.emit('DOMContentLoaded_ready');
+                }}
+            }});
+        "#
+        );
 
-        let webview = WebviewWindowBuilder::new(
+        WebviewWindowBuilder::new(
             &self.app_handle,
             &window_label,
             WebviewUrl::External(url.parse()?),
@@ -224,19 +140,61 @@ impl WebviewScraper {
         .title("Scraper")
         .initialization_script(init_script)
         .visible(true)
-        .additional_browser_args("--disable-web-security --disable-features=VizDisplayCompositor --disable-site-isolation-trials")
-        .content_protected(false)
-        .on_page_load(|w,x| {
-            #[cfg(debug_assertions)]
-            log::debug!("Page loaded for URL: {}, event: {:?}", w.url().map(|u|u.to_string()).unwrap_or_default(),x.event());
+        .on_page_load(move |webview, _payload| {
+            let tx_dom_clone = dom_content_loaded_signal.clone();
+            webview.once("DOMContentLoaded_ready", move |_event| {
+                if let Ok(mut guard) = tx_dom_clone.lock() {
+                    if let Some(tx) = guard.take() {
+                        if tx.send(()).is_err() {
+                            log::error!(
+                                "Failed to send DOMContentLoaded_ready signal, receiver dropped."
+                            );
+                        }
+                    }
+                }
+            });
 
+            let tx_scrape_clone = scrape_result_signal.clone();
+            webview.listen("scrape_result", move |event| {
+                let data_str = event.payload();
+                log::debug!("Raw scrape_result payload: {:?}", data_str);
+                if let Ok(result) = serde_json::from_str::<ScrapeResultMessage>(&data_str) {
+                    log::debug!("Attempting to deserialize: {}", data_str);
+                    if let Ok(mut guard) = tx_scrape_clone.lock() {
+                        if let Some(tx) = guard.take() {
+                            if let Some(success) = result.success {
+                                let _ = tx.send(Ok(success));
+                            } else if let Some(error) = result.error {
+                                let _ = tx.send(Err(anyhow!(error)));
+                            }
+                        }
+                    }
+                } else {
+                    log::warn!(
+                        "Failed to deserialize scrape_result payload as ScrapeResultMessage: {}",
+                        data_str
+                    );
+                }
+            });
+
+            #[cfg(debug_assertions)]
+            {
+                webview.listen("logger", move |event| {
+                    if let Ok(payload) = serde_json::from_str::<Value>(event.payload()) {
+                        log::debug!("{}", payload.get("message").unwrap_or(&Value::Null));
+                    }
+                });
+            }
+
+            if let Ok(mut guard) = page_load_signal.lock() {
+                if let Some(tx) = guard.take() {
+                    if tx.send(()).is_err() {
+                        log::error!("Failed to send page_load signal, receiver dropped.");
+                    }
+                }
+            }
         })
         .build()
-        .map_err(|e| anyhow!("Failed to create webview window: {}", e))?;
-
-        #[cfg(debug_assertions)]
-        log::debug!("Created scraper window with label: {}", window_label);
-
-        Ok(webview)
+        .map_err(|e| anyhow!("Failed to create webview window: {}", e))
     }
 }

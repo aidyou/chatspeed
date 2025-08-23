@@ -1,9 +1,11 @@
 //! Handles loading of scraper configurations from the filesystem.
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 use tauri::{AppHandle, Wry};
 use url::Url;
+
+#[allow(unused_imports)]
+use tauri::Manager;
 
 use super::scraper_config::FullConfig;
 
@@ -17,12 +19,12 @@ impl ConfigLoader {
     ///
     /// It determines the base directory for schema files, which is typically
     /// the application's data directory.
-    pub fn new(app: &AppHandle<Wry>) -> Result<Self> {
+    pub fn new(_app: &AppHandle<Wry>) -> Result<Self> {
         #[cfg(debug_assertions)]
         let schema_dir = { &*crate::STORE_DIR.read() };
 
         #[cfg(not(debug_assertions))]
-        let schema_dir = app.path().app_data_dir().map_err(|e| {
+        let schema_dir = _app.path().app_data_dir().map_err(|e| {
             anyhow!(
                 "Failed to resolve app data directory for scraper config loading: {}",
                 e.to_string()
