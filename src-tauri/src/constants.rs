@@ -25,23 +25,34 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
-// chatspeed crawler api name
-pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
 pub const CFG_CCPROXY_PORT: &str = "chat_completion_proxy_port";
 pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11434;
 pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";
+pub const CFG_SEARCH_ENGINE: &str = "search_engine";
+pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
+pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";
+pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";
+// pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
 
-// main window shortcuts
+//======================================================
+//  main window shortcuts
+//======================================================
 pub const CFG_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "main_window_visible_shortcut";
 pub const DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT: &str = "F2";
+
 pub const CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT: &str = "assistant_window_visible_shortcut";
 pub const DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+Z";
+
 pub const CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT: &str =
     "assistant_window_visible_and_paste_shortcut";
 pub const DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT: &str = "Alt+S";
+
 pub const CFG_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "note_window_visible_shortcut";
 pub const DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+N";
+//======================================================
+// end main window shortcuts
+//======================================================
 
 pub const DEFAULT_THUMBNAIL_WIDTH: u32 = 200;
 pub const DEFAULT_THUMBNAIL_HEIGHT: u32 = 200;
@@ -52,9 +63,6 @@ pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // on mouse event status
 pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
-
-// web search tool
-pub static WEB_SEARCH_TOOL: &str = "webSearch";
 
 // The following static variables are used to store the paths of the http server and related directories
 // They are initialized after the http server is initialized,
@@ -71,7 +79,7 @@ lazy_static! {
     // http server upload dir: ${app_data}/static/upload
     pub static ref HTTP_SERVER_UPLOAD_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // plugins dir: ${app_data}/plugins
-    pub static ref PLUGINS_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
+    pub static ref SCHEMA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // shared data dir: ${app_data}/shared
     pub static ref SHARED_DATA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // log dir: ${app_data}/log, it will be initialized at startup in @src-tauri/src/logger.rs L108 `setup_logger`
@@ -137,3 +145,20 @@ lazy_static! {
 pub fn get_static_var<T: Clone>(var: &Arc<PLRwLock<T>>) -> T {
     var.read().clone()
 }
+
+// When the search results include video or image websites, they are filtered out
+pub static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf::phf_set! {
+    // video websites
+    "v.qq.com", "iqiyi.com", "youku.com", "imgo.tv", "bilibili.com", "xigua.com",
+    "douyin.com", "kuaishou.com", "yspapp.cn", "youtube.com", "vimeo.com",
+    "dailymotion.com", "netflix.com", "primevideo.com", "hulu.com", "disneyplus.com",
+    "tiktok.com", "twitch.tv", "mgtv.com", "le.com", "acfun.cn", "bilibili.tv",
+    // image websites
+    "vcg.com", "dfic.cn", "tuchong.com", "zcool.com.cn",
+    "ui.cn", "gettyimages.com", "shutterstock.com", "istockphoto.com", "stock.adobe.com",
+    "alamy.com", "unsplash.com", "pexels.com", "pixabay.com", "instagram.com",
+    "pinterest.com", "flickr.com", "dribbble.com", "behance.net", "freepik.com",
+    "stockvault.net", "picjumbo.com", "gratisography.com", "lifeofpix.com",
+    "pikwizard.com", "burst.shopify.com", "barnimages.com", "picalls.com",
+    "smugmug.com", "deviantart.com", "artstation.com", "picfair.com", "eyeem.com",
+};

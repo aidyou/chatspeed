@@ -1,0 +1,33 @@
+{
+  "config": {
+    "name": "DuckDuckGo Search",
+    "url_template": "https://duckduckgo.com/html/?q={kw}&s={offset}&df={time_period}",
+    "pagination_type": "offset",
+    "pagination_param": "offset",
+    "wait_for": "#links",
+    "wait_timeout": 10000,
+    "page_timeout": 15000,
+    "max_results_per_page": 10
+  },
+  "selectors": {
+    "base_selector": ".results_links",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h2",
+        "type": "text"
+      },
+      {
+        "name": "url",
+        "selector": "h2>a",
+        "type": "attribute",
+        "attribute": "href"
+      },
+      {
+        "name": "snippet",
+        "selector": ".result__snippet",
+        "type": "text"
+      }
+    ]
+  }
+}

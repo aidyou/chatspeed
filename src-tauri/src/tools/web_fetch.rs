@@ -5,26 +5,29 @@ use tauri::AppHandle;
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    scraper::webview_wrapper::WebviewScraper,
+    scraper::{
+        engine,
+        types::{ContentOptions, ScrapeRequest},
+    },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
-pub struct WebScraperTool {
+pub struct WebFetch {
     app_handle: AppHandle<tauri::Wry>,
 }
 
-impl WebScraperTool {
+impl WebFetch {
     pub fn new(app_handle: AppHandle<tauri::Wry>) -> Self {
         Self { app_handle }
     }
 }
 
 #[async_trait]
-impl ToolDefinition for WebScraperTool {
+impl ToolDefinition for WebFetch {
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "web_scraper"
+        "WebFetch"
     }
 
     /// Returns the description of the function.
@@ -44,9 +47,18 @@ impl ToolDefinition for WebScraperTool {
                         "type": "string",
                         "description": "URL to scrape content from"
                     },
-                    "selector": {
+                    "format": {
                         "type": "string",
-                        "description": "CSS selector to target specific content (optional, defaults to entire page)"
+                        "enum": ["markdown", "text"],
+                        "description": "Format of the output content (optional, defaults to markdown)"
+                    },
+                    "keep_link": {
+                        "type": "boolean",
+                        "description": "Keep the original link in the output (optional, defaults to true)"
+                    },
+                    "keep_image": {
+                        "type": "boolean",
+                        "description": "Keep the original image in the output (optional, defaults to false)"
                     }
                 },
                 "required": ["url"]
@@ -78,22 +90,32 @@ impl ToolDefinition for WebScraperTool {
         }
 
         // Get optional selector
-        let selector = params["selector"].as_str();
-
+        let content_format = params["format"]
+            .as_str()
+            .unwrap_or("markdown")
+            .to_string()
+            .into();
+        let keep_link = params["keep_link"].as_bool().unwrap_or(true);
+        let keep_image = params["keep_image"].as_bool().unwrap_or(false);
+        let request = ScrapeRequest::Content(ContentOptions {
+            url: url.to_string(),
+            content_format,
+            keep_link,
+            keep_image,
+        });
         // Create scraper instance
-        let scraper = WebviewScraper::new(self.app_handle.clone());
-
-        // Perform scraping
-        let content = scraper.scrape(url, None).await.map_err(|e| {
-            ToolError::Execution(
-                t!(
-                    "tools.web_scraper_failed",
-                    url = url,
-                    details = e.to_string()
+        let content = engine::run(self.app_handle.clone(), request)
+            .await
+            .map_err(|e| {
+                ToolError::Execution(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
-            )
-        })?;
+            })?;
 
         // Return the scraped content as JSON
         Ok(ToolCallResult::success(
@@ -101,8 +123,6 @@ impl ToolDefinition for WebScraperTool {
             Some(json!({
                 "url": url,
                 "content": content,
-                "selector": selector.unwrap_or("body"),
-                "format": "markdown"
             })),
         ))
     }
@@ -110,7 +130,6 @@ impl ToolDefinition for WebScraperTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
 
     // Note: These tests require a Tauri app handle and are integration tests
@@ -119,14 +138,14 @@ mod tests {
     async fn test_web_scraper_params() {
         // This test just validates parameter handling without actual scraping
         let params = json!({
-            "url": "https://www.iqx.me",
+            "url": "https://www.aidyou.ai",
             "selector": "container"
         });
 
         let url = params["url"].as_str().unwrap();
         let selector = params["selector"].as_str();
 
-        assert_eq!(url, "https://www.iqx.me");
+        assert_eq!(url, "https://www.aidyou.ai");
         assert_eq!(selector.unwrap(), "container");
     }
 

@@ -4,24 +4,11 @@
       <div class="input-container">
         <div class="icons upperLayer" v-if="canChat">
           <cs name="menu" @click.stop="selectGroupVisible = !selectGroupVisible" />
-          <cs
-            name="connected"
-            @click="onToggleNetwork"
-            :class="{ active: networkEnabled }"
-            v-if="crawlerAvailable" />
+          <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" v-if="crawlerAvailable" />
         </div>
-        <el-input
-          class="input upperLayer"
-          ref="inputRef"
-          v-model="inputMessage"
-          type="textarea"
-          :disabled="!canChat"
-          :autosize="{ minRows: 1, maxRows: 5 }"
-          :placeholder="$t('assistant.chatPlaceholder')"
-          @input="onInput"
-          @keydown.enter="onKeyEnter"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd" />
+        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
+          :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
+          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
       </div>
       <div class="transaction" v-if="isTranslation">
         <el-dropdown trigger="click">
@@ -35,11 +22,8 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
-              }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                @click="fromLang = lang.code">
+                }}</el-dropdown-item>
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -59,11 +43,8 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
-              }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                :checked="toLang === lang.code"
+                }}</el-dropdown-item>
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
@@ -82,10 +63,7 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip
-          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
-          :hide-after="0"
-          placement="bottom">
+        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" placement="bottom">
           <cs name="pin" />
         </el-tooltip>
       </div>
@@ -119,18 +97,10 @@
     <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
-        <el-tooltip
-          v-for="(skill, index) in skills"
-          :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description"
-          placement="top"
-          :hide-after="0"
-          :disabled="!skill.metadata.description"
-          transition="none">
-          <div
-            class="skill-item-compact"
-            :class="{ active: skillIndex === index }"
-            @click="onSelectSkill(index)">
+        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0"
+          :disabled="!skill.metadata.description" transition="none">
+          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -148,9 +118,7 @@
               <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
               <div class="content" ref="chatMessagesRef">
                 <div class="chat-reference" v-if="chatState.reference.length > 0">
-                  <div
-                    class="chat-reference-title"
-                    :class="{ expanded: showReference }"
+                  <div class="chat-reference-title" :class="{ expanded: showReference }"
                     @click="showReference = !showReference">
                     <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
                   </div>
@@ -161,42 +129,22 @@
                   </ul>
                 </div>
                 <div class="chat-think" v-if="chatState.reasoning != ''">
-                  <div
-                    class="chat-think-title"
-                    :class="{ expanded: showThink }"
-                    @click="showThink = !showThink">
+                  <div class="chat-think-title" :class="{ expanded: showThink }" @click="showThink = !showThink">
                     <span>{{
                       $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
-                    }}</span>
+                      }}</span>
                   </div>
-                  <div
-                    v-show="showThink"
-                    class="think-content"
-                    v-highlight
-                    v-link
-                    v-table
-                    v-katex
+                  <div v-show="showThink" class="think-content" v-highlight v-link v-table v-katex
                     v-html="parseMarkdown(chatState.reasoning)"></div>
                 </div>
-                <div
-                  v-html="currentAssistantMessageHtml"
-                  v-highlight
-                  v-link
-                  v-table
-                  v-katex
-                  v-think
-                  v-mermaid />
+                <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think v-mermaid />
               </div>
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div
-            class="skill-item"
-            v-for="(skill, index) in skills"
-            :key="skill.id"
-            :class="{ active: skillIndex === index }"
-            @click="onSkillItemClick(index)">
+          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
+            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -208,26 +156,14 @@
     <footer class="footer" v-if="!isChatting && currentAssistantMessage">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip
-            :content="$t('chat.quoteMessage')"
-            :hide-after="0"
-            placement="top"
-            transition="none">
+          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" placement="top" transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.resendMessage')"
-            :hide-after="0"
-            placement="top"
-            transition="none"
+          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" placement="top" transition="none"
             v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.goToChat')"
-            :hide-after="0"
-            placement="top"
-            transition="none"
+          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" placement="top" transition="none"
             v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
@@ -240,17 +176,10 @@
     <div class="select-group upperLayer" ref="selectGroupRef" v-if="selectGroupVisible">
       <div class="selector arrow">
         <div class="selector-content">
-          <div
-            class="item"
-            v-for="model in providers"
-            @click.stop="onModelSelect(model)"
-            :key="model.id"
+          <div class="item" v-for="model in providers" @click.stop="onModelSelect(model)" :key="model.id"
             :class="{ active: currentModelProvider.id === model.id }">
             <div class="name">
-              <img
-                :src="model.providerLogo"
-                v-if="model.providerLogo !== ''"
-                class="provider-logo" />
+              <img :src="model.providerLogo" v-if="model.providerLogo !== ''" class="provider-logo" />
               <avatar :text="model.name" size="16" v-else />
               <span>{{ model.name }}</span>
             </div>
@@ -268,11 +197,7 @@
                 {{ group }}
               </div>
             </div>
-            <div
-              class="item"
-              v-for="(model, index) in models"
-              @click.stop="onSubModelSelect(model.id)"
-              :key="index"
+            <div class="item" v-for="(model, index) in models" @click.stop="onSubModelSelect(model.id)" :key="index"
               :class="{ active: currentModelProvider?.defaultModel === model.id }">
               <div class="name">
                 <span>{{ model.name || model.id.split('/').pop() }}</span>
@@ -295,7 +220,7 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-import SkillItem from '@/components/chat/skillItem.vue'
+import SkillItem from '@/components/chat/SkillItem.vue'
 
 import { chatPreProcess, parseMarkdown } from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
@@ -972,6 +897,7 @@ const onAddModel = () => {
 .app-container {
   background-color: transparent !important;
 }
+
 .el-dropdown-menu__item {
   align-items: flex-start !important;
 }
@@ -1042,7 +968,7 @@ const onAddModel = () => {
         }
       }
 
-      .input > .el-textarea__inner {
+      .input>.el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
         border-radius: var(--cs-border-radius-lg);
@@ -1364,10 +1290,12 @@ const onAddModel = () => {
       &.group {
         border-bottom: 1px solid var(--cs-border-color);
         border-radius: 0;
+
         &:hover {
           background: none;
           cursor: default;
         }
+
         .name {
           font-size: var(--cs-font-size-sm);
           color: var(--cs-text-color-secondary);

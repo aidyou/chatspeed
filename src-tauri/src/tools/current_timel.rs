@@ -7,22 +7,22 @@ use crate::{
     tools::{NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
-pub struct TimeTool;
+pub struct CurrentTime;
 
-impl TimeTool {
+impl CurrentTime {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl ToolDefinition for TimeTool {
+impl ToolDefinition for CurrentTime {
     fn name(&self) -> &str {
-        "getCurrentTime"
+        "GetCurrentTime"
     }
 
     fn description(&self) -> &str {
-        "Get the current local time in Y-m-d H:M:S %Z format"
+        "Get the current time in the user's location, formatted as %Y-%m-%d %H:%M:%S %Z, e.g. 2025-08-01 14:30:00 UTC+8"
     }
 
     fn tool_calling_spec(&self) -> MCPToolDeclaration {
@@ -47,10 +47,7 @@ impl ToolDefinition for TimeTool {
         let local_time = Local::now();
         let formatted_time = local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string();
 
-        Ok(ToolCallResult::success(
-            Some(formatted_time.clone()),
-            Some(json!({"current_time":formatted_time})),
-        ))
+        Ok(ToolCallResult::success(Some(formatted_time.clone()), None))
     }
 }
 
@@ -61,7 +58,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_time_tool() {
-        let tool = TimeTool::new();
+        let tool = CurrentTime::new();
 
         let params = json!({});
         let result = tool.call(params).await;

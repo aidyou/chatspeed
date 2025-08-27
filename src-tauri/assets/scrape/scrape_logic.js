@@ -5,8 +5,29 @@
  *  2. Generic scraping: Extracts the main content of a page as Markdown.
  */
 
+function sendScrapeResult(data) {
+  const ev = 'scrape_result' + (windowLabel ? '_' + windowLabel : '');
+  logger.debug('send '+ev+' , data: ', data?.success || data?.error)
+  sendEvent(ev, data)
+}
+
 ;(function () {
-  // 等待Tauri API可用的辅助函数
+  const urls = [
+    'https://www.bing.com/ck/',
+    'https://www.so.com/link',
+    'https://sogou.com/link',
+    'https://www.sogou.com/link'
+  ]
+  const isRedirectUrl = () => {
+    return urls.some(url => window.location.href.startsWith(url))
+  }
+
+  const isFinalHttp = () =>
+    !!window.location.href &&
+    (window.location.href.startsWith('http://') || window.location.href.startsWith('https://')) &&
+    !isRedirectUrl()
+
+  // Helper function to wait for the Tauri API to be available
   function waitForTauriAPI() {
     return new Promise(resolve => {
       if (window.__TAURI__?.event) {
@@ -31,9 +52,6 @@
       }
     })
   }
-
-  // 初始化事件发射器
-  let eventEmitter = null
 
   /**
    * Waits for an element matching the selector to appear in the DOM.
@@ -79,17 +97,21 @@
     if (!target) return null
 
     switch (field.type) {
-      case 'text':
-        return target.innerText
       case 'attribute':
-        return target.getAttribute(field.attribute)
+        const attrValue = target.getAttribute(field.attribute)
+        const urlAttributes = ['href', 'src', 'srcset', 'data-src', 'poster', 'action']
+        if (urlAttributes.includes(field.attribute)) {
+          return target[field.attribute] || attrValue // Use property first, fall back to attribute
+        }
+        return attrValue
       case 'html':
-        return target.innerHTML
+        return target.innerHTML?.trim()
       case 'markdown':
         const turndownService = new TurndownService()
-        return turndownService.turndown(target)
+        return turndownService.turndown(baseCleanForMarkdown(target))
       default:
-        return null
+      case 'text':
+        return formatText(target.innerText)
     }
   }
 
@@ -99,19 +121,50 @@
    */
   async function scrapeWithSchema(config) {
     try {
-      await waitForElement(config.selectors.baseSelector, config.config.waitForTimeout || 10000)
+      if (!config.selectors?.base_selector) {
+        return sendScrapeResult({ error: 'selectors.base_selector is required' })
+      }
+      console.log('base_selector:', config.selectors.base_selector)
+
+      if (config.config?.wait_for) {
+        console.log('wait_for:', config.config.wait_for)
+        try {
+          await waitForElement(config.config.wait_for, config.config.wait_timeout || 10000)
+        } catch (error) {
+          sendScrapeResult({ error: `Wait for element failed: ${error.message}` })
+          return
+        }
+      }
 
       const results = []
-      const elements = document.querySelectorAll(config.selectors.baseSelector)
 
-      elements.forEach(element => {
-        const item = {}
-        config.selectors.fields.forEach(field => {
-          item[field.name] = extractField(element, field)
+      const maxTry = 3
+      let tryCount = 0
+      while (tryCount < maxTry) {
+        const elements = document.querySelectorAll(config.selectors.base_selector)
+        if (!elements.length) {
+          tryCount++
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+          continue
+        }
+
+        elements.forEach(element => {
+          console.log('element:', element)
+          const item = {}
+          let hasSatisfy = true
+          config.selectors.fields.forEach(field => {
+            item[field.name] = extractField(element, field)
+            if (field.required && !item[field.name]) {
+              hasSatisfy = false
+            }
+          })
+          if (hasSatisfy) {
+            results.push(item)
+          }
         })
-        results.push(item)
-      })
-      logger.info('scrape with schema result:', results)
+        break
+      }
+      console.info('scrape with schema result:', results?.length)
       sendScrapeResult({ success: JSON.stringify(results) })
     } catch (error) {
       logger.error('Schema scraping failed:', error)
@@ -122,8 +175,83 @@
   /**
    * Performs generic content extraction, converting the main body to Markdown.
    */
-  function scrapeGeneric() {
+  async function scrapeGeneric(generic_content_rule = {}) {
     try {
+      let title = document.title || document.querySelector('h1, h2, h3')?.innerText || ''
+
+      let content
+      const maxTry = 3
+      let tryCount = 0
+      while (!content && tryCount < maxTry) {
+        content = document.body?.cloneNode(true)
+        if (!content) {
+          tryCount++
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+        }
+      }
+      if (!content) {
+        logger.error('Content scraping failed')
+        sendScrapeResult({ error: 'Content scraping failed, cannot find body child elements' })
+        return
+      }
+
+      // Remove non-content elements
+      let selectorToRemove =
+        'script, style, noscript, form, iframe, frame, object, embed, video, audio, link, svg, canvas, meta, head, base, template, symbol, button, select, textarea, datalist, dialog, source, picture, track, map'
+      content.querySelectorAll(selectorToRemove).forEach(el => el.remove())
+
+      if (generic_content_rule.format === 'text') {
+        content.querySelectorAll('nav, aside, header, footer').forEach(el => el.remove())
+
+        const textContent = formatText(content?.innerText || '')
+        sendScrapeResult({
+          success: JSON.stringify({ title, content: textContent, url: window.location.href })
+        })
+        return
+      }
+
+      // remove image
+      if (!generic_content_rule.keep_image) {
+        content.querySelectorAll('img')?.forEach(el => el.remove())
+      } else {
+        content.querySelectorAll('img')?.forEach(el => {
+          const src = el.src || el.getAttribute('src')
+          if (!src || src.startsWith('data:') || src.startsWith('blob:')) {
+            el.remove()
+            return
+          }
+          const newImg = document.createElement('img')
+          newImg.src = src
+          newImg.alt = el.alt || ''
+          el.replaceWith(newImg)
+        })
+      }
+
+      if (generic_content_rule.keep_link) {
+        // format link
+        const links = content.querySelectorAll('a')
+        links?.forEach(link => {
+          const href = link.href
+          if (href === '' || href.startsWith('#') || href.startsWith('javascript:')) {
+            link.removeAttribute('href')
+          } else {
+            link.setAttribute('href', href)
+          }
+          link.innerText = link.innerText.trim().replace(/\n+/g, ' ')
+        })
+      } else {
+        // Remove links
+        const links = content.querySelectorAll('a')
+        links?.forEach(link => {
+          const textNode = document.createTextNode(link.innerText.replace(/\n+/g, ' ').trim())
+          link.replaceWith(textNode)
+        })
+
+        content.querySelectorAll('nav, aside, header, footer').forEach(el => el.remove())
+      }
+
+      content.querySelectorAll(selectorToRemove).forEach(el => el.remove())
+
       const turndownService = new TurndownService({
         headingStyle: 'atx',
         hr: '---',
@@ -131,26 +259,15 @@
         codeBlockStyle: 'fenced',
         emDelimiter: '_'
       })
-
-      let title = document.title || document.querySelector('h1, h2, h3')?.innerText || ''
-
-      const content = document.body?.cloneNode(true)
-
-      // Remove non-content elements
-      const elementsToRemove = content.querySelectorAll(
-        'script, style, noscript, nav, footer, header, aside, form, iframe, frame, video, audio, link'
-      )
-      elementsToRemove.forEach(el => el.remove())
-
       let markdown = turndownService.turndown(content)
 
       // Basic cleanup
       markdown = markdown
-        .replace(/\\\\[(.*?)\\\\]/g, '[$1]') // Fix escaped brackets
+        .replace(/\\[(.*?)\\]/g, '[$1]') // Fix escaped brackets
         .replace(/\n{3,}/g, '\n\n') // Collapse multiple newlines
         .trim()
-      logger.info('scrape generic title:', title,", content:",markdown)
-      const result = { title, content: markdown }
+      // logger.info('scrape generic title:', title, ', content:', markdown)
+      const result = { title, content: markdown, url: window.location.href }
       sendScrapeResult({ success: JSON.stringify(result) })
     } catch (error) {
       logger.error('scrape generic failed:', error)
@@ -162,68 +279,62 @@
    * Main entry point for the scraping logic.
    * @param {object | null} config - The configuration object, or null for generic scraping.
    */
-  window.performScrape = function (config) {
-    logger.debug('performScrape called, config:', config)
-    // The TurndownService might not be loaded immediately.
-    // We wait for it to be available before proceeding.
-    const checkTurndown = setInterval(() => {
-      if (typeof TurndownService !== 'undefined') {
-        clearInterval(checkTurndown)
-        if (config) {
-          scrapeWithSchema(config)
-        } else {
-          scrapeGeneric()
-        }
+  window.performScrape = async function (config, generic_content_rule) {
+    logger.debug('performScrape called, config:', JSON.stringify(config))
+    logger.debug('generic_content_rule:', JSON.stringify(generic_content_rule))
+
+    try {
+      // Wait for TurndownService to be available
+      await new Promise((resolve, reject) => {
+        const interval = setInterval(() => {
+          if (typeof TurndownService !== 'undefined' && isFinalHttp()) {
+            clearInterval(interval)
+            logger.debug('TurndownService is ready, url:', window.location.href)
+            resolve()
+          }
+        }, 100)
+
+        setTimeout(() => {
+          clearInterval(interval)
+          reject(new Error('Timeout waiting for TurndownService'))
+        }, 3000) // 5 second timeout
+      })
+
+      // Now that TurndownService is ready, proceed
+      if (config) {
+        await scrapeWithSchema(config)
+      } else {
+        await scrapeGeneric(generic_content_rule || {})
       }
-    }, 100)
-  }
-
-  // 初始化并通知后端
-  waitForTauriAPI().then(event => {
-    eventEmitter = event
-    if (eventEmitter) {
-      logger.info('emit page loaded')
-      eventEmitter.emit('page_loaded')
-    } else {
-      logger.warn('Tauri API不可用，无法发送事件')
+    } catch (error) {
+      // Uniformly catch any errors that may occur during the await process
+      logger.error('performScrape failed:', error)
+      sendScrapeResult({ error: `performScrape failed: ${error.message}` })
     }
-  })
+  }
+  ;(async () => {
+    try {
+      const event = await waitForTauriAPI()
+      if (!event) {
+        logger.warn('Tauri API unavailable, unable to send event')
+        return
+      }
+
+      const maxTry = 3
+      let tryCount = 0
+      while (!isFinalHttp() && tryCount < maxTry) {
+        tryCount++
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+      }
+
+      if (isFinalHttp()) {
+        logger.info('emit page loaded, url:', window.location.href)
+        event.emit('page_loaded_' + windowLabel)
+      } else {
+        logger.warn('Failed to get a valid URL after multiple retries.')
+      }
+    } catch (error) {
+      logger.error('Error during page loaded event handling:', error)
+    }
+  })()
 })()
-
-// 全局变量，用于跟踪采集是否已完成
-let scrapeCompleted = false
-
-// 修改全局消息发送函数，添加采集完成标记
-function sendScrapeResult(data) {
-  // 如果采集已完成，设置标记
-  if (data?.success) {
-    scrapeCompleted = true
-  }
-
-  logger.debug('sendScrapeResult called, data: ', data?.success || data?.error)
-  sendEvent("scrape_result",data)
-}
-
-// 添加全局错误处理
-window.addEventListener('error', event => {
-  logger.error('Global error:', event.error)
-  // 只有在采集完成后才发送错误消息给Rust端
-  if (scrapeCompleted) {
-    sendScrapeResult({ error: 'Global error occurred' })
-  }
-  // 阻止错误继续传播
-  event.preventDefault()
-  event.stopPropagation()
-  return true
-})
-
-window.addEventListener('unhandledrejection', event => {
-  logger.error('Unhandled promise rejection:', event.reason)
-  // 只有在采集完成后才发送错误消息给Rust端
-  if (scrapeCompleted) {
-    sendScrapeResult({ error: 'Unhandled promise rejection' })
-  }
-  // 阻止错误继续传播
-  event.preventDefault()
-  event.stopPropagation()
-})

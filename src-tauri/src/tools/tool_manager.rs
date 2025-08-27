@@ -3,9 +3,9 @@ use rust_i18n::t;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, RwLock};
 
-use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::commands::chat::setup_chat_proxy;
 use crate::constants::CFG_SEARCH_ENGINE;
@@ -18,9 +18,6 @@ use crate::mcp::client::{
 use crate::tools::error::ToolError;
 use crate::tools::ToolCallResult;
 
-// use super::tools::Crawler;
-// use super::tools::Plot;
-// use super::tools::Search;
 // use super::tools::SearchDedup;
 // use super::tools::{ChatCompletion, ModelName};
 
@@ -100,14 +97,17 @@ impl ToolManager {
     /// * `Result<(), ToolError>` - The result of the registration.
     pub async fn register_available_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
-        _chat_state: Arc<ChatState>,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        app_handle: AppHandle,
     ) -> Result<(), ToolError> {
+        let main_store = app_handle
+            .state::<Arc<std::sync::RwLock<MainStore>>>()
+            .inner();
+
         // =================================================
         // Built-in tools
         // =================================================
         // Register time tool
-        self.register_tool(Arc::new(crate::tools::TimeTool::new()))
+        self.register_tool(Arc::new(crate::tools::CurrentTime::new()))
             .await?;
 
         // Register search tool
@@ -118,12 +118,15 @@ impl ToolManager {
                     t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
                 )
             })?
-            .get_config(CFG_SEARCH_ENGINE, "".to_string());
+            .get_config(CFG_SEARCH_ENGINE, "bing".to_string());
         if !search_engine.is_empty() {
-            if let Ok(ws) = crate::tools::WebSearch::new(search_engine, main_store.clone()) {
-                self.register_tool(ws).await?;
-            }
+            let ws = crate::tools::WebSearch::new(app_handle.clone());
+            self.register_tool(ws).await?;
         }
+
+        // Register web fetch tool
+        self.register_tool(Arc::new(crate::tools::WebFetch::new(app_handle.clone())))
+            .await?;
 
         // =================================================
         // Chat completion

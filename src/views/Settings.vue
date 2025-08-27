@@ -3,11 +3,12 @@
     <titlebar class="header-container" :show-maximize-button="false">
       <template #center>
         <el-menu mode="horizontal" :default-active="settingType" class="menu">
-          <el-menu-item class="upperLayer" v-for="(item, index) in menuItems" :key="index" :index="item.id"
-            @click="switchSetting(item.id)">
-            <cs :name="item.icon" />
-            <span>{{ item.label }}</span>
-          </el-menu-item>
+          <template v-for="(item, index) in menuItems" :key="index">
+            <el-menu-item class="upperLayer" :index="item.id" @click="switchSetting(item.id)" v-show="!item.hide">
+              <cs :name="item.icon" />
+              <span>{{ item.label }}</span>
+            </el-menu-item>
+          </template>
         </el-menu>
       </template>
     </titlebar>
@@ -41,7 +42,7 @@
       <about />
     </el-main>
 
-    <el-main v-show="settingType === 'scraper-test'" class="main">
+    <el-main v-show="settingType === 'scraperTest'" class="main">
       <ScraperTest />
     </el-main>
   </el-container>
@@ -52,15 +53,15 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import about from '@/components/setting/about.vue'
-import general from '@/components/setting/general.vue'
-import mcp from '@/components/setting/mcp.vue'
-import model from '@/components/setting/model.vue'
-import proxy from '@/components/setting/proxy.vue'
-import skill from '@/components/setting/skill.vue'
-import privacy from '@/components/setting/privacy.vue'
+import about from '@/components/setting/About.vue'
+import general from '@/components/setting/General.vue'
+import mcp from '@/components/setting/Mcp.vue'
+import model from '@/components/setting/Model.vue'
+import proxy from '@/components/setting/Proxy.vue'
+import skill from '@/components/setting/Skill.vue'
+import privacy from '@/components/setting/Privacy.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
-import titlebar from '@/components/window/titlebar.vue'
+import titlebar from '@/components/window/Titlebar.vue'
 
 const { t } = useI18n()
 
@@ -75,8 +76,8 @@ const menuItems = computed(() => [
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
-  { label: t('settings.type.about'), icon: 'about', id: 'about' }
-  //,{ label: '测试', icon: 'setting', id: 'scraper-test' }
+  { label: t('settings.type.about'), icon: 'about', id: 'about' },
+  { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }
 ])
 
 onMounted(async () => {
@@ -84,7 +85,7 @@ onMounted(async () => {
   const route = useRoute()
   const queryType = route.params.type
   if (queryType) {
-    const menuItem = menuItems.value.find(item => item.icon === queryType)
+    const menuItem = menuItems.value.find(item => item.id === queryType)
     if (menuItem) {
       settingType.value = menuItem.id
       settingLabel.value = menuItem.label

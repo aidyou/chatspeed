@@ -808,6 +808,7 @@ dependencies = [
  "rmcp",
  "rusqlite",
  "rust-i18n",
+ "scopeguard",
  "scraper",
  "seahash",
  "semver",

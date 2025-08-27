@@ -1,46 +1,40 @@
 {
   "config": {
     "name": "Bing Search",
-    "url_template": "/search?q={kw}&first={offset}&count={number}&filters={time_period}",
+    "url_template": "https://www.bing.com/search?q={kw}&first={offset}&count={number}&filters={time_period}",
+    "max_results_per_page": 25,
     "pagination_type": "offset",
     "pagination_param": "offset",
-    "max_results_per_page": 25,
-    "wait_for": "#b_results",
-    "wait_timeout": 15000,
     "page_timeout": 15000,
-    "pages_selector": "li.b_pag nav[role='navigation'] a:not(.sb_pagN.sb_pagN_bp)",
-    "js_code": "",
-    "events": [
-      {
-        "event": "enter",
-        "selector": "#sb_form_q"
-      }
-    ]
+    "wait_for": "#b_results",
+    "wait_timeout": 10000
   },
   "selectors": {
     "base_selector": "#b_results > li.b_algo",
     "fields": [
       {
-        "name": "sitename",
-        "selector": ".tilk",
-        "type": "attribute",
-        "attribute": "aria-label"
-      },
-      {
         "name": "title",
         "selector": "h2 a",
-        "type": "text"
+        "type": "text",
+        "required": true
       },
       {
         "name": "url",
         "selector": "h2 a",
         "type": "attribute",
-        "attribute": "href"
+        "attribute": "href",
+        "required": true
       },
       {
-        "name": "summary",
-        "selector": ".b_caption p",
+        "name": "snippet",
+        "selector": "p",
         "type": "text"
+      },
+      {
+        "name": "sitename",
+        "selector": ".tilk",
+        "type": "attribute",
+        "attribute": "aria-label"
       }
     ]
   }

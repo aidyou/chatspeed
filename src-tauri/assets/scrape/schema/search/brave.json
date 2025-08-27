@@ -1,0 +1,41 @@
+{
+  "config": {
+    "name": "Brave Search",
+    "url_template": "https://search.brave.com/search?q={kw}&offset={offset}&tf={time_period}",
+    "pagination_type": "page",
+    "pagination_param": "offset",
+    "page_offset": -1,
+    "wait_for": "#results",
+    "wait_timeout": 10000,
+    "page_timeout": 15000,
+    "max_results_per_page": 20
+  },
+  "selectors": {
+    "base_selector": ".snippet",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "a .title",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "url",
+        "selector": "a",
+        "type": "attribute",
+        "attribute": "href",
+        "required": true
+      },
+      {
+        "name": "snippet",
+        "selector": ".snippet-content",
+        "type": "text"
+      },
+      {
+        "name": "sitename",
+        "selector": ".sitename",
+        "type": "text"
+      }
+    ]
+  }
+}

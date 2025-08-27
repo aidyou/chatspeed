@@ -7,7 +7,7 @@ use url::Url;
 #[allow(unused_imports)]
 use tauri::Manager;
 
-use super::scraper_config::FullConfig;
+use super::types::FullConfig;
 
 /// Manages the loading of scraper configurations.
 pub struct ConfigLoader {
@@ -45,8 +45,13 @@ impl ConfigLoader {
             .schema_dir
             .join("search")
             .join(format!("{}.json", provider));
-        self.read_config_from_path(&config_path)
-            .with_context(|| format!("Failed to load search config for provider: '{}'", provider))
+        self.read_config_from_path(&config_path).map_err(|e| {
+            anyhow::Error::msg(format!(
+                "Failed to load search config for provider: '{}', error: {}",
+                provider,
+                e.to_string()
+            ))
+        })
     }
 
     /// Loads a content extraction configuration based on the URL's domain.

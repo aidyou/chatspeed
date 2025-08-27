@@ -12,12 +12,14 @@ mod mcp;
 mod scraper;
 mod search;
 mod shortcut;
-mod test;
 mod tools;
 mod tray;
 mod updater;
 mod window;
 mod workflow;
+
+#[cfg(test)]
+pub mod test;
 
 use anyhow::anyhow;
 use log::{error, warn};
@@ -55,6 +57,7 @@ use libs::window_channels::WindowChannels;
 use logger::setup_logger;
 use shortcut::register_desktop_shortcut;
 // use tools::*;
+use scraper::pool::ScraperPool;
 use tray::create_tray;
 use updater::*;
 use window::*;
@@ -502,17 +505,20 @@ pub async fn run() -> Result<()> {
                 Some(app_handle_for_chat_state),
             );
             let tm = chat_state.tool_manager.clone();
-            let chat_state_clone = chat_state.clone();
-            let main_store_clone = main_store.clone();
+            let app_handle_for_tm = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let _ = tm
-                    .register_available_tools(chat_state_clone, main_store_clone)
+                    .register_available_tools(app_handle_for_tm)
                     .await
                     .map_err(|e| {
                         log::error!("Failed to register available tools: {}", e);
                     });
             });
             app.manage(chat_state.clone());
+
+            // Initialize the scraper pool and manage it
+            let scraper_pool = ScraperPool::new(app.handle().clone());
+            app.manage(scraper_pool);
 
             // Read and set the main window size from the configuration
             if let Some(main_window) = app.get_webview_window("main") {

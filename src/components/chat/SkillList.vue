@@ -1,23 +1,16 @@
 <template>
-  <transition
-    name="skill-list"
-    @before-enter="onBeforeEnter"
-    @enter="onEnter"
-    @before-leave="onBeforeLeave"
+  <transition name="skill-list" @before-enter="onBeforeEnter" @enter="onEnter" @before-leave="onBeforeLeave"
     @leave="onLeave">
     <div class="skill-select-list" v-show="isVisible" ref="listRef">
       <div class="title">
         <span class="text">{{ t('settings.skill.selectSkill') }}</span>
-        <span class="icons" @click="isVisible = false"><cs name="delete" /></span>
+        <span class="icons" @click="isVisible = false">
+          <cs name="delete" />
+        </span>
       </div>
       <div class="list">
-        <SkillItem
-          class="skill-item"
-          v-for="(skill, index) in filteredSkills"
-          :key="skill.id"
-          :skill="skill"
-          :class="{ active: selectedId === index }"
-          @click="onSelected(index)" />
+        <SkillItem class="skill-item" v-for="(skill, index) in filteredSkills" :key="skill.id" :skill="skill"
+          :class="{ active: selectedId === index }" @click="onSelected(index)" />
       </div>
     </div>
   </transition>
@@ -28,7 +21,7 @@ import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 
 import { useSkillStore } from '@/stores/skill'
-import SkillItem from './skillItem.vue'
+import SkillItem from './SkillItem.vue'
 
 const { t } = useI18n()
 const skillStore = useSkillStore()

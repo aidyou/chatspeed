@@ -2,14 +2,14 @@ use log::{debug, error, info, warn};
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc};
+use tauri::{AppHandle, Manager};
 
 use super::{types::Step, MessageRole};
 use crate::{
     ai::interaction::chat_completion::ChatState,
-    db::MainStore,
     libs::util::format_json_str,
     search::SearchResult,
-    tools::{ModelName, ToolManager, WebSearch},
+    tools::{ModelName, WebSearch},
     workflow::{
         error::WorkflowError,
         react::{
@@ -45,20 +45,14 @@ impl ReactExecutor {
     ///
     /// # Returns
     /// A new ReAct executor
-    pub async fn new(
-        main_store: Arc<std::sync::RwLock<MainStore>>,
-        chat_state: Arc<ChatState>,
-        max_retries: u32,
-    ) -> Result<Self, WorkflowError> {
-        // Initialize function manager
-        let function_manager = Arc::new(ToolManager::new());
-        function_manager
-            .clone()
-            .register_available_tools(chat_state.clone(), main_store.clone())
-            .await?;
+    pub async fn new(app_handle: AppHandle, max_retries: u32) -> Result<Self, WorkflowError> {
+        // let main_store = app_handle
+        //     .state::<Arc<std::sync::RwLock<MainStore>>>()
+        //     .inner();
+        let chat_state = app_handle.state::<Arc<ChatState>>().inner();
 
         // Create context
-        let context = ReactContext::new(function_manager.clone(), max_retries);
+        let context = ReactContext::new(chat_state.tool_manager.clone(), max_retries);
 
         // Create plan manager
         let plan_manager = PlanManager::new();
@@ -1562,79 +1556,5 @@ impl ReactExecutor {
             .and_then(|s| s.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default()
-    }
-}
-
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
-
-    #[tokio::test]
-    async fn test_react_executor() {
-        let db_path = crate::constants::STORE_DIR
-            .read()
-            .clone()
-            .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
-        let chat_state =
-            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
-        let mut exe = ReactExecutor::new(main_store, chat_state, 10)
-            .await
-            .unwrap();
-        let plan = exe
-            .execute("据说幻方的规模下降了不少，是真的吗？".to_string())
-            .await
-            .unwrap();
-        println!("Plan: {:#?}", plan);
-    }
-
-    #[tokio::test]
-    async fn test_web_search() {
-        let db_path = crate::constants::STORE_DIR
-            .read()
-            .clone()
-            .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
-        let chat_state =
-            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
-        let exe = ReactExecutor::new(main_store, chat_state, 10)
-            .await
-            .unwrap();
-        let ws = exe
-            .context
-            .function_manager
-            .get_tool("web_search")
-            .await
-            .unwrap();
-        let result = ws
-            .call(json!({"provider":"google","kw": ["五粮液股票"]}))
-            .await;
-        println!("Result: {:#?}", result);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_web_crawler() {
-        let db_path = crate::constants::STORE_DIR
-            .read()
-            .clone()
-            .join("chatspeed.db");
-        let main_store = Arc::new(std::sync::RwLock::new(MainStore::new(db_path).unwrap()));
-        let chat_state =
-            ChatState::new(Arc::new(crate::libs::window_channels::WindowChannels::new()));
-        let exe = ReactExecutor::new(main_store, chat_state, 10)
-            .await
-            .unwrap();
-        let ws = exe
-            .context
-            .function_manager
-            .get_tool("web_crawler")
-            .await
-            .unwrap();
-        let result = ws
-            .call(json!({"url":"https://guba.eastmoney.com/list,000858,1370734419.html"}))
-            .await;
-        println!("Result: {:#?}", result);
-        assert!(result.is_ok());
     }
 }

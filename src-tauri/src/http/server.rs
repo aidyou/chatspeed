@@ -30,15 +30,11 @@ use tower_http::{
     services::ServeDir,
 };
 
+use crate::{ai::interaction::chat_completion::ChatState, ccproxy, db::MainStore};
 use crate::{
-    ai::interaction::chat_completion::ChatState,
-    ccproxy,
-    constants::{CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY},
-    db::MainStore,
-};
-use crate::{
-    HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
-    HTTP_SERVER_UPLOAD_DIR, PLUGINS_DIR, SHARED_DATA_DIR, STORE_DIR,
+    CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY, HTTP_SERVER,
+    HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR, HTTP_SERVER_UPLOAD_DIR,
+    SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
 };
 
 static INIT: Once = Once::new();
@@ -59,10 +55,10 @@ pub async fn start_http_server(
     log::info!("start_http_server function entered.");
     // plugins dir
     let app_data_dir = get_app_data_dir(app)?;
-    let plugins_dir = app_data_dir.join("plugins");
+    let schema_dir = app_data_dir.join("schema");
     // shared data dir
     let shared_data_dir = app_data_dir.join("shared");
-    std::fs::create_dir_all(&plugins_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&schema_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&shared_data_dir).map_err(|e| e.to_string())?;
 
     // Get the server directory
@@ -109,7 +105,7 @@ pub async fn start_http_server(
     INIT.call_once(|| {
         // Store the server directory
         *STORE_DIR.write() = app_data_dir.clone();
-        *PLUGINS_DIR.write() = plugins_dir.to_string_lossy().to_string();
+        *SCHEMA_DIR.write() = schema_dir.to_string_lossy().to_string();
         *SHARED_DATA_DIR.write() = shared_data_dir.to_string_lossy().to_string();
         *HTTP_SERVER_DIR.write() = server_dir.to_string_lossy().to_string();
         *HTTP_SERVER_THEME_DIR.write() = theme_dir.to_string_lossy().to_string();

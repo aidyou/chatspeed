@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::search::{GoogleSearch, SerperSearch, TavilySearch};
+use crate::search::{BuiltInSearch, GoogleSearch, SerperSearch, TavilySearch};
 
 /// Defines a single search result item.
 /// The `skip_serializing_if` attribute ensures that `Option` fields
@@ -30,27 +30,40 @@ pub struct SearchResult {
 
 impl Display for SearchResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<cs:webpage>\n")?;
+
         if self.id > 0 {
-            write!(f, "id: {}\n", self.id)?;
+            write!(f, "<cs:id>{}</cs:id>\n", self.id)?;
         }
 
-        write!(f, "title: {}\nurl: {}\n", self.title, self.url)?;
+        write!(
+            f,
+            "<cs:title>{}</cs:title>\n<cs:url>{}</cs:url>\n",
+            self.title, self.url
+        )?;
 
-        if let Some(s) = self.snippet.as_ref() {
-            write!(f, "snippet: {}\n", s)?;
-        }
+        let mut write_content = false;
         if let Some(c) = self.content.as_ref() {
-            write!(f, "content: {}\n", c)?;
+            if !c.is_empty() {
+                write!(f, "<cs:content>{}</cs:content>\n", c)?;
+                write_content = true;
+            }
+        }
+        if !write_content {
+            if let Some(s) = self.snippet.as_ref() {
+                write!(f, "<cs:snippet>{}</cs:snippet>\n", s)?;
+            }
         }
         if let Some(s) = self.sitename.as_ref() {
-            write!(f, "sitename: {}\n", s)?;
+            write!(f, "<cs:sitename>{}</cs:sitename>\n", s)?;
         }
         if let Some(pb) = self.publish_date.as_ref() {
-            write!(f, "publish_date: {}\n", pb)?;
+            write!(f, "<cs:publish_date>{}</cs:publish_date>\n", pb)?;
         }
         if let Some(s) = self.score.as_ref() {
-            write!(f, "score: {}\n", s)?;
+            write!(f, "<cs:score>{}</cs:score>\n", s)?;
         }
+        write!(f, "</cs:webpage>\n")?;
         Ok(())
     }
 }
@@ -59,9 +72,13 @@ fn is_zero<T: PartialEq + From<u8>>(value: &T) -> bool {
     *value == T::from(0)
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum SearchProviderName {
-    // Bing,
+    Bing,
+    Brave,
+    DuckDuckGo,
+    So,
+    Sogou,
     Google,
     Serper,
     Tavily,
@@ -70,7 +87,11 @@ pub enum SearchProviderName {
 impl Display for SearchProviderName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            // Self::Bing => write!(f, "bing"),
+            Self::Bing => write!(f, "bing"),
+            Self::Brave => write!(f, "brave"),
+            Self::DuckDuckGo => write!(f, "duckduckgo"),
+            Self::So => write!(f, "so"),
+            Self::Sogou => write!(f, "sogou"),
             Self::Google => write!(f, "google"),
             Self::Serper => write!(f, "serper"),
             Self::Tavily => write!(f, "tavily"),
@@ -97,7 +118,11 @@ impl TryFrom<&str> for SearchProviderName {
 
     fn try_from(provider: &str) -> Result<Self, Self::Error> {
         match provider {
-            // "bing" => Ok(Self::Bing),
+            "bing" => Ok(Self::Bing),
+            "brave" => Ok(Self::Brave),
+            "duckduckgo" => Ok(Self::DuckDuckGo),
+            "so" => Ok(Self::So),
+            "sogou" => Ok(Self::Sogou),
             "tavily" => Ok(Self::Tavily),
             "google" => Ok(Self::Google),
             "serper" => Ok(Self::Serper),
@@ -171,6 +196,7 @@ pub enum SearchFactory {
     Google(GoogleSearch),
     Serper(SerperSearch),
     Tavily(TavilySearch),
+    Builtin(BuiltInSearch),
 }
 
 #[async_trait]
@@ -180,6 +206,7 @@ impl SearchProvider for SearchFactory {
             Self::Google(gs) => gs.search(params).await,
             Self::Serper(sp) => sp.search(params).await,
             Self::Tavily(t) => t.search(params).await,
+            Self::Builtin(b) => b.search(params).await,
         };
         result
     }
@@ -191,6 +218,7 @@ impl Display for SearchFactory {
             Self::Google(_) => write!(f, "Google"),
             Self::Serper(_) => write!(f, "Serper"),
             Self::Tavily(_) => write!(f, "Tavily"),
+            Self::Builtin(b) => write!(f, "Builtin({})", b.provider),
         }
     }
 }

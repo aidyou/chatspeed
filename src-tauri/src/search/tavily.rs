@@ -43,7 +43,6 @@ struct TavilyResult {
     title: String,
     url: String,
     content: String,
-    raw_content: Option<String>,
     score: Option<f32>,
 }
 
@@ -125,12 +124,7 @@ impl SearchProvider for TavilySearch {
             .map(|item| SearchResult {
                 title: item.title,
                 url: item.url,
-                snippet: if !item.raw_content.as_deref().unwrap_or("").is_empty() {
-                    None
-                } else {
-                    Some(item.content)
-                },
-                content: item.raw_content,
+                content: Some(item.content),
                 score: item.score,
                 ..Default::default()
             })

@@ -30,9 +30,12 @@
 
 use futures::TryStreamExt;
 use reqwest::redirect::Policy;
+use reqwest::Client;
 use rust_i18n::t;
 use std::{collections::HashMap, time::Duration};
 use tokio::{fs::File, io::AsyncWriteExt};
+use regex::Regex;
+use scraper::{Html, Selector};
 
 use super::{
     error::{HttpError, HttpResult},
@@ -41,7 +44,7 @@ use super::{
 
 /// HTTP client implementation with support for async requests and file operations
 pub struct HttpClient {
-    client: reqwest::Client,
+    client: Client,
 }
 
 impl HttpClient {
@@ -420,6 +423,66 @@ impl HttpClient {
             self.handle_request(request).await
         }
     }
+}
+
+/// Resolves Baidu short URL with retry mechanism
+///
+/// # Arguments
+/// * `short_url` - The Baidu short URL to resolve
+///
+/// # Returns
+/// * `Ok(String)` - The resolved original URL
+/// * `Err(Box<dyn std::error::Error>)` - Error if resolution fails after retries
+pub async fn get_real_url(short_url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let client = Client::builder()
+    .redirect(reqwest::redirect::Policy::none())
+    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    .build()?;
+
+    let mut retries = 3;
+    while retries > 0 {
+        let response = client.get(short_url).send().await?;
+
+        // Case 1: Standard HTTP Redirect (3xx)
+        if let Some(location) = response.headers().get("Location") {
+            return Ok(location.to_str()?.to_string());
+        }
+
+        // Case 2: Client-side redirect in HTML body (200 OK)
+        if response.status() == http::StatusCode::OK {
+            let body = response.text().await?;
+
+            // 2a: Check for <meta> tag redirect (priority)
+            let document = Html::parse_document(&body);
+            let meta_selector = Selector::parse("meta[http-equiv='refresh']")?;
+            if let Some(element) = document.select(&meta_selector).next() {
+                if let Some(content) = element.value().attr("content") {
+                    let re = Regex::new(r#"(?i)url\s*=\s*['"](?P<url>[^'"]+)['"]"#)?;
+                    if let Some(caps) = re.captures(content) {
+                        if let Some(url) = caps.name("url") {
+                            return Ok(url.as_str().to_string());
+                        }
+                    }
+                }
+            }
+
+            // 2b: Check for <script> tag redirect (fallback)
+            let re = Regex::new(r#"window\.location\.(?:replace|href)\s*=\s*['"](?P<url>[^'"]+)['"]"#)?;
+            if let Some(caps) = re.captures(&body) {
+                if let Some(url) = caps.name("url") {
+                    return Ok(url.as_str().to_string());
+                }
+            }
+
+            // If no redirect found in 200 body, return original URL
+            return Ok(short_url.to_string());
+        }
+
+        retries -= 1;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    Err("Failed to resolve URL after retries".into())
 }
 
 #[cfg(test)]

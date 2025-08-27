@@ -1,20 +1,10 @@
-use std::sync::{Arc, RwLock};
+use tauri::{command, AppHandle};
 
-use tauri::{command, State};
-
-use crate::{
-    ai::interaction::chat_completion::ChatState,
-    db::MainStore,
-    workflow::{dag::WorkflowEngine, react::ReactExecutor},
-};
+use crate::workflow::{dag::WorkflowEngine, react::ReactExecutor};
 
 #[command]
-pub async fn run_dag_workflow(
-    chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
-    workflow_config: &str,
-) -> Result<(), String> {
-    let engine = WorkflowEngine::new(main_store.inner().clone(), chat_state.inner().clone())
+pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> Result<(), String> {
+    let engine = WorkflowEngine::new(app_handle)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -31,12 +21,8 @@ pub async fn run_dag_workflow(
 }
 
 #[command]
-pub async fn run_react_workflow(
-    chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
-    query: &str,
-) -> Result<(), String> {
-    let mut exe = ReactExecutor::new(main_store.inner().clone(), chat_state.inner().clone(), 10)
+pub async fn run_react_workflow(app_handle: AppHandle, query: &str) -> Result<(), String> {
+    let mut exe = ReactExecutor::new(app_handle.clone(), 10)
         .await
         .map_err(|e| e.to_string())?;
     let plan = exe

@@ -136,7 +136,7 @@ impl SearchProvider for SerperSearch {
                 url: item.link,
                 snippet: Some(item.snippet),
                 // The `date` field from Serper can be used as `content`.
-                content: item.date,
+                publish_date: item.date,
                 ..Default::default()
             })
             .collect();

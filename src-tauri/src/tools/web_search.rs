@@ -1,17 +1,21 @@
 use async_trait::async_trait;
+use futures::future::join_all;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
+    constants::{CFG_SEARCH_ENGINE, VIDEO_AND_IMAGE_DOMAINS},
     db::MainStore,
+    scraper::types::StrapeContentFormat,
     search::{
-        GoogleSearch, SearchFactory, SearchPeriod, SearchProvider, SearchProviderName,
-        SerperSearch, TavilySearch,
+        BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
+        SearchResult, SerperSearch, TavilySearch,
     },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
+use tauri::{AppHandle, Manager, Wry};
 
 pub struct Auth {
     pub api_key: String,
@@ -27,18 +31,25 @@ impl Auth {
 }
 
 pub struct WebSearch {
-    // chatspeed bot server url
-    searcher: SearchFactory,
+    app_handle: AppHandle<Wry>,
 }
 
 impl WebSearch {
-    pub fn new(
-        search_engine: String,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
-    ) -> Result<Arc<Self>, ToolError> {
+    pub fn new(app_handle: AppHandle<Wry>) -> Arc<Self> {
+        Arc::new(Self { app_handle })
+    }
+
+    fn create_searcher(&self, provider: Option<String>) -> Result<SearchFactory, ToolError> {
+        let main_store = self
+            .app_handle
+            .state::<Arc<std::sync::RwLock<MainStore>>>()
+            .inner();
         let store = main_store.read().map_err(|e| {
             ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
         })?;
+
+        let search_engine =
+            provider.unwrap_or_else(|| store.get_config(CFG_SEARCH_ENGINE, "bing".to_string()));
 
         let proxy_type = store.get_config("proxy_type", "".to_string());
         let proxy = if proxy_type == "http" {
@@ -51,26 +62,42 @@ impl WebSearch {
         } else {
             None
         };
-        let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
 
         let provider_name = SearchProviderName::from_str(&search_engine)
             .map_err(|e| ToolError::Initialization(e))?;
-        let searcher = match provider_name {
-            SearchProviderName::Google => SearchFactory::Google(
-                GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy)
-                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
-            ),
-            SearchProviderName::Tavily => SearchFactory::Tavily(
-                TavilySearch::new(auth.api_key, proxy)
-                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
-            ),
-            SearchProviderName::Serper => SearchFactory::Serper(
-                SerperSearch::new(auth.api_key, proxy)
-                    .map_err(|e| ToolError::Initialization(e.to_string()))?,
-            ),
-        };
 
-        Ok(Arc::new(Self { searcher }))
+        let searcher = match provider_name {
+            SearchProviderName::Google => {
+                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                SearchFactory::Google(
+                    GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy)
+                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
+                )
+            }
+            SearchProviderName::Tavily => {
+                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                SearchFactory::Tavily(
+                    TavilySearch::new(auth.api_key, proxy)
+                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
+                )
+            }
+            SearchProviderName::Serper => {
+                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                SearchFactory::Serper(
+                    SerperSearch::new(auth.api_key, proxy)
+                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
+                )
+            }
+            p @ (SearchProviderName::Bing
+            | SearchProviderName::Brave
+            | SearchProviderName::DuckDuckGo
+            | SearchProviderName::So
+            | SearchProviderName::Sogou) => SearchFactory::Builtin(BuiltInSearch {
+                app_handle: self.app_handle.clone(),
+                provider: p,
+            }),
+        };
+        Ok(searcher)
     }
 
     /// Get and check authentication for the search engine.
@@ -116,15 +143,15 @@ impl WebSearch {
                     ));
                 }
                 Auth::new(api_key)
-            } // _ => {
-              //     return Err(ToolError::Initialization(
-              //         t!(
-              //             "tools.search.provider_no_support",
-              //             name = provider_name.to_string()
-              //         )
-              //         .to_string(),
-              //     ))
-              // }
+            }
+            SearchProviderName::Bing
+            | SearchProviderName::Brave
+            | SearchProviderName::DuckDuckGo
+            | SearchProviderName::So
+            | SearchProviderName::Sogou => {
+                // Built-in providers don't need auth.
+                return Ok(Auth::new("".to_string()));
+            }
         };
         Ok(auth)
     }
@@ -168,18 +195,136 @@ impl WebSearch {
             )),
         }
     }
+
+    pub async fn scrape_content(
+        &self,
+        mut results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>, ToolError> {
+        if results.is_empty() {
+            return Ok(results);
+        }
+
+        let main_store = self
+            .app_handle
+            .state::<Arc<std::sync::RwLock<MainStore>>>()
+            .inner();
+        let concurrency = {
+            let store = main_store
+                .read()
+                .map_err(|e| ToolError::Store(e.to_string()))?;
+            store.get_config(crate::constants::CFG_SCRAPER_CONCURRENCY_COUNT, 3_u64) as usize
+        };
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+
+        let mut scrape_tasks = Vec::new();
+
+        for (index, result) in results.iter().enumerate() {
+            if result.content.as_deref().unwrap_or("").is_empty() && !result.url.is_empty() {
+                let app_handle = self.app_handle.clone();
+                let url = result.url.clone();
+                let permit = semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| ToolError::Execution(e.to_string()))?;
+
+                let task = tokio::spawn(async move {
+                    let _permit = permit;
+
+                    // 1. Wrap the core scraping logic in an async block
+                    let scrape_future = async {
+                        let request = crate::scraper::types::ScrapeRequest::Content(
+                            crate::scraper::types::ContentOptions {
+                                url: url.clone(), // clone url for logging on timeout
+                                content_format: StrapeContentFormat::Markdown,
+                                keep_link: false,
+                                keep_image: false,
+                            },
+                        );
+
+                        if let Ok(scraped_json_str) =
+                            crate::scraper::engine::run(app_handle, request).await
+                        {
+                            match serde_json::from_str::<Value>(&scraped_json_str) {
+                                Ok(scraped_data) => {
+                                    return (
+                                        index,
+                                        scraped_data["content"].as_str().map(String::from),
+                                        scraped_data["url"].as_str().map(String::from),
+                                    );
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to parse scraped JSON: {}, rawdata: {}",
+                                        e,
+                                        scraped_json_str
+                                    );
+                                }
+                            }
+                        }
+                        (index, None, None)
+                    };
+
+                    // 2. Wrap the future with tokio::time::timeout
+                    let timeout_duration = std::time::Duration::from_secs(10);
+                    if let Ok(result) = tokio::time::timeout(timeout_duration, scrape_future).await
+                    {
+                        // If completed within 10 seconds, return its result
+                        result
+                    } else {
+                        // If timeout occurs
+                        log::warn!("Scraping task for url {} timed out after 10 seconds.", &url);
+                        // Return a tuple indicating failure
+                        (index, None, None)
+                    }
+                });
+                scrape_tasks.push(task);
+            }
+        }
+
+        let scraped_contents = join_all(scrape_tasks).await;
+
+        for task_result in scraped_contents {
+            if let Ok((index, opt_content, opt_url)) = task_result {
+                if let Some(result) = results.get_mut(index) {
+                    if opt_content.is_some() {
+                        result.content = opt_content;
+                    }
+
+                    if let Some(url) = opt_url {
+                        result.url = url;
+                    }
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        log::debug!("Current results: {}", results.len());
+
+        // Filter out video and image domains
+        results.retain(|result| {
+            !VIDEO_AND_IMAGE_DOMAINS
+                .iter()
+                .any(|domain| result.url.contains(domain))
+        });
+
+        #[cfg(debug_assertions)]
+        log::debug!("Filtered results: {}", results.len());
+
+        Ok(results)
+    }
 }
 
 #[async_trait]
 impl ToolDefinition for WebSearch {
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "webSearch"
+        "WebSearch"
     }
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "A powerful web search tool that performs a web search query"
+        "Performs a web search using the configured search engine. It can retrieve a list of search results. If the initial search results lack content, it will automatically attempt to scrape the content from the web pages."
     }
 
     /// Returns the function calling spec.
@@ -194,15 +339,17 @@ impl ToolDefinition for WebSearch {
                             "type": "string",
                             "description": "Search keyword"
                         },
-                        "number": {
-                            "type": "integer",
-                            "default": 10,
-                            "description": "Results count"
-                        },
                         "page": {
                             "type": "integer",
                             "default": 1,
                             "description": "Page number"
+                        },
+                        "number": {
+                            "type": "integer",
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": 10,
+                            "description": "Number of results to return, between 1 and 10. For more results, use the 'page' parameter."
                         },
                         "time_period": {
                             "type": "string",
@@ -210,7 +357,7 @@ impl ToolDefinition for WebSearch {
                             "description": "Time range filter"
                         }
                     },
-                    "required": ["provider", "kw"]
+                    "required": ["kw"]
             }),
             output_schema: None,
             disabled: false,
@@ -225,6 +372,13 @@ impl ToolDefinition for WebSearch {
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
     async fn call(&self, params: Value) -> NativeToolResult {
+        // Optional provider for testing, usually not shown in `input_schema`
+        let provider = params
+            .get("provider")
+            .map(|p| p.as_str().unwrap())
+            .map(|p| p.to_string());
+        let searcher = self.create_searcher(provider)?;
+
         let kw = Self::extract_keywords(&params)?;
         if kw.is_empty() {
             return Err(ToolError::FunctionParamError(
@@ -234,38 +388,45 @@ impl ToolDefinition for WebSearch {
 
         let number = params["number"].as_i64().unwrap_or(10);
         let page = params["page"].as_i64().unwrap_or(1);
-        // let resolve_baidu_links = params["resolve_baidu_links"].as_bool().unwrap_or(true);
         let time_period = params["time_period"].as_str().unwrap_or("");
 
-        // Convert time_period string to SearchPeriod enum
         let period = match time_period {
-            "day" => Some(SearchPeriod::Day),
-            "week" => Some(SearchPeriod::Week),
-            "month" => Some(SearchPeriod::Month),
-            "year" => Some(SearchPeriod::Year),
+            "day" => Some(crate::search::SearchPeriod::Day),
+            "week" => Some(crate::search::SearchPeriod::Week),
+            "month" => Some(crate::search::SearchPeriod::Month),
+            "year" => Some(crate::search::SearchPeriod::Year),
             _ => None,
         };
 
-        // Create search parameters
         let search_params = json!({
-            "query": kw,
+            "query": kw.clone(),
             "count": number,
             "period": period,
             "page": page,
         });
 
-        // Execute search using the factory
-        let results = self.searcher.search(&search_params).await.map_err(|e| {
+        let mut results = searcher.search(&search_params).await.map_err(|e| {
             ToolError::Execution(
                 t!(
                     "tools.search.web_search_failed",
-                    provider = self.searcher.to_string(),
-                    keyword = kw,
+                    provider = searcher.to_string(),
+                    keyword = kw.clone(),
                     details = e.to_string()
                 )
                 .to_string(),
             )
         })?;
+
+        #[cfg(debug_assertions)]
+        log::debug!("Scrape result count: {}", results.len());
+
+        results = self.scrape_content(results).await?;
+
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "Scrape result count after content scraped: {}",
+            results.len()
+        );
 
         Ok(ToolCallResult::success(
             Some(
@@ -273,63 +434,12 @@ impl ToolDefinition for WebSearch {
                     .iter()
                     .map(|r| r.to_string())
                     .collect::<Vec<_>>()
-                    .join("\n===============\n"),
+                    .join("\n"),
             ),
             Some(json!({
                 "query": &search_params,
                 "results": results
             })),
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::db;
-
-    use super::*;
-    use serde_json::json;
-
-    fn get_store() -> MainStore {
-        let db_path = {
-            let dev_dir = &*crate::STORE_DIR.read();
-            dev_dir.join("chatspeed.db")
-        };
-
-        // Setup language
-        MainStore::new(db_path)
-            .map_err(|e| db::StoreError::IoError(e.to_string()))
-            .expect("Failed to create main store")
-    }
-
-    #[tokio::test]
-    async fn test_search() {
-        let store = Arc::new(std::sync::RwLock::new(get_store()));
-        for provider in vec!["google", "tavily", "serper"] {
-            let search = WebSearch::new(provider.to_string(), store.clone()).unwrap();
-            let params = json!({
-                    "kw": "deepseek",
-                    "number": 10,
-                    "page": 1,
-                    "time_period": "week"
-            });
-            let result = search.call(params).await.unwrap();
-            assert!(result.content.is_some());
-            println!("{}", result.content.as_ref().unwrap());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_search_error() {
-        let store = Arc::new(std::sync::RwLock::new(get_store()));
-        let search = WebSearch::new("google".to_string(), store.clone()).unwrap();
-        let params = json!({
-            "kw": "rust lifetime",
-            "number": 10,
-            "page": 1
-        });
-        let result = search.call(params).await.unwrap();
-        assert!(result.content.is_some());
-        println!("{}", result.content.as_ref().unwrap());
     }
 }

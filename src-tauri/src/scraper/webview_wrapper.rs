@@ -1,14 +1,19 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tauri::{AppHandle, Listener, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::{
+    AppHandle, EventId, Listener, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
+};
 
 #[allow(unused_imports)]
 use tauri::Manager;
 
-use super::scraper_config::FullConfig;
+use super::types::{FullConfig, GenericContentRule};
+use crate::constants::CFG_SCRAPER_DEBUG_MODE;
+use crate::db::MainStore;
 
 #[derive(Deserialize, Debug, Clone)]
 struct ScrapeResultMessage {
@@ -24,176 +29,266 @@ pub struct WebviewScraper {
 
 impl WebviewScraper {
     pub fn new(app_handle: AppHandle<Wry>) -> Self {
+        #[cfg(debug_assertions)]
+        app_handle.listen("logger_event", move |event| {
+            if let Ok(payload) = serde_json::from_str::<Value>(event.payload()) {
+                log::debug!(
+                    "window:{}, message:{}",
+                    payload.get("window").unwrap_or(&Value::Null),
+                    payload.get("message").unwrap_or(&Value::Null)
+                );
+            }
+        });
+
         Self {
             app_handle,
-            timeout: Duration::from_secs(60),
+            timeout: Duration::from_secs(30),
         }
     }
 
-    pub async fn scrape(&self, url: &str, config: Option<FullConfig>) -> Result<String> {
+    /// Scrapes the content of a webpage using a webview.
+    pub async fn scrape(
+        &self,
+        webview: &WebviewWindow<Wry>,
+        url: &str,
+        config: Option<FullConfig>,
+        generic_content_rule: Option<GenericContentRule>,
+    ) -> Result<(String, Vec<EventId>)> {
         let (tx_page_load, rx_page_load) = tokio::sync::oneshot::channel::<()>();
-        let page_load_signal = Arc::new(Mutex::new(Some(tx_page_load)));
-
         let (tx_dom_content_loaded, rx_dom_content_loaded) = tokio::sync::oneshot::channel::<()>();
-        let dom_content_loaded_signal = Arc::new(Mutex::new(Some(tx_dom_content_loaded)));
-
         let (tx_scrape_result, rx_scrape_result) =
             tokio::sync::oneshot::channel::<Result<String>>();
-        let scrape_result_signal = Arc::new(Mutex::new(Some(tx_scrape_result)));
 
-        let webview = self.create_webview(
-            url,
-            page_load_signal,
-            dom_content_loaded_signal,
-            scrape_result_signal,
-        )?;
+        let scrape_result_sender = Arc::new(Mutex::new(Some(tx_scrape_result)));
 
-        if tokio::time::timeout(self.timeout, rx_page_load)
-            .await
-            .is_err()
-        {
-            let _ = webview.close();
-            return Err(anyhow!("Page load timed out for URL: {}", url));
-        }
+        let window_label = webview.label();
+        // --- Attach listeners directly ---
+        let page_loaded_id = webview.once(format!("page_loaded_{}", window_label), move |_event| {
+            let _ = tx_page_load.send(());
+        });
 
-        // Wait for DOMContentLoaded before injecting and running the script
-        if tokio::time::timeout(self.timeout, rx_dom_content_loaded)
-            .await
-            .is_err()
-        {
-            let _ = webview.close();
-            return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
-        }
+        let dom_content_loaded_id = webview.once(
+            format!("DOMContentLoaded_ready_{}", window_label),
+            move |_event| {
+                let _ = tx_dom_content_loaded.send(());
+            },
+        );
 
-        self.inject_and_run_script(&webview, config)?;
+        let is_completed = Arc::new(AtomicBool::new(false));
 
-        let result = match tokio::time::timeout(self.timeout, rx_scrape_result).await {
-            Ok(Ok(res)) => res,
-            Ok(Err(_)) => Err(anyhow!("Scrape result channel closed unexpectedly.")),
-            Err(_) => Err(anyhow!("Scraping timed out for URL: {}", url)),
+        let sender_for_listen = scrape_result_sender.clone();
+        let is_completed_for_listen = is_completed.clone();
+        let window_label_clone = window_label.to_string();
+        let scrape_result_listener_id = webview.listen(
+            format!("scrape_result_{}", &window_label_clone),
+            move |event| {
+                let data_str = event.payload();
+
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "receive scrape_result_{}, result: {}",
+                    &window_label_clone,
+                    &data_str
+                );
+
+                match serde_json::from_str::<ScrapeResultMessage>(data_str) {
+                    Ok(result) => {
+                        if let Ok(mut guard) = sender_for_listen.lock() {
+                            if let Some(tx) = guard.take() {
+                                if is_completed_for_listen.swap(true, Ordering::SeqCst) {
+                                    return;
+                                }
+
+                                if let Some(success) = result.success {
+                                    let _ = tx.send(Ok(success));
+                                } else if let Some(error) = result.error {
+                                    let _ = tx.send(Err(anyhow!(error)));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to parse scrape result message for scrape_result_{}: {}, rawData: {}",
+                            &window_label_clone,
+                            e,
+                            data_str
+                        );
+                    }
+                }
+            },
+        );
+
+        let main_store = self.app_handle.state::<Arc<RwLock<MainStore>>>();
+        let debug_mode = if let Ok(store) = main_store.read() {
+            store.get_config(CFG_SCRAPER_DEBUG_MODE, false)
+        } else {
+            false
         };
 
-        let _ = webview.close();
-        result
+        if debug_mode {
+            let webview_clone = webview.clone();
+            webview.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = webview_clone.hide();
+                }
+            });
+        }
+
+        let page_timeout = config
+            .as_ref()
+            .map(|cfg| Duration::from_millis(cfg.config.page_timeout))
+            .unwrap_or(self.timeout);
+
+        webview
+            .navigate(url.parse()?)
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+        let result = async {
+            if tokio::time::timeout(page_timeout, rx_page_load)
+                .await
+                .is_err()
+            {
+                return Err(anyhow!("Page load timed out for URL: {}", url));
+            }
+
+            if tokio::time::timeout(page_timeout, rx_dom_content_loaded)
+                .await
+                .is_err()
+            {
+                return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
+            }
+
+            if url.contains("bing.com") {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+
+            self.inject_and_run_script(&webview, config, generic_content_rule)?;
+
+            match tokio::time::timeout(page_timeout, rx_scrape_result).await {
+                Ok(Ok(res)) => res,
+                Ok(Err(_)) => Err(anyhow!("Scrape result channel closed unexpectedly.")),
+                Err(_) => Err(anyhow!("Scraping timed out for URL: {}", url)),
+            }
+        }
+        .await;
+
+        let listeners = vec![
+            page_loaded_id,
+            dom_content_loaded_id,
+            scrape_result_listener_id,
+        ];
+
+        Ok((result?, listeners))
     }
 
+    /// Injects and runs the script for scraping.
     fn inject_and_run_script(
         &self,
         webview: &WebviewWindow<Wry>,
         config: Option<FullConfig>,
+        generic_content_rule: Option<GenericContentRule>,
     ) -> Result<()> {
-        let logger_js = include_str!("../../assets/scrape/utility.js");
+        log::debug!(
+            "=== Injecting and running script for scraping window {} === ",
+            webview.label()
+        );
+        let utility_js = include_str!("../../assets/scrape/utility.min.js");
         let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
-        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.js");
+        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.min.js");
 
         let config_json_str =
             serde_json::to_string(&config).context("Failed to serialize scraper config to JSON")?;
-
+        let generic_content_rule_json_str =
+            serde_json::to_string(&generic_content_rule.unwrap_or_default())
+                .context("Failed to serialize generic content rule to JSON")?;
         let js_code = format!(
             r#"
-            try {{
-                console.debug('Starting script injection...');
-                {logger_js}
-                {turndown_js}
-                logger.debug('Turndown library loaded');
-                {scrape_logic_js}
-                logger.debug('Scrape logic loaded');
-                logger.debug('Executing scrape with config: {config_json_str}');
-                window.performScrape({config_json_str});
-            }} catch (error) {{
-                logger.error('Script injection failed:', error);
-            }}
+            window.performScrape || (()=>{{
+                try {{
+                    console.debug('Starting script injection...');
+                    {utility_js}
+                    {turndown_js}
+                    {scrape_logic_js}
+                    console.debug('end script injection');
+                    window.performScrape({config_json_str}, {generic_content_rule_json_str});
+                }} catch (error) {{
+                    console.error('Script injection failed:', error);
+                }}
+            }})();
             "#,
         );
-
         webview.eval(&js_code)?;
         Ok(())
     }
 
-    fn create_webview(
+    /// Creates a new webview window for scraping.
+    pub fn create_webview(
         &self,
         url: &str,
-        page_load_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
-        dom_content_loaded_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
-        scrape_result_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Result<String>>>>>,
+        visible: bool,
+        _block_images: bool,
     ) -> Result<WebviewWindow<Wry>> {
-        let window_label = format!("scraper-{}", uuid::Uuid::new_v4().simple().to_string());
+        let window_label = format!(
+            "scraper-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..6]
+        );
 
         let init_script = format!(
             r#"
-            window.addEventListener('load', () => console.log('Page fully loaded'));
-            window.addEventListener('error', (event) => console.error('Page load error:', event));
-            window.addEventListener('DOMContentLoaded', () => {{
-                console.log('DOMContentLoaded fired');
+            const windowLabel = '{window_label}';
+            window.addEventListener('load', () => {{
                 if (window.__TAURI__?.event) {{
-                    window.__TAURI__.event.emit('DOMContentLoaded_ready');
+                    window.__TAURI__.event.emit('page_loaded_{window_label}');
+                }}
+            }});
+            window.addEventListener('DOMContentLoaded', () => {{
+                if (window.__TAURI__?.event) {{
+                    window.__TAURI__.event.emit('DOMContentLoaded_ready_{window_label}');
                 }}
             }});
         "#
         );
+
+        // if block_images {
+        //     let block_script = r#"
+        //         const blankImage = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        //         const observer = new MutationObserver((mutations) => {
+        //           for (const mutation of mutations) {
+        //             for (const node of mutation.addedNodes) {
+        //               if (node.tagName === "IMG") {
+        //                 node.src = blankImage;
+        //               }
+        //               if (node.querySelectorAll) {
+        //                 node.querySelectorAll("img").forEach((img) => (img.src = blankImage));
+        //               }
+        //             }
+        //           }
+        //         });
+
+        //         observer.observe(document, {
+        //           childList: true,
+        //           subtree: true
+        //         });
+
+        //         document.addEventListener("DOMContentLoaded",() => {
+        //             document.querySelectorAll("img").forEach((img) => (img.src = blankImage));
+        //           },
+        //           { once: true }
+        //         );
+        //     "#;
+        //     init_script.push_str(block_script);
+        // }
 
         WebviewWindowBuilder::new(
             &self.app_handle,
             &window_label,
             WebviewUrl::External(url.parse()?),
         )
-        .title("Scraper")
-        .initialization_script(init_script)
-        .visible(true)
-        .on_page_load(move |webview, _payload| {
-            let tx_dom_clone = dom_content_loaded_signal.clone();
-            webview.once("DOMContentLoaded_ready", move |_event| {
-                if let Ok(mut guard) = tx_dom_clone.lock() {
-                    if let Some(tx) = guard.take() {
-                        if tx.send(()).is_err() {
-                            log::error!(
-                                "Failed to send DOMContentLoaded_ready signal, receiver dropped."
-                            );
-                        }
-                    }
-                }
-            });
-
-            let tx_scrape_clone = scrape_result_signal.clone();
-            webview.listen("scrape_result", move |event| {
-                let data_str = event.payload();
-                log::debug!("Raw scrape_result payload: {:?}", data_str);
-                if let Ok(result) = serde_json::from_str::<ScrapeResultMessage>(&data_str) {
-                    log::debug!("Attempting to deserialize: {}", data_str);
-                    if let Ok(mut guard) = tx_scrape_clone.lock() {
-                        if let Some(tx) = guard.take() {
-                            if let Some(success) = result.success {
-                                let _ = tx.send(Ok(success));
-                            } else if let Some(error) = result.error {
-                                let _ = tx.send(Err(anyhow!(error)));
-                            }
-                        }
-                    }
-                } else {
-                    log::warn!(
-                        "Failed to deserialize scrape_result payload as ScrapeResultMessage: {}",
-                        data_str
-                    );
-                }
-            });
-
-            #[cfg(debug_assertions)]
-            {
-                webview.listen("logger", move |event| {
-                    if let Ok(payload) = serde_json::from_str::<Value>(event.payload()) {
-                        log::debug!("{}", payload.get("message").unwrap_or(&Value::Null));
-                    }
-                });
-            }
-
-            if let Ok(mut guard) = page_load_signal.lock() {
-                if let Some(tx) = guard.take() {
-                    if tx.send(()).is_err() {
-                        log::error!("Failed to send page_load signal, receiver dropped.");
-                    }
-                }
-            }
-        })
+        .title("Chatspeed Web Scraper")
+        .initialization_script(&init_script)
+        .visible(visible)
         .build()
         .map_err(|e| anyhow!("Failed to create webview window: {}", e))
     }

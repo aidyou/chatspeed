@@ -91,10 +91,10 @@ const defaultSettings = {
   googleApiKey: '',
   googleSearchId: "",
   serperApiKey: "",
-  tavilyApiKey:"",
+  tavilyApiKey: "",
   websearchModel: { id: '', model: '' },
   searchEngine: '',
-  searchResultCount: 10
+  scraperConcurrencyCount: 5,
 }
 
 /**
@@ -109,6 +109,7 @@ export const useSettingStore = defineStore('setting', () => {
   const env = ref({
     httpServer: '',
     logDir: '',
+    schemaDir: '',
     chatCompletionProxy: ''
   })
 

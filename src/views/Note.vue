@@ -20,16 +20,9 @@
 
     <div class="body">
       <el-aside class="sidebar" :style="{ width: sidebarWidth + 'px' }" v-show="!sidebarCollapsed">
-        <el-tree
-          :data="treeData"
-          :props="defaultProps"
-          :expand-on-click-node="true"
-          :default-expand-all="true"
-          :highlight-current="true"
-          @node-click="onHandleNodeClick"
-          @node-expand="onHandleNodeExpand"
-          @node-collapse="onHandleNodeCollapse"
-          node-key="id">
+        <el-tree :data="treeData" :props="defaultProps" :expand-on-click-node="true" :default-expand-all="true"
+          :highlight-current="true" @node-click="onHandleNodeClick" @node-expand="onHandleNodeExpand"
+          @node-collapse="onHandleNodeCollapse" node-key="id">
           <template #default="{ node, data }">
             <div class="tree-node" :class="{ 'is-tag': data.type === 'tag' }">
               <div class="label">
@@ -49,9 +42,7 @@
       <div class="resize-handle" @mousedown="handleResizeStart" v-show="!sidebarCollapsed"></div>
       <el-main ref="mainContent" class="main">
         <div v-if="currentNote" class="chat note-content">
-          <markdown
-            :content="currentNote.content"
-            :reference="currentNote?.metadata?.reference || []"
+          <markdown :content="currentNote.content" :reference="currentNote?.metadata?.reference || []"
             :reasoning="currentNote?.metadata?.reasoning || ''" />
           <div class="note-footer">
             <div class="note-meta">
@@ -71,22 +62,11 @@
     </div>
   </el-container>
 
-  <el-dialog
-    class="note-search-dialog"
-    v-model="searchDialogVisible"
-    :close-on-press-escape="false"
+  <el-dialog class="note-search-dialog" v-model="searchDialogVisible" :close-on-press-escape="false"
     :show-close="false">
-    <el-input
-      ref="searchInputRef"
-      v-model="kw"
-      :placeholder="$t('note.searchNotePlaceholder')"
-      @input="onSearchNote" />
+    <el-input ref="searchInputRef" v-model="kw" :placeholder="$t('note.searchNotePlaceholder')" @input="onSearchNote" />
     <div class="note-list">
-      <div
-        class="note-item"
-        v-for="note in searchResult"
-        :key="note.id"
-        @click="onSelectNote(note)">
+      <div class="note-item" v-for="note in searchResult" :key="note.id" @click="onSelectNote(note)">
         {{ note.title }}
       </div>
     </div>
@@ -99,7 +79,7 @@ import { useI18n } from 'vue-i18n'
 import { Document, Folder, FolderOpened } from '@element-plus/icons-vue'
 import { listen } from '@tauri-apps/api/event'
 
-import markdown from '@/components/chat/markdown.vue'
+import markdown from '@/components/chat/Markdown.vue'
 
 import { csStorageKey } from '@/config/config'
 import { formatTime } from '@/libs/util'
@@ -369,7 +349,7 @@ const onSelectNote = note => {
         -moz-user-select: none;
         -webkit-user-select: none;
 
-        &.el-tree--highlight-current .el-tree-node.is-current > .el-tree-node__content {
+        &.el-tree--highlight-current .el-tree-node.is-current>.el-tree-node__content {
           background-color: var(--cs-active-bg-color);
         }
 
@@ -441,6 +421,7 @@ const onSelectNote = note => {
     }
   }
 }
+
 .note-search-dialog {
   display: flex;
   flex-direction: column;

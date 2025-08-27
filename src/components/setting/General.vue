@@ -250,14 +250,27 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
-            {{ $t('settings.general.searchResultCount') }}
-            <small class="tooltip">{{ $t('settings.general.searchResultCountTooltip') }}</small>
+            {{ $t('settings.general.scraperDebugMode') }}
+            <small class="tooltip">{{ $t('settings.general.scraperDebugModeTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch v-model="settings.scraperDebugMode" @change="onScraperDebugModeChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.scraperConcurrencyCount') }}
+            <small class="tooltip">{{
+              $t('settings.general.scraperConcurrencyCountTooltip')
+            }}</small>
           </div>
         </div>
         <div class="value" style="width: 45%">
           <el-input
-            v-model="settings.searchResultCount"
-            @input="onSearchResultCountChange"
+            v-model="settings.scraperConcurrencyCount"
+            @input="scraperConcurrencyCountChange"
             type="number" />
         </div>
       </div>
@@ -648,7 +661,21 @@ const { settings } = storeToRefs(settingStore)
 
 const backups = ref([])
 const restoreDir = ref('')
-const searchEngines = ['google', 'serper', 'tavily']
+const searchEngines = computed(() => {
+  const engines = ['bing', 'duckduckgo', 'brave', 'so', 'sogou']
+
+  if (settings.value.googleApiKey && settings.value.googleSearchId) {
+    engines.push('google')
+  }
+  if (settings.value.serperApiKey) {
+    engines.push('serper')
+  }
+  if (settings.value.tavilyApiKey) {
+    engines.push('tavily')
+  }
+
+  return engines
+})
 
 const defaultBackupDir = ref('')
 
@@ -848,7 +875,7 @@ const clearShortcut = shortcutKey => {
  * @param {number} value - The value of history messages
  */
 const onHistoryMessagesChange = value => {
-  setSetting('historyMessages', value || 0)
+  setSetting('historyMessages', Number(value || 0))
 }
 
 /**
@@ -891,8 +918,12 @@ const onSearchEngineChange = value => {
   setSetting('searchEngine', value || '')
 }
 
-const onSearchResultCountChange = value => {
-  setSetting('searchResultCount', value || 0)
+const onScraperDebugModeChange = value => {
+  setSetting('scraperDebugMode', value || false)
+}
+
+const scraperConcurrencyCountChange = value => {
+  setSetting('scraperConcurrencyCount', Number(value || 0))
 }
 
 /**

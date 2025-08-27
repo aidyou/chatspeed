@@ -1,0 +1,40 @@
+{
+  "config": {
+    "name": "So.com Search",
+    "url_template": "https://www.so.com/s?q={kw}&pn={page}&adv_t={time_period}",
+    "pagination_type": "page",
+    "pagination_param": "page",
+    "wait_for": "#main",
+    "wait_timeout": 10000,
+    "page_timeout": 15000,
+    "max_results_per_page": 10
+  },
+  "selectors": {
+    "base_selector": ".res-list",
+    "fields": [
+      {
+        "name": "title",
+        "selector": "h3.res-title a",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "url",
+        "selector": "h3.res-title a",
+        "type": "attribute",
+        "attribute": "href",
+        "required": true
+      },
+      {
+        "name": "snippet",
+        "selector": ".res-desc",
+        "type": "text"
+      },
+      {
+        "name": "sitename",
+        "selector": ".g-linkinfo cite",
+        "type": "text"
+      }
+    ]
+  }
+}

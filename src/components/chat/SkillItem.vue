@@ -2,11 +2,7 @@
   <div class="item" :class="{ active: active }">
     <div class="icon">
       <cs :name="skill.icon" v-if="skill.icon" />
-      <avatar
-        :text="skill.name"
-        :size="24"
-        bgColor="var(--cs-bg-color)"
-        textColor="var(--cs-text-color-secondary)"
+      <avatar :text="skill.name" :size="24" bgColor="var(--cs-bg-color)" textColor="var(--cs-text-color-secondary)"
         v-else />
     </div>
     <div class="name">{{ skill.name }}</div>
@@ -14,7 +10,6 @@
   </div>
 </template>
 <script setup>
-import avatar from '@/components/common/avatar.vue'
 const props = defineProps({
   skill: {
     type: Object,
@@ -50,11 +45,13 @@ const props = defineProps({
   .name {
     font-size: var(--cs-font-size);
   }
+
   img,
   icon,
   name {
     flex-shrink: 0;
   }
+
   .desc {
     flex: 1;
     overflow: hidden;

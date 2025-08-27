@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-extract:before {
+  content: "\e712";
+}
+
 .cs-proxy:before {
   content: "\e654";
 }

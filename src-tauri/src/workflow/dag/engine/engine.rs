@@ -1,40 +1,34 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::db::MainStore;
 use crate::tools::ToolManager;
-use crate::workflow::dag::executor::WorkflowExecutor;
-use crate::workflow::dag::graph::WorkflowGraph;
-use crate::workflow::dag::{context::Context, parser::WorkflowParser, types::WorkflowResult};
-use crate::workflow::error::WorkflowError;
+use crate::workflow::{
+    dag::{
+        context::Context, executor::WorkflowExecutor, graph::WorkflowGraph, parser::WorkflowParser,
+        types::WorkflowResult,
+    },
+    error::WorkflowError,
+};
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
-    main_store: Arc<RwLock<MainStore>>,
-    chat_state: Arc<ChatState>,
+    // main_store: Arc<RwLock<MainStore>>,
+    // chat_state: Arc<ChatState>,
     /// Function manager for handling function operations
-    function_manager: Arc<ToolManager>,
+    tool_manager: Arc<ToolManager>,
     /// Execution context
     pub(crate) context: Arc<Context>,
 }
 
 impl WorkflowEngine {
     /// Create a new workflow engine
-    pub async fn new(
-        main_store: Arc<RwLock<MainStore>>,
-        chat_state: Arc<ChatState>,
-    ) -> Result<Self, WorkflowError> {
-        let function_manager = Arc::new(ToolManager::new());
-        function_manager
-            .clone()
-            .register_available_tools(chat_state.clone(), main_store.clone())
-            .await?;
+    pub async fn new<R: Runtime>(app_handle: AppHandle<R>) -> Result<Self, WorkflowError> {
+        let chat_state = app_handle.state::<Arc<ChatState>>().inner();
 
         Ok(Self {
-            chat_state,
-            main_store,
-            function_manager,
+            tool_manager: chat_state.tool_manager.clone(),
             context: Arc::new(Context::new()),
         })
     }
@@ -48,7 +42,7 @@ impl WorkflowEngine {
         // Create executor
         let mut executor = WorkflowExecutor::create(
             self.context.clone(),
-            self.function_manager.clone(),
+            self.tool_manager.clone(),
             4, // max_parallel
             Arc::new(graph),
         )?;
@@ -67,33 +61,20 @@ impl WorkflowEngine {
     pub async fn get_function_calling_spec(
         &self,
     ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
-        Ok(self.function_manager.get_tool_calling_spec(None).await?)
+        Ok(self.tool_manager.get_tool_calling_spec(None).await?)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::test::get_app_handle;
 
     use super::*;
-    use crate::libs::window_channels::WindowChannels;
-
-    fn get_db_path() -> std::path::PathBuf {
-        let db_path = {
-            let dev_dir = &*crate::STORE_DIR.read();
-            dev_dir.join("chatspeed.db")
-        };
-        db_path
-    }
 
     #[tokio::test]
     async fn test_get_function_calling_spec() -> Result<(), WorkflowError> {
-        let main_store =
-            MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
-        let engine = WorkflowEngine::new(
-            Arc::new(std::sync::RwLock::new(main_store)),
-            ChatState::new(Arc::new(WindowChannels::new())),
-        )
-        .await?;
+        let app = get_app_handle();
+        let engine = WorkflowEngine::new(app).await?;
 
         let calling_spec = engine.get_function_calling_spec().await?;
         log::debug!(
@@ -106,15 +87,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute() -> Result<(), Box<dyn std::error::Error>> {
-        let main_store =
-            MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
         // 创建工作流引擎
-        let engine = WorkflowEngine::new(
-            Arc::new(std::sync::RwLock::new(main_store)),
-            ChatState::new(Arc::new(WindowChannels::new())),
-        )
-        .await
-        .map_err(|e| format!("Failed to create workflow engine: {}", e))?;
+        let app = get_app_handle();
+        let engine = WorkflowEngine::new(app)
+            .await
+            .map_err(|e| format!("Failed to create workflow engine: {}", e))?;
 
         // 测试工作流执行
         let result = engine
@@ -195,8 +172,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_dag() -> Result<(), Box<dyn std::error::Error>> {
-        let chat_state = ChatState::new(Arc::new(WindowChannels::new()));
-
         // 2. 加载工作流配置
         let workflow_config = r#"[
         {
@@ -379,11 +354,11 @@ mod tests {
                 },
                 "output": "final_report"
             }
-        }]"#;
+        }]
+"#;
 
-        let main_store =
-            MainStore::new(get_db_path()).map_err(|e| WorkflowError::Store(e.to_string()))?;
-        let engine = WorkflowEngine::new(Arc::new(std::sync::RwLock::new(main_store)), chat_state)
+        let app = get_app_handle();
+        let engine = WorkflowEngine::new(app)
             .await
             .map_err(|e| format!("Failed to create workflow engine: {}", e))?;
 

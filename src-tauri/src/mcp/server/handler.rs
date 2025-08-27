@@ -235,7 +235,8 @@ impl ServerHandler for McpProxyHandler {
                 {
                     (
                         result.content.map(|s| s.into_contents()),
-                        result.structured_content,
+                        // result.structured_content,
+                        None,
                     )
                 } else {
                     (

@@ -106,7 +106,7 @@ pub struct WorkflowExecutor {
     /// DAG 图构建器
     graph: Arc<WorkflowGraph>,
     /// 函数管理器
-    function_manager: Arc<ToolManager>,
+    tool_manager: Arc<ToolManager>,
     /// 最大并行任务数
     max_parallel: usize,
     /// 工作流状态
@@ -147,7 +147,7 @@ impl WorkflowExecutor {
     ///   - The context is not properly initialized
     pub fn create(
         context: Arc<Context>,
-        function_manager: Arc<ToolManager>,
+        tool_manager: Arc<ToolManager>,
         max_parallel: usize,
         graph: Arc<WorkflowGraph>,
     ) -> WorkflowResult<Self> {
@@ -159,7 +159,7 @@ impl WorkflowExecutor {
         Ok(Self {
             context,
             graph,
-            function_manager,
+            tool_manager,
             state: Arc::new(RwLock::new(WorkflowState::Init)),
             state_channel,
             max_parallel,
@@ -571,11 +571,11 @@ impl WorkflowExecutor {
 
         let mut retries = 0;
         let mut current_delay = BASE_DELAY_MS;
-        let function_manager = self.function_manager.clone();
+        let tool_manager = self.tool_manager.clone();
 
         loop {
             match self
-                .execute_task_node(node.clone(), function_manager.clone())
+                .execute_task_node(node.clone(), tool_manager.clone())
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -614,7 +614,7 @@ impl WorkflowExecutor {
     async fn execute_task_node(
         &self,
         node: NodeConfig,
-        function_manager: Arc<ToolManager>,
+        tool_manager: Arc<ToolManager>,
     ) -> WorkflowResult<()> {
         match node.r#type {
             NodeType::Task(ToolConfig {
@@ -622,7 +622,7 @@ impl WorkflowExecutor {
                 param,
                 output,
             }) => {
-                let function = function_manager.get_tool(&function).await.map_err(|_| {
+                let function = tool_manager.get_tool(&function).await.map_err(|_| {
                     WorkflowError::Execution(
                         t!("tools.function_not_found", name = function).to_string(),
                     )
@@ -644,7 +644,7 @@ impl WorkflowExecutor {
                     .await?;
             }
             NodeType::Loop(_) => {
-                return self.execute_loop_node(node, function_manager).await;
+                return self.execute_loop_node(node, tool_manager).await;
             }
             _ => {
                 return Err(WorkflowError::Validation(

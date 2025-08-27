@@ -1,4 +1,4 @@
-function sendEvent(event,data) {
+function sendEvent(event, data) {
   if (window.__TAURI__?.event) {
     try {
       window.__TAURI__.event.emit(event, data)
@@ -20,18 +20,40 @@ const getTimestamp = () => {
 const logger = {
   debug: (...args) => {
     console.debug(`${getTimestamp()} [D]`, ...args)
-    sendEvent('logger', {message: args.join(' ') })
+    sendEvent('logger_event', { window: windowLabel || '', message: args.join(' ') })
   },
   info: (...args) => {
     console.info(`${getTimestamp()} [I]`, ...args)
-    sendEvent('logger', {message: args.join(' ') })
+    sendEvent('logger_event', { window: windowLabel || '', message: args.join(' ') })
   },
   warn: (...args) => {
     console.warn(`${getTimestamp()} [W]`, ...args)
-    sendEvent('logger', {message: args.join(' ') })
+    sendEvent('logger_event', { window: windowLabel || '', message: args.join(' ') })
   },
   error: (...args) => {
     console.error(`${getTimestamp()} [E]`, ...args)
-    sendEvent('logger', {message: args.join(' ') })
+    sendEvent('logger_event', { window: windowLabel || '', message: args.join(' ') })
   }
+}
+
+const formatText = txt => {
+  return txt == null
+    ? txt
+    : txt
+        .toString()
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+const baseCleanForMarkdown = el => {
+  if (!el) return el
+
+  el.querySelectorAll(
+    'script, style, noscript, form, iframe, frame, object, ' +
+      'embed, video, audio, link, svg, canvas, meta, head, ' +
+      'base, template, symbol, button, select, textarea, ' +
+      'datalist, dialog, source, picture, track, map'
+  ).forEach(el => el.remove())
+
+  return el
 }

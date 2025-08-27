@@ -136,18 +136,24 @@ pub fn set_config(
         .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
 
+    // Get previous value
+    // let prev_value = config_store.get_config(key, Value::Null);
+
     // Set the configuration value
     match config_store
         .set_config(key, &value)
         .map_err(|e| e.to_string())
     {
         Ok(_) => {
-            if key == CFG_INTERFACE_LANGUAGE {
-                let lang =
-                    config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
-                set_locale(&lang);
-                #[cfg(debug_assertions)]
-                log::debug!("Language set to: {}", lang);
+            match key {
+                CFG_INTERFACE_LANGUAGE => {
+                    let lang =
+                        config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
+                    set_locale(&lang);
+                    #[cfg(debug_assertions)]
+                    log::debug!("Language set to: {}", lang);
+                }
+                _ => {}
             }
             Ok(())
         }
@@ -179,7 +185,10 @@ pub fn reload_config(state: State<Arc<RwLock<MainStore>>>) -> Result<(), String>
 /// # Returns
 /// * `Result<AiModel, String>` - The AI model or an error message
 #[command]
-pub fn get_ai_model_by_id(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<AiModel, String> {
+pub fn get_ai_model_by_id(
+    state: State<Arc<RwLock<MainStore>>>,
+    id: i64,
+) -> Result<AiModel, String> {
     let config_store = state
         .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
@@ -460,7 +469,10 @@ pub fn delete_ai_model(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<
 /// # Returns
 /// * `Result<AiSkill, String>` - The AI skill or an error message
 #[command]
-pub fn get_ai_skill_by_id(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<AiSkill, String> {
+pub fn get_ai_skill_by_id(
+    state: State<Arc<RwLock<MainStore>>>,
+    id: i64,
+) -> Result<AiSkill, String> {
     let config_store = state
         .read()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;

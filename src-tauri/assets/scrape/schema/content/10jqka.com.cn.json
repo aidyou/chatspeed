@@ -3,7 +3,7 @@
     "name": "同花顺",
     "page_timeout": 15000,
     "wait_for": "body",
-    "js_code": ""
+    "wait_timeout": 10000
   },
   "selectors": {
     "base_selector": ".main-fl.fl",

@@ -3,7 +3,7 @@
     "name": "凤凰网",
     "page_timeout": 15000,
     "wait_for": "body",
-    "js_code": ""
+    "wait_timeout": 10000
   },
   "selectors": {
     "base_selector": "div[class^='index_leftContent_']",
