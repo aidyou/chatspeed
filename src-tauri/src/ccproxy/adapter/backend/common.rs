@@ -306,10 +306,30 @@ fn parse_and_emit_tool_call(
             args_json
         );
     } else {
-        unified_chunks.push(UnifiedStreamChunk::Error {
-            message: format!("tool xml parse failed, xml: {}", tool_xml),
+        let malformed_xml = tool_xml.to_string();
+        log::warn!("tool use xml parse failed, xml: {}", malformed_xml);
+
+        // 1. Send the malformed XML back as plain text so the AI can see what it did.
+        unified_chunks.push(UnifiedStreamChunk::Text {
+            delta: malformed_xml,
         });
-        log::warn!("tool xml parse failed, xml: {}", tool_xml);
+
+        // 2. Send the corrective reminder.
+        let reminder_text = r#"<system-reminder>
+Your last tool call had an invalid XML format and could not be parsed. Please check carefully and strictly follow the tool usage specifications.
+Common reasons for failure:
+1. Required parameters are missing.
+2. Special XML characters were not escaped. You must escape the following characters in parameter values:
+   - `&` must be written as `&amp;`
+   - `<` must be written as `&lt;`
+   - `>` must be written as `&gt;`
+   - `"` must be written as `&quot;`
+   - `'` must be written as `&apos;`
+</system-reminder>"#;
+
+        unified_chunks.push(UnifiedStreamChunk::Text {
+            delta: reminder_text.to_string(),
+        });
     }
 }
 

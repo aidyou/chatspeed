@@ -9,7 +9,7 @@ use std::{collections::HashMap, path::Path, sync::Mutex};
 
 // Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
 // DO NOT REMOVE: This trait import is necessary for the Manager trait to be in scope
-#[allow(unused_imports)]
+#[cfg(not(debug_assertions))]
 use tauri::Manager;
 
 use super::{

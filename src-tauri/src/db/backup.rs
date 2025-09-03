@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 use zip::{write::FileOptions, ZipWriter};
 
-#[allow(unused_imports)]
+#[cfg(not(debug_assertions))]
 use tauri::Manager;
 
 /// Configuration for database backup operations.

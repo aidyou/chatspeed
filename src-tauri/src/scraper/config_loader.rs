@@ -1,11 +1,11 @@
 //! Handles loading of scraper configurations from the filesystem.
+#[cfg(not(debug_assertions))]
+use {anyhow::anyhow, tauri::Manager};
+
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Wry};
 use url::Url;
-
-#[allow(unused_imports)]
-use tauri::Manager;
 
 use super::types::FullConfig;
 

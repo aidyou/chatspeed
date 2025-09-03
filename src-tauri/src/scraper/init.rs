@@ -7,7 +7,7 @@ use std::io;
 use std::path::Path;
 use tauri::{AppHandle, Wry};
 
-#[allow(unused_imports)]
+#[cfg(not(debug_assertions))]
 use tauri::Manager;
 
 // Helper function to recursively copy a directory, only copying files that don't exist in the destination.

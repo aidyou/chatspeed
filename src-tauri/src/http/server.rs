@@ -1,21 +1,5 @@
-use rust_i18n::t;
-use std::{
-    net::{AddrParseError, SocketAddr},
-    path::{Path, PathBuf},
-    sync::{Arc, Once},
-};
-use tauri::AppHandle;
-// Required for AppHandle::path() method even when using fully qualified syntax (<AppHandle as Manager>::path)
-// DO NOT REMOVE: This trait import is necessary for the Manager trait to be in scope
-#[allow(unused_imports)]
+#[cfg(not(debug_assertions))]
 use tauri::Manager;
-use tokio::{
-    net::TcpListener,
-    signal,
-    sync::broadcast,
-    task,
-    time::{self, Duration},
-};
 
 use axum::{
     body::Bytes,
@@ -24,6 +8,20 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
     Router,
+};
+use rust_i18n::t;
+use std::{
+    net::{AddrParseError, SocketAddr},
+    path::{Path, PathBuf},
+    sync::{Arc, Once},
+};
+use tauri::AppHandle;
+use tokio::{
+    net::TcpListener,
+    signal,
+    sync::broadcast,
+    task,
+    time::{self, Duration},
 };
 use tower_http::{
     cors::{Any, CorsLayer},

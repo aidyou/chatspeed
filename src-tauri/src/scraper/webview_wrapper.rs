@@ -5,11 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tauri::{
-    AppHandle, EventId, Listener, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
+    AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent, Wry,
 };
-
-#[allow(unused_imports)]
-use tauri::Manager;
 
 use super::types::{FullConfig, GenericContentRule};
 use crate::constants::CFG_SCRAPER_DEBUG_MODE;
