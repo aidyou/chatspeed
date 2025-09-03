@@ -1,14 +1,11 @@
-use crate::{
-    ai::interaction::ChatProtocol,
-    ccproxy::{
-        adapter::{
-            backend::BackendAdapter,
-            output::OutputAdapter,
-            unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart, UnifiedStreamChunk},
-        },
-        errors::{CCProxyError, ProxyResult},
-        StreamFormat, StreamProcessor,
+use crate::ccproxy::{
+    adapter::{
+        backend::BackendAdapter,
+        output::OutputAdapter,
+        unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart, UnifiedStreamChunk},
     },
+    errors::{CCProxyError, ProxyResult},
+    ChatProtocol, StreamFormat, StreamProcessor,
 };
 
 use axum::body::Body;

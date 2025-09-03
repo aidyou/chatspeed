@@ -1,9 +1,10 @@
-use crate::ai::interaction::ChatProtocol;
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
+use crate::ccproxy::helper::get_tool_id;
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
     helper::{get_provider_chat_full_url, should_forward_header, ModelResolver},
     types::ProxyModel,
+    ChatProtocol,
 };
 use crate::db::MainStore;
 
@@ -303,10 +304,12 @@ fn enhance_direct_request_body(
                         .to_string();
 
                     if proxy_model.prompt_injection == "enhance" {
-                        body_map.insert(
-                            system_prompt_field.to_string(),
-                            json!(format!("{}\n{}", original_prompt, proxy_model.prompt_text)),
-                        );
+                        let new_prompt = if original_prompt.is_empty() {
+                            proxy_model.prompt_text.clone()
+                        } else {
+                            format!("{}\n\n{}", original_prompt, proxy_model.prompt_text)
+                        };
+                        body_map.insert(system_prompt_field.to_string(), json!(new_prompt));
                     } else if proxy_model.prompt_injection == "replace" {
                         body_map.insert(
                             system_prompt_field.to_string(),
@@ -327,7 +330,7 @@ fn enhance_direct_request_body(
                         .to_string();
 
                     let new_prompt = if proxy_model.prompt_injection == "enhance" {
-                        format!("{}\n\nருங்கள்{}", original_prompt, proxy_model.prompt_text)
+                        format!("{}\n\n{}", original_prompt, proxy_model.prompt_text)
                     } else {
                         proxy_model.prompt_text.clone()
                     };
@@ -455,10 +458,7 @@ fn chunk_parser_and_log(
                                         .get("id")
                                         .and_then(|i| i.as_str())
                                         .map(|x| x.to_string())
-                                        .unwrap_or(format!(
-                                            "tool_{}",
-                                            uuid::Uuid::new_v4().simple()
-                                        ));
+                                        .unwrap_or(get_tool_id());
 
                                     if let Some(func) = tc.get("function") {
                                         if let Some(name) =
@@ -530,10 +530,8 @@ fn chunk_parser_and_log(
                                         match block.block_type.as_str() {
                                             "tool_use" => {
                                                 let tool_name = block.name.unwrap_or_default();
-                                                let tool_id = block.id.clone().unwrap_or(
-                                                    format!("tool_{}", uuid::Uuid::new_v4())
-                                                        .to_string(),
-                                                );
+                                                let tool_id =
+                                                    block.id.clone().unwrap_or(get_tool_id());
                                                 if let Ok(mut status) = sse_status.write() {
                                                     status.tool_id = tool_id.clone();
                                                 }
@@ -658,7 +656,7 @@ fn chunk_parser_and_log(
                                         .and_then(|f| f.get("name"))
                                         .and_then(|n| n.as_str())
                                     {
-                                        let id = format!("tool_{}", uuid::Uuid::new_v4().simple());
+                                        let id = get_tool_id();
                                         recorder_tool_calls.entry(id.to_string()).or_insert_with(
                                             || UnifiedFunctionCallPart {
                                                 name: name.to_string(),
@@ -733,8 +731,7 @@ fn chunk_parser_and_log(
                                             .and_then(|f| f.get("name"))
                                             .and_then(|n| n.as_str())
                                         {
-                                            let id =
-                                                format!("tool_{}", uuid::Uuid::new_v4().simple());
+                                            let id = get_tool_id();
                                             recorder_tool_calls
                                                 .entry(id.to_string())
                                                 .or_insert_with(|| UnifiedFunctionCallPart {

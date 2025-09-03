@@ -3,6 +3,7 @@ mod proxy_rotator;
 pub mod sse;
 pub mod stream_handler;
 mod stream_processor;
+pub mod tool_use_xml;
 
 pub use common::*;
 pub use proxy_rotator::CC_PROXY_ROTATOR;

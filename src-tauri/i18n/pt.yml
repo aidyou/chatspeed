@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "É necessária uma chave de API para obter a lista de modelos. Configure uma chave de API válida nas configurações."
   chat_completion_failed_after_retries: "A conclusão do chat falhou após %{retries} tentativas"
   chat_not_found: "Sessão de chat especificada não encontrada"
-  crawler_url_not_found: "URL do servidor do rastreador não encontrada"
   empty_chat_id: "O ID do chat não pode estar vazio"
   empty_messages: "A lista de mensagens não pode estar vazia"
   empty_model: "O nome do modelo não pode estar vazio"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "Falha ao configurar o proxy do chat: %{error}"
   failed_to_write_file: "Não foi possível escrever no arquivo: %{error}"
   invalid_search_model: "Modelo de pesquisa inválido: %{model_name}"
-  json_serialize_crawler_results_failed: "Falha ao serializar o conteúdo rastreado para JSON: %{error}"
-  no_valid_search_engine_config: "Nenhuma configuração válida de mecanismo de busca encontrada. Configure pelo menos um mecanismo de busca nas configurações."
   note_already_exists: "Esta nota já existe, não há necessidade de adicioná-la novamente"
   search_analysing: "Analisando dados..."
   search_fetching: "Buscando dados..."
@@ -260,7 +257,6 @@ tools:
   model_name_must_be_string: "O parâmetro de nome do modelo deve ser uma string"
   model_not_found: "Modelo não encontrado no fluxo de trabalho: %{model_name}"
   model_type_not_found: "Tipo de modelo %{model_type} não encontrado, id: %{id}, erro: %{error}"
-  provider_must_be_string: "O parâmetro do provedor de serviços de pesquisa deve ser uma string"
   query_must_not_be_empty: "O parâmetro de consulta deve ser uma string não vazia"
   url_invalid: "Erro de formato do parâmetro de URL, deve começar com http:// ou https://: %{url}"
   url_must_be_string: "O parâmetro de URL deve ser uma string"
@@ -295,7 +291,6 @@ tools:
     google_cx_empty: "O ID do mecanismo de busca do Google não pode estar vazio"
     serper_api_key_empty: "A chave de API do Serper não pode estar vazia"
     tavily_api_key_empty: "A chave de API do Tavily não pode estar vazia"
-    provider_no_support: "Mecanismo de busca não suportado: {name}"
     web_search_failed: "Falha na pesquisa na web (provedor: %{provider}, palavra-chave: %{keyword}): %{details}"
 
 tray:

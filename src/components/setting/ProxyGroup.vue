@@ -45,42 +45,103 @@
         </template>
       </div>
 
-      <el-dialog v-model="dialogVisible" :title="isEditing ? $t('settings.proxyGroup.editTitle') : $t('settings.proxyGroup.addTitle')
-        " width="600px" align-center @closed="resetForm" class="proxy-group-edit-dialog" :show-close="false"
-        :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-dialog
+        v-model="dialogVisible"
+        :title="
+          isEditing ? $t('settings.proxyGroup.editTitle') : $t('settings.proxyGroup.addTitle')
+        "
+        width="600px"
+        align-center
+        @closed="resetForm"
+        class="proxy-group-edit-dialog"
+        :show-close="false"
+        :close-on-click-modal="false"
+        :close-on-press-escape="false">
         <div class="form-container">
-          <el-form :model="currentGroup" label-width="auto" ref="proxyGroupFormRef" style="padding-top: 10px">
-            <el-form-item :label="$t('settings.proxyGroup.form.name')" prop="name" :rules="[
-              { required: true, message: $t('settings.proxyGroup.validation.nameRequired') }
-            ]">
-              <el-input v-model="currentGroup.name" :placeholder="$t('settings.proxyGroup.form.namePlaceholder')" />
+          <el-form
+            :model="currentGroup"
+            label-width="auto"
+            ref="proxyGroupFormRef"
+            style="padding-top: 10px">
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.name')"
+              prop="name"
+              :rules="[
+                { required: true, message: $t('settings.proxyGroup.validation.nameRequired') }
+              ]">
+              <el-input
+                v-model="currentGroup.name"
+                :placeholder="$t('settings.proxyGroup.form.namePlaceholder')" />
             </el-form-item>
             <el-form-item :label="$t('settings.proxyGroup.form.description')" prop="description">
-              <el-input v-model="currentGroup.description" type="textarea" :rows="2"
+              <el-input
+                v-model="currentGroup.description"
+                type="textarea"
+                :rows="2"
                 :placeholder="$t('settings.proxyGroup.form.descriptionPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="$t('settings.proxyGroup.form.promptInjection')" prop="prompt_injection">
-              <el-select v-model="currentGroup.prompt_injection"
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.promptInjection')"
+              prop="prompt_injection">
+              <el-select
+                v-model="currentGroup.promptInjection"
                 :placeholder="$t('settings.proxyGroup.form.promptInjectionPlaceholder')">
                 <el-option :label="$t('settings.proxyGroup.promptInjection.off')" value="off" />
-                <el-option :label="$t('settings.proxyGroup.promptInjection.enhance')" value="enhance" />
-                <el-option :label="$t('settings.proxyGroup.promptInjection.replace')" value="replace" />
+                <el-option
+                  :label="$t('settings.proxyGroup.promptInjection.enhance')"
+                  value="enhance" />
+                <el-option
+                  :label="$t('settings.proxyGroup.promptInjection.replace')"
+                  value="replace" />
+              </el-select>
+            </el-form-item>
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.promptInjectionPosition')"
+              prop="metadata.prompt_injection_position">
+              <el-select
+                v-model="currentGroup.metadata.promptInjectionPosition"
+                :placeholder="$t('settings.proxyGroup.form.promptInjectionPositionPlaceholder')">
+                <el-option
+                  :label="$t('settings.proxyGroup.promptInjectionPosition.system')"
+                  value="system" />
+                <el-option
+                  :label="$t('settings.proxyGroup.promptInjectionPosition.user')"
+                  value="user" />
               </el-select>
             </el-form-item>
             <el-form-item :label="$t('settings.proxyGroup.form.promptText')" prop="prompt_text">
-              <el-input v-model="currentGroup.prompt_text" type="textarea" :rows="4"
+              <el-input
+                v-model="currentGroup.promptText"
+                type="textarea"
+                :rows="4"
                 :placeholder="$t('settings.proxyGroup.form.promptTextPlaceholder')" />
             </el-form-item>
             <el-form-item :label="$t('settings.proxyGroup.form.toolFilter')" prop="tool_filter">
-              <el-input v-model="currentGroup.tool_filter" type="textarea" :rows="3"
+              <el-input
+                v-model="currentGroup.toolFilter"
+                type="textarea"
+                :rows="3"
                 :placeholder="$t('settings.proxyGroup.form.toolFilterPlaceholder')" />
             </el-form-item>
-            <el-form-item :label="$t('settings.proxyGroup.form.temperatureRatio')" prop="temperature">
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.temperatureRatio')"
+              prop="temperature">
               <div class="temperature-wrap">
-                <el-tooltip :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')" placement="top">
-                  <el-input-number v-model="currentGroup.temperature" :min="0" :max="1.0" :step="0.1" />
+                <el-tooltip
+                  :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')"
+                  placement="top">
+                  <el-input-number
+                    v-model="currentGroup.temperature"
+                    :min="0"
+                    :max="1.0"
+                    :step="0.1" />
                 </el-tooltip>
-                <el-slider v-model="currentGroup.temperature" :min="0" :max="1.0" :step="0.1" style="width: 65%" />
+                <el-slider
+                  v-model="currentGroup.temperature"
+                  :min="0"
+                  :max="1.0"
+                  :step="0.1"
+                  style="width: 65%" />
               </div>
             </el-form-item>
             <!-- <el-form-item :label="$t('settings.proxyGroup.form.maxContext')" prop="maxContext">
@@ -139,11 +200,11 @@ const initialGroupState = () => ({
   id: null,
   name: '',
   description: '',
-  prompt_injection: 'off',
-  prompt_text: '',
-  tool_filter: '',
+  promptInjection: 'off',
+  promptText: '',
+  toolFilter: '',
   temperature: 1.0,
-  metadata: { maxContext: 0 },
+  metadata: { maxContext: 0, promptInjectionPosition: 'system' },
   disabled: false
 })
 
@@ -224,7 +285,7 @@ const handleDeleteGroup = id => {
         )
       }
     })
-    .catch(() => { })
+    .catch(() => {})
 }
 </script>
 

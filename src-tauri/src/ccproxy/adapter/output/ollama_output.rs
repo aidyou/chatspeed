@@ -89,7 +89,11 @@ impl OutputAdapter for OllamaOutputAdapter {
         chunk: UnifiedStreamChunk,
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
-        let model_id = sse_status.read().unwrap().model_id.clone();
+        let model_id = if let Ok(status) = sse_status.read() {
+            status.model_id.clone()
+        } else {
+            "".to_string()
+        };
 
         let stream_response = match chunk {
             UnifiedStreamChunk::Text { delta } => Some(OllamaStreamResponse {
@@ -105,9 +109,10 @@ impl OutputAdapter for OllamaOutputAdapter {
             }),
 
             UnifiedStreamChunk::ToolUseStart { id: _, name, .. } => {
-                let mut status = sse_status.write().unwrap();
-                status.tool_name = Some(name.clone());
-                status.tool_arguments = Some(String::new());
+                if let Ok(mut status) = sse_status.write() {
+                    status.tool_name = Some(name.clone());
+                    status.tool_arguments = Some(String::new());
+                }
 
                 Some(OllamaStreamResponse {
                     model: model_id,
@@ -129,20 +134,52 @@ impl OutputAdapter for OllamaOutputAdapter {
             }
 
             UnifiedStreamChunk::ToolUseDelta { delta, .. } => {
-                let mut status = sse_status.write().unwrap();
-                if let Some(args) = &mut status.tool_arguments {
-                    args.push_str(&delta);
+                let (tool_name, _) = if let Ok(mut status) = sse_status.write() {
+                    (status.tool_name.take(), status.tool_arguments.take())
+                } else {
+                    (None, None)
+                };
+
+                if let Some(name) = tool_name {
+                    let arguments: serde_json::Value = serde_json::from_str(&delta)
+                        .unwrap_or_else(|_| json!({ "partial_data": delta }));
+
+                    Some(OllamaStreamResponse {
+                        model: model_id,
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        message: OllamaMessage {
+                            role: "assistant".to_string(),
+                            content: "".to_string(),
+                            tool_calls: Some(vec![OllamaToolCall {
+                                function: OllamaFunctionCall { name, arguments },
+                            }]),
+                            ..Default::default()
+                        },
+                        done: false,
+                        ..Default::default()
+                    })
+                } else {
+                    None
                 }
-                None // No separate event for delta, aggregated and sent at the end
             }
 
             UnifiedStreamChunk::ToolUseEnd { .. } => {
-                let mut status = sse_status.write().unwrap();
-                let tool_name = status.tool_name.take();
-                let tool_arguments = status.tool_arguments.take();
+                let (tool_name, tool_arguments) = if let Ok(mut status) = sse_status.write() {
+                    (status.tool_name.take(), status.tool_arguments.take())
+                } else {
+                    (None, None)
+                };
 
                 if let (Some(name), Some(arguments_str)) = (tool_name, tool_arguments) {
                     let arguments: serde_json::Value = serde_json::from_str(&arguments_str)
+                        .map_err(|e| {
+                            log::error!(
+                                "Failed to parse tool arguments, error: {}, rawString: {}",
+                                e,
+                                arguments_str
+                            );
+                            e
+                        })
                         .unwrap_or_else(|_| json!({ "partial_data": arguments_str }));
 
                     Some(OllamaStreamResponse {
@@ -164,22 +201,31 @@ impl OutputAdapter for OllamaOutputAdapter {
                 }
             }
 
-            UnifiedStreamChunk::MessageStop { usage, .. } => Some(OllamaStreamResponse {
-                model: model_id,
-                created_at: chrono::Utc::now().to_rfc3339(),
-                message: OllamaMessage {
-                    role: "assistant".to_string(),
-                    content: "".to_string(),
-                    ..Default::default()
-                },
-                done: true,
-                total_duration: Some(usage.total_duration.unwrap_or(0)),
-                load_duration: Some(usage.load_duration.unwrap_or(0)),
-                prompt_eval_count: Some(usage.input_tokens as u32),
-                prompt_eval_duration: Some(usage.prompt_eval_duration.unwrap_or(0)),
-                eval_count: Some(usage.output_tokens as u32),
-                eval_duration: Some(usage.eval_duration.unwrap_or(0)),
-            }),
+            UnifiedStreamChunk::MessageStop { usage, .. } => {
+                let output = if let Ok(status) = sse_status.read() {
+                    (status.text_delta_count
+                        + status.tool_delta_count
+                        + status.thinking_delta_count) as u64
+                } else {
+                    1
+                };
+                Some(OllamaStreamResponse {
+                    model: model_id,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    message: OllamaMessage {
+                        role: "assistant".to_string(),
+                        content: "".to_string(),
+                        ..Default::default()
+                    },
+                    done: true,
+                    total_duration: Some(usage.total_duration.unwrap_or(0)),
+                    load_duration: Some(usage.load_duration.unwrap_or(0)),
+                    prompt_eval_count: Some(usage.input_tokens.max(1) as u32),
+                    prompt_eval_duration: Some(usage.prompt_eval_duration.unwrap_or(0)),
+                    eval_count: Some(usage.output_tokens.max(output) as u32),
+                    eval_duration: Some(usage.eval_duration.unwrap_or(0)),
+                })
+            }
 
             UnifiedStreamChunk::Error { message } => {
                 let error_response = json!({ "error": message });
@@ -190,7 +236,15 @@ impl OutputAdapter for OllamaOutputAdapter {
         };
 
         if let Some(response) = stream_response {
-            let json_str = serde_json::to_string(&response).unwrap();
+            let json_str = serde_json::to_string(&response)
+                .map_err(|e| {
+                    log::error!(
+                        "Failed to serialize Ollama response, error: {}, response: {:?}",
+                        e.to_string(),
+                        &response
+                    );
+                })
+                .unwrap_or_default();
             Ok(vec![Event::default().text(json_str)])
         } else {
             Ok(vec![])

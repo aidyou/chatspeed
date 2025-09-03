@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "Getting model list requires API key, please configure a valid API key in settings"
   chat_completion_failed_after_retries: "Chat completion failed after %{retries} retries"
   chat_not_found: "Specified chat session not found"
-  crawler_url_not_found: "Crawler server URL not found"
   empty_chat_id: "Chat ID cannot be empty"
   empty_messages: "Message list cannot be empty"
   empty_model: "Model name cannot be empty"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "Failed to setup chat proxy: %{error}"
   failed_to_write_file: "Failed to write file: %{error}"
   invalid_search_model: "Invalid search model: %{model_name}"
-  json_serialize_crawler_results_failed: "Failed to serialize crawled content to JSON: %{error}"
-  no_valid_search_engine_config: "No valid search engine configuration found, please configure at least one search engine in settings"
   note_already_exists: "This note already exists, no need to add again"
   search_analysing: "Analyzing data..."
   search_fetching: "Fetching data..."
@@ -260,7 +257,6 @@ tools:
   model_name_must_be_string: "Model name parameter must be a string"
   model_not_found: "Model not found in workflow: %{model_name}"
   model_type_not_found: "Model type %{model_type} not found, id: %{id}, error: %{error}"
-  provider_must_be_string: "Search service provider parameter must be a string"
   query_must_not_be_empty: "Query parameter must be non-empty string"
   url_invalid: "URL parameter format error, must start with http:// or https://: %{url}"
   url_must_be_string: "URL parameter must be a string"
@@ -295,7 +291,6 @@ tools:
     google_cx_empty: "Google Search Engine ID cannot be empty"
     serper_api_key_empty: "Serper API key cannot be empty"
     tavily_api_key_empty: "Tavily API key cannot be empty"
-    provider_no_support: "Search engine not supported: {name}"
     web_search_failed: "Web search failed (Provider: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:

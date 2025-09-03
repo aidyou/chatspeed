@@ -45,9 +45,10 @@
 //! - Finally, add the new AI provider to the `init_chats!` macro.
 
 use crate::ai::interaction::chat_completion::{
-    list_models_async, start_new_chat_interaction, ChatProtocol, ChatState,
+    list_models_async, start_new_chat_interaction, ChatState,
 };
 use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, ModelDetails};
+use crate::ccproxy::ChatProtocol;
 use crate::constants::CFG_SEARCH_ENGINE;
 use crate::db::MainStore;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};

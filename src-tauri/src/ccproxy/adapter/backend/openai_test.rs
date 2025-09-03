@@ -18,7 +18,7 @@ mod tests {
         let client = Client::new();
 
         // Create a unified request that mimics the Claude request structure
-        let unified_request = UnifiedRequest {
+        let mut unified_request = UnifiedRequest {
             system_prompt: None,
             model: "test-model".to_string(),
             messages: vec![
@@ -121,25 +121,15 @@ mod tests {
                     }),
                 },
             ]),
-            tool_choice: None,
             tool_compat_mode: false,
-            logprobs: None,
-            top_logprobs: None,
-            top_k: None,
-            metadata: None,
-            thinking: None,
-            cache_control: None,
-            safety_settings: None,
-            response_mime_type: None,
-            response_schema: None,
-            cached_content: None,
+            ..Default::default()
         };
 
         // Test the adaptation
         let result = adapter
             .adapt_request(
                 &client,
-                &unified_request,
+                &mut unified_request,
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
@@ -160,7 +150,7 @@ mod tests {
         let client = Client::new();
 
         // Create a request that mimics the bugfix.md scenario: multiple consecutive assistant messages with tool calls
-        let unified_request = UnifiedRequest {
+        let mut unified_request = UnifiedRequest {
             model: "test-model".to_string(),
             messages: vec![
                 UnifiedMessage {
@@ -212,13 +202,6 @@ mod tests {
             stream: false,
             max_tokens: Some(1000),
             temperature: Some(0.7),
-            top_p: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            response_format: None,
-            stop_sequences: None,
-            seed: None,
-            user: None,
             tools: Some(vec![UnifiedTool {
                 name: "search".to_string(),
                 description: Some("Search tool".to_string()),
@@ -231,25 +214,14 @@ mod tests {
                     }
                 }),
             }]),
-            tool_choice: None,
             tool_compat_mode: false,
-            logprobs: None,
-            top_logprobs: None,
-            top_k: None,
-            metadata: None,
-            thinking: None,
-            cache_control: None,
-            system_prompt: None,
-            safety_settings: None,
-            response_mime_type: None,
-            response_schema: None,
-            cached_content: None,
+            ..Default::default()
         };
 
         let result = adapter
             .adapt_request(
                 &client,
-                &unified_request,
+                &mut unified_request,
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
@@ -270,7 +242,7 @@ mod tests {
         let client = Client::new();
 
         // Create a request with a tool call but no corresponding tool result
-        let unified_request = UnifiedRequest {
+        let mut unified_request = UnifiedRequest {
             model: "test-model".to_string(),
             messages: vec![
                 UnifiedMessage {
@@ -301,13 +273,6 @@ mod tests {
             stream: false,
             max_tokens: Some(1000),
             temperature: Some(0.7),
-            top_p: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            response_format: None,
-            stop_sequences: None,
-            seed: None,
-            user: None,
             tools: Some(vec![UnifiedTool {
                 name: "TestTool".to_string(),
                 description: Some("Test tool".to_string()),
@@ -320,25 +285,14 @@ mod tests {
                     }
                 }),
             }]),
-            tool_choice: None,
             tool_compat_mode: false,
-            logprobs: None,
-            top_logprobs: None,
-            top_k: None,
-            metadata: None,
-            thinking: None,
-            cache_control: None,
-            system_prompt: None,
-            safety_settings: None,
-            response_mime_type: None,
-            response_schema: None,
-            cached_content: None,
+            ..Default::default()
         };
 
         let result = adapter
             .adapt_request(
                 &client,
-                &unified_request,
+                &mut unified_request,
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
@@ -1126,13 +1080,13 @@ mod tests {
 }
 "#;
         let claude_request = serde_json::from_str(test_request_data).unwrap();
-        let unified_request = from_claude(claude_request, false).unwrap();
+        let mut unified_request = from_claude(claude_request, false).unwrap();
         let be = OpenAIBackendAdapter {};
         let client = Client::new();
         let _ = be
             .adapt_request(
                 &client,
-                &unified_request,
+                &mut unified_request,
                 "test-api-key",
                 "https://api.abc.com/v1",
                 "gpt-4",
@@ -1140,6 +1094,7 @@ mod tests {
             .await
             .unwrap();
     }
+
     #[tokio::test]
     async fn test_cline_request() {
         let test_request_data = r#"{
@@ -1158,13 +1113,13 @@ mod tests {
         }
 "#;
         let request = serde_json::from_str(test_request_data).unwrap();
-        let unified_request = from_ollama(request, false).unwrap();
+        let mut unified_request = from_ollama(request, false).unwrap();
         let be = OpenAIBackendAdapter {};
         let client = Client::new();
         let _ = be
             .adapt_request(
                 &client,
-                &unified_request,
+                &mut unified_request,
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",

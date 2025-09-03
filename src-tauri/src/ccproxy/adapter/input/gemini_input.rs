@@ -1,14 +1,15 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::ccproxy::{
     adapter::{
-        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
             UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
             UnifiedToolChoice,
         },
     },
     gemini::{GeminiPart, GeminiRequest},
+    types::ChatProtocol,
 };
 
 /// Converts a Gemini-compatible chat completion request into the `UnifiedRequest`.
@@ -68,21 +69,24 @@ pub fn from_gemini(
                     .into_iter()
                     .map(|func_decl| UnifiedTool {
                         name: func_decl.name,
-                        description: Some(func_decl.description),
-                        input_schema: func_decl.parameters,
+                        description: func_decl.description,
+                        input_schema: func_decl.parameters.unwrap_or(Value::Null),
                     })
             })
             .collect()
     });
 
-    let tool_choice = req.tool_config.map(|config| {
-        match config.function_calling_config.mode.to_uppercase().as_str() {
-            "NONE" => UnifiedToolChoice::None,
-            "AUTO" => UnifiedToolChoice::Auto,
-            "ANY" => UnifiedToolChoice::Required,
-            _ => UnifiedToolChoice::Auto, // Default to auto
-        }
-    });
+    let tool_choice = req
+        .tool_config
+        .map(|config| match config.function_calling_config {
+            Some(config) => match config.mode.as_str() {
+                "NONE" => UnifiedToolChoice::None,
+                "AUTO" => UnifiedToolChoice::Auto,
+                "ANY" => UnifiedToolChoice::Required,
+                _ => UnifiedToolChoice::Auto,
+            },
+            None => UnifiedToolChoice::Auto,
+        });
 
     let stream = if generate_action == "streamGenerateContent".to_string() {
         true
@@ -94,7 +98,7 @@ pub fn from_gemini(
         .generation_config
         .as_ref()
         .and_then(|config| config.temperature)
-        .map(|t| clamp_to_protocol_range(t, Protocol::Gemini, Parameter::Temperature));
+        .map(|t| clamp_to_protocol_range(t, ChatProtocol::Gemini, Parameter::Temperature));
     let max_tokens = req.generation_config.as_ref().and_then(|config| {
         config
             .max_output_tokens
@@ -104,7 +108,7 @@ pub fn from_gemini(
         .generation_config
         .as_ref()
         .and_then(|config| config.top_p)
-        .map(|p| clamp_to_protocol_range(p, Protocol::Gemini, Parameter::TopP));
+        .map(|p| clamp_to_protocol_range(p, ChatProtocol::Gemini, Parameter::TopP));
     let top_k = req
         .generation_config
         .as_ref()
@@ -170,6 +174,7 @@ pub fn from_gemini(
         response_schema,
         cached_content: req.cached_content,
         tool_compat_mode,
+        ..Default::default()
     })
 }
 

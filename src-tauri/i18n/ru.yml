@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "Для получения списка моделей требуется ключ API. Настройте действительный ключ API в настройках."
   chat_completion_failed_after_retries: "Завершение чата не удалось после %{retries} попыток"
   chat_not_found: "Указанная сессия чата не найдена"
-  crawler_url_not_found: "URL-адрес сервера веб-сканера не найден"
   empty_chat_id: "ID чата не может быть пустым"
   empty_messages: "Список сообщений не может быть пустым"
   empty_model: "Имя модели не может быть пустым"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "Не удалось настроить прокси для чата: %{error}"
   failed_to_write_file: "Не удалось записать в файл: %{error}"
   invalid_search_model: "Недопустимая модель поиска: %{model_name}"
-  json_serialize_crawler_results_failed: "Не удалось сериализовать результаты сканирования в JSON: %{error}"
-  no_valid_search_engine_config: "Нет действительной конфигурации поисковой системы. Настройте хотя бы одну поисковую систему в настройках."
   note_already_exists: "Эта заметка уже существует, нет необходимости добавлять ее снова"
   search_analysing: "Анализ данных..."
   search_fetching: "Получение данных..."
@@ -260,7 +257,6 @@ tools:
   model_name_must_be_string: "Параметр имя модели (model_name) должен быть строкой"
   model_not_found: "Модель не найдена в рабочем процессе: %{model_name}"
   model_type_not_found: "Тип модели %{model_type} не найден, id: %{id}, ошибка: %{error}"
-  provider_must_be_string: "Параметр поставщик поиска (provider) должен быть строкой"
   query_must_not_be_empty: "Параметр запрос (query) должен быть непустой строкой"
   url_invalid: "Неверный формат параметра URL, должен начинаться с http:// или https://: %{url}"
   url_must_be_string: "Параметр URL должен быть строкой"
@@ -295,7 +291,6 @@ tools:
     google_cx_empty: "ID поисковой системы Google не может быть пустым"
     serper_api_key_empty: "Ключ API Serper не может быть пустым"
     tavily_api_key_empty: "Ключ API Tavily не может быть пустым"
-    provider_no_support: "Поисковая система не поддерживается: {name}"
     web_search_failed: "Ошибка веб-поиска (Поставщик: %{provider}, Ключевое слово: %{keyword}): %{details}"
 
 tray:

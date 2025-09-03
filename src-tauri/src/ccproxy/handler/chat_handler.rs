@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::ai::interaction::ChatProtocol;
+use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     adapter::{
         backend::{self, BackendAdapter},
@@ -247,6 +247,9 @@ pub async fn handle_chat_completion(
     )
     .await?;
 
+    //======================================================
+    // Direct send request to ai server
+    //======================================================
     if chat_protocol == proxy_model.chat_protocol && !tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
@@ -307,15 +310,9 @@ pub async fn handle_chat_completion(
         .map_or(false, |t| t.len() > 0);
 
     if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
-        if proxy_model.prompt_injection == "enhance" {
-            unified_request.system_prompt = Some(format!(
-                "{}\n\n{}",
-                unified_request.system_prompt.unwrap_or_default(),
-                proxy_model.prompt_text,
-            ));
-        } else if proxy_model.prompt_injection == "replace" {
-            unified_request.system_prompt = Some(proxy_model.prompt_text);
-        }
+        unified_request.prompt_injection = Some(proxy_model.prompt_injection.clone());
+        unified_request.prompt_enhance_text = Some(proxy_model.prompt_text.clone());
+        unified_request.prompt_injection_position = proxy_model.prompt_injection_position.clone();
     }
 
     // 2. Resolve model and get backend adapter
@@ -351,7 +348,7 @@ pub async fn handle_chat_completion(
     let mut onward_request_builder = backend_adapter
         .adapt_request(
             &http_client,
-            &unified_request,
+            &mut unified_request,
             &proxy_model.api_key,
             &full_url,
             &proxy_model.model,

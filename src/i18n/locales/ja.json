@@ -126,6 +126,7 @@
     "note": "智記",
     "proxy": "プロキシ",
     "quit": "終了",
+    "scraperTest": "スクレイパーのテスト",
     "setting": "設定",
     "skill": "スキル"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "バックアップ復元の確認",
       "restoreSuccess": "復元が完了しました",
       "runBackup": "バックアップを実行",
+      "scraperConcurrencyCount": "スクレイパーの並行数",
+      "scraperConcurrencyCountTooltip": "検索結果のウェブコンテンツをスクレイプする際の並行リクエスト数、5～10を推奨",
       "scraperDebugMode": "スクレイパーのデバッグモード",
       "scraperDebugModeTooltip": "スクレイパーのデバッグモードを有効にすると、スクレイパーのブラウザウィンドウが表示されます",
       "searchEngine": "検索エンジン",
@@ -499,7 +502,9 @@
         "temperatureRatio": "温度比",
         "temperatureRatioPlaceholder": "実際の温度=リクエスト温度*温度比",
         "toolFilter": "ツールフィルター",
-        "toolFilterPlaceholder": "フィルターするツール名を入力してください（1行に1つ）"
+        "toolFilterPlaceholder": "フィルターするツール名を入力してください（1行に1つ）",
+        "promptInjectionPosition": "インジェクション位置",
+        "promptInjectionPositionPlaceholder": "システムロールまたは最後のユーザーメッセージに注入するを選択"
       },
       "validation": {
         "nameRequired": "グループ名は空にできません。"
@@ -508,6 +513,10 @@
         "off": "オフ",
         "enhance": "拡張",
         "replace": "置換"
+      },
+      "promptInjectionPosition": {
+        "system": "システムロール",
+        "user": "ユーザーロール"
       }
     },
     "skill": {

@@ -1,8 +1,13 @@
 use crate::ccproxy::{
-    adapter::unified::{
-        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
+    adapter::{
+        range_adapter::clamp_to_protocol_range,
+        unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
     },
-    types::ollama::{OllamaChatCompletionRequest, OllamaMessage},
+    get_tool_id,
+    types::{
+        ollama::{OllamaChatCompletionRequest, OllamaMessage},
+        ChatProtocol,
+    },
 };
 use anyhow::Result;
 
@@ -27,7 +32,19 @@ pub fn from_ollama(
             _ => anyhow::bail!("Invalid or missing role in Ollama message: {}", msg.role),
         };
 
-        let content = convert_ollama_message_to_content_blocks(msg)?;
+        let content = if role == UnifiedRole::Tool {
+            // Correctly handle the tool role by creating a ToolResult block.
+            // Ollama does not provide a tool_call_id, so we generate a placeholder.
+            // This is crucial for the backend adapter to identify this as a tool result.
+            vec![UnifiedContentBlock::ToolResult {
+                tool_use_id: get_tool_id(),
+                content: msg.content.clone(),
+                is_error: false,
+            }]
+        } else {
+            // For user and assistant roles, use the helper function.
+            convert_ollama_message_to_content_blocks(&msg)?
+        };
 
         messages.push(UnifiedMessage {
             role,
@@ -41,7 +58,7 @@ pub fn from_ollama(
             .into_iter()
             .map(|tool| UnifiedTool {
                 name: tool.function.name,
-                description: Some(tool.function.description),
+                description: tool.function.description,
                 input_schema: tool.function.parameters,
             })
             .collect()
@@ -56,7 +73,17 @@ pub fn from_ollama(
         tools,
         tool_choice: None, // Ollama doesn't support tool_choice
         stream: req.stream.unwrap_or(false),
-        temperature: options.temperature,
+        temperature: options.temperature.and_then(|t| {
+            if t < 0.0 {
+                None
+            } else {
+                Some(clamp_to_protocol_range(
+                    t,
+                    ChatProtocol::Ollama,
+                    crate::ccproxy::adapter::range_adapter::Parameter::Temperature,
+                ))
+            }
+        }),
         max_tokens: options.num_predict,
         top_p: options.top_p,
         top_k: options.top_k,
@@ -82,24 +109,37 @@ pub fn from_ollama(
         response_schema: None,
         cached_content: None,
         tool_compat_mode,
+        keep_alive: req
+            .keep_alive
+            .as_ref()
+            .and_then(|ka| ka.as_str())
+            .and_then(|ka| {
+                if ka.is_empty() || ka == "-1" {
+                    None
+                } else {
+                    Some(ka.to_string())
+                }
+            }),
+        ..Default::default()
     })
 }
 
-/// Converts an Ollama message into a vector of `UnifiedContentBlock`.
-/// This function follows the pattern of `openai_input.rs`, which may have limitations
-/// in handling tool results correctly.
+/// Converts an Ollama message (for user or assistant) into a vector of `UnifiedContentBlock`.
+/// Note: This function should not be called for 'tool' role messages.
 fn convert_ollama_message_to_content_blocks(
-    msg: OllamaMessage,
+    msg: &OllamaMessage,
 ) -> Result<Vec<UnifiedContentBlock>> {
     let mut blocks = Vec::new();
 
-    // Add text content. For 'tool' role, this is the tool's output.
+    // Add text content.
     if !msg.content.is_empty() {
-        blocks.push(UnifiedContentBlock::Text { text: msg.content });
+        blocks.push(UnifiedContentBlock::Text {
+            text: msg.content.clone(),
+        });
     }
 
     // Add image content (for 'user' messages)
-    if let Some(images) = msg.images {
+    if let Some(images) = &msg.images {
         for base64_data in images {
             let media_type = if base64_data.starts_with("iVBORw0KGgo") {
                 "image/png".to_string()
@@ -110,19 +150,20 @@ fn convert_ollama_message_to_content_blocks(
             };
             blocks.push(UnifiedContentBlock::Image {
                 media_type,
-                data: base64_data,
+                data: base64_data.clone(),
             });
         }
     }
 
     // Add tool calls (for 'assistant' messages)
-    if let Some(tool_calls) = msg.tool_calls {
+    if let Some(tool_calls) = &msg.tool_calls {
         for tc in tool_calls {
             blocks.push(UnifiedContentBlock::ToolUse {
-                // Ollama doesn't provide a tool_call_id. This is a known limitation.
-                id: "".to_string(),
-                name: tc.function.name,
-                input: tc.function.arguments,
+                // Ollama doesn't provide a tool_call_id in the request.
+                // We generate a placeholder, though it won't correlate to a result.
+                id: get_tool_id(),
+                name: tc.function.name.clone(),
+                input: tc.function.arguments.clone(),
             });
         }
     }

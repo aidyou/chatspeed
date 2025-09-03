@@ -126,6 +126,7 @@
     "note": "Notiz",
     "proxy": "Proxy",
     "quit": "Beenden",
+    "scraperTest": "Scraper-Test",
     "setting": "Einstellungen",
     "skill": "Fähigkeit"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "Bestätigung der Wiederherstellung",
       "restoreSuccess": "Wiederherstellung erfolgreich",
       "runBackup": "Sicherung ausführen",
+      "scraperConcurrencyCount": "Scraper-Nebenläufigkeit",
+      "scraperConcurrencyCountTooltip": "Die Anzahl der gleichzeitigen Anfragen zum Scrapen von Webinhalten aus Suchergebnissen, empfohlen zwischen 5-10",
       "scraperDebugMode": "Scraper-Debug-Modus",
       "scraperDebugModeTooltip": "Aktiviert den Scraper-Debug-Modus, bei dem das Browserfenster des Scrapers angezeigt wird",
       "searchEngine": "Suchmaschine",
@@ -499,7 +502,9 @@
         "temperatureRatio": "Temperaturverhältnis",
         "temperatureRatioPlaceholder": "Echte Temperatur = Anfragetemperatur * Temperaturverhältnis",
         "toolFilter": "Werkzeugfilter",
-        "toolFilterPlaceholder": "Bitte geben Sie die zu filternden Werkzeugnamen ein, einen pro Zeile"
+        "toolFilterPlaceholder": "Bitte geben Sie die zu filternden Werkzeugnamen ein, einen pro Zeile",
+        "promptInjectionPosition": "Injektionsposition",
+        "promptInjectionPositionPlaceholder": "Wählen Sie aus, ob in die Systemrolle oder die letzte Benutzernachricht injiziert werden soll"
       },
       "validation": {
         "nameRequired": "Gruppenname darf nicht leer sein."
@@ -508,6 +513,10 @@
         "off": "Aus",
         "enhance": "Erweitern",
         "replace": "Ersetzen"
+      },
+      "promptInjectionPosition": {
+        "system": "Systemrolle",
+        "user": "Benutzerrolle"
       }
     },
     "skill": {

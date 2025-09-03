@@ -26,6 +26,7 @@ mod tests {
     }
 }
 
+// use lazy_static::*;
 use std::sync::Arc;
 
 fn get_db_path() -> std::path::PathBuf {
@@ -47,7 +48,12 @@ pub fn get_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
     let app = tauri::test::mock_builder()
         .manage(main_store)
         .manage(chat_state)
-        .build(tauri::generate_context!());
+        .build(tauri::test::mock_context(tauri::test::noop_assets()));
 
     app.unwrap().handle().clone()
 }
+
+// lazy_static! {
+//     pub static ref MOCK_APP_HANDLE: Arc<tauri::AppHandle<tauri::test::MockRuntime>> =
+//         Arc::new(get_app_handle());
+// }

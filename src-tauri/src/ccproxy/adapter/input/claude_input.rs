@@ -2,13 +2,16 @@ use anyhow::Result;
 
 use crate::ccproxy::{
     adapter::{
-        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
             UnifiedCacheControl, UnifiedContentBlock, UnifiedMessage, UnifiedMetadata,
             UnifiedRequest, UnifiedRole, UnifiedThinking, UnifiedTool, UnifiedToolChoice,
         },
     },
-    types::claude::{ClaudeNativeContentBlock, ClaudeNativeRequest, ClaudeToolChoice},
+    types::{
+        claude::{ClaudeNativeContentBlock, ClaudeNativeRequest, ClaudeToolChoice},
+        ChatProtocol,
+    },
 };
 
 /// Converts a single Claude native content block into a unified content block.
@@ -175,16 +178,14 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
     Ok(UnifiedRequest {
         model: req.model,
         messages,
-        system_prompt: req
-            .system
-            .map(|x| serde_json::to_string(&x).unwrap_or_default()),
+        system_prompt: req.system.map(|x| x.trim().to_string()),
         tools,
         tool_choice,
         // stream: false, // Stream handling is managed by the handler, not in the request body itself.
         stream: req.stream.unwrap_or(false),
         temperature: req
             .temperature
-            .map(|t| clamp_to_protocol_range(t, Protocol::Claude, Parameter::Temperature)),
+            .map(|t| clamp_to_protocol_range(t, ChatProtocol::Claude, Parameter::Temperature)),
         max_tokens: if req.max_tokens <= 0 {
             None
         } else {
@@ -192,7 +193,7 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
         },
         top_p: req
             .top_p
-            .map(|p| clamp_to_protocol_range(p, Protocol::Claude, Parameter::TopP)),
+            .map(|p| clamp_to_protocol_range(p, ChatProtocol::Claude, Parameter::TopP)),
         top_k: req.top_k,
         stop_sequences: req.stop_sequences,
         // OpenAI-specific parameters
@@ -218,5 +219,6 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
         response_schema: None,
         cached_content: None,
         tool_compat_mode,
+        ..Default::default()
     })
 }

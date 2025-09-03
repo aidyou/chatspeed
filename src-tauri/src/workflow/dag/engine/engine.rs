@@ -67,6 +67,8 @@ impl WorkflowEngine {
 
 #[cfg(test)]
 mod tests {
+    // use crate::test::MOCK_APP_HANDLE;
+
     use crate::test::get_app_handle;
 
     use super::*;

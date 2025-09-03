@@ -69,7 +69,8 @@
 //!         applying middleware as needed. This modular approach allows for easy expansion.
 //!
 
-use crate::ai::interaction::{chat_completion::ChatState, ChatProtocol};
+use crate::ai::interaction::chat_completion::ChatState;
+use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     auth::authenticate_request,
     handle_chat_completion, handle_list_models, handle_ollama_tags,

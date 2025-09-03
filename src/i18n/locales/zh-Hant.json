@@ -126,6 +126,7 @@
     "note": "智記",
     "proxy": "代理",
     "quit": "退出",
+    "scraperTest": "爬蟲測試",
     "setting": "設定",
     "skill": "技能"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "恢復備份確認",
       "restoreSuccess": "恢復成功",
       "runBackup": "執行備份",
+      "scraperConcurrencyCount": "爬蟲並行數",
+      "scraperConcurrencyCountTooltip": "爬取搜尋結果中網頁內容的並行數，建議5～10之間",
       "scraperDebugMode": "爬蟲調試模式",
       "scraperDebugModeTooltip": "開啟爬蟲調試模式，會顯示爬蟲的瀏覽器窗口",
       "searchEngine": "搜尋引擎",
@@ -499,7 +502,9 @@
         "temperatureRatio": "溫度比例",
         "temperatureRatioPlaceholder": "真實溫度 = 請求溫度 * 溫度比例",
         "toolFilter": "工具過濾",
-        "toolFilterPlaceholder": "請輸入要過濾的工具名稱，每行一個"
+        "toolFilterPlaceholder": "請輸入要過濾的工具名稱，每行一個",
+        "promptInjectionPosition": "注入位置",
+        "promptInjectionPositionPlaceholder": "選擇注入到 system 角色或最後一條 user 訊息"
       },
       "validation": {
         "nameRequired": "分組名稱不可為空。"
@@ -508,6 +513,10 @@
         "off": "關閉",
         "enhance": "增強",
         "replace": "替代"
+      },
+      "promptInjectionPosition": {
+        "system": "系統角色 (System Role)",
+        "user": "用戶角色 (User Role)"
       }
     },
     "skill": {

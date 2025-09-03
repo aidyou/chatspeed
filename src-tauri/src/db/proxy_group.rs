@@ -10,6 +10,7 @@ use super::StoreError;
 pub const PROXY_GROUP_TABLE: &str = "proxy_group";
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ProxyGroup {
     pub id: i64,
     pub name: String,

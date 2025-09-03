@@ -1,14 +1,17 @@
 use crate::ccproxy::{
     adapter::{
-        range_adapter::{clamp_to_protocol_range, Parameter, Protocol},
+        range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
             UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
             UnifiedToolChoice,
         },
     },
-    types::openai::{
-        OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart,
-        OpenAIToolChoice,
+    types::{
+        openai::{
+            OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart,
+            OpenAIToolChoice,
+        },
+        ChatProtocol,
     },
 };
 
@@ -29,8 +32,11 @@ pub fn from_openai(
             Some("system") => {
                 // Extract system prompt text and continue, as it's a top-level field in UnifiedRequest
                 if let Some(OpenAIMessageContent::Text(text)) = msg.content {
-                    system_prompt =
-                        Some(format!("{}{}\n", system_prompt.unwrap_or_default(), text));
+                    system_prompt = Some(format!(
+                        "{}{}\n",
+                        system_prompt.unwrap_or_default(),
+                        text.trim()
+                    ));
                 }
                 continue;
             }
@@ -40,7 +46,28 @@ pub fn from_openai(
             _ => anyhow::bail!("Invalid or missing role in OpenAI message"),
         };
 
-        let content = convert_openai_content(msg.content, msg.tool_calls)?;
+        let content = if role == UnifiedRole::Tool {
+            let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+            let tool_content = if let Some(OpenAIMessageContent::Text(text)) = msg.content {
+                text
+            } else {
+                // According to OpenAI spec, the content of a tool message is a string and required.
+                // If it's missing or not text, we can treat it as an empty string,
+                // though this indicates a malformed request from the client.
+                log::warn!(
+                    "Tool message received without text content for tool_call_id: {}",
+                    tool_call_id
+                );
+                String::new()
+            };
+            vec![UnifiedContentBlock::ToolResult {
+                tool_use_id: tool_call_id,
+                content: tool_content,
+                is_error: false, // The native OpenAI format does not have an `is_error` field.
+            }]
+        } else {
+            convert_openai_content(msg.content, msg.tool_calls)?
+        };
 
         messages.push(UnifiedMessage {
             role,
@@ -65,29 +92,29 @@ pub fn from_openai(
     Ok(UnifiedRequest {
         model: req.model,
         messages,
-        system_prompt: system_prompt.map(|s: String| s.trim().to_string()),
+        system_prompt: system_prompt.map(|s: String| s.clone()),
         tools,
         tool_choice,
         stream: req.stream.unwrap_or(false),
         temperature: req.temperature.map(|t| {
             // Clamp to OpenAI range first, then it will be adapted in backend adapters
-            clamp_to_protocol_range(t, Protocol::OpenAI, Parameter::Temperature)
+            clamp_to_protocol_range(t, ChatProtocol::OpenAI, Parameter::Temperature)
         }),
         max_tokens: req
             .max_tokens
             .and_then(|t| if t <= 0 { None } else { Some(t) }),
         top_p: req
             .top_p
-            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::TopP)),
+            .map(|p| clamp_to_protocol_range(p, ChatProtocol::OpenAI, Parameter::TopP)),
         top_k: None, // OpenAI doesn't support top_k directly
         stop_sequences: req.stop,
         // OpenAI-specific parameters
         presence_penalty: req
             .presence_penalty
-            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::PresencePenalty)),
+            .map(|p| clamp_to_protocol_range(p, ChatProtocol::OpenAI, Parameter::PresencePenalty)),
         frequency_penalty: req
             .frequency_penalty
-            .map(|p| clamp_to_protocol_range(p, Protocol::OpenAI, Parameter::FrequencyPenalty)),
+            .map(|p| clamp_to_protocol_range(p, ChatProtocol::OpenAI, Parameter::FrequencyPenalty)),
         response_format: req
             .response_format
             .as_ref()
@@ -119,6 +146,7 @@ pub fn from_openai(
             .and_then(|rf| rf.json_schema.clone()),
         cached_content: None,
         tool_compat_mode,
+        ..Default::default()
     })
 }
 

@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "モデルリストを取得するにはAPIキーが必要です。設定で有効なAPIキーを設定してください。"
   chat_completion_failed_after_retries: "チャット補完は %{retries} 回のリトライ後に失敗しました"
   chat_not_found: "指定されたチャットセッションが見つかりません"
-  crawler_url_not_found: "クローラーサーバーのURLが見つかりません"
   empty_chat_id: "チャットIDは空にできません"
   empty_messages: "メッセージリストは空にできません"
   empty_model: "モデル名は空にできません"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "チャットプロキシの設定に失敗しました: %{error}"
   failed_to_write_file: "ファイルへの書き込みに失敗しました: %{error}"
   invalid_search_model: "無効な検索モデル: %{model_name}"
-  json_serialize_crawler_results_failed: "クロールされたコンテンツのJSONへのシリアル化に失敗しました: %{error}"
-  no_valid_search_engine_config: "有効な検索エンジン設定が見つかりません。設定で少なくとも1つの検索エンジンを設定してください。"
   note_already_exists: "このノートは既に存在するため、再度追加する必要はありません"
   search_analysing: "データを分析中..."
   search_fetching: "データを取得中..."
@@ -272,7 +269,6 @@ tools:
   model_name_must_be_string: "モデル名パラメータ(model_name)は文字列である必要があります"
   model_not_found: "ワークフローにモデルが見つかりません: %{model_name}"
   model_type_not_found: "モデルタイプ %{model_type} が見つかりません、ID: %{id}, エラー: %{error}"
-  provider_must_be_string: "検索サービスプロバイダー(provider)パラメータは文字列である必要があります"
   query_must_not_be_empty: "queryパラメータは空でない文字列である必要があります"
   url_invalid: "URLパラメータの形式が間違っています。http://またはhttps://で始まる必要があります: %{url}"
   url_must_be_string: "URLパラメータは文字列である必要があります"
@@ -307,7 +303,6 @@ tools:
     google_cx_empty: "Google検索エンジンIDは空にできません"
     serper_api_key_empty: "Serper APIキーは空にできません"
     tavily_api_key_empty: "Tavily APIキーは空にできません"
-    provider_no_support: "検索エンジンがサポートされていません: {name}"
     web_search_failed: "ウェブ検索に失敗しました (プロバイダー: %{provider}, キーワード: %{keyword}): %{details}"
 
 updater:

@@ -1,9 +1,6 @@
-use crate::{
-    ai::{error::AiError, interaction::chat_completion::ChatProtocol},
-    search::SearchResult,
-};
-
 use super::stoppable::Stoppable;
+use crate::{ai::error::AiError, ccproxy::ChatProtocol, search::SearchResult};
+
 use async_trait::async_trait;
 use log::warn;
 use serde::{Deserialize, Deserializer, Serialize};

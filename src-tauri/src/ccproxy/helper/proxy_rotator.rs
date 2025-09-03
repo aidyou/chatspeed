@@ -112,28 +112,30 @@ impl ProxyRotator {
         // Check if mapping relationship exists and if there are changes
         let needs_update = {
             let mapping = self.provider_keys_mapping.read().await;
-            let existing_keys_opt = mapping.get(&mapping_key).map(|entry| {
-                let (keys, _, _) = entry.value();
-                keys.clone()
+            // Clone the necessary data inside the lock's scope to avoid lifetime issues.
+            let existing_entry_opt = mapping.get(&mapping_key).map(|entry| {
+                let (keys, base_url, model_name) = entry.value();
+                (keys.clone(), base_url.clone(), model_name.clone())
             });
+            // The read lock is released here as `mapping` goes out of scope.
 
-            match existing_keys_opt {
-                // 2. If mapping relationship doesn't exist, need to update
-                None => !new_keys.is_empty(),
-                // Only update when there are new keys
-                // 3. Exists but no update, exit directly;
-                // 4. Exists and updated, need to modify
-                Some(existing_keys) => {
-                    // 5. If keys are empty, need to remove mapping relationship
+            // Now, perform comparisons on the owned data.
+            match existing_entry_opt {
+                None => !new_keys.is_empty(), // If no mapping exists, update if there are new keys.
+                Some((existing_keys, existing_base_url, existing_model_name)) => {
                     if new_keys.is_empty() {
-                        true // Need to delete
+                        true // Need to delete the existing entry.
                     } else {
-                        // Compare if keys have changed (sort first to ensure consistent order)
-                        let mut existing_sorted = existing_keys.clone();
+                        // Sort keys for consistent comparison.
+                        let mut existing_sorted = existing_keys;
                         existing_sorted.sort();
                         let mut new_sorted = new_keys.clone();
                         new_sorted.sort();
+
+                        // Check for any changes in keys, base_url, or model_name.
                         existing_sorted != new_sorted
+                            || existing_base_url != base_url
+                            || existing_model_name != model_name
                     }
                 }
             }

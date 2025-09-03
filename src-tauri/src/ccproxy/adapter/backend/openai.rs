@@ -1,23 +1,26 @@
 use async_trait::async_trait;
-use quick_xml::de::from_str;
 use reqwest::{Client, RequestBuilder};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::{
-    backend::{generate_tool_prompt, update_message_block, ToolUse, TOOL_TAG_END, TOOL_TAG_START},
-    range_adapter::{adapt_temperature, Protocol},
-    unified::{
-        SseStatus, UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedResponse,
-        UnifiedRole, UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
-    },
-};
+use crate::ccproxy::get_tool_id;
 use crate::ccproxy::openai::{
     OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse,
     OpenAIFunctionCall, OpenAIFunctionDefinition, OpenAIImageUrl, OpenAIMessageContent,
     OpenAIMessageContentPart, OpenAIResponseFormat, OpenAITool, OpenAIToolChoice,
     OpenAIToolChoiceFunction, OpenAIToolChoiceObject, UnifiedChatMessage, UnifiedToolCall,
+};
+use crate::ccproxy::{
+    adapter::{
+        backend::{common, update_message_block, TOOL_TAG_END, TOOL_TAG_START},
+        range_adapter::adapt_temperature,
+        unified::{
+            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
+            UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
+        },
+    },
+    types::ChatProtocol,
 };
 
 pub struct OpenAIBackendAdapter;
@@ -27,236 +30,182 @@ impl BackendAdapter for OpenAIBackendAdapter {
     async fn adapt_request(
         &self,
         client: &Client,
-        unified_request: &UnifiedRequest,
+        unified_request: &mut UnifiedRequest,
         api_key: &str,
         full_provider_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
-        let mut openai_messages: Vec<UnifiedChatMessage> = Vec::new();
-        let mut unified_request = unified_request.clone();
-
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
-        // into the last user message. This is a specific adaptation for models that
+        // into the system message. This is a specific adaptation for models that
         // don't support native tool calling APIs but can follow instructions.
+        //
+        // The call to `unified_request.enhance_prompt` should be placed as early as possible because
+        // it handles tool progression in compatibility mode and removes the tool calling module.
+        unified_request.enhance_prompt();
+
+        let mut openai_messages: Vec<UnifiedChatMessage> = Vec::new();
+        // --- Message Processing ---
         if unified_request.tool_compat_mode {
-            if let Some(tools) = &unified_request.tools {
-                let tool_prompt = generate_tool_prompt(tools);
-                if let Some(last_message) = unified_request
-                    .messages
-                    .iter_mut()
-                    .rfind(|m| m.role == UnifiedRole::User)
-                {
-                    // Prepend the tool prompt to the existing text content.
-                    let new_text = if let Some(UnifiedContentBlock::Text { text }) =
-                        last_message.content.get_mut(0)
-                    {
-                        format!("{}\n{}", tool_prompt, text)
-                    } else {
-                        tool_prompt
-                    };
-                    // Replace or insert the new text content.
-                    if !last_message.content.is_empty()
-                        && matches!(last_message.content[0], UnifiedContentBlock::Text { .. })
-                    {
-                        last_message.content[0] = UnifiedContentBlock::Text { text: new_text };
-                    } else {
-                        last_message
-                            .content
-                            .insert(0, UnifiedContentBlock::Text { text: new_text });
+            // Special handling for tool compatibility mode to mimic a more natural
+            // conversation flow for models that don't natively support tool calls.
+            let mut processed_messages: Vec<UnifiedChatMessage> = Vec::new();
+            let mut tool_results_buffer: Vec<String> = Vec::new();
+
+            for msg in &unified_request.messages {
+                match msg.role {
+                    UnifiedRole::Assistant => {
+                        // If there are pending tool results, flush them as a single user message first.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                                tool_results_buffer.join("\n")
+                            );
+                            processed_messages.push(UnifiedChatMessage {
+                                role: Some("user".to_string()),
+                                content: Some(OpenAIMessageContent::Text(results_xml)),
+                                ..Default::default()
+                            });
+                            tool_results_buffer.clear();
+                        }
+
+                        // Process the assistant message, converting ToolUse blocks to XML.
+                        let mut content_parts: Vec<String> = Vec::new();
+
+                        for block in &msg.content {
+                            match block {
+                                UnifiedContentBlock::Text { text } => {
+                                    // Trim whitespace from the text part to avoid accumulating newlines
+                                    let trimmed_text = text.trim();
+                                    if !trimmed_text.is_empty() {
+                                        content_parts.push(trimmed_text.to_string());
+                                    }
+                                }
+                                UnifiedContentBlock::ToolUse { id, name, input } => {
+                                    // Format the tool use block as XML
+                                    let tool_use_xml =
+                                        crate::ccproxy::helper::tool_use_xml::format_tool_use_xml(
+                                            id, name, input,
+                                        );
+                                    content_parts.push(tool_use_xml);
+                                }
+                                // Ignore other block types like Image, ToolResult, etc. in this context
+                                _ => {}
+                            }
+                        }
+
+                        // Join all parts with a consistent separator
+                        let final_content = content_parts.join("\n");
+
+                        if !final_content.is_empty() {
+                            processed_messages.push(UnifiedChatMessage {
+                                role: Some("assistant".to_string()),
+                                content: Some(OpenAIMessageContent::Text(final_content)),
+                                ..Default::default()
+                            });
+                        }
                     }
-                } else {
-                    // If no user message exists, create a new one with the tool prompt.
-                    unified_request.messages.push(UnifiedMessage {
-                        role: UnifiedRole::User,
-                        content: vec![UnifiedContentBlock::Text { text: tool_prompt }],
-                        reasoning_content: None,
-                    });
+                    UnifiedRole::Tool => {
+                        // Collect tool results into a buffer to be flushed later.
+                        for block in &msg.content {
+                            if let UnifiedContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } = block
+                            {
+                                let result_xml = format!(
+                                    "<ccp:tool_result>\n<id>{}</id>\n{}\n</ccp:tool_result>",
+                                    tool_use_id, content
+                                );
+                                tool_results_buffer.push(result_xml);
+                            }
+                        }
+                    }
+                    UnifiedRole::User => {
+                        // Flush any pending tool results before processing the user message.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                                tool_results_buffer.join("\n")
+                            );
+                            processed_messages.push(UnifiedChatMessage {
+                                role: Some("user".to_string()),
+                                content: Some(OpenAIMessageContent::Text(results_xml)),
+                                ..Default::default()
+                            });
+                            tool_results_buffer.clear();
+                        }
+
+                        // Add the actual user message.
+                        let content_text = msg
+                            .content
+                            .iter()
+                            .filter_map(|block| {
+                                if let UnifiedContentBlock::Text { text } = block {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+
+                        if !content_text.is_empty() {
+                            processed_messages.push(UnifiedChatMessage {
+                                role: Some("user".to_string()),
+                                content: Some(OpenAIMessageContent::Text(content_text)),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    _ => {} // Ignore System role in this context, it's handled separately.
                 }
-                // Tools are now part of the prompt, so remove them from the request object.
-                unified_request.tools = None;
             }
-        }
 
-        // --- Advanced Message Processing with Proper Tool Call Handling ---
-        // Build a map of tool call IDs to their corresponding tool results
-        let mut tool_results: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for msg in &unified_request.messages {
-            for block in &msg.content {
-                if let UnifiedContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    ..
-                } = block
-                {
-                    tool_results.insert(tool_use_id.clone(), content.clone());
-                }
+            // Flush any remaining tool results at the end of the message list.
+            if !tool_results_buffer.is_empty() {
+                let results_xml = format!(
+                    "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                    tool_results_buffer.join("\n")
+                );
+                processed_messages.push(UnifiedChatMessage {
+                    role: Some("user".to_string()),
+                    content: Some(OpenAIMessageContent::Text(results_xml)),
+                    ..Default::default()
+                });
             }
-        }
-
-        // Process messages with proper OpenAI message structure
-        let mut current_message_parts: Vec<OpenAIMessageContentPart> = Vec::new();
-        let mut current_tool_calls: Vec<UnifiedToolCall> = Vec::new();
-        let mut current_role: Option<UnifiedRole> = None;
-
-        // Helper function to flush current message and add tool responses immediately
-        let flush_current_message_with_tool_responses =
-            |openai_messages: &mut Vec<UnifiedChatMessage>,
-             current_role: &mut Option<UnifiedRole>,
-             current_message_parts: &mut Vec<OpenAIMessageContentPart>,
-             current_tool_calls: &mut Vec<UnifiedToolCall>,
-             tool_results: &std::collections::HashMap<String, String>| {
-                if current_message_parts.is_empty() && current_tool_calls.is_empty() {
-                    return;
-                }
-
-                let role_str = match current_role.as_ref().unwrap_or(&UnifiedRole::User) {
-                    UnifiedRole::System => return,
+            openai_messages = processed_messages;
+        } else {
+            // Standard processing for non-tool-compatibility mode.
+            for msg in &unified_request.messages {
+                let role_str = match msg.role {
+                    UnifiedRole::System => "system",
                     UnifiedRole::User => "user",
                     UnifiedRole::Assistant => "assistant",
                     UnifiedRole::Tool => "tool",
                 };
 
-                // Combine text parts into a single content if all are text
-                let content = if current_message_parts.is_empty() {
-                    None
-                } else if current_message_parts
-                    .iter()
-                    .all(|p| matches!(p, OpenAIMessageContentPart::Text { .. }))
-                {
-                    let combined_text = current_message_parts
-                        .iter()
-                        .filter_map(|p| {
-                            if let OpenAIMessageContentPart::Text { text } = p {
-                                Some(text.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<&str>>()
-                        .join("\n\n");
-                    Some(OpenAIMessageContent::Text(combined_text))
-                } else {
-                    Some(OpenAIMessageContent::Parts(std::mem::take(
-                        current_message_parts,
-                    )))
-                };
+                let mut primary_message_parts: Vec<OpenAIMessageContentPart> = Vec::new();
+                let mut primary_tool_calls: Vec<UnifiedToolCall> = Vec::new();
+                let mut tool_result_messages: Vec<UnifiedChatMessage> = Vec::new();
 
-                // Add the main message
-                if content.is_some() || !current_tool_calls.is_empty() {
-                    openai_messages.push(UnifiedChatMessage {
-                        role: Some(role_str.to_string()),
-                        content,
-                        tool_calls: if current_tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(current_tool_calls.clone())
-                        },
-                        tool_call_id: None,
-                        reasoning_content: None,
-                    });
-
-                    // Immediately add tool responses for each tool call
-                    for tool_call in current_tool_calls.iter() {
-                        if let Some(tool_id) = &tool_call.id {
-                            let tool_response_content =
-                                tool_results.get(tool_id).cloned().unwrap_or_else(|| {
-                                    "Tool execution was interrupted or failed.".to_string()
-                                });
-
-                            openai_messages.push(UnifiedChatMessage {
-                                role: Some("tool".to_string()),
-                                content: Some(OpenAIMessageContent::Text(tool_response_content)),
-                                tool_calls: None,
-                                tool_call_id: Some(tool_id.clone()),
-                                reasoning_content: None,
+                for block in &msg.content {
+                    match block {
+                        UnifiedContentBlock::Text { text } => {
+                            primary_message_parts
+                                .push(OpenAIMessageContentPart::Text { text: text.clone() });
+                        }
+                        UnifiedContentBlock::Image { media_type, data } => {
+                            primary_message_parts.push(OpenAIMessageContentPart::ImageUrl {
+                                image_url: OpenAIImageUrl {
+                                    url: format!("data:{};base64,{}", media_type, data),
+                                    detail: None,
+                                },
                             });
                         }
-                    }
-                }
-
-                current_message_parts.clear();
-                current_tool_calls.clear();
-                *current_role = None;
-            };
-
-        for msg in &unified_request.messages {
-            for block in &msg.content {
-                match block {
-                    UnifiedContentBlock::ToolResult { .. } => {
-                        // Tool results are handled when processing tool calls, skip them here
-                        continue;
-                    }
-                    UnifiedContentBlock::Text { text } => {
-                        // Check if we need to flush due to role change
-                        if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role {
-                            flush_current_message_with_tool_responses(
-                                &mut openai_messages,
-                                &mut current_role,
-                                &mut current_message_parts,
-                                &mut current_tool_calls,
-                                &tool_results,
-                            );
-                        }
-
-                        if current_role.is_none() {
-                            current_role = Some(msg.role.clone());
-                        }
-                        current_message_parts
-                            .push(OpenAIMessageContentPart::Text { text: text.clone() });
-                    }
-                    UnifiedContentBlock::Image { media_type, data } => {
-                        // Check if we need to flush due to role change
-                        if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role {
-                            flush_current_message_with_tool_responses(
-                                &mut openai_messages,
-                                &mut current_role,
-                                &mut current_message_parts,
-                                &mut current_tool_calls,
-                                &tool_results,
-                            );
-                        }
-
-                        if current_role.is_none() {
-                            current_role = Some(msg.role.clone());
-                        }
-                        current_message_parts.push(OpenAIMessageContentPart::ImageUrl {
-                            image_url: OpenAIImageUrl {
-                                url: format!("data:{};base64,{}", media_type, data),
-                                detail: None,
-                            },
-                        });
-                    }
-                    UnifiedContentBlock::ToolUse { id, name, input } => {
-                        if msg.role == UnifiedRole::System {
-                            // If a system message contains a tool use, convert it to text
-                            let tool_text = format!(
-                                "System message contained a tool call: {{ name: {}, input: {} }}",
-                                name, input
-                            );
-                            if current_role.is_none() {
-                                current_role = Some(UnifiedRole::System);
-                            }
-                            current_message_parts
-                                .push(OpenAIMessageContentPart::Text { text: tool_text });
-                        } else {
-                            // Check if we need to flush due to role change
-                            if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role
-                            {
-                                flush_current_message_with_tool_responses(
-                                    &mut openai_messages,
-                                    &mut current_role,
-                                    &mut current_message_parts,
-                                    &mut current_tool_calls,
-                                    &tool_results,
-                                );
-                            }
-
-                            if current_role.is_none() {
-                                current_role = Some(msg.role.clone());
-                            }
-                            current_tool_calls.push(UnifiedToolCall {
+                        UnifiedContentBlock::ToolUse { id, name, input } => {
+                            primary_tool_calls.push(UnifiedToolCall {
                                 id: Some(id.clone()),
                                 r#type: Some("function".to_string()),
                                 function: OpenAIFunctionCall {
@@ -266,20 +215,62 @@ impl BackendAdapter for OpenAIBackendAdapter {
                                 index: None,
                             });
                         }
+                        UnifiedContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            ..
+                        } => {
+                            tool_result_messages.push(UnifiedChatMessage {
+                                role: Some("tool".to_string()),
+                                content: Some(OpenAIMessageContent::Text(content.clone())),
+                                tool_calls: None,
+                                tool_call_id: Some(tool_use_id.clone()),
+                                reasoning_content: None,
+                            });
+                        }
+                        _ => {} // Ignore Thinking blocks
                     }
-                    _ => {} // Thinking blocks are ignored in the final request
                 }
+
+                if !primary_message_parts.is_empty() || !primary_tool_calls.is_empty() {
+                    let content = if primary_message_parts.is_empty() {
+                        None
+                    } else if primary_message_parts
+                        .iter()
+                        .all(|p| matches!(p, OpenAIMessageContentPart::Text { .. }))
+                    {
+                        let combined_text = primary_message_parts
+                            .iter()
+                            .filter_map(|p| {
+                                if let OpenAIMessageContentPart::Text { text } = p {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<&str>>()
+                            .join("\n");
+                        Some(OpenAIMessageContent::Text(combined_text))
+                    } else {
+                        Some(OpenAIMessageContent::Parts(primary_message_parts))
+                    };
+
+                    openai_messages.push(UnifiedChatMessage {
+                        role: Some(role_str.to_string()),
+                        content,
+                        tool_calls: if primary_tool_calls.is_empty() {
+                            None
+                        } else {
+                            Some(primary_tool_calls)
+                        },
+                        tool_call_id: None,
+                        reasoning_content: None,
+                    });
+                }
+
+                openai_messages.extend(tool_result_messages);
             }
         }
-
-        // Flush any remaining message
-        flush_current_message_with_tool_responses(
-            &mut openai_messages,
-            &mut current_role,
-            &mut current_message_parts,
-            &mut current_tool_calls,
-            &tool_results,
-        );
 
         let openai_tools = unified_request.tools.as_ref().and_then(|tools| {
             let collected_tools: Vec<OpenAITool> = tools
@@ -327,16 +318,85 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 }
             });
 
-        if let Some(sys_prompt_str) = unified_request.system_prompt {
-            if !sys_prompt_str.trim().is_empty() {
+        // --- New Prompt Injection Logic ---
+        let injection_pos = unified_request
+            .prompt_injection_position
+            .as_deref()
+            .unwrap_or("system");
+        let combined_prompt_text = unified_request
+            .combined_prompt
+            .as_deref()
+            .unwrap_or_default();
+
+        if injection_pos == "user" && !combined_prompt_text.is_empty() {
+            // Find the last user message and append the prompt.
+            if let Some(last_user_msg) = openai_messages
+                .iter_mut()
+                .rfind(|m| m.role.as_deref() == Some("user"))
+            {
+                // Append to the content of the last user message
+                if let Some(content) = &mut last_user_msg.content {
+                    match content {
+                        OpenAIMessageContent::Text(text) => {
+                            *text = format!("{}\n\n{}", combined_prompt_text, text);
+                        }
+                        OpenAIMessageContent::Parts(parts) => {
+                            parts.insert(
+                                0,
+                                OpenAIMessageContentPart::Text {
+                                    text: combined_prompt_text.to_string(),
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    // If the last user message has no content, set it.
+                    last_user_msg.content =
+                        Some(OpenAIMessageContent::Text(combined_prompt_text.to_string()));
+                }
+            }
+
+            // After injecting into user message, handle the original system prompt separately.
+            if let Some(sys_prompt_str) = unified_request.system_prompt.as_deref() {
+                if !sys_prompt_str.trim().is_empty() {
+                    openai_messages.insert(
+                        0,
+                        UnifiedChatMessage {
+                            role: Some("system".to_string()),
+                            content: Some(OpenAIMessageContent::Text(sys_prompt_str.to_string())),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        } else {
+            // injection_pos == "system" or default behavior
+            let injection_mode = unified_request
+                .prompt_injection
+                .as_deref()
+                .unwrap_or("enhance");
+            let original_system_prompt =
+                unified_request.system_prompt.as_deref().unwrap_or_default();
+
+            let final_system_prompt = if injection_mode == "replace" {
+                combined_prompt_text.to_string()
+            } else {
+                // "enhance" or default
+                [original_system_prompt, combined_prompt_text]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| *s)
+                    .collect::<Vec<&str>>()
+                    .join("\n\n")
+            };
+
+            if !final_system_prompt.trim().is_empty() {
                 openai_messages.insert(
                     0,
                     UnifiedChatMessage {
                         role: Some("system".to_string()),
-                        content: Some(OpenAIMessageContent::Text(sys_prompt_str)),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        reasoning_content: None,
+                        content: Some(OpenAIMessageContent::Text(final_system_prompt)),
+                        ..Default::default()
                     },
                 );
             }
@@ -347,10 +407,9 @@ impl BackendAdapter for OpenAIBackendAdapter {
             messages: openai_messages,
             stream: Some(unified_request.stream),
             max_tokens: unified_request.max_tokens,
-            temperature: unified_request.temperature.map(|t| {
-                // Adapt temperature from source protocol to OpenAI range
-                adapt_temperature(t, Protocol::Claude, Protocol::OpenAI)
-            }),
+            temperature: unified_request
+                .temperature
+                .map(|t| adapt_temperature(t, ChatProtocol::OpenAI)),
             top_p: unified_request.top_p,
             presence_penalty: unified_request.presence_penalty,
             frequency_penalty: unified_request.frequency_penalty,
@@ -485,26 +544,16 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     if let Some(relative_end_pos) = processed_text[start_pos..].find(TOOL_TAG_END) {
                         let end_pos = start_pos + relative_end_pos;
                         let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
-                        if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
-                            let mut arguments = serde_json::Map::new();
-                            for param in parsed_tool.params.param {
-                                arguments.insert(
-                                    param.name.clone(),
-                                    serde_json::Value::String(param.get_value()),
-                                );
-                            }
-
+                        if let Ok(parsed_tool) =
+                            crate::ccproxy::helper::tool_use_xml::ToolUse::try_from(tool_xml)
+                        {
                             log::debug!(
                                 "tool_use parse result: name: {}, param: {:?}",
                                 &parsed_tool.name,
-                                &arguments
+                                &parsed_tool.params
                             );
 
-                            content_blocks.push(UnifiedContentBlock::ToolUse {
-                                id: format!("tool_{}", uuid::Uuid::new_v4()),
-                                name: parsed_tool.name,
-                                input: serde_json::Value::Object(arguments),
-                            });
+                            content_blocks.push(parsed_tool.into());
                         } else {
                             let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
 
@@ -795,10 +844,7 @@ impl OpenAIBackendAdapter {
     ) {
         if let Some(name) = &tc.function.name {
             if !name.is_empty() {
-                let tool_id = tc
-                    .id
-                    .clone()
-                    .unwrap_or_else(|| format!("tool_{}", uuid::Uuid::new_v4()));
+                let tool_id = tc.id.clone().unwrap_or_else(|| get_tool_id());
 
                 // Update tool_id in status
                 let mut message_index = 0;
@@ -858,13 +904,19 @@ impl OpenAIBackendAdapter {
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if let Ok(mut status) = sse_status.write() {
+            if status.tool_compat_mode {
+                // On stream finish, try to auto-complete any dangling tool tag.
+                common::auto_complete_and_process_tool_tag(&mut status, unified_chunks);
+            }
+
             if !status.tool_compat_buffer.is_empty()
                 || !status.tool_compat_fragment_buffer.is_empty()
             {
-                log::debug!("Flushing remaining buffers at stream end - buffer: {} chars, fragment: {} chars, in_tool_block: {}",
+                log::debug!("Flushing remaining buffers at stream end - buffer: {} chars, fragment: {} chars, in_tool_block: {}\ntool buffer: {}",
                     status.tool_compat_buffer.len(),
                     status.tool_compat_fragment_buffer.len(),
-                    status.in_tool_call_block
+                    status.in_tool_call_block,
+                    status.tool_compat_buffer
                 );
 
                 // First, try to flush and process any remaining tool calls
@@ -876,7 +928,7 @@ impl OpenAIBackendAdapter {
                 {
                     unified_chunks.push(UnifiedStreamChunk::Text {
                         delta: format!(
-                            "{}{}",
+                            "{}{} ",
                             status.tool_compat_buffer, status.tool_compat_fragment_buffer
                         ),
                     });
@@ -954,8 +1006,12 @@ impl OpenAIBackendAdapter {
             let should_flush = status.tool_compat_fragment_count >= 25
                 || time_since_flush >= 100
                 || status.tool_compat_fragment_buffer.len() > 500
-                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_START)
-                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_END);
+                || status
+                    .tool_compat_fragment_buffer
+                    .contains(common::TOOL_TAG_START)
+                || status
+                    .tool_compat_fragment_buffer
+                    .contains(common::TOOL_TAG_END);
 
             if should_flush {
                 self.flush_tool_compat_buffer(&mut status, unified_chunks);
@@ -976,131 +1032,10 @@ impl OpenAIBackendAdapter {
         status.tool_compat_last_flush_time = std::time::Instant::now();
 
         // Process tool calls in the buffer
-        self.process_tool_calls_in_buffer(status, unified_chunks);
+        common::process_tool_calls_in_buffer(status, unified_chunks);
 
         // Handle remaining buffer content
         self.handle_remaining_buffer_content(status, unified_chunks);
-    }
-
-    /// Process tool calls found in the buffer
-    fn process_tool_calls_in_buffer(
-        &self,
-        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
-        unified_chunks: &mut Vec<UnifiedStreamChunk>,
-    ) {
-        loop {
-            if !status.in_tool_call_block {
-                let buffer = &status.tool_compat_buffer;
-                let tool_start = TOOL_TAG_START;
-
-                if let Some(start_pos) = buffer.find(tool_start) {
-                    log::debug!(
-                        "buffer has tool start tag `<ccp:tool_use>` at pos: {}",
-                        start_pos
-                    );
-                    // Send text before the tool tag
-                    let text_before = &buffer[..start_pos];
-                    if !text_before.is_empty() {
-                        unified_chunks.push(UnifiedStreamChunk::Text {
-                            delta: text_before.to_string(),
-                        });
-                    }
-
-                    status.tool_compat_buffer = buffer[start_pos..].to_string();
-                    status.in_tool_call_block = true;
-                } else {
-                    break;
-                }
-            }
-
-            if status.in_tool_call_block {
-                let tool_end = TOOL_TAG_END;
-
-                if let Some(end_pos) = status.tool_compat_buffer.find(tool_end) {
-                    let tool_xml =
-                        status.tool_compat_buffer[..end_pos + tool_end.len()].to_string();
-                    let remaining_buffer =
-                        status.tool_compat_buffer[end_pos + tool_end.len()..].to_string();
-
-                    log::debug!(
-                        "find tool end tag `{}` at pos: {}\n, tool xml: {}",
-                        TOOL_TAG_END,
-                        end_pos,
-                        tool_xml
-                    );
-
-                    self.parse_and_emit_tool_call(status, &tool_xml, unified_chunks);
-
-                    status.tool_compat_buffer = remaining_buffer;
-                    status.in_tool_call_block = false;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Parse tool XML and emit tool call chunks
-    fn parse_and_emit_tool_call(
-        &self,
-        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
-        tool_xml: &str,
-        unified_chunks: &mut Vec<UnifiedStreamChunk>,
-    ) {
-        if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
-            let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
-            if status.tool_id != "" {
-                // send tool stop
-                unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
-                    index: status.message_index,
-                })
-            }
-            status.tool_id = tool_id.clone();
-            update_message_block(status, tool_id.clone());
-
-            let mut arguments = serde_json::Map::new();
-            for param in parsed_tool.params.param {
-                arguments.insert(
-                    param.name.clone(),
-                    serde_json::Value::String(param.get_value()),
-                );
-            }
-
-            // Send tool call start for claude only
-            unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
-                index: status.message_index,
-                block: json!({
-                    "type": "tool_use",
-                    "id": tool_id.clone(),
-                    "name": parsed_tool.name.clone(),
-                    "input": {}
-                }),
-            });
-            // Send tool call start for gemini and openai
-            unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
-                tool_type: "function".to_string(),
-                id: tool_id.clone(),
-                name: parsed_tool.name.clone(),
-            });
-
-            // Send tool call parameters
-            let args_json = serde_json::to_string(&arguments).unwrap_or_default();
-            unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
-                id: tool_id,
-                delta: args_json.clone(),
-            });
-
-            log::info!(
-                "tool parse success, name: {}, param: {}",
-                parsed_tool.name.clone(),
-                args_json
-            );
-        } else {
-            unified_chunks.push(UnifiedStreamChunk::Error {
-                message: format!("tool xml parse failed, xml: {}", tool_xml),
-            });
-            log::warn!("tool xml parse failed, xml: {}", tool_xml);
-        }
     }
 
     /// Handle remaining content in buffer that's not part of tool calls
@@ -1111,8 +1046,8 @@ impl OpenAIBackendAdapter {
     ) {
         if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
             let buffer = &status.tool_compat_buffer;
-            let tool_start = TOOL_TAG_START;
-            let tool_end = TOOL_TAG_END;
+            let tool_start = common::TOOL_TAG_START;
+            let tool_end = common::TOOL_TAG_END;
 
             let mut partial_tag_len = 0;
 

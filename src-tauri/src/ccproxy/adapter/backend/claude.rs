@@ -4,17 +4,21 @@ use serde_json::Value;
 use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
-use crate::ccproxy::adapter::{
-    backend::update_message_block,
-    range_adapter::{adapt_temperature, Protocol},
-    unified::{
-        SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
-        UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
-    },
-};
 use crate::ccproxy::claude::{
     ClaudeNativeContentBlock, ClaudeNativeMessage, ClaudeNativeRequest, ClaudeNativeResponse,
     ClaudeNativeTool, ClaudeStreamEvent, ClaudeToolChoice,
+};
+use crate::ccproxy::get_tool_id;
+use crate::ccproxy::{
+    adapter::{
+        backend::update_message_block,
+        range_adapter::adapt_temperature,
+        unified::{
+            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
+            UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
+        },
+    },
+    types::ChatProtocol,
 };
 
 pub struct ClaudeBackendAdapter;
@@ -110,13 +114,19 @@ impl BackendAdapter for ClaudeBackendAdapter {
     async fn adapt_request(
         &self,
         client: &Client,
-        unified_request: &UnifiedRequest,
+        unified_request: &mut UnifiedRequest,
         api_key: &str,
         full_provider_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
         // Validate tool call sequence before processing
         self.validate_tool_call_sequence(&unified_request.messages)?;
+
+        // Typically, Claude models have excellent tool call support，
+        // and do not require enabling tool compatibility mode.
+        // For logical consistency and to extend the capabilities of models compatible with the Claude protocol,
+        // tool compatibility mode is also enabled here.
+        unified_request.enhance_prompt();
 
         let mut claude_messages = Vec::new();
 
@@ -194,15 +204,59 @@ impl BackendAdapter for ClaudeBackendAdapter {
             }
         });
 
+        let injection_pos = unified_request
+            .prompt_injection_position
+            .as_deref()
+            .unwrap_or("system");
+        let combined_prompt_text = unified_request
+            .combined_prompt
+            .as_deref()
+            .unwrap_or_default();
+        let mut final_system_prompt: Option<String> = None;
+
+        if injection_pos == "user" && !combined_prompt_text.is_empty() {
+            if let Some(last_user_msg) = claude_messages.iter_mut().rfind(|m| m.role == "user") {
+                last_user_msg.content.insert(
+                    0,
+                    ClaudeNativeContentBlock::Text {
+                        text: combined_prompt_text.to_string(),
+                    },
+                );
+            }
+            final_system_prompt = unified_request.system_prompt.clone();
+        } else {
+            let injection_mode = unified_request
+                .prompt_injection
+                .as_deref()
+                .unwrap_or("enhance");
+            let original_system_prompt =
+                unified_request.system_prompt.as_deref().unwrap_or_default();
+
+            let prompt = if injection_mode == "replace" {
+                combined_prompt_text.to_string()
+            } else {
+                [original_system_prompt, combined_prompt_text]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| *s)
+                    .collect::<Vec<&str>>()
+                    .join("\n\n")
+            };
+
+            if !prompt.trim().is_empty() {
+                final_system_prompt = Some(prompt);
+            }
+        }
+
         let claude_request = ClaudeNativeRequest {
             model: model.to_string(),
             messages: claude_messages,
-            system: unified_request.system_prompt.clone(),
+            system: final_system_prompt,
             max_tokens: unified_request.max_tokens.unwrap_or(1024),
             stream: Some(unified_request.stream),
             temperature: unified_request.temperature.map(|t| {
                 // Adapt temperature from source protocol to Claude range
-                adapt_temperature(t, Protocol::OpenAI, Protocol::Claude)
+                adapt_temperature(t, ChatProtocol::Claude)
             }),
             top_p: unified_request.top_p,
             top_k: unified_request.top_k,
@@ -398,9 +452,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         }
                                     }
                                     "tool_use" => {
-                                        let tool_id = block.id.clone().unwrap_or(
-                                            format!("tool_{}", uuid::Uuid::new_v4()).to_string(),
-                                        );
+                                        let tool_id = block.id.clone().unwrap_or(get_tool_id());
                                         if let Ok(mut status) = sse_status.write() {
                                             status.tool_id = tool_id.clone();
                                             update_message_block(&mut status, tool_id.clone());

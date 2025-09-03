@@ -126,6 +126,7 @@
     "note": "Note",
     "proxy": "Proxy",
     "quit": "Quit",
+    "scraperTest": "Scraper Test",
     "setting": "Settings",
     "skill": "Skill"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "Restore Backup Confirmation",
       "restoreSuccess": "Restore successful",
       "runBackup": "Run Backup",
+      "scraperConcurrencyCount": "Scraper Concurrency Count",
+      "scraperConcurrencyCountTooltip": "The number of concurrent requests for scraping web content from search results, recommended between 5-10",
       "scraperDebugMode": "Scraper Debug Mode",
       "scraperDebugModeTooltip": "Enable scraper debug mode, which will display the scraper's browser window",
       "searchEngine": "Search Engine",
@@ -499,7 +502,9 @@
         "temperatureRatio": "Temperature Ratio",
         "temperatureRatioPlaceholder": "Actual temperature = request temperature * temperature ratio",
         "toolFilter": "Tool Filter",
-        "toolFilterPlaceholder": "Please enter the tool names to filter, one per line"
+        "toolFilterPlaceholder": "Please enter the tool names to filter, one per line",
+        "promptInjectionPosition": "Injection Position",
+        "promptInjectionPositionPlaceholder": "Choose to inject into system role or last user message"
       },
       "validation": {
         "nameRequired": "Group name cannot be empty."
@@ -508,6 +513,10 @@
         "off": "Off",
         "enhance": "Enhance",
         "replace": "Replace"
+      },
+      "promptInjectionPosition": {
+        "system": "System Role",
+        "user": "User Role"
       }
     },
     "skill": {

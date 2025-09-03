@@ -126,6 +126,7 @@
     "note": "Notas",
     "proxy": "Proxy",
     "quit": "Salir",
+    "scraperTest": "Prueba del scraper",
     "setting": "Configuración",
     "skill": "Habilidad"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "Confirmar restauración de la copia de seguridad",
       "restoreSuccess": "Restauración exitosa",
       "runBackup": "Ejecutar copia de seguridad",
+      "scraperConcurrencyCount": "Número de concurrencia del scraper",
+      "scraperConcurrencyCountTooltip": "El número de solicitudes concurrentes para raspar el contenido web de los resultados de búsqueda, se recomienda entre 5 y 10",
       "scraperDebugMode": "Modo de depuración del scraper",
       "scraperDebugModeTooltip": "Habilita el modo de depuración del scraper, que mostrará la ventana del navegador del scraper",
       "searchEngine": "Motor de búsqueda",
@@ -499,7 +502,9 @@
         "temperatureRatio": "Relación de temperatura",
         "temperatureRatioPlaceholder": "Temperatura real = temperatura de la solicitud * relación de temperatura",
         "toolFilter": "Filtro de herramientas",
-        "toolFilterPlaceholder": "Introduzca los nombres de las herramientas a filtrar, uno por línea"
+        "toolFilterPlaceholder": "Introduzca los nombres de las herramientas a filtrar, uno por línea",
+        "promptInjectionPosition": "Posición de inyección",
+        "promptInjectionPositionPlaceholder": "Elija inyectar en el rol del sistema o en el último mensaje del usuario"
       },
       "validation": {
         "nameRequired": "El nombre del grupo no puede estar vacío."
@@ -508,6 +513,10 @@
         "off": "Desactivado",
         "enhance": "Mejorar",
         "replace": "Reemplazar"
+      },
+      "promptInjectionPosition": {
+        "system": "Rol del sistema",
+        "user": "Rol del usuario"
       }
     },
     "skill": {

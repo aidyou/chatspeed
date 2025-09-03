@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "Une clé API est requise pour obtenir la liste des modèles. Veuillez configurer une clé API valide dans les paramètres."
   chat_completion_failed_after_retries: "La complétion de la discussion a échoué après %{retries} tentatives"
   chat_not_found: "Session de discussion spécifiée non trouvée"
-  crawler_url_not_found: "URL du serveur du robot d'exploration non trouvée"
   empty_chat_id: "L'ID de la discussion ne peut pas être vide"
   empty_messages: "La liste des messages ne peut pas être vide"
   empty_model: "Le nom du modèle ne peut pas être vide"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "Échec de la configuration du proxy de discussion : %{error}"
   failed_to_write_file: "Échec de l'écriture dans le fichier : %{error}"
   invalid_search_model: "Modèle de recherche non valide : %{model_name}"
-  json_serialize_crawler_results_failed: "Échec de la sérialisation du contenu exploré en JSON : %{error}"
-  no_valid_search_engine_config: "Aucune configuration de moteur de recherche valide n'a été trouvée. Veuillez configurer au moins un moteur de recherche dans les paramètres."
   note_already_exists: "Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau"
   search_analysing: "Analyse des données en cours..."
   search_fetching: "Récupération des données en cours..."
@@ -260,7 +257,6 @@ tools:
   model_name_must_be_string: "Le paramètre de nom de modèle doit être une chaîne"
   model_not_found: "Modèle non trouvé dans le flux de travail : %{model_name}"
   model_type_not_found: "Type de modèle %{model_type} non trouvé, id : %{id}, erreur : %{error}"
-  provider_must_be_string: "Le paramètre du fournisseur de services de recherche doit être une chaîne"
   query_must_not_be_empty: "Le paramètre de requête doit être une chaîne non vide"
   url_invalid: "Erreur de format du paramètre d'URL, doit commencer par http:// ou https:// : %{url}"
   url_must_be_string: "Le paramètre d'URL doit être une chaîne"
@@ -295,7 +291,6 @@ tools:
     google_cx_empty: "L'ID du moteur de recherche Google ne peut pas être vide"
     serper_api_key_empty: "La clé API Serper ne peut pas être vide"
     tavily_api_key_empty: "La clé API Tavily ne peut pas être vide"
-    provider_no_support: "Moteur de recherche non pris en charge : {name}"
     web_search_failed: "Échec de la recherche sur le Web (fournisseur : %{provider}, mot-clé : %{keyword}) : %{details}"
 
 tray:

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
-use crate::ai::interaction::chat_completion::ChatProtocol;
 use crate::ai::interaction::constants::{
     TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
 };
@@ -20,7 +19,7 @@ use crate::ai::util::{
     get_family_from_model_id, get_proxy_type, init_extra_params, is_function_call_supported,
     is_image_input_supported, is_reasoning_supported, update_or_create_metadata,
 };
-use crate::ccproxy::{StreamFormat, StreamProcessor};
+use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
 use crate::{ai::error::AiError, impl_stoppable};
 
 const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";

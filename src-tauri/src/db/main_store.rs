@@ -160,12 +160,10 @@ impl Config {
     }
 
     pub fn get_proxy_group_by_name(&self, name: &str) -> Result<ProxyGroup, StoreError> {
-        if name.is_empty() || name == "default" {
+        if name.is_empty() {
             return Ok(ProxyGroup {
-                id: 0,
                 name: "default".to_string(),
                 temperature: Some(1.0),
-                disabled: false,
                 ..Default::default()
             });
         }

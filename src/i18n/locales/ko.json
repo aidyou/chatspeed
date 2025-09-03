@@ -126,6 +126,7 @@
     "note": "지식 노트",
     "proxy": "프록시",
     "quit": "종료",
+    "scraperTest": "스크래퍼 테스트",
     "setting": "설정",
     "skill": "스킬"
   },
@@ -177,6 +178,8 @@
       "restoreConfirmTitle": "백업 복원 확인",
       "restoreSuccess": "복원 성공",
       "runBackup": "백업 실행",
+      "scraperConcurrencyCount": "스크래퍼 동시 실행 수",
+      "scraperConcurrencyCountTooltip": "검색 결과의 웹 콘텐츠를 스크래핑하는 동시 요청 수, 5~10 사이를 권장합니다",
       "scraperDebugMode": "스크래퍼 디버그 모드",
       "scraperDebugModeTooltip": "스크래퍼 디버그 모드를 활성화하면 스크래퍼의 브라우저 창이 표시됩니다",
       "searchEngine": "검색 엔진",
@@ -499,7 +502,9 @@
         "temperatureRatio": "온도 비율",
         "temperatureRatioPlaceholder": "실제 온도 = 요청 온도 * 온도 비율",
         "toolFilter": "도구 필터",
-        "toolFilterPlaceholder": "필터링할 도구 이름을 한 줄에 하나씩 입력하십시오."
+        "toolFilterPlaceholder": "필터링할 도구 이름을 한 줄에 하나씩 입력하십시오.",
+        "promptInjectionPosition": "주입 위치",
+        "promptInjectionPositionPlaceholder": "시스템 역할 또는 마지막 사용자 메시지에 주입 선택"
       },
       "validation": {
         "nameRequired": "그룹 이름은 비워 둘 수 없습니다."
@@ -508,6 +513,10 @@
         "off": "끄기",
         "enhance": "향상",
         "replace": "바꾸기"
+      },
+      "promptInjectionPosition": {
+        "system": "시스템 역할",
+        "user": "사용자 역할"
       }
     },
     "skill": {

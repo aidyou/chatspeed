@@ -1,22 +1,26 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
+use std::str::FromStr as _;
+use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex; // Removed broadcast as it's not used in this file directly
-
-use crate::ai::error::AiError;
-use crate::ai::interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL};
-use crate::ai::traits::chat::{
-    ChatCompletionResult, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration, Usage,
+use tokio::sync::{
+    mpsc::{self, Receiver, Sender},
+    Mutex,
 };
+
+use super::constants::{API_KEY_ROTATOR, BASE_URL};
+use crate::ccproxy::ChatProtocol;
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
     ai::{
         chat::{claude::ClaudeChat, gemini::GeminiChat, openai::OpenAIChat},
+        error::AiError,
+        interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL},
+        traits::chat::{
+            ChatCompletionResult, MCPToolDeclaration, MessageType, ModelDetails,
+            ToolCallDeclaration, Usage,
+        },
         traits::{
             chat::FinishReason,
             chat::{AiChatTrait, ChatResponse},
@@ -25,9 +29,6 @@ use crate::{
     },
     libs::window_channels::WindowChannels,
 };
-use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use super::constants::{API_KEY_ROTATOR, BASE_URL};
 
 /// Macro for initializing a nested HashMap structure for chat interfaces
 ///
@@ -314,59 +315,6 @@ impl AiChatEnum {
     /// - `value`: A boolean indicating whether to stop the chat.
     pub async fn set_stop_flag(&self, value: bool) {
         impl_chat_method!(self, set_stop_flag, value)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq)]
-pub enum ChatProtocol {
-    OpenAI,
-    Claude,
-    Gemini,
-    Ollama,
-    HuggingFace,
-}
-
-impl Default for ChatProtocol {
-    fn default() -> Self {
-        ChatProtocol::OpenAI
-    }
-}
-
-impl Display for ChatProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ChatProtocol::OpenAI => "openai",
-                ChatProtocol::Claude => "claude",
-                ChatProtocol::Gemini => "gemini",
-                ChatProtocol::Ollama => "ollama",
-                ChatProtocol::HuggingFace => "huggingface",
-            }
-        )
-    }
-}
-
-impl FromStr for ChatProtocol {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "openai" => Ok(ChatProtocol::OpenAI),
-            "claude" => Ok(ChatProtocol::Claude),
-            "gemini" => Ok(ChatProtocol::Gemini),
-            "ollama" => Ok(ChatProtocol::Ollama),
-            "huggingface" => Ok(ChatProtocol::HuggingFace),
-            _ => Err(format!("Invalid AiProtocol: {}", s)),
-        }
-    }
-}
-
-impl TryFrom<String> for ChatProtocol {
-    type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
     }
 }
 

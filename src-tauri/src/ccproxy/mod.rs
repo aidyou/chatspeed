@@ -11,6 +11,6 @@ mod router;
 mod types;
 
 pub use handler::{handle_chat_completion, handle_list_models, handle_ollama_tags};
-pub use helper::StreamProcessor;
+pub use helper::{get_tool_id, StreamProcessor};
 pub use router::routes;
-pub use types::{claude, gemini, openai, StreamFormat};
+pub use types::{claude, gemini, openai, ChatProtocol, StreamFormat};

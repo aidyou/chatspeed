@@ -1,9 +1,10 @@
 use crate::{
-    ai::{interaction::ChatProtocol, network::ProxyType, util::get_proxy_type},
+    ai::{network::ProxyType, util::get_proxy_type},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
         helper::CC_PROXY_ROTATOR,
         types::{BackendModelTarget, ChatCompletionProxyConfig, ProxyModel},
+        ChatProtocol,
     },
     commands::chat::setup_chat_proxy,
     constants::CFG_CHAT_COMPLETION_PROXY,
@@ -49,11 +50,59 @@ impl ModelResolver {
         let (backend_target, ai_model_detail) =
             Self::update_global_key_pool(main_store_arc.clone(), &proxy_alias, proxy_group).await?;
 
+        let group_name = proxy_group.unwrap_or("default");
+        let group_config = Self::get_proxy_group(main_store_arc.clone(), group_name);
+
+        let prompt_injection = group_config
+            .as_ref()
+            .map_or("off".to_string(), |g| g.prompt_injection.clone());
+
+        #[cfg(debug_assertions)]
+        {
+            log::debug!(
+                "proxy groupu: {}, prompt injection: {}",
+                group_name,
+                &prompt_injection
+            );
+        }
+
+        let prompt_text = group_config
+            .as_ref()
+            .map(|g| {
+                format!(
+                    "<cs:behavioral-guidelines>{}</cs:behavioral-guidelines>",
+                    g.prompt_text.clone()
+                )
+            })
+            .unwrap_or_default();
+        let prompt_injection_position = group_config
+            .as_ref()
+            .map(|g| {
+                g.metadata
+                    .as_ref()
+                    .and_then(|m| m.get("promptInjectionPosition"))
+                    .and_then(|v| v.as_str())
+                    .map(|x| x.to_string())
+                    .unwrap_or("system".to_string())
+            })
+            .unwrap_or("system".to_string());
+
+        let tool_filter = group_config.as_ref().map_or(HashMap::new(), |g| {
+            let mut map = HashMap::new();
+            for it in g.tool_filter.split('\n').into_iter() {
+                if it.trim().is_empty() {
+                    continue;
+                }
+                map.insert(it.trim().to_string(), 1_i8);
+            }
+            map
+        });
+        let temperature = group_config
+            .as_ref()
+            .map_or(1.0, |g| g.temperature.unwrap_or(1.0));
+
         // Ollama hasn't api key
         if ai_model_detail.api_protocol == ChatProtocol::Ollama.to_string() {
-            let group =
-                Self::get_proxy_group(main_store_arc.clone(), proxy_group.unwrap_or("default"))?;
-
             return Ok(ProxyModel {
                 provider: ai_model_detail.name.clone(),
                 chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
@@ -61,23 +110,14 @@ impl ModelResolver {
                 model: backend_target.model.clone(),
                 api_key: ai_model_detail.api_key.clone(),
                 metadata: ai_model_detail.metadata.clone(),
-                prompt_injection: group.prompt_injection.clone(),
-                prompt_text: group.prompt_text.clone(),
-                tool_filter: {
-                    let mut map = HashMap::new();
-                    for it in group.tool_filter.split('\n').into_iter() {
-                        if it.trim().is_empty() {
-                            continue;
-                        }
-                        map.insert(it.trim().to_string(), 1_i8);
-                    }
-                    map
-                },
-                temperature: group.temperature.unwrap_or(1.0),
+                prompt_injection_position: Some(prompt_injection_position),
+                prompt_injection: prompt_injection,
+                prompt_text: prompt_text,
+                tool_filter: tool_filter,
+                temperature: temperature,
             });
         }
 
-        let group_name = proxy_group.unwrap_or("default");
         let composite_key = format!("{}/{}", group_name, proxy_alias);
 
         // Get the next key from the global pool
@@ -117,37 +157,6 @@ impl ModelResolver {
         let backend_chat_protocol = ChatProtocol::from_str(&ai_model_details.api_protocol)
             .map_err(|e| CCProxyError::InvalidProtocolError(e.to_string()))?;
 
-        // Get the proxy group detail
-        let group_config =
-            Self::get_proxy_group(main_store_arc.clone(), proxy_group.unwrap_or("default"));
-        let prompt_injection = group_config
-            .as_ref()
-            .map_or("off".to_string(), |g| g.prompt_injection.clone());
-        let prompt_text = group_config
-            .as_ref()
-            .map_or("".to_string(), |g| g.prompt_text.clone());
-        let tool_filter = group_config.as_ref().map_or(HashMap::new(), |g| {
-            let mut map = HashMap::new();
-            for it in g.tool_filter.split('\n').into_iter() {
-                if it.trim().is_empty() {
-                    continue;
-                }
-                map.insert(it.trim().to_string(), 1_i8);
-            }
-            map
-        });
-        let temperature = group_config
-            .as_ref()
-            .map_or(1.0, |g| g.temperature.unwrap_or(1.0));
-        // let max_context = group_config.as_ref().map_or(0, |g| {
-        //     g.metadata
-        //         .as_ref()
-        //         .and_then(|m| m.as_object())
-        //         .and_then(|obj| obj.get("maxContext"))
-        //         .and_then(|v| v.as_u64())
-        //         .unwrap_or(0) as usize
-        // });
-
         Ok(ProxyModel {
             provider: ai_model_details.name.clone(),
             chat_protocol: backend_chat_protocol,
@@ -156,6 +165,7 @@ impl ModelResolver {
             api_key: global_key.key,
             metadata: ai_model_details.metadata.clone(),
             prompt_injection,
+            prompt_injection_position: Some(prompt_injection_position),
             prompt_text,
             tool_filter,
             temperature,
@@ -399,4 +409,8 @@ pub fn get_provider_chat_full_url(
             }
         }
     }
+}
+
+pub fn get_tool_id() -> String {
+    format!("tool_{}", &uuid::Uuid::new_v4().to_string()[..8])
 }

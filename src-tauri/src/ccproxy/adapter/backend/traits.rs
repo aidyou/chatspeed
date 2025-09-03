@@ -18,7 +18,7 @@ pub trait BackendAdapter: Send + Sync {
     async fn adapt_request(
         &self,
         client: &Client,
-        unified_request: &UnifiedRequest,
+        unified_request: &mut UnifiedRequest,
         api_key: &str,
         provider_full_url: &str,
         model: &str,

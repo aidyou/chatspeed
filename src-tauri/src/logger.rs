@@ -218,8 +218,15 @@ pub fn setup_logger(app: &tauri::App) {
         .chain(std::io::stdout());
 
     // File dispatcher - detailed format
+    // In development (debug builds), log everything at Debug level.
+    // In production (release builds), log only Info and above to reduce noise.
+    #[cfg(debug_assertions)]
+    let log_level = log::LevelFilter::Debug;
+    #[cfg(not(debug_assertions))]
+    let log_level = log::LevelFilter::Info;
+
     let file_dispatcher = fern::Dispatch::new()
-        .level(log::LevelFilter::Debug)
+        .level(log_level)
         .filter(|record| {
             record.target().contains("chatspeed")
                 || (record.level() < log::LevelFilter::Debug && record.target() != "ccproxy_logger")

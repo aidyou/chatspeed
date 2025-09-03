@@ -1,22 +1,27 @@
 use async_trait::async_trait;
-use quick_xml::de::from_str;
 use reqwest::{Client, RequestBuilder};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 
-use crate::ccproxy::adapter::{
-    backend::{generate_tool_prompt, update_message_block, ToolUse, TOOL_TAG_END, TOOL_TAG_START},
-    unified::{
-        SseStatus, UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedResponse,
-        UnifiedRole, UnifiedStreamChunk, UnifiedUsage,
-    },
-};
+use crate::ccproxy::adapter::range_adapter::adapt_temperature;
+use crate::ccproxy::get_tool_id;
 use crate::ccproxy::types::ollama::{
     OllamaChatCompletionRequest, OllamaChatCompletionResponse, OllamaFunctionCall, OllamaMessage,
     OllamaOptions, OllamaStreamResponse, OllamaTool, OllamaToolCall,
 };
+use crate::ccproxy::{
+    adapter::{
+        backend::{update_message_block, TOOL_TAG_END, TOOL_TAG_START},
+        unified::{
+            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
+            UnifiedStreamChunk, UnifiedUsage,
+        },
+    },
+    types::ChatProtocol,
+};
 
 use super::{BackendAdapter, BackendResponse};
+use crate::ccproxy::adapter::backend::common;
 
 pub struct OllamaBackendAdapter;
 
@@ -25,260 +30,285 @@ impl BackendAdapter for OllamaBackendAdapter {
     async fn adapt_request(
         &self,
         client: &Client,
-        unified_request: &UnifiedRequest,
+        unified_request: &mut UnifiedRequest,
         _api_key: &str, // Ollama doesn't use API keys
         provider_full_url: &str,
         model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
-        let mut ollama_messages: Vec<OllamaMessage> = Vec::new();
-        let mut unified_request = unified_request.clone();
-
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
-        // into the last user message. This is a specific adaptation for models that
+        // into the system message. This is a specific adaptation for models that
         // don't support native tool calling APIs but can follow instructions.
+        unified_request.enhance_prompt();
+
+        // --- Message Processing ---
+        let mut ollama_messages: Vec<OllamaMessage> = Vec::new();
         if unified_request.tool_compat_mode {
-            if let Some(tools) = &unified_request.tools {
-                let tool_prompt = generate_tool_prompt(tools);
-                if let Some(last_message) = unified_request
-                    .messages
-                    .iter_mut()
-                    .rfind(|m| m.role == UnifiedRole::User)
-                {
-                    // Prepend the tool prompt to the existing text content.
-                    let new_text = if let Some(UnifiedContentBlock::Text { text }) =
-                        last_message.content.get_mut(0)
-                    {
-                        format!("{}\n{}", tool_prompt, text)
-                    } else {
-                        tool_prompt
-                    };
-                    // Replace or insert the new text content.
-                    if !last_message.content.is_empty()
-                        && matches!(last_message.content[0], UnifiedContentBlock::Text { .. })
-                    {
-                        last_message.content[0] = UnifiedContentBlock::Text { text: new_text };
-                    } else {
-                        last_message
-                            .content
-                            .insert(0, UnifiedContentBlock::Text { text: new_text });
+            // Special handling for tool compatibility mode to mimic a more natural
+            // conversation flow for models that don't natively support tool calls.
+            let mut processed_messages: Vec<OllamaMessage> = Vec::new();
+            let mut tool_results_buffer: Vec<String> = Vec::new();
+
+            for msg in &unified_request.messages {
+                match msg.role {
+                    UnifiedRole::Assistant => {
+                        // If there are pending tool results, flush them as a single user message first.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                                tool_results_buffer.join("\n")
+                            );
+                            processed_messages.push(OllamaMessage {
+                                role: "user".to_string(),
+                                content: results_xml,
+                                images: None,
+                                tool_calls: None,
+                                thinking: None,
+                                tool_name: None,
+                            });
+                            tool_results_buffer.clear();
+                        }
+
+                        // Process the assistant message, converting ToolUse blocks to XML.
+                        let mut content_parts: Vec<String> = Vec::new();
+
+                        for block in &msg.content {
+                            match block {
+                                UnifiedContentBlock::Text { text } => {
+                                    // Trim whitespace from the text part to avoid accumulating newlines
+                                    let trimmed_text = text.trim();
+                                    if !trimmed_text.is_empty() {
+                                        content_parts.push(trimmed_text.to_string());
+                                    }
+                                }
+                                UnifiedContentBlock::ToolUse { id, name, input } => {
+                                    // Format the tool use block as XML
+                                    let tool_use_xml =
+                                        crate::ccproxy::helper::tool_use_xml::format_tool_use_xml(
+                                            id, name, input,
+                                        );
+                                    content_parts.push(tool_use_xml);
+                                }
+                                // Ignore other block types like Image, ToolResult, etc. in this context
+                                _ => {} // Ignore Thinking blocks
+                            }
+                        }
+
+                        // Join all parts with a consistent separator
+                        let final_content = content_parts.join("\n\n");
+
+                        if !final_content.is_empty() {
+                            processed_messages.push(OllamaMessage {
+                                role: "assistant".to_string(),
+                                content: final_content,
+                                images: None,
+                                tool_calls: None,
+                                thinking: None,
+                                tool_name: None,
+                            });
+                        }
                     }
-                } else {
-                    // If no user message exists, create a new one with the tool prompt.
-                    unified_request.messages.push(UnifiedMessage {
-                        role: UnifiedRole::User,
-                        content: vec![UnifiedContentBlock::Text { text: tool_prompt }],
-                        reasoning_content: None,
-                    });
+                    UnifiedRole::Tool => {
+                        // Collect tool results into a buffer to be flushed later.
+                        for block in &msg.content {
+                            if let UnifiedContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } = block
+                            {
+                                let result_xml = format!(
+                                    "<ccp:tool_result>\n<id>{}</id>\n{}\n</ccp:tool_result>",
+                                    tool_use_id, content
+                                );
+                                tool_results_buffer.push(result_xml);
+                            }
+                        }
+                    }
+                    UnifiedRole::User => {
+                        // Flush any pending tool results before processing the user message.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                                tool_results_buffer.join("\n")
+                            );
+                            processed_messages.push(OllamaMessage {
+                                role: "user".to_string(),
+                                content: results_xml,
+                                images: None,
+                                tool_calls: None,
+                                thinking: None,
+                                tool_name: None,
+                            });
+                            tool_results_buffer.clear();
+                        }
+
+                        // Add the actual user message.
+                        let content_text = msg
+                            .content
+                            .iter()
+                            .filter_map(|block| {
+                                if let UnifiedContentBlock::Text { text } = block {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+
+                        if !content_text.is_empty() {
+                            processed_messages.push(OllamaMessage {
+                                role: "user".to_string(),
+                                content: content_text,
+                                images: None,
+                                tool_calls: None,
+                                thinking: None,
+                                tool_name: None,
+                            });
+                        }
+                    }
+                    _ => {} // Ignore System role in this context, it's handled separately.
                 }
-                // Tools are now part of the prompt, so remove them from the request object.
-                unified_request.tools = None;
             }
-        }
 
-        // --- Advanced Message Processing with Proper Tool Call Handling ---
-        // Build a map of tool call IDs to their corresponding tool results
-        let mut tool_results: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for msg in &unified_request.messages {
-            for block in &msg.content {
-                if let UnifiedContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    ..
-                } = block
-                {
-                    tool_results.insert(tool_use_id.clone(), content.clone());
-                }
+            // Flush any remaining tool results at the end of the message list.
+            if !tool_results_buffer.is_empty() {
+                let results_xml = format!(
+                    "<ccp:tool_results>\n{}\n</ccp:tool_results>",
+                    tool_results_buffer.join("\n")
+                );
+                processed_messages.push(OllamaMessage {
+                    role: "user".to_string(),
+                    content: results_xml,
+                    images: None,
+                    tool_calls: None,
+                    thinking: None,
+                    tool_name: None,
+                });
             }
-        }
-
-        // Process messages with proper Ollama message structure
-        let mut current_content = String::new();
-        let mut current_images: Vec<String> = Vec::new();
-        let mut current_tool_calls: Vec<OllamaToolCall> = Vec::new();
-        let mut current_role: Option<UnifiedRole> = None;
-
-        // Helper function to flush current message and add tool responses immediately
-        let flush_current_message_with_tool_responses =
-            |ollama_messages: &mut Vec<OllamaMessage>,
-             current_role: &mut Option<UnifiedRole>,
-             current_content: &mut String,
-             current_images: &mut Vec<String>,
-             current_tool_calls: &mut Vec<OllamaToolCall>,
-             tool_results: &std::collections::HashMap<String, String>| {
-                if current_content.is_empty()
-                    && current_images.is_empty()
-                    && current_tool_calls.is_empty()
-                {
-                    return;
-                }
-
-                let role_str = match current_role.as_ref().unwrap_or(&UnifiedRole::User) {
-                    UnifiedRole::System => return,
+            ollama_messages = processed_messages;
+        } else {
+            // This logic correctly converts the UnifiedRequest message structure into the
+            // Ollama-compatible format for non-tool-compat mode.
+            for msg in &unified_request.messages {
+                let role_str = match msg.role {
+                    UnifiedRole::System => "system",
                     UnifiedRole::User => "user",
                     UnifiedRole::Assistant => "assistant",
                     UnifiedRole::Tool => "tool",
                 };
 
-                // Add the main message
-                if !current_content.is_empty()
-                    || !current_images.is_empty()
-                    || !current_tool_calls.is_empty()
-                {
-                    ollama_messages.push(OllamaMessage {
-                        role: role_str.to_string(),
-                        content: std::mem::take(current_content),
-                        images: if current_images.is_empty() {
-                            None
-                        } else {
-                            Some(std::mem::take(current_images))
-                        },
-                        thinking: None,
-                        tool_calls: if current_tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(current_tool_calls.clone())
-                        },
-                        tool_name: None,
-                    });
+                let mut content_parts = Vec::new();
+                let mut image_parts: Vec<String> = Vec::new();
+                let mut tool_calls = Vec::new();
 
-                    // Immediately add tool responses for each tool call
-                    for tool_call in current_tool_calls.iter() {
-                        // Generate a tool call ID if not present
-                        let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
-                        let tool_response_content =
-                            tool_results.get(&tool_id).cloned().unwrap_or_else(|| {
-                                "Tool execution was interrupted or failed.".to_string()
-                            });
-
-                        ollama_messages.push(OllamaMessage {
-                            role: "tool".to_string(),
-                            content: tool_response_content,
-                            images: None,
-                            thinking: None,
-                            tool_calls: None,
-                            tool_name: Some(tool_call.function.name.clone()),
-                        });
-                    }
-                }
-
-                current_tool_calls.clear();
-                *current_role = None;
-            };
-
-        for msg in &unified_request.messages {
-            for block in &msg.content {
-                match block {
-                    UnifiedContentBlock::ToolResult { .. } => {
-                        // Tool results are handled when processing tool calls, skip them here
-                        continue;
-                    }
-                    UnifiedContentBlock::Text { text } => {
-                        // Check if we need to flush due to role change
-                        if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role {
-                            flush_current_message_with_tool_responses(
-                                &mut ollama_messages,
-                                &mut current_role,
-                                &mut current_content,
-                                &mut current_images,
-                                &mut current_tool_calls,
-                                &tool_results,
-                            );
+                for block in &msg.content {
+                    match block {
+                        UnifiedContentBlock::Text { text } => {
+                            content_parts.push(text.clone());
                         }
-
-                        if current_role.is_none() {
-                            current_role = Some(msg.role.clone());
+                        UnifiedContentBlock::Image { data, .. } => {
+                            image_parts.push(data.clone());
                         }
-                        if !current_content.is_empty() {
-                            current_content.push_str("\n\n");
-                        }
-                        current_content.push_str(text);
-                    }
-                    UnifiedContentBlock::Image { data, .. } => {
-                        // Check if we need to flush due to role change
-                        if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role {
-                            flush_current_message_with_tool_responses(
-                                &mut ollama_messages,
-                                &mut current_role,
-                                &mut current_content,
-                                &mut current_images,
-                                &mut current_tool_calls,
-                                &tool_results,
-                            );
-                        }
-
-                        if current_role.is_none() {
-                            current_role = Some(msg.role.clone());
-                        }
-                        current_images.push(data.clone());
-                    }
-                    UnifiedContentBlock::ToolUse { id: _, name, input } => {
-                        if msg.role == UnifiedRole::System {
-                            // If a system message contains a tool use, convert it to text
-                            let tool_text = format!(
-                                "System message contained a tool call: {{ name: {}, input: {} }}",
-                                name, input
-                            );
-                            if current_role.is_none() {
-                                current_role = Some(UnifiedRole::System);
-                            }
-                            if !current_content.is_empty() {
-                                current_content.push_str("\n\n");
-                            }
-                            current_content.push_str(&tool_text);
-                        } else {
-                            // Check if we need to flush due to role change
-                            if current_role.is_some() && current_role.as_ref().unwrap() != &msg.role
-                            {
-                                flush_current_message_with_tool_responses(
-                                    &mut ollama_messages,
-                                    &mut current_role,
-                                    &mut current_content,
-                                    &mut current_images,
-                                    &mut current_tool_calls,
-                                    &tool_results,
-                                );
-                            }
-
-                            if current_role.is_none() {
-                                current_role = Some(msg.role.clone());
-                            }
-                            current_tool_calls.push(OllamaToolCall {
+                        UnifiedContentBlock::ToolUse { name, input, .. } => {
+                            tool_calls.push(OllamaToolCall {
                                 function: OllamaFunctionCall {
                                     name: name.clone(),
                                     arguments: input.clone(),
                                 },
                             });
                         }
+                        UnifiedContentBlock::ToolResult { content, .. } => {
+                            // For a 'tool' role message, the content is the result.
+                            content_parts.push(content.clone());
+                        }
+                        _ => {} // Ignore Thinking blocks
                     }
-                    _ => {} // Thinking blocks are ignored in the final request
                 }
+
+                // Don't add empty messages
+                if content_parts.is_empty() && image_parts.is_empty() && tool_calls.is_empty() {
+                    continue;
+                }
+
+                ollama_messages.push(OllamaMessage {
+                    role: role_str.to_string(),
+                    content: content_parts.join("\n\n"),
+                    images: if image_parts.is_empty() {
+                        None
+                    } else {
+                        Some(image_parts)
+                    },
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
+                    thinking: None,
+                    tool_name: None,
+                });
             }
         }
 
-        // Flush any remaining message
-        flush_current_message_with_tool_responses(
-            &mut ollama_messages,
-            &mut current_role,
-            &mut current_content,
-            &mut current_images,
-            &mut current_tool_calls,
-            &tool_results,
-        );
+        // --- New Prompt Injection Logic ---
+        let injection_pos = unified_request
+            .prompt_injection_position
+            .as_deref()
+            .unwrap_or("system");
+        let combined_prompt_text = unified_request
+            .combined_prompt
+            .as_deref()
+            .unwrap_or_default();
 
-        // Add system prompt if present
-        if let Some(system_prompt) = &unified_request.system_prompt {
-            if !system_prompt.trim().is_empty() {
+        if injection_pos == "user" && !combined_prompt_text.is_empty() {
+            // Find the last user message and append the prompt.
+            if let Some(last_user_msg) = ollama_messages.iter_mut().rfind(|m| m.role == "user") {
+                last_user_msg.content =
+                    format!("{}\n\n{}", combined_prompt_text, last_user_msg.content);
+            }
+
+            // After injecting into user message, handle the original system prompt separately.
+            if let Some(sys_prompt_str) = &unified_request.system_prompt {
+                if !sys_prompt_str.trim().is_empty() {
+                    ollama_messages.insert(
+                        0,
+                        OllamaMessage {
+                            role: "system".to_string(),
+                            content: sys_prompt_str.clone(),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        } else {
+            // injection_pos == "system" or default behavior
+            let injection_mode = unified_request
+                .prompt_injection
+                .as_deref()
+                .unwrap_or("enhance");
+            let original_system_prompt =
+                unified_request.system_prompt.as_deref().unwrap_or_default();
+
+            let final_system_prompt = if injection_mode == "replace" {
+                combined_prompt_text.to_string()
+            } else {
+                // "enhance" or default
+                [original_system_prompt, combined_prompt_text]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| *s)
+                    .collect::<Vec<&str>>()
+                    .join("\n\n")
+            };
+
+            if !final_system_prompt.trim().is_empty() {
                 ollama_messages.insert(
                     0,
                     OllamaMessage {
                         role: "system".to_string(),
-                        content: system_prompt.clone(),
-                        images: None,
-                        thinking: None,
-                        tool_calls: None,
-                        tool_name: None,
+                        content: final_system_prompt,
+                        ..Default::default()
                     },
                 );
             }
@@ -295,7 +325,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                             r#type: "function".to_string(),
                             function: crate::ccproxy::types::ollama::OllamaFunctionDefinition {
                                 name: tool.name.clone(),
-                                description: tool.description.clone().unwrap_or_default(),
+                                description: tool.description.clone(),
                                 parameters: tool.input_schema.clone(),
                             },
                         })
@@ -349,7 +379,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                         })
                 }),
             options: Some(OllamaOptions {
-                temperature: unified_request.temperature,
+                temperature: unified_request
+                    .temperature
+                    .map(|t| adapt_temperature(t, ChatProtocol::Ollama)),
                 num_predict: unified_request.max_tokens,
                 top_p: unified_request.top_p,
                 top_k: unified_request.top_k.map(|k| k as i32),
@@ -359,7 +391,10 @@ impl BackendAdapter for OllamaBackendAdapter {
                 seed: unified_request.seed,
                 ..Default::default()
             }),
-            keep_alive: Some("5m".to_string()),
+            keep_alive: unified_request
+                .keep_alive
+                .as_deref()
+                .map(|ka| serde_json::Value::from(ka)),
             tools: ollama_tools,
         };
 
@@ -455,26 +490,16 @@ impl BackendAdapter for OllamaBackendAdapter {
                 if let Some(relative_end_pos) = processed_text[start_pos..].find(TOOL_TAG_END) {
                     let end_pos = start_pos + relative_end_pos;
                     let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
-                    if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
-                        let mut arguments = serde_json::Map::new();
-                        for param in parsed_tool.params.param {
-                            arguments.insert(
-                                param.name.clone(),
-                                serde_json::Value::String(param.get_value()),
-                            );
-                        }
-
+                    if let Ok(parsed_tool) =
+                        crate::ccproxy::helper::tool_use_xml::ToolUse::try_from(tool_xml)
+                    {
                         log::debug!(
                             "tool_use parse result: name: {}, param: {:?}",
                             &parsed_tool.name,
-                            &arguments
+                            &parsed_tool.params
                         );
 
-                        content_blocks.push(UnifiedContentBlock::ToolUse {
-                            id: format!("tool_{}", uuid::Uuid::new_v4()),
-                            name: parsed_tool.name,
-                            input: serde_json::Value::Object(arguments),
-                        });
+                        content_blocks.push(parsed_tool.into());
                     } else {
                         let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
 
@@ -525,7 +550,7 @@ impl BackendAdapter for OllamaBackendAdapter {
             if let Some(tool_calls) = ollama_response.message.tool_calls {
                 for tc in tool_calls {
                     content_blocks.push(UnifiedContentBlock::ToolUse {
-                        id: format!("tool_{}", uuid::Uuid::new_v4()),
+                        id: get_tool_id(),
                         name: tc.function.name,
                         input: tc.function.arguments,
                     });
@@ -716,7 +741,7 @@ impl OllamaBackendAdapter {
     ) {
         let name = &tc.function.name;
         if !name.is_empty() {
-            let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
+            let tool_id = get_tool_id();
 
             // Update tool_id in status
             let mut message_index = 0;
@@ -774,6 +799,11 @@ impl OllamaBackendAdapter {
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if let Ok(mut status) = sse_status.write() {
+            if status.tool_compat_mode {
+                // On stream finish, try to auto-complete any dangling tool tag.
+                common::auto_complete_and_process_tool_tag(&mut status, unified_chunks);
+            }
+
             if !status.tool_compat_buffer.is_empty()
                 || !status.tool_compat_fragment_buffer.is_empty()
             {
@@ -857,8 +887,12 @@ impl OllamaBackendAdapter {
             let should_flush = status.tool_compat_fragment_count >= 25
                 || time_since_flush >= 100
                 || status.tool_compat_fragment_buffer.len() > 500
-                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_START)
-                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_END);
+                || status
+                    .tool_compat_fragment_buffer
+                    .contains(common::TOOL_TAG_START)
+                || status
+                    .tool_compat_fragment_buffer
+                    .contains(common::TOOL_TAG_END);
 
             if should_flush {
                 self.flush_tool_compat_buffer(&mut status, unified_chunks);
@@ -879,131 +913,10 @@ impl OllamaBackendAdapter {
         status.tool_compat_last_flush_time = std::time::Instant::now();
 
         // Process tool calls in the buffer
-        self.process_tool_calls_in_buffer(status, unified_chunks);
+        common::process_tool_calls_in_buffer(status, unified_chunks);
 
         // Handle remaining buffer content
         self.handle_remaining_buffer_content(status, unified_chunks);
-    }
-
-    /// Process tool calls found in the buffer
-    fn process_tool_calls_in_buffer(
-        &self,
-        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
-        unified_chunks: &mut Vec<UnifiedStreamChunk>,
-    ) {
-        loop {
-            if !status.in_tool_call_block {
-                let buffer = &status.tool_compat_buffer;
-                let tool_start = TOOL_TAG_START;
-
-                if let Some(start_pos) = buffer.find(tool_start) {
-                    log::debug!(
-                        "buffer has tool start tag `<ccp:tool_use>` at pos: {}",
-                        start_pos
-                    );
-                    // Send text before the tool tag, but filter out markdown code blocks
-                    let text_before = &buffer[..start_pos];
-                    if !text_before.is_empty() {
-                        unified_chunks.push(UnifiedStreamChunk::Text {
-                            delta: text_before.to_string(),
-                        });
-                    }
-
-                    status.tool_compat_buffer = buffer[start_pos..].to_string();
-                    status.in_tool_call_block = true;
-                } else {
-                    break;
-                }
-            }
-
-            if status.in_tool_call_block {
-                let tool_end = TOOL_TAG_END;
-
-                if let Some(end_pos) = status.tool_compat_buffer.find(tool_end) {
-                    let tool_xml =
-                        status.tool_compat_buffer[..end_pos + tool_end.len()].to_string();
-                    let remaining_buffer =
-                        status.tool_compat_buffer[end_pos + tool_end.len()..].to_string();
-
-                    log::debug!(
-                        "find tool end tag `{}` at pos: {}\n, tool xml: {}",
-                        TOOL_TAG_END,
-                        end_pos,
-                        tool_xml
-                    );
-
-                    self.parse_and_emit_tool_call(status, &tool_xml, unified_chunks);
-
-                    status.tool_compat_buffer = remaining_buffer;
-                    status.in_tool_call_block = false;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Parse tool XML and emit tool call chunks
-    fn parse_and_emit_tool_call(
-        &self,
-        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
-        tool_xml: &str,
-        unified_chunks: &mut Vec<UnifiedStreamChunk>,
-    ) {
-        if let Ok(parsed_tool) = from_str::<ToolUse>(tool_xml) {
-            let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
-            if status.tool_id != "" {
-                // send tool stop
-                unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
-                    index: status.message_index,
-                })
-            }
-            status.tool_id = tool_id.clone();
-            update_message_block(status, tool_id.clone());
-
-            let mut arguments = serde_json::Map::new();
-            for param in parsed_tool.params.param {
-                arguments.insert(
-                    param.name.clone(),
-                    serde_json::Value::String(param.get_value()),
-                );
-            }
-
-            // Send tool call start for claude only
-            unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
-                index: status.message_index,
-                block: json!({
-                    "type": "tool_use",
-                    "id": tool_id.clone(),
-                    "name": parsed_tool.name.clone(),
-                    "input": {}
-                }),
-            });
-            // Send tool call start for gemini and openai
-            unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
-                tool_type: "function".to_string(),
-                id: tool_id.clone(),
-                name: parsed_tool.name.clone(),
-            });
-
-            // Send tool call parameters
-            let args_json = serde_json::to_string(&arguments).unwrap_or_default();
-            unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
-                id: tool_id,
-                delta: args_json.clone(),
-            });
-
-            log::info!(
-                "tool parse success, name: {}, param: {}",
-                parsed_tool.name.clone(),
-                args_json
-            );
-        } else {
-            unified_chunks.push(UnifiedStreamChunk::Error {
-                message: format!("tool xml parse failed, xml: {}", tool_xml),
-            });
-            log::warn!("tool xml parse failed, xml: {}", tool_xml);
-        }
     }
 
     /// Process content in normal (non-tool compatibility) mode
@@ -1062,8 +975,8 @@ impl OllamaBackendAdapter {
     ) {
         if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
             let buffer = &status.tool_compat_buffer;
-            let tool_start = TOOL_TAG_START;
-            let tool_end = TOOL_TAG_END;
+            let tool_start = common::TOOL_TAG_START;
+            let tool_end = common::TOOL_TAG_END;
 
             let mut partial_tag_len = 0;
 

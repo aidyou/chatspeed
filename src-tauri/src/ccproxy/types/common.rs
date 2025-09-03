@@ -1,9 +1,11 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::ai::interaction::ChatProtocol;
 
 /// Represents a target backend model for a proxy alias.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,8 +67,66 @@ pub struct ProxyModel {
     pub api_key: String,
     pub metadata: Option<Value>,
     pub prompt_injection: String,
+    pub prompt_injection_position: Option<String>,
     pub prompt_text: String,
     pub tool_filter: HashMap<String, i8>,
     pub temperature: f32,
     // pub max_context: usize,
+}
+
+//======================================================
+// Chat Protocol
+//======================================================
+
+#[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq)]
+pub enum ChatProtocol {
+    OpenAI,
+    Claude,
+    Gemini,
+    Ollama,
+    HuggingFace,
+}
+
+impl Default for ChatProtocol {
+    fn default() -> Self {
+        ChatProtocol::OpenAI
+    }
+}
+
+impl Display for ChatProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ChatProtocol::OpenAI => "openai",
+                ChatProtocol::Claude => "claude",
+                ChatProtocol::Gemini => "gemini",
+                ChatProtocol::Ollama => "ollama",
+                ChatProtocol::HuggingFace => "huggingface",
+            }
+        )
+    }
+}
+
+impl FromStr for ChatProtocol {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "openai" => Ok(ChatProtocol::OpenAI),
+            "claude" => Ok(ChatProtocol::Claude),
+            "gemini" => Ok(ChatProtocol::Gemini),
+            "ollama" => Ok(ChatProtocol::Ollama),
+            "huggingface" => Ok(ChatProtocol::HuggingFace),
+            _ => Err(format!("Invalid AiProtocol: {}", s)),
+        }
+    }
+}
+
+impl TryFrom<String> for ChatProtocol {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
 }

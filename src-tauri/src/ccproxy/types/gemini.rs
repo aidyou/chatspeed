@@ -22,9 +22,10 @@ pub struct GeminiRequest {
     pub cached_content: Option<String>, // Context cache content name
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiContent {
+    #[serde(default)]
     pub role: String, // "user" or "model"
     // Add `serde(default)` to handle cases where the `parts` field is omitted in stream chunks,
     // such as in metadata-only chunks at the end of a stream.
@@ -66,6 +67,7 @@ pub struct GeminiInlineData {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiTool {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_declarations: Vec<GeminiFunctionDeclaration>,
 }
 
@@ -73,14 +75,17 @@ pub struct GeminiTool {
 #[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionDeclaration {
     pub name: String,
-    pub description: String,
-    pub parameters: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiToolConfig {
-    pub function_calling_config: GeminiFunctionCallingConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_calling_config: Option<GeminiFunctionCallingConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -136,6 +141,7 @@ pub struct GeminiResponse {
 pub struct GeminiCandidate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<u32>, // Index of the candidate
+    #[serde(default)]
     pub content: GeminiContent,
     #[serde(default, rename = "finishReason")]
     pub finish_reason: Option<String>, // "STOP", "MAX_TOKENS", "SAFETY", etc.
@@ -154,7 +160,9 @@ pub struct GeminiCandidate {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiUsageMetadata {
+    #[serde(default)]
     pub prompt_token_count: u64,
+    #[serde(default)]
     pub total_token_count: u64,
     #[serde(default, deserialize_with = "deserialize_token_count")]
     pub candidates_token_count: Option<u64>, // Handle both u64 and object types
@@ -177,7 +185,8 @@ pub struct GeminiPromptFeedback {
     pub block_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_reason_metadata: Option<Value>,
-    pub safety_ratings: Vec<GeminiSafetyRating>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safety_ratings: Option<Vec<GeminiSafetyRating>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

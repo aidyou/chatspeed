@@ -21,7 +21,6 @@ chat:
   api_key_is_require_for_list_models: "Für das Abrufen der Modellliste ist ein API-Schlüssel erforderlich. Bitte konfigurieren Sie einen gültigen API-Schlüssel in den Einstellungen."
   chat_completion_failed_after_retries: "Chat-Completion nach %{retries} Versuchen fehlgeschlagen"
   chat_not_found: "Angegebene Chat-Sitzung nicht gefunden"
-  crawler_url_not_found: "Crawler-Server-URL nicht gefunden"
   empty_chat_id: "Chat-ID darf nicht leer sein"
   empty_messages: "Nachrichtenliste darf nicht leer sein"
   empty_model: "Modellname darf nicht leer sein"
@@ -33,8 +32,6 @@ chat:
   failed_to_setup_proxy: "Chat-Proxy konnte nicht eingerichtet werden: %{error}"
   failed_to_write_file: "Datei konnte nicht geschrieben werden: %{error}"
   invalid_search_model: "Ungültiges Suchmodell: %{model_name}"
-  json_serialize_crawler_results_failed: "Gecrawlter Inhalt konnte nicht in JSON serialisiert werden: %{error}"
-  no_valid_search_engine_config: "Keine gültige Suchmaschinenkonfiguration gefunden. Bitte konfigurieren Sie mindestens eine Suchmaschine in den Einstellungen."
   note_already_exists: "Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden"
   search_analysing: "Daten werden analysiert..."
   search_fetching: "Daten werden abgerufen..."
@@ -260,7 +257,6 @@ tools:
   model_name_must_be_string: "Modellnameparameter (model_name) muss ein String sein"
   model_not_found: "Modell im Workflow nicht gefunden: %{model_name}"
   model_type_not_found: "Modelltyp %{model_type} nicht gefunden, ID: %{id}, Fehler: %{error}"
-  provider_must_be_string: "Suchdienstanbieter(provider)-Parameter muss ein String sein"
   query_must_not_be_empty: "Query-Parameter muss ein nicht leerer String sein"
   url_invalid: "URL-Parameterformatfehler, muss mit http:// oder https:// beginnen: %{url}"
   url_must_be_string: "URL-Parameter muss ein String sein"
@@ -295,7 +291,6 @@ tools:
     google_cx_empty: "Google Suchmaschinen-ID darf nicht leer sein"
     serper_api_key_empty: "Serper API-Schlüssel darf nicht leer sein"
     tavily_api_key_empty: "Tavily API-Schlüssel darf nicht leer sein"
-    provider_no_support: "Suchmaschine nicht unterstützt: {name}"
     web_search_failed: "Websuche fehlgeschlagen (Anbieter: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:

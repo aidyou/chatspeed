@@ -1,5 +1,6 @@
-use crate::ccproxy::adapter::backend::update_message_block;
 use crate::ccproxy::adapter::unified::SseStatus;
+use crate::ccproxy::get_tool_id;
+use crate::ccproxy::{adapter::backend::update_message_block, types::ChatProtocol};
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
 use serde_json::json;
@@ -7,7 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use super::{BackendAdapter, BackendResponse};
 use crate::ccproxy::adapter::{
-    range_adapter::{adapt_temperature, Protocol},
+    range_adapter::adapt_temperature,
     unified::{
         UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
         UnifiedToolChoice, UnifiedUsage,
@@ -101,11 +102,16 @@ impl BackendAdapter for GeminiBackendAdapter {
     async fn adapt_request(
         &self,
         client: &Client,
-        unified_request: &UnifiedRequest,
+        unified_request: &mut UnifiedRequest,
         _api_key: &str,
         full_provider_url: &str,
         _model: &str,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        // Gemini's support for tool calls is very good, usually,
+        // there's no need to enable tool compatibility mode.
+        // For logical consistency, we give the user the choice.
+        unified_request.enhance_prompt();
+
         let mut gemini_contents: Vec<GeminiContent> = Vec::new();
         let mut current_parts: Vec<GeminiPart> = Vec::new();
         let mut current_role: Option<UnifiedRole> = None;
@@ -192,21 +198,74 @@ impl BackendAdapter for GeminiBackendAdapter {
         }
         flush_message(&mut gemini_contents, &current_role, &mut current_parts);
 
-        let system_instruction = unified_request.system_prompt.as_ref().and_then(|prompt| {
-            if prompt.trim().is_empty() {
-                None
+        // --- Prompt Injection Logic ---
+        let injection_pos = unified_request
+            .prompt_injection_position
+            .as_deref()
+            .unwrap_or("system");
+        let combined_prompt_text = unified_request
+            .combined_prompt
+            .as_deref()
+            .unwrap_or_default();
+        let mut final_system_instruction: Option<GeminiContent> = None;
+
+        if injection_pos == "user" && !combined_prompt_text.is_empty() {
+            // Find the last user message and append the prompt.
+            if let Some(last_user_msg) = gemini_contents.iter_mut().rfind(|m| m.role == "user") {
+                last_user_msg.parts.insert(
+                    0,
+                    GeminiPart {
+                        text: Some(combined_prompt_text.to_string()),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            // Use the original system prompt as is.
+            if let Some(sys_prompt_str) = &unified_request.system_prompt {
+                if !sys_prompt_str.trim().is_empty() {
+                    final_system_instruction = Some(GeminiContent {
+                        role: "system".to_string(), // Conceptual role
+                        parts: vec![GeminiPart {
+                            text: Some(sys_prompt_str.clone()),
+                            ..Default::default()
+                        }],
+                    });
+                }
+            }
+        } else {
+            // injection_pos == "system" or default behavior
+            let injection_mode = unified_request
+                .prompt_injection
+                .as_deref()
+                .unwrap_or("enhance");
+            let original_system_prompt =
+                unified_request.system_prompt.as_deref().unwrap_or_default();
+
+            let prompt = if injection_mode == "replace" {
+                combined_prompt_text.to_string()
             } else {
-                Some(GeminiContent {
-                    // The role for system instructions is not explicitly defined in the same way as user/model.
-                    // It's a top-level field in the request.
-                    role: "system".to_string(),
+                // "enhance" or default
+                [original_system_prompt, combined_prompt_text]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| *s)
+                    .collect::<Vec<&str>>()
+                    .join("\n\n")
+            };
+
+            if !prompt.trim().is_empty() {
+                final_system_instruction = Some(GeminiContent {
+                    role: "system".to_string(), // Conceptual role
                     parts: vec![GeminiPart {
-                        text: Some(prompt.to_string()),
+                        text: Some(prompt),
                         ..Default::default()
                     }],
-                })
+                });
             }
-        });
+        }
+
+        let system_instruction = final_system_instruction;
 
         let gemini_tools = unified_request.tools.as_ref().map(|tools| {
             vec![GeminiApiTool {
@@ -214,8 +273,8 @@ impl BackendAdapter for GeminiBackendAdapter {
                     .iter()
                     .map(|tool| GeminiFunctionDeclaration {
                         name: tool.name.clone(),
-                        description: tool.description.clone().unwrap_or_default(),
-                        parameters: Self::extract_gemini_schema(&tool.input_schema),
+                        description: tool.description.clone(),
+                        parameters: Some(Self::extract_gemini_schema(&tool.input_schema)),
                     })
                     .collect(),
             }]
@@ -229,7 +288,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                 UnifiedToolChoice::Tool { name: _ } => "ANY".to_string(),
             };
             GeminiToolConfig {
-                function_calling_config: GeminiFunctionCallingConfig { mode },
+                function_calling_config: Some(GeminiFunctionCallingConfig { mode }),
             }
         });
 
@@ -238,7 +297,7 @@ impl BackendAdapter for GeminiBackendAdapter {
             generation_config: Some(GeminiGenerationConfig {
                 temperature: unified_request
                     .temperature
-                    .map(|t| adapt_temperature(t, Protocol::OpenAI, Protocol::Gemini)),
+                    .map(|t| adapt_temperature(t, ChatProtocol::Gemini)),
                 top_p: unified_request.top_p,
                 top_k: unified_request.top_k.map(|v| v as i32),
                 max_output_tokens: unified_request.max_tokens.map(|v| v as i32),
@@ -412,7 +471,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 // Therefore, for each one, we must emit a full Start -> Delta -> End sequence.
 
                                 // Generate a unique ID for this specific tool call.
-                                let tool_id = format!("tool_{}", uuid::Uuid::new_v4());
+                                let tool_id = get_tool_id();
                                 let mut message_index = 0;
                                 // We need a unique ID for each parallel call. Let's use an index from our status.
                                 if let Ok(mut status) = sse_status.write() {

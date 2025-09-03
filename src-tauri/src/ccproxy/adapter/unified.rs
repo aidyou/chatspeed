@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::ccproxy::gemini::SafetySetting;
+use crate::ccproxy::{adapter::backend::generate_tool_prompt, gemini::SafetySetting};
 
 // ===================================
 // Unified Request Structures
@@ -69,8 +69,61 @@ pub struct UnifiedRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content: Option<String>, // Context cache content name
 
+    // Ollama
+    pub keep_alive: Option<String>,
+
     // For tool compatibility mode
     pub tool_compat_mode: bool,
+    pub prompt_injection: Option<String>,
+    pub prompt_enhance_text: Option<String>,
+    pub combined_prompt: Option<String>,
+    pub prompt_injection_position: Option<String>,
+}
+
+impl UnifiedRequest {
+    pub fn enhance_prompt(&mut self) {
+        // This function now only prepares the combined prompt from tool definitions and enhancement text.
+        // It no longer merges with the original system_prompt.
+        // The actual injection is handled by the backend adapters.
+
+        // We only inject prompts when tools are present, especially for tool-compat-mode.
+        if self.tools.as_deref().unwrap_or_default().is_empty() && !self.tool_compat_mode {
+            return;
+        }
+
+        // Generate tool prompt if in compatibility mode.
+        let tool_prompt = if self.tool_compat_mode {
+            if let Some(tools) = &self.tools {
+                let prompt = generate_tool_prompt(tools);
+                self.tools = None; // Clear tools as they are now in the prompt.
+                prompt
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut prompt_parts: Vec<&str> = Vec::new();
+        let enhance_text_str = self.prompt_enhance_text.as_deref().unwrap_or_default();
+
+        // The 'replace' mode for prompt_injection is now conceptually handled by
+        // the backend adapter, which will decide whether to use the original system_prompt or not.
+        // Here, we just combine the tool and enhancement prompts.
+        prompt_parts.push(&tool_prompt);
+        prompt_parts.push(enhance_text_str);
+
+        let final_combined_prompt = prompt_parts
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<&str>>()
+            .join("\n\n");
+
+        if !final_combined_prompt.is_empty() {
+            self.combined_prompt = Some(final_combined_prompt);
+            self.prompt_enhance_text = None; // clear enhance_text
+        }
+    }
 }
 
 /// A single message in the chat history.
@@ -360,6 +413,7 @@ impl Default for SseStatus {
         }
     }
 }
+
 impl SseStatus {
     pub fn new(message_id: String, model_id: String, tool_compat_mode: bool) -> Self {
         Self {

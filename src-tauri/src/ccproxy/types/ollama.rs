@@ -13,7 +13,7 @@ pub struct OllamaChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<OllamaOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub keep_alive: Option<String>,
+    pub keep_alive: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<OllamaTool>>,
 }
@@ -147,6 +147,6 @@ pub struct OllamaTool {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OllamaFunctionDefinition {
     pub name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub parameters: Value, // JSON schema
 }
