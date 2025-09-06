@@ -5,6 +5,10 @@ use crate::ccproxy::{
     adapter::unified::{SseStatus, UnifiedStreamChunk},
     get_tool_id,
     helper::tool_use_xml::ToolUse,
+    types::{
+        TODO_TAG_END, TODO_TAG_START, TOOL_COMPAT_MODE_PROMPT, TOOL_PARSE_ERROR_REMINDER,
+        TOOL_TAG_END, TOOL_TAG_START,
+    },
 };
 
 pub fn update_message_block(status: &mut RwLockWriteGuard<'_, SseStatus>, block: String) {
@@ -14,127 +18,10 @@ pub fn update_message_block(status: &mut RwLockWriteGuard<'_, SseStatus>, block:
     status.current_content_block = block;
 }
 
-pub const TOOL_TAG_START: &str = "<ccp:tool_use>";
-pub const TOOL_TAG_END: &str = "</ccp:tool_use>";
-pub const TODO_TAG_START: &str = "<ccp:todo>";
-pub const TODO_TAG_END: &str = "</ccp:todo>";
-
 pub fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
     let tools_xml = crate::ccproxy::helper::tool_use_xml::generate_tools_xml(tools);
 
-    let template = r###"<cs:tool-use-guide>
-You have access to the following tools to help accomplish the user's goals:
-
-{TOOLS_LIST}
-
-## TOOL USAGE PHILOSOPHY
-Always prioritize using available tools to provide concrete, actionable solutions rather than generic responses. Tools are your primary means of helping users achieve their objectives.
-
-## TOOL FORMAT SPECIFICATION
-The tools available to you are defined in a `<ccp:tool_define>` block. You will be provided a list of these definitions. Each definition contains:
-- `<name>`: The tool's name.
-- `<description>`: What the tool does.
-- `<params>`: A list of `<param>` tags for each parameter. The parameter's description will indicate if it is `(required)` or `(optional)`.
-
-## HOW TO USE TOOLS
-To execute a tool, you MUST output a `<ccp:tool_use>` block. This block MUST include the `<name>` of the tool and ALL of its required parameters within the `<params>` section. The system will automatically assign an `<id>` to your call; you MUST NOT include an `<id>` tag yourself.
-
-## TOOL RESULT FORMAT
-After the system executes your tool call, the result will be provided back to you in a `<ccp:tool_results>` block. Example of a tool result **the system will send back to you**:
-```xml
-<ccp:tool_results>
-    <ccp:tool_result>
-        <id>tool_call_id_123</id>
-        <result>
-            This is the text output from the tool.
-        </result>
-    </ccp:tool_result>
-</ccp:tool_results>
-```
-You should use this result to continue with the user's request.
-
-## XML CHARACTER ESCAPING
-When a parameter's value contains special XML characters, you MUST escape them:
-- `&` must be written as `&amp;`
-- `<` must be written as `&lt;`
-- `>` must be written as `&gt;`
-- `"` must be written as `&quot;`
-- `'` must be written as `&apos;`
-
-Example for a value containing '&':
-<ccp:tool_use>
-    <name>Search</name>
-    <params>
-        <param name="query">https://example.com?a=1&amp;b=2</param>
-    </params>
-</ccp:tool_use>
-
-## CRITICAL FORMATTING RULES
-1. **NO Markdown**: Never use ```xml or any code block delimiters
-2. **Plain Text**: Output XML tags directly in your response text
-3. **No Wrapping**: Don't wrap XML in any special formatting
-4. **Direct Output**: Treat XML as regular response content, not code
-5. **Fill Required Parameters**: Never submit a tool call with an empty `<params>` block if the tool has required parameters.
-
-## EXAMPLES
-Note: The `Read` and `Write` tools below are just examples. You should use the actual tools available in the provided tools list. The path is relative to the project root.
-
-### Example 1: Reading a File
-**✅ CORRECT**:
-First, I'll read the file.
-<ccp:tool_use>
-    <name>Read</name>
-    <params>
-        <param name="file_path">path/to/project/config.toml</param>
-    </params>
-</ccp:tool_use>
-
-**❌ WRONG** (Do not output raw commands):
-```bash
-cat path/to/project/config.toml
-```
-
-### Example 2: Creating a File
-**✅ CORRECT**:
-I will create the `.gitignore` file.
-<ccp:tool_use>
-    <name>Write</name>
-    <params>
-        <param name="file_path">path/to/project/.gitignore</param>
-        <param name="content">node_modules
-dist
-.env</param>
-    </params>
-</ccp:tool_use>
-
-**❌ WRONG** (Do not output raw commands):
-```bash
-echo "node_modules\ndist\n.env" > path/to/project/.gitignore
-```
-
-## DECISION FRAMEWORK
-Before responding, ask yourself:
-- Is this a complex task that requires multiple steps? → First, create a plan using the appropriate planning tool (e.g., `TodoWrite`) if available.
-- Can available tools accomplish this task? → Use tools
-- Does the user need specific data or actions? → Use appropriate tools
-- Would tools provide more accurate/current information? → Use tools
-- Is this a general question that tools can answer concretely? → Use tools
-
-## BEST PRACTICES
-1. Plan First: For any non-trivial task, create a step-by-step plan using a planning tool (like `TodoWrite`) before executing the first step.
-2. Proactive Usage: Consider tools first, generic responses second
-3. Logical Chaining: Sequence multiple tools thoughtfully
-4. Parameter Validation: Ensure parameters match expected types
-5. Error Handling: Be prepared for tool failures and have alternatives
-6. User Context: Consider the user's broader goals when selecting tools
-
-<cs:Remember>
-- Your primary job is to leverage these tools effectively to solve user problems, not just to provide information about them.
-- IMPORTANT: The only correct way to make a tool call is by using the `<ccp:tool_use></ccp:tool_use>` tags. No other format is permitted.
-</cs:Remember>
-"###;
-
-    template.replace("{TOOLS_LIST}", &tools_xml)
+    TOOL_COMPAT_MODE_PROMPT.replace("{TOOLS_LIST}", &tools_xml)
 }
 
 /// Process tool calls found in the buffer
@@ -272,7 +159,7 @@ fn parse_and_emit_tool_call(
         update_message_block(status, tool_id.clone());
 
         let mut arguments = serde_json::Map::new();
-        for param in parsed_tool.params.param {
+        for param in parsed_tool.args {
             arguments.insert(param.name.clone(), param.get_value());
         }
 
@@ -300,11 +187,7 @@ fn parse_and_emit_tool_call(
             delta: args_json.clone(),
         });
 
-        log::info!(
-            "tool parse success, name: {}, param: {}",
-            parsed_tool.name.clone(),
-            args_json
-        );
+        log::info!("tool parse success, name: {}", parsed_tool.name.clone());
     } else {
         let malformed_xml = tool_xml.to_string();
         log::warn!("tool use xml parse failed, xml: {}", malformed_xml);
@@ -315,20 +198,8 @@ fn parse_and_emit_tool_call(
         });
 
         // 2. Send the corrective reminder.
-        let reminder_text = r#"<system-reminder>
-Your last tool call had an invalid XML format and could not be parsed. Please check carefully and strictly follow the tool usage specifications.
-Common reasons for failure:
-1. Required parameters are missing.
-2. Special XML characters were not escaped. You must escape the following characters in parameter values:
-   - `&` must be written as `&amp;`
-   - `<` must be written as `&lt;`
-   - `>` must be written as `&gt;`
-   - `"` must be written as `&quot;`
-   - `'` must be written as `&apos;`
-</system-reminder>"#;
-
         unified_chunks.push(UnifiedStreamChunk::Text {
-            delta: reminder_text.to_string(),
+            delta: TOOL_PARSE_ERROR_REMINDER.to_string(),
         });
     }
 }
@@ -363,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_strips_todo_block() {
-        let input = "start <ccp:todo>thought</ccp:todo> end";
+        let input = "start <ccp:todo>\"thought\"</ccp:todo> end";
         let result = run_processor(input);
         assert!(result
             .chunks
@@ -375,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_parses_tool_use_after_todo() {
-        let input = "<ccp:todo>I should call a tool.</ccp:todo><ccp:tool_use><name>test_tool</name><params></params></ccp:tool_use>";
+        let input = "<ccp:todo>I should call a tool.</ccp:todo><ccp:tool_use><name>test_tool</name><args></args></ccp:tool_use>";
         let result = run_processor(input);
         assert!(result.chunks.iter().any(
             |c| matches!(c, UnifiedStreamChunk::ToolUseStart{name, ..} if name == "test_tool")
@@ -385,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_ignores_tool_use_inside_todo() {
-        let input = "<ccp:todo>do not run <ccp:tool_use><name>fake_tool</name></ccp:tool_use></ccp:todo><ccp:tool_use><name>real_tool</name><params></params></ccp:tool_use>";
+        let input = "<ccp:todo>do not run <ccp:tool_use><name>fake_tool</name></ccp:tool_use></ccp:todo><ccp:tool_use><name>real_tool</name><args></args></ccp:tool_use>";
         let result = run_processor(input);
         assert!(!result.chunks.iter().any(
             |c| matches!(c, UnifiedStreamChunk::ToolUseStart{name, ..} if name == "fake_tool")
@@ -409,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_handles_multiple_mixed_blocks() {
-        let input = "text1<ccp:todo>t1</ccp:todo>text2<ccp:tool_use><name>tool1</name><params></params></ccp:tool_use>text3";
+        let input = "text1<ccp:todo>t1</ccp:todo>text2<ccp:tool_use><name>tool1</name><args></args></ccp:tool_use>text3";
         let result = run_processor(input);
 
         let texts: Vec<String> = result

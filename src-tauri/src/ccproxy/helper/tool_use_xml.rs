@@ -1,24 +1,20 @@
-use serde::Deserialize;
-use serde_json::{json, Value};
+use scraper::{ElementRef, Html, Selector};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 
 use crate::ccproxy::{adapter::unified::UnifiedContentBlock, helper::get_tool_id};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct ToolUse {
-    #[serde(rename = "name")]
     pub name: String,
-    #[serde(rename = "params")]
-    pub params: Params,
+    pub args: Vec<Arg>,
 }
 
 impl TryFrom<&str> for ToolUse {
     type Error = anyhow::Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        match quick_xml::de::from_str::<ToolUse>(s) {
-            Ok(tool_use) => Ok(tool_use),
-            Err(_) => parse_tool_use(s),
-        }
+        parse_tool_use(s)
     }
 }
 
@@ -34,8 +30,8 @@ impl TryFrom<String> for ToolUse {
 impl From<ToolUse> for UnifiedContentBlock {
     fn from(tool_use: ToolUse) -> UnifiedContentBlock {
         let mut arguments = serde_json::Map::new();
-        for param in tool_use.params.param {
-            arguments.insert(param.name.clone(), param.get_value());
+        for arg in tool_use.args {
+            arguments.insert(arg.name.clone(), arg.get_value());
         }
 
         UnifiedContentBlock::ToolUse {
@@ -46,42 +42,24 @@ impl From<ToolUse> for UnifiedContentBlock {
     }
 }
 
-#[derive(Deserialize, Debug)]
-pub struct Params {
-    #[serde(rename = "param", default)]
-    pub param: Vec<Param>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Param {
-    #[serde(rename = "@name")]
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Arg {
     pub name: String,
 
-    #[serde(rename = "@type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data_type: Option<String>,
 
-    // parse the type attribute: <param name="location" type="string" value="beijing" />
-    #[serde(rename = "@value")]
+    // Holds the attribute value or the inner HTML content.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-
-    // parse the text content: <param name="location">beijing</param>
-    #[serde(rename = "$text", default)]
-    pub text_content: Option<String>,
 }
 
-impl Param {
+impl Arg {
     pub fn get_value(&self) -> Value {
-        let raw_value = self
-            .value
-            .as_ref()
-            .map(|s| s.as_str())
-            .or_else(|| self.text_content.as_ref().map(|s| s.as_str()))
-            .unwrap_or_default();
+        let raw_value = self.value.as_deref().unwrap_or_default();
 
-        // Explicitly unescape the raw value to handle XML entities like &lt;, &amp;, etc.
-        let value = quick_xml::escape::unescape(raw_value)
-            .map(|cow| cow.into_owned())
-            .unwrap_or_else(|_| raw_value.to_string()); // Fallback to raw value on error
+        // Use HTML decoding for entities since we're using HTML parser now
+        let value = html_escape::decode_html_entities(raw_value).to_string();
 
         if let Some(data_type) = self.data_type.as_ref() {
             match data_type.as_str() {
@@ -89,51 +67,43 @@ impl Param {
                     // Trim whitespace as intended for numeric types.
                     // If parsing fails, fallback to the original (unescaped) string value.
                     if let Ok(f) = value.trim().parse::<f64>() {
-                        json!(f)
-                    } else {
-                        json!(value)
+                        return json!(f);
                     }
                 }
-                "int" | "integer" => {
+                "int" | "i32" | "i64" | "integer" | "long" | "int32" | "int64" => {
                     if let Ok(i) = value.trim().parse::<i64>() {
-                        json!(i)
-                    } else {
-                        json!(value)
+                        return json!(i);
                     }
                 }
                 "bool" | "boolean" => {
                     if let Ok(b) = value.trim().parse::<bool>() {
-                        json!(b)
-                    } else {
-                        json!(value)
+                        return json!(b);
                     }
                 }
-                _ => json!(value), // For string and other types, preserve original value.
+                "array" | "list" | "vec" => {
+                    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(value.trim()) {
+                        return json!(arr);
+                    }
+                }
+                "object" | "map" | "dict" => {
+                    if let Ok(obj) = serde_json::from_str::<Map<String, Value>>(value.trim()) {
+                        return json!(obj);
+                    }
+                }
+                "json" => {
+                    if let Ok(json_val) = serde_json::from_str::<Value>(value.trim()) {
+                        return json_val;
+                    }
+                }
+                _ => {} // Default to string for unknown types
             }
-        } else {
-            Self::try_parse_value(&value)
         }
-    }
 
-    pub fn try_parse_value(s: &str) -> Value {
-        if let Ok(b) = s.parse::<bool>() {
-            return Value::Bool(b);
-        }
-        if let Ok(i) = s.parse::<i64>() {
-            return json!(i);
-        }
-        if let Ok(f) = s.parse::<f64>() {
-            return json!(f);
-        }
-        if (s.starts_with('[') && s.ends_with(']')) || (s.starts_with('{') && s.ends_with('}')) {
-            if let Ok(json_value) = serde_json::from_str(s) {
-                return json_value;
-            }
-        }
-        serde_json::Value::String(s.to_string())
+        json!(value)
     }
 }
 
+/// Generate XML for tool definitions
 pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedTool>) -> String {
     let mut tools_xml = String::new();
     tools_xml.push_str("<ccp:tools description=\"You available tools\">\n");
@@ -147,7 +117,7 @@ pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedT
 
         if let Some(schema) = tool.input_schema.as_object() {
             // Get the list of required parameters from the JSON schema
-            let required_params: std::collections::HashSet<String> = schema
+            let required_args: std::collections::HashSet<String> = schema
                 .get("required")
                 .and_then(|r| r.as_array())
                 .map(|arr| {
@@ -158,13 +128,13 @@ pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedT
                 .unwrap_or_default();
 
             if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                tools_xml.push_str("<params>\n");
+                tools_xml.push_str("<args>\n");
 
                 let mut required_keys: Vec<&String> = Vec::new();
                 let mut optional_keys: Vec<&String> = Vec::new();
 
                 for name in properties.keys() {
-                    if required_params.contains(name) {
+                    if required_args.contains(name) {
                         required_keys.push(name);
                     } else {
                         optional_keys.push(name);
@@ -186,14 +156,14 @@ pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedT
                         .unwrap_or("")
                         .to_string();
 
-                    if required_params.contains(name) {
+                    if required_args.contains(name) {
                         description.push_str(" (required)");
                     } else {
                         description.push_str(" (optional)");
                     }
 
                     tools_xml.push_str(&format!(
-                        "<param name=\"{}\" type=\"{}\">{}</param>\n",
+                        "<arg name=\"{}\" type=\"{}\">{}</arg>\n",
                         name, param_type, description
                     ));
                 };
@@ -205,7 +175,7 @@ pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedT
                     append_param(name);
                 }
 
-                tools_xml.push_str("</params>\n");
+                tools_xml.push_str("</args>\n");
             }
         }
         tools_xml.push_str("</ccp:tool_define>\n");
@@ -215,206 +185,722 @@ pub fn generate_tools_xml(tools: &Vec<crate::ccproxy::adapter::unified::UnifiedT
 }
 
 pub fn format_tool_use_xml(id: &str, name: &str, input: &serde_json::Value) -> String {
-    let mut params_xml = String::new();
+    let mut args_xml = String::new();
     if let Some(obj) = input.as_object() {
         for (key, value) in obj {
             let value_str = match value {
                 serde_json::Value::String(s) => s.clone(),
                 _ => value.to_string(),
             };
-            // Per user request, the type attribute is omitted for simplicity.
-            params_xml.push_str(&format!(
-                "<param name=\"{}\">{}</param>\n",
-                key,
-                quick_xml::escape::escape(&value_str)
-            ));
+            // Escape the content to avoid XML parsing issues
+            let escaped_value = escape_xml_content(&value_str);
+            args_xml.push_str(&format!("<arg name=\"{}\">{}</arg>\n", key, escaped_value));
         }
     }
 
     format!(
-        "<ccp:tool_use>\n<id>{}</id>\n<name>{}</name>\n<params>\n{}\n</params>\n</ccp:tool_use>",
-        id, name, params_xml
+        "<ccp:tool_use>\n<id>{}</id>\n<name>{}</name>\n<args>\n{}\n</args>\n</ccp:tool_use>",
+        id, name, args_xml
     )
 }
 
-/// A lenient parser for tool use XML that ignores unknown tags within the <params> block.
-///
-/// This function is designed to be more robust against malformed XML from AI models,
-/// where unexpected tags might be present. It manually iterates through the XML events.
+/// Parse tool use XML using scraper - SIMPLIFIED ONE-LEVEL ONLY
 pub fn parse_tool_use(xml_str: &str) -> Result<ToolUse, anyhow::Error> {
-    let mut reader = quick_xml::Reader::from_str(xml_str.trim());
-    let mut buf = Vec::new();
+    // Parse as HTML fragment for better error tolerance
+    let document = Html::parse_fragment(xml_str);
 
-    let mut tool_name = None;
-    let mut params_vec: Vec<Param> = Vec::new();
+    // Find the tool name
+    let name_selector =
+        Selector::parse("name").map_err(|e| anyhow::anyhow!("Invalid name selector: {}", e))?;
 
-    // Loop until we find the opening <ccp:tool_use> tag, ignoring whitespace/comments etc.
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e)) => {
-                if e.name().as_ref() == b"ccp:tool_use" {
-                    // Found it, break the loop and proceed.
-                    break;
-                } else {
-                    // Found a different start tag, which is an error.
-                    return Err(anyhow::anyhow!(
-                        "Expected <ccp:tool_use> as root, found <{}>",
-                        String::from_utf8_lossy(e.name().as_ref())
-                    ));
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => {
-                return Err(anyhow::anyhow!(
-                    "Unexpected EOF while looking for <ccp:tool_use> start tag"
-                ));
-            }
-            Err(e) => return Err(e.into()),
-            // Ignore other events like Text, Comment, etc.
-            _ => (),
-        }
-    }
-    buf.clear();
+    let name = document
+        .select(&name_selector)
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No <name> element found"))?
+        .text()
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_string();
 
-    // Inside <ccp:tool_use>, look for <name> and <params>
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(e)) => {
-                log::info!(
-                    "=== Start event: {}",
-                    String::from_utf8_lossy(e.name().as_ref())
-                );
-
-                match e.name().as_ref() {
-                    b"name" => {
-                        if tool_name.is_none() {
-                            let txt = reader.read_text(e.name())?;
-                            tool_name = Some(txt.into_owned());
-                        }
-                    }
-                    b"params" => {
-                        // Enter the <params> block and parse its children leniently
-                        let mut params_depth = 1;
-                        while params_depth > 0 {
-                            buf.clear();
-                            match reader.read_event_into(&mut buf) {
-                                Ok(quick_xml::events::Event::Start(param_e)) => {
-                                    log::info!(
-                                        "=== Params start event: {}",
-                                        String::from_utf8_lossy(param_e.name().as_ref())
-                                    );
-
-                                    if param_e.name().as_ref() == b"param" {
-                                        let mut param_name = None;
-                                        let mut param_type = None;
-                                        let mut param_value = None;
-                                        for attr in param_e.attributes() {
-                                            let attr = attr?;
-                                            if attr.key.as_ref() == b"name" {
-                                                param_name = Some(String::from_utf8(
-                                                    attr.value.into_owned(),
-                                                )?);
-                                            } else if attr.key.as_ref() == b"type" {
-                                                param_type = Some(String::from_utf8(
-                                                    attr.value.into_owned(),
-                                                )?);
-                                            } else if attr.key.as_ref() == b"value" {
-                                                param_value = Some(String::from_utf8(
-                                                    attr.value.into_owned(),
-                                                )?);
-                                            }
-                                        }
-                                        let param_text = reader.read_text(param_e.name())?;
-                                        if let Some(name) = param_name {
-                                            params_vec.push(Param {
-                                                name,
-                                                data_type: param_type,
-                                                value: param_value,
-                                                text_content: Some(param_text.into_owned()),
-                                            });
-                                        }
-                                    } else {
-                                        // This is the "ignore" logic for unknown tags like <description>
-                                        reader.read_to_end_into(param_e.name(), &mut Vec::new())?;
-                                    }
-                                }
-                                Ok(quick_xml::events::Event::End(_)) => {
-                                    params_depth -= 1;
-                                }
-                                Ok(quick_xml::events::Event::Eof) => {
-                                    return Err(anyhow::anyhow!("Unexpected EOF inside <params>"));
-                                }
-                                Err(e) => return Err(e.into()),
-                                _ => (),
-                            }
-                        }
-                    }
-                    // Ignore any other tags directly under <ccp:tool_use>
-                    _ => {
-                        reader.read_to_end_into(e.name(), &mut Vec::new())?;
-                    }
-                }
-            }
-            Ok(quick_xml::events::Event::End(e)) if e.name().as_ref() == b"ccp:tool_use" => {
-                break; // End of the main tag
-            }
-            Ok(quick_xml::events::Event::Eof) => {
-                return Err(anyhow::anyhow!("Unexpected EOF inside <ccp:tool_use>"));
-            }
-            Err(e) => return Err(e.into()),
-            _ => (),
-        }
-        buf.clear();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("Tool name is empty"));
     }
 
-    let name = tool_name.ok_or_else(|| anyhow::anyhow!("<name> tag not found"))?;
-    Ok(ToolUse {
+    // Parse parameters - ONLY ONE LEVEL
+    let args = parse_simple_args(&document)?;
+
+    #[cfg(debug_assertions)]
+    log::debug!(
+        "tool use parse success, name: {}, args: {}",
         name,
-        params: Params { param: params_vec },
-    })
+        serde_json::to_string_pretty(&args).unwrap_or_default()
+    );
+
+    Ok(ToolUse { name, args })
+}
+
+/// Parse parameters from the document - SIMPLIFIED: only direct children of <args>
+fn parse_simple_args(document: &Html) -> Result<Vec<Arg>, anyhow::Error> {
+    let mut param_vec = Vec::new();
+
+    let args_selector =
+        Selector::parse("args").map_err(|e| anyhow::anyhow!("Invalid args selector: {}", e))?;
+    let args_element = match document.select(&args_selector).next() {
+        Some(el) => el,
+        None => return Ok(param_vec),
+    };
+
+    let mut elements_to_process: Vec<ElementRef> = args_element
+        .children()
+        .filter_map(ElementRef::wrap)
+        .collect();
+    let mut i = 0;
+
+    while i < elements_to_process.len() {
+        let element = elements_to_process[i];
+        i += 1;
+
+        let value = element.value();
+        let tag_name = value.name();
+
+        if tag_name == "arg" {
+            // Only process arg elements that have a name attribute (are actual parameters)
+            if value.attr("name").is_some() {
+                // Heuristic: if an <arg> has a `value` attribute, its element children
+                // are treated as swallowed siblings. Otherwise, they are content.
+                if value.attr("value").is_some() {
+                    if let Some(arg) = parse_arg_element(&element)? {
+                        param_vec.push(arg);
+                    }
+                    let children: Vec<ElementRef> =
+                        element.children().filter_map(ElementRef::wrap).collect();
+                    // Insert children at the current position to be processed next.
+                    elements_to_process.splice(i..i, children);
+                } else {
+                    // No `value` attribute, so children are content.
+                    // `parse_arg_element` will correctly handle this by using inner_html.
+                    if let Some(arg) = parse_arg_element(&element)? {
+                        param_vec.push(arg);
+                    }
+                }
+            }
+        } else {
+            // This is a custom tag parameter.
+            if let Some(arg) = parse_custom_tag_as_simple_arg(&element, tag_name)? {
+                param_vec.push(arg);
+            }
+        }
+    }
+
+    Ok(param_vec)
+}
+
+/// Parse custom tag as simple argument (all content treated as text)
+fn parse_custom_tag_as_simple_arg(
+    element: &ElementRef,
+    tag_name: &str,
+) -> Result<Option<Arg>, anyhow::Error> {
+    // Per user request, get the full inner content, including HTML tags and all whitespace.
+    let content = element.inner_html();
+
+    // The data_type is ONLY determined by the explicit `type` attribute.
+    let explicit_type = element.value().attr("type").map(|s| s.to_string());
+
+    Ok(Some(Arg {
+        name: tag_name.to_string(),
+        data_type: explicit_type,
+        value: Some(content),
+    }))
+}
+
+/// Parse a single <arg> element
+fn parse_arg_element(element: &ElementRef) -> Result<Option<Arg>, anyhow::Error> {
+    let name = element
+        .value()
+        .attr("name")
+        .ok_or_else(|| anyhow::anyhow!("arg element missing name attribute"))?
+        .to_string();
+
+    let explicit_type = element.value().attr("type").map(|s| s.to_string());
+
+    if let Some(value) = element.value().attr("value").map(|s| s.to_string()) {
+        return Ok(Some(Arg {
+            name,
+            data_type: explicit_type,
+            value: Some(value),
+        }));
+    }
+
+    // No 'value' attribute, so use inner_html to preserve nested tags and all whitespace.
+    let content = element.inner_html();
+
+    Ok(Some(Arg {
+        name,
+        data_type: explicit_type,
+        value: Some(content),
+    }))
+}
+
+/// Escape XML content to prevent parsing issues
+///
+/// This function handles the 5 basic XML entities that are required for valid XML:
+/// - & → &amp;   (must be escaped first to avoid double-escaping)
+/// - < → &lt;    (starts XML tags)
+/// - > → &gt;    (ends XML tags)
+/// - " → &quot;  (for attribute values)
+/// - ' → &apos;  (for attribute values)
+///
+/// Note: While HTML supports 252+ named entities (like &nbsp;, &copy;, etc.),
+/// XML only requires these 5. The scraper library handles HTML entity decoding
+/// automatically during parsing, so we don't need to protect other entities.
+fn escape_xml_content(content: &str) -> String {
+    // Multi-pass logic to handle existing entities properly
+
+    // Pass 1: Protect common HTML entities to avoid double-escaping
+    let protected_content = content
+        // Basic XML entities
+        .replace("&amp;", "__CCP_AMP__")
+        .replace("&lt;", "__CCP_LT__")
+        .replace("&gt;", "__CCP_GT__")
+        .replace("&quot;", "__CCP_QUOT__")
+        .replace("&apos;", "__CCP_APOS__")
+        // Common HTML entities
+        .replace("&nbsp;", "__CCP_NBSP__")
+        .replace("&copy;", "__CCP_COPY__")
+        .replace("&reg;", "__CCP_REG__")
+        .replace("&trade;", "__CCP_TRADE__")
+        .replace("&mdash;", "__CCP_MDASH__")
+        .replace("&ndash;", "__CCP_NDASH__")
+        .replace("&hellip;", "__CCP_HELLIP__")
+        .replace("&laquo;", "__CCP_LAQUO__")
+        .replace("&raquo;", "__CCP_RAQUO__")
+        .replace("&ldquo;", "__CCP_LDQUO__")
+        .replace("&rdquo;", "__CCP_RDQUO__")
+        .replace("&lsquo;", "__CCP_LSQUO__")
+        .replace("&rsquo;", "__CCP_RSQUO__")
+        .replace("&euro;", "__CCP_EURO__")
+        .replace("&pound;", "__CCP_POUND__")
+        .replace("&yen;", "__CCP_YEN__")
+        .replace("&cent;", "__CCP_CENT__")
+        .replace("&plusmn;", "__CCP_PLUSMN__")
+        .replace("&times;", "__CCP_TIMES__")
+        .replace("&divide;", "__CCP_DIVIDE__")
+        .replace("&ne;", "__CCP_NE__")
+        .replace("&le;", "__CCP_LE__")
+        .replace("&ge;", "__CCP_GE__");
+
+    // Pass 2: Escape naked special characters that would break XML
+    let escaped_content = protected_content
+        .replace('&', "&amp;") // Must be first to avoid double-escaping
+        .replace('<', "&lt;") // Prevents accidental tag creation
+        .replace('>', "&gt;"); // Prevents malformed tags
+
+    // Pass 3: Restore the protected entities
+    escaped_content
+        // Basic XML entities
+        .replace("__CCP_AMP__", "&amp;")
+        .replace("__CCP_LT__", "&lt;")
+        .replace("__CCP_GT__", "&gt;")
+        .replace("__CCP_QUOT__", "&quot;")
+        .replace("__CCP_APOS__", "&apos;")
+        // Common HTML entities
+        .replace("__CCP_NBSP__", "&nbsp;")
+        .replace("__CCP_COPY__", "&copy;")
+        .replace("__CCP_REG__", "&reg;")
+        .replace("__CCP_TRADE__", "&trade;")
+        .replace("__CCP_MDASH__", "&mdash;")
+        .replace("__CCP_NDASH__", "&ndash;")
+        .replace("__CCP_HELLIP__", "&hellip;")
+        .replace("__CCP_LAQUO__", "&laquo;")
+        .replace("__CCP_RAQUO__", "&raquo;")
+        .replace("__CCP_LDQUO__", "&ldquo;")
+        .replace("__CCP_RDQUO__", "&rdquo;")
+        .replace("__CCP_LSQUO__", "&lsquo;")
+        .replace("__CCP_RSQUO__", "&rsquo;")
+        .replace("__CCP_EURO__", "&euro;")
+        .replace("__CCP_POUND__", "&pound;")
+        .replace("__CCP_YEN__", "&yen;")
+        .replace("__CCP_CENT__", "&cent;")
+        .replace("__CCP_PLUSMN__", "&plusmn;")
+        .replace("__CCP_TIMES__", "&times;")
+        .replace("__CCP_DIVIDE__", "&divide;")
+        .replace("__CCP_NE__", "&ne;")
+        .replace("__CCP_LE__", "&le;")
+        .replace("__CCP_GE__", "&ge;")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_parse_tool_use_with_malformed_xml() {
-        let malformed_xml = r#"
-        <ccp:tool_use>
-            <id>tool_2c2c8f78-2ad3-42f1-9dd2-bb1a2a7a5d29</id>
-            <name>Bash</name>
-            <params>
-            <param name="command">cd /Volumes/dev/personal/dev/python/csv_to_api &amp;&amp; python3 -c "from utils import read_csv_files; import json; data = read_csv_files(); print('price records:', len(data.get('price', []))); print('store records:', len(data.get('store', [])))"</param>
-            <param name="description">测试Python环境并验证CSV读取功能</param>
+    fn test_parse_simple_traditional_args() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>simple_tool</name>
+            <args>
+                <arg name="param1">value1</arg>
+                <arg name="param2" value="value2" />
+                <arg name="param3" type="int">123</arg>
+            </args>
+        </ccp:tool_use>"#;
 
-            </params>
-        </ccp:tool_use>
-        "#;
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "simple_tool");
+        assert_eq!(result.args.len(), 3);
 
-        let result = parse_tool_use(malformed_xml);
-        assert!(
-            result.is_ok(),
-            "Lenient parsing should succeed, but failed with: {:?}",
-            result.err()
-        );
-        let tool_use = result.unwrap();
+        assert_eq!(result.args[0].name, "param1");
+        assert_eq!(result.args[0].get_value(), json!("value1"));
 
-        assert_eq!(tool_use.name, "Bash");
-        // It should ignore <description>, <subagent_type> and the nested <params>
-        // and only find the valid <param> tag.
+        assert_eq!(result.args[1].name, "param2");
+        assert_eq!(result.args[1].get_value(), json!("value2"));
+
+        assert_eq!(result.args[2].name, "param3");
+        assert_eq!(result.args[2].get_value(), json!(123));
+    }
+
+    #[test]
+    fn test_parse_custom_tags() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>custom_tool</name>
+            <args>
+                <arg name="traditional_arg">traditional_value</arg>
+                <custom_param>custom_value</custom_param>
+                <json_data type="json">[{"name": "test", "value": 42}]</json_data>
+                <html_content><div>This is HTML content</div></html_content>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "custom_tool");
+        assert_eq!(result.args.len(), 4);
+
+        // Traditional arg
+        let traditional_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "traditional_arg")
+            .unwrap();
+        assert_eq!(traditional_arg.get_value(), json!("traditional_value"));
+
+        // Custom param as text
+        let custom_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "custom_param")
+            .unwrap();
+        assert_eq!(custom_arg.get_value(), json!("custom_value"));
+
+        // JSON data should be detected and parsed
+        let json_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "json_data")
+            .unwrap();
+        assert_eq!(json_arg.data_type, Some("json".to_string()));
+        let json_value = json_arg.get_value();
+        assert!(json_value.is_array());
+        assert_eq!(json_value[0]["name"].as_str().unwrap(), "test");
+
+        // HTML content should be treated as plain text
+        let html_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "html_content")
+            .unwrap();
         assert_eq!(
-            tool_use.params.param.len(),
-            2,
-            "Should have found exactly one valid param"
+            html_arg.get_value(),
+            json!("<div>This is HTML content</div>")
+        );
+    }
+
+    #[test]
+    fn test_html_content_as_plain_text() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>TodoWrite</name>
+            <args>
+                <arg name="description">Description of the todo item</arg>
+                <arg name="todo" type="json">[{"item1":"xxx", "item2":"yyy", "item3":"zzz"}]</arg>
+                <html_content>
+                    <div>
+                        <h1>Todo List</h1>
+                        <ul>
+                            <li>Item 1</li>
+                            <li>Item 2</li>
+                            <li>Item 3</li>
+                        </ul>
+                    </div>
+                </html_content>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "TodoWrite");
+        assert_eq!(result.args.len(), 3);
+
+        // Check description
+        let desc_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "description")
+            .unwrap();
+        assert_eq!(desc_arg.get_value(), json!("Description of the todo item"));
+
+        // Check JSON todo data
+        let todo_arg = result.args.iter().find(|arg| arg.name == "todo").unwrap();
+        assert_eq!(todo_arg.data_type, Some("json".to_string()));
+        let todo_value = todo_arg.get_value();
+        assert!(todo_value.is_array());
+
+        // Check HTML content - should be plain text
+        let html_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "html_content")
+            .unwrap();
+        let html_value = html_arg.get_value();
+        assert!(html_value.is_string());
+
+        let html_text = html_value.as_str().unwrap();
+        assert!(html_text.contains("Todo List"));
+        assert!(html_text.contains("Item 1"));
+        assert!(html_text.contains("Item 2"));
+        assert!(html_text.contains("Item 3"));
+        // Should NOT have nested JSON structure
+    }
+
+    #[test]
+    fn test_nested_arg_tags_treated_as_content() {
+        // This is the exact scenario you were worried about
+        let xml_input = r#"<ccp:tool_use>
+            <name>HTMLWithArgTags</name>
+            <args>
+                <arg name="html_content">
+                    <html>
+                        <head><title>Test Page</title></head>
+                        <body>
+                            <p>Some content</p>
+                            <arg>This should be treated as HTML content, not a parameter</arg>
+                            <div>More content</div>
+                        </body>
+                    </html>
+                </arg>
+                <arg name="regular_param">regular_value</arg>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "HTMLWithArgTags");
+        assert_eq!(result.args.len(), 2); // Only 2 top-level parameters
+
+        let arg_names: Vec<&String> = result.args.iter().map(|p| &p.name).collect();
+        assert!(arg_names.contains(&&"html_content".to_string()));
+        assert!(arg_names.contains(&&"regular_param".to_string()));
+
+        // Should NOT contain any nested "arg" parameters
+        assert!(!arg_names.iter().any(|name| name == &"arg"));
+
+        // Check the html_content parameter contains the nested arg tag as plain text
+        let html_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "html_content")
+            .unwrap();
+        let html_value = html_arg.get_value();
+        let html_text = html_value.as_str().unwrap();
+
+        assert!(html_text.contains("This should be treated as HTML content"));
+        assert!(html_text.contains("Test Page"));
+        assert!(html_text.contains("<p>Some content</p>"));
+        assert!(html_text
+            .contains("<arg>This should be treated as HTML content, not a parameter</arg>"));
+
+        // Check regular param works normally
+        let regular_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "regular_param")
+            .unwrap();
+        assert_eq!(regular_arg.get_value(), json!("regular_value"));
+    }
+
+    #[test]
+    fn test_todo_write_example() {
+        // Test the exact example from the user's description
+        let xml_input = r#"<ccp:tool_use>
+            <name>TodoWrite</name>
+            <args>
+                <arg name="description">Description of the todo item</arg>
+                <arg name="todo" type="json">[{"item1":"xxx", "item2":"yyy", "item3":"zzz"}]</arg>
+                <html_content>
+                    <div>
+                        <h1>Todo List</h1>
+                        <ul>
+                            <li>Item 1</li>
+                            <li>Item 2</li>
+                            <li>Item 3</li>
+                        </ul>
+                    </div>
+                </html_content>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "TodoWrite");
+        assert_eq!(result.args.len(), 3);
+
+        // Check description
+        let desc_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "description")
+            .unwrap();
+        assert_eq!(desc_arg.get_value(), json!("Description of the todo item"));
+
+        // Check todo JSON data
+        let todo_arg = result.args.iter().find(|arg| arg.name == "todo").unwrap();
+        assert_eq!(todo_arg.data_type, Some("json".to_string()));
+        let todo_value = todo_arg.get_value();
+        assert!(todo_value.is_array());
+        let todo_array = todo_value.as_array().unwrap();
+        assert_eq!(todo_array.len(), 1);
+        let todo_object = &todo_array[0];
+        assert_eq!(todo_object["item1"].as_str().unwrap(), "xxx");
+        assert_eq!(todo_object["item2"].as_str().unwrap(), "yyy");
+        assert_eq!(todo_object["item3"].as_str().unwrap(), "zzz");
+
+        // Check HTML content - should be plain text with newlines
+        let html_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "html_content")
+            .unwrap();
+        let html_value = html_arg.get_value();
+        assert!(html_value.is_string());
+
+        let html_text = html_value.as_str().unwrap();
+        assert!(html_text.contains("Todo List"));
+        assert!(html_text.contains("<li>Item 1</li>"));
+        assert!(html_text.contains("<li>Item 2</li>"));
+        assert!(html_text.contains("Item 3"));
+        // Should contain newlines and whitespace from original formatting
+        assert!(html_text.contains("\n"));
+    }
+
+    #[test]
+    fn test_complex_nested_as_plain_text() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>complex_tool</name>
+            <args>
+                <complex_data>
+                    <level1>
+                        <level2>
+                            <level3>Deep nested content</level3>
+                        </level2>
+                    </level1>
+                    <another_section>
+                        <item>Item 1</item>
+                        <item>Item 2</item>
+                    </another_section>
+                </complex_data>
+                <arg name="test-arg">
+                    <arg name="test-arg1">Item 1</arg>
+                    <arg name="test-arg2">Item 2</arg>
+                </arg>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "complex_tool");
+        assert_eq!(result.args.len(), 2);
+
+        let complex_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "complex_data")
+            .unwrap();
+        let complex_value = complex_arg.get_value();
+        assert!(complex_value.is_string());
+
+        let complex_text = complex_value.as_str().unwrap();
+        assert!(complex_text.contains("Deep nested content"));
+        assert!(complex_text.contains("<item>Item 1</item>"));
+        assert!(complex_text.contains("Item 2"));
+        // All content should be flattened to plain text
+        //
+        let test_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "test-arg")
+            .unwrap();
+
+        let val = test_arg.get_value();
+        let complex_text = val.as_str().unwrap();
+
+        assert!(complex_text.contains("<arg name=\"test-arg1\">Item 1</arg>"));
+    }
+
+    #[test]
+    fn test_json_detection_and_parsing() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>json_tool</name>
+            <args>
+                <valid_json type="json">{"name": "test", "values": [1, 2, 3]}</valid_json>
+                <invalid_json>{"name": "test", "incomplete":</invalid_json>
+                <array_json type="json">[{"a": 1}, {"b": 2}]</array_json>
+                <explicit_json type="json">{"explicit": true}</explicit_json>
+                <not_json>This is just plain text</not_json>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "json_tool");
+        assert_eq!(result.args.len(), 5);
+
+        // Valid JSON should be parsed
+        let valid_json_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "valid_json")
+            .unwrap();
+        assert_eq!(valid_json_arg.data_type, Some("json".to_string()));
+        let valid_json_value = valid_json_arg.get_value();
+        assert!(valid_json_value.is_object());
+        assert_eq!(valid_json_value["name"].as_str().unwrap(), "test");
+
+        // Invalid JSON should be treated as plain text
+        let invalid_json_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "invalid_json")
+            .unwrap();
+        assert!(invalid_json_arg.data_type.is_none());
+        assert_eq!(
+            invalid_json_arg.get_value(),
+            json!("{\"name\": \"test\", \"incomplete\":")
         );
 
-        let param = &tool_use.params.param[0];
-        log::debug!("value: {}", param.get_value().as_str().unwrap_or_default());
-        assert_eq!(param.name, "command");
-        assert!(param
-            .get_value()
-            .as_str()
-            .unwrap()
-            .starts_with("cd /Volumes/dev/personal/dev/python/csv_to_api &&"),);
+        // Array JSON should be parsed
+        let array_json_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "array_json")
+            .unwrap();
+        assert_eq!(array_json_arg.data_type, Some("json".to_string()));
+        let array_json_value = array_json_arg.get_value();
+        assert!(array_json_value.is_array());
+
+        // Explicit type should be respected
+        let explicit_json_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "explicit_json")
+            .unwrap();
+        assert_eq!(explicit_json_arg.data_type, Some("json".to_string()));
+        let explicit_json_value = explicit_json_arg.get_value();
+        assert!(explicit_json_value.is_object());
+
+        // Plain text should remain as string
+        let plain_text_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "not_json")
+            .unwrap();
+        assert!(plain_text_arg.data_type.is_none());
+        assert_eq!(plain_text_arg.get_value(), json!("This is just plain text"));
+    }
+
+    #[test]
+    fn test_mixed_traditional_and_custom() {
+        let xml_input = r#"<ccp:tool_use>
+            <name>mixed_tool</name>
+            <args>
+                <arg name="traditional1" value="trad_value" />
+                <custom1>"custom_value"</custom1>
+                <arg name="traditional2" type="int">42</arg>
+                <custom2 type="json">{"json": "data"}</custom2>
+                <arg name="traditional3">text content</arg>
+                <html_like><p>HTML content</p></html_like>
+            </args>
+        </ccp:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "mixed_tool");
+        assert_eq!(result.args.len(), 6);
+
+        let arg_names: Vec<String> = result.args.iter().map(|arg| arg.name.clone()).collect();
+        assert!(arg_names.contains(&"traditional1".to_string()));
+        assert!(arg_names.contains(&"custom1".to_string()));
+        assert!(arg_names.contains(&"traditional2".to_string()));
+        assert!(arg_names.contains(&"custom2".to_string()));
+        assert!(arg_names.contains(&"traditional3".to_string()));
+        assert!(arg_names.contains(&"html_like".to_string()));
+
+        // Verify specific values
+        let trad1 = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "traditional1")
+            .unwrap();
+        assert_eq!(trad1.get_value(), json!("trad_value"));
+
+        let custom1 = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "custom1")
+            .unwrap();
+        assert_eq!(custom1.get_value(), json!("\"custom_value\""));
+
+        let trad2 = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "traditional2")
+            .unwrap();
+        assert_eq!(trad2.get_value(), json!(42));
+
+        let custom2 = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "custom2")
+            .unwrap();
+        let custom2_value = custom2.get_value();
+        assert!(custom2_value.is_object());
+        assert_eq!(custom2_value["json"].as_str().unwrap(), "data");
+
+        let html_like = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "html_like")
+            .unwrap();
+        assert_eq!(html_like.get_value(), json!("<p>HTML content</p>"));
+    }
+
+    #[test]
+    fn test_generate_tools_xml() {
+        let tools = vec![crate::ccproxy::adapter::unified::UnifiedTool {
+            name: "test_tool".to_string(),
+            description: Some("A test tool".to_string()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "param1": {
+                        "type": "string",
+                        "description": "First parameter"
+                    },
+                    "param2": {
+                        "type": "number",
+                        "description": "Second parameter"
+                    }
+                },
+                "required": ["param1"]
+            }),
+        }];
+
+        let xml = generate_tools_xml(&tools);
+        assert!(xml.contains("<name>test_tool</name>"));
+        assert!(xml.contains("A test tool"));
+        assert!(xml.contains("param1"));
+        assert!(xml.contains("param2"));
     }
 }

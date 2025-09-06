@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "记录请求和响应",
-        "logToFileChangedRestartRequired": "记录请求和响应变更后需要重启应用才能生效",
-        "logToFileNote": "记录请求和响应到文件，用于调试和分析",
+        "logOrgToFile": "记录原始请求和响应",
+        "logOrgToFileTip": "记录原始请求和响应到文件，用于调试和分析",
+        "logProxyToFile": "记录代理请求和响应",
+        "logProxyToFileTip": "记录代理请求和响应到文件，用于调试和分析",
         "openLogFile": "打开日志文件",
         "port": "代理端口",
         "portChangedRestartRequired": "端口号变更后须重启应用才能生效",

@@ -133,6 +133,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                false,
             )
             .await;
 
@@ -225,6 +226,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                false,
             )
             .await;
 
@@ -296,6 +298,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                false,
             )
             .await;
 
@@ -1090,6 +1093,7 @@ mod tests {
                 "test-api-key",
                 "https://api.abc.com/v1",
                 "gpt-4",
+                false,
             )
             .await
             .unwrap();
@@ -1123,6 +1127,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                false,
             )
             .await
             .unwrap();

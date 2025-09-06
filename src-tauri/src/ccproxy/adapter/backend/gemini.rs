@@ -1,5 +1,6 @@
 use crate::ccproxy::adapter::unified::SseStatus;
 use crate::ccproxy::get_tool_id;
+use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_START};
 use crate::ccproxy::{adapter::backend::update_message_block, types::ChatProtocol};
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
@@ -95,6 +96,201 @@ impl GeminiBackendAdapter {
             _ => schema.clone(),
         }
     }
+
+    /// Process tool compatibility mode chunk
+    async fn process_tool_compat_chunk(
+        &self,
+        chunk: bytes::Bytes,
+        sse_status: Arc<RwLock<SseStatus>>,
+    ) -> Result<Vec<UnifiedStreamChunk>, anyhow::Error> {
+        let chunk_str = String::from_utf8_lossy(&chunk);
+        let mut unified_chunks = Vec::new();
+
+        for line in chunk_str.lines() {
+            if line.starts_with("data:") {
+                let data_str = line["data:".len()..].trim();
+                let gemini_response: GeminiNetworkResponse = serde_json::from_str(data_str)
+                    .map_err(|e| {
+                        log::error!(
+                            "Gemini delta deserialize failed, delta: {}, error:{}",
+                            &data_str,
+                            e.to_string()
+                        );
+                        e
+                    })?;
+
+                if let Ok(mut status) = sse_status.write() {
+                    if !status.message_start {
+                        status.message_start = true;
+                        unified_chunks.push(UnifiedStreamChunk::MessageStart {
+                            id: status.message_id.clone(),
+                            model: status.model_id.clone(),
+                            usage: UnifiedUsage {
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                ..Default::default()
+                            },
+                        });
+                    }
+                }
+
+                if let Some(candidates) = gemini_response.candidates {
+                    for candidate in candidates {
+                        for part in candidate.content.parts {
+                            if let Some(text) = part.text.clone() {
+                                if !text.is_empty() {
+                                    if let Ok(mut status) = sse_status.write() {
+                                        // Add text to fragment buffer for tool compatibility processing
+                                        status.tool_compat_fragment_buffer.push_str(&text);
+                                        status.tool_compat_fragment_count += 1;
+
+                                        let now = std::time::Instant::now();
+                                        let time_since_flush = now
+                                            .duration_since(status.tool_compat_last_flush_time)
+                                            .as_millis();
+
+                                        // Force flush if conditions are met
+                                        let should_flush = status.tool_compat_fragment_count >= 25
+                                            || time_since_flush >= 100
+                                            || status.tool_compat_fragment_buffer.len() > 500
+                                            || status
+                                                .tool_compat_fragment_buffer
+                                                .contains(TOOL_TAG_START)
+                                            || status
+                                                .tool_compat_fragment_buffer
+                                                .contains(TOOL_TAG_END);
+
+                                        if should_flush {
+                                            self.flush_tool_compat_buffer(
+                                                &mut status,
+                                                &mut unified_chunks,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(finish_reason) = candidate.finish_reason {
+                            let stop_reason = finish_reason.to_string();
+                            let usage = gemini_response
+                                .usage_metadata
+                                .clone()
+                                .map(|u| UnifiedUsage {
+                                    input_tokens: u.prompt_token_count,
+                                    output_tokens: u.candidates_token_count.unwrap_or(0),
+                                    cache_creation_input_tokens: None,
+                                    cache_read_input_tokens: None,
+                                    tool_use_prompt_tokens: u.tool_use_prompt_token_count,
+                                    thoughts_tokens: u.thoughts_token_count,
+                                    cached_content_tokens: u.cached_content_token_count,
+                                    total_duration: None,
+                                    load_duration: None,
+                                    prompt_eval_duration: None,
+                                    eval_duration: None,
+                                })
+                                .unwrap_or_default();
+
+                            // On stream finish, process any remaining buffers
+                            if let Ok(mut status) = sse_status.write() {
+                                if !status.tool_compat_buffer.is_empty()
+                                    || !status.tool_compat_fragment_buffer.is_empty()
+                                {
+                                    self.flush_tool_compat_buffer(&mut status, &mut unified_chunks);
+
+                                    // Output remaining content as text
+                                    if !status.tool_compat_buffer.is_empty()
+                                        || !status.tool_compat_fragment_buffer.is_empty()
+                                    {
+                                        unified_chunks.push(UnifiedStreamChunk::Text {
+                                            delta: format!(
+                                                "{}{}",
+                                                status.tool_compat_buffer,
+                                                status.tool_compat_fragment_buffer
+                                            ),
+                                        });
+                                        status.tool_compat_buffer.clear();
+                                        status.tool_compat_fragment_buffer.clear();
+                                    }
+                                }
+                            }
+
+                            unified_chunks
+                                .push(UnifiedStreamChunk::MessageStop { stop_reason, usage });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(unified_chunks)
+    }
+
+    /// Flush tool compatibility buffer and process tool calls
+    fn flush_tool_compat_buffer(
+        &self,
+        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
+        unified_chunks: &mut Vec<UnifiedStreamChunk>,
+    ) {
+        let fragment = status.tool_compat_fragment_buffer.clone();
+        status.tool_compat_buffer.push_str(&fragment);
+        status.tool_compat_fragment_buffer.clear();
+        status.tool_compat_fragment_count = 0;
+        status.tool_compat_last_flush_time = std::time::Instant::now();
+
+        // Process tool calls in the buffer using common utility
+        crate::ccproxy::adapter::backend::common::process_tool_calls_in_buffer(
+            status,
+            unified_chunks,
+        );
+
+        // Handle remaining buffer content
+        self.handle_remaining_buffer_content(status, unified_chunks);
+    }
+
+    /// Handle remaining content in buffer that's not part of tool calls
+    fn handle_remaining_buffer_content(
+        &self,
+        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
+        unified_chunks: &mut Vec<UnifiedStreamChunk>,
+    ) {
+        if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
+            let buffer = &status.tool_compat_buffer;
+            let tool_start = TOOL_TAG_START;
+            let tool_end = TOOL_TAG_END;
+
+            let mut partial_tag_len = 0;
+
+            // Check for a partial start tag at the end of the buffer
+            for i in (1..=std::cmp::min(buffer.len(), tool_start.len())).rev() {
+                if buffer.ends_with(&tool_start[..i]) {
+                    partial_tag_len = i;
+                    break;
+                }
+            }
+
+            // Also check for a partial end tag if no partial start tag was found
+            if partial_tag_len == 0 {
+                for i in (1..=std::cmp::min(buffer.len(), tool_end.len())).rev() {
+                    if buffer.ends_with(&tool_end[..i]) {
+                        partial_tag_len = i;
+                        break;
+                    }
+                }
+            }
+
+            let text_to_flush_len = buffer.len() - partial_tag_len;
+            if text_to_flush_len > 0 {
+                // Flush the text part that is definitely not part of a tag
+                let text_to_flush = &buffer[..text_to_flush_len];
+                unified_chunks.push(UnifiedStreamChunk::Text {
+                    delta: text_to_flush.to_string(),
+                });
+                // Update the buffer to only contain the partial tag (or be empty)
+                status.tool_compat_buffer = buffer[text_to_flush_len..].to_string();
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -106,97 +302,250 @@ impl BackendAdapter for GeminiBackendAdapter {
         _api_key: &str,
         full_provider_url: &str,
         _model: &str,
+        log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
-        // Gemini's support for tool calls is very good, usually,
-        // there's no need to enable tool compatibility mode.
-        // For logical consistency, we give the user the choice.
+        // --- Tool Compatibility Mode Handling ---
+        // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
+        // into the system message. This is a specific adaptation for models that
+        // don't support native tool calling APIs but can follow instructions.
+        //
+        // The call to `unified_request.enhance_prompt` should be placed as early as possible because
+        // it handles tool progression in compatibility mode and removes the tool calling module.
         unified_request.enhance_prompt();
 
         let mut gemini_contents: Vec<GeminiContent> = Vec::new();
-        let mut current_parts: Vec<GeminiPart> = Vec::new();
-        let mut current_role: Option<UnifiedRole> = None;
 
-        let flush_message = |contents: &mut Vec<GeminiContent>,
-                             role: &Option<UnifiedRole>,
-                             parts: &mut Vec<GeminiPart>| {
-            if parts.is_empty() {
-                return;
-            }
-            let gemini_role = match role {
-                Some(UnifiedRole::User) => "user".to_string(),
-                Some(UnifiedRole::Assistant) => "model".to_string(),
-                Some(UnifiedRole::System) => return, // System prompts are handled separately
-                Some(UnifiedRole::Tool) => "user".to_string(),
-                None => return, // Should not happen
-            };
-            contents.push(GeminiContent {
-                role: gemini_role,
-                parts: std::mem::take(parts),
-            });
-        };
+        // --- Message Processing ---
+        if unified_request.tool_compat_mode {
+            // Special handling for tool compatibility mode to mimic a more natural
+            // conversation flow for models that don't natively support tool calls.
+            let mut processed_messages: Vec<GeminiContent> = Vec::new();
+            let mut tool_results_buffer: Vec<String> = Vec::new();
 
-        for msg in &unified_request.messages {
-            if current_role.is_some() && current_role.as_ref() != Some(&msg.role) {
-                flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                current_role = None;
-            }
+            for msg in &unified_request.messages {
+                match msg.role {
+                    UnifiedRole::Assistant => {
+                        // If there are pending tool results, flush them as a single user message first.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                                tool_results_buffer.join("\n"),
+                                crate::ccproxy::types::TOOL_RESULT_REMINDER
+                            );
+                            processed_messages.push(GeminiContent {
+                                role: Some("user".to_string()),
+                                parts: vec![GeminiPart {
+                                    text: Some(results_xml),
+                                    ..Default::default()
+                                }],
+                            });
+                            tool_results_buffer.clear();
+                        }
 
-            if current_role.is_none() {
-                current_role = Some(msg.role.clone());
-            }
+                        // Process the assistant message, converting ToolUse blocks to XML.
+                        let mut content_parts: Vec<String> = Vec::new();
 
-            for block in &msg.content {
-                match block {
-                    UnifiedContentBlock::Text { text } => {
-                        current_parts.push(GeminiPart {
-                            text: Some(text.clone()),
-                            ..Default::default()
-                        });
+                        for block in &msg.content {
+                            match block {
+                                UnifiedContentBlock::Text { text } => {
+                                    // Trim whitespace from the text part to avoid accumulating newlines
+                                    let trimmed_text = text.trim();
+                                    if !trimmed_text.is_empty() {
+                                        content_parts.push(trimmed_text.to_string());
+                                    }
+                                }
+                                UnifiedContentBlock::ToolUse { id, name, input } => {
+                                    // Format the tool use block as XML
+                                    let tool_use_xml =
+                                        crate::ccproxy::helper::tool_use_xml::format_tool_use_xml(
+                                            id, name, input,
+                                        );
+                                    content_parts.push(tool_use_xml);
+                                }
+                                // Ignore other block types like Image, ToolResult, etc. in this context
+                                _ => {}
+                            }
+                        }
+
+                        // Join all parts with a consistent separator
+                        let final_content = content_parts.join("\n");
+
+                        if !final_content.is_empty() {
+                            processed_messages.push(GeminiContent {
+                                role: Some("model".to_string()),
+                                parts: vec![GeminiPart {
+                                    text: Some(final_content),
+                                    ..Default::default()
+                                }],
+                            });
+                        }
                     }
-                    UnifiedContentBlock::Image { media_type, data } => {
-                        current_parts.push(GeminiPart {
-                            inline_data: Some(GeminiInlineData {
-                                mime_type: media_type.clone(),
-                                data: data.clone(),
-                            }),
-                            ..Default::default()
-                        });
+                    UnifiedRole::Tool => {
+                        // Collect tool results into a buffer to be flushed later.
+                        for block in &msg.content {
+                            if let UnifiedContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } = block
+                            {
+                                let result_xml = format!(
+                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
+                                    tool_use_id, content
+                                );
+                                tool_results_buffer.push(result_xml);
+                            }
+                        }
                     }
-                    UnifiedContentBlock::ToolUse { id: _, name, input } => {
-                        current_parts.push(GeminiPart {
-                            function_call: Some(GeminiFunctionCall {
-                                name: name.clone(),
-                                args: input.clone(),
-                            }),
-                            ..Default::default()
-                        });
-                    }
-                    UnifiedContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                        is_error: _,
-                    } => {
-                        // A tool result must start a new user message
-                        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                        current_role = Some(UnifiedRole::User);
+                    UnifiedRole::User => {
+                        // Flush any pending tool results before processing the user message.
+                        if !tool_results_buffer.is_empty() {
+                            let results_xml = format!(
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                                tool_results_buffer.join("\n"),
+                                crate::ccproxy::types::TOOL_RESULT_REMINDER,
+                            );
+                            processed_messages.push(GeminiContent {
+                                role: Some("user".to_string()),
+                                parts: vec![GeminiPart {
+                                    text: Some(results_xml),
+                                    ..Default::default()
+                                }],
+                            });
+                            tool_results_buffer.clear();
+                        }
 
-                        current_parts.push(GeminiPart {
-                            function_response: Some(GeminiFunctionResponse {
-                                name: tool_use_id.clone(),
-                                response: json!({ "name": tool_use_id, "content": content.clone() }),
-                            }),
-                            ..Default::default()
-                        });
+                        // Add the actual user message.
+                        let content_text = msg
+                            .content
+                            .iter()
+                            .filter_map(|block| {
+                                if let UnifiedContentBlock::Text { text } = block {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
 
-                        // Flush immediately as a tool response is a self-contained message
-                        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                        current_role = None;
+                        if !content_text.is_empty() {
+                            processed_messages.push(GeminiContent {
+                                role: Some("user".to_string()),
+                                parts: vec![GeminiPart {
+                                    text: Some(content_text),
+                                    ..Default::default()
+                                }],
+                            });
+                        }
                     }
-                    _ => {} // Ignore other block types
+                    _ => {} // Ignore System role in this context, it's handled separately.
                 }
             }
+
+            // Flush any remaining tool results at the end of the message list.
+            if !tool_results_buffer.is_empty() {
+                let results_xml = format!(
+                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                    tool_results_buffer.join("\n"),
+                    crate::ccproxy::types::TOOL_RESULT_REMINDER,
+                );
+                processed_messages.push(GeminiContent {
+                    role: Some("user".to_string()),
+                    parts: vec![GeminiPart {
+                        text: Some(results_xml),
+                        ..Default::default()
+                    }],
+                });
+            }
+            gemini_contents = processed_messages;
+        } else {
+            // Standard processing for non-tool-compatibility mode.
+            let mut current_parts: Vec<GeminiPart> = Vec::new();
+            let mut current_role: Option<UnifiedRole> = None;
+
+            let flush_message = |contents: &mut Vec<GeminiContent>,
+                                 role: &Option<UnifiedRole>,
+                                 parts: &mut Vec<GeminiPart>| {
+                if parts.is_empty() {
+                    return;
+                }
+                let gemini_role = match role {
+                    Some(UnifiedRole::User) => "user".to_string(),
+                    Some(UnifiedRole::Assistant) => "model".to_string(),
+                    Some(UnifiedRole::System) => return, // System prompts are handled separately
+                    Some(UnifiedRole::Tool) => "user".to_string(),
+                    None => return, // Should not happen
+                };
+                contents.push(GeminiContent {
+                    role: Some(gemini_role),
+                    parts: std::mem::take(parts),
+                });
+            };
+
+            for msg in &unified_request.messages {
+                if current_role.is_some() && current_role.as_ref() != Some(&msg.role) {
+                    flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                    current_role = None;
+                }
+
+                if current_role.is_none() {
+                    current_role = Some(msg.role.clone());
+                }
+
+                for block in &msg.content {
+                    match block {
+                        UnifiedContentBlock::Text { text } => {
+                            current_parts.push(GeminiPart {
+                                text: Some(text.clone()),
+                                ..Default::default()
+                            });
+                        }
+                        UnifiedContentBlock::Image { media_type, data } => {
+                            current_parts.push(GeminiPart {
+                                inline_data: Some(GeminiInlineData {
+                                    mime_type: media_type.clone(),
+                                    data: data.clone(),
+                                }),
+                                ..Default::default()
+                            });
+                        }
+                        UnifiedContentBlock::ToolUse { id: _, name, input } => {
+                            current_parts.push(GeminiPart {
+                                function_call: Some(GeminiFunctionCall {
+                                    name: name.clone(),
+                                    args: input.clone(),
+                                }),
+                                ..Default::default()
+                            });
+                        }
+                        UnifiedContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: _,
+                        } => {
+                            // A tool result must start a new user message
+                            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                            current_role = Some(UnifiedRole::User);
+
+                            current_parts.push(GeminiPart {
+                                function_response: Some(GeminiFunctionResponse {
+                                    name: tool_use_id.clone(),
+                                    response: json!({ "name": tool_use_id, "content": content.clone() }),
+                                }),
+                                ..Default::default()
+                            });
+
+                            // Flush immediately as a tool response is a self-contained message
+                            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
+                            current_role = None;
+                        }
+                        _ => {} // Ignore other block types
+                    }
+                }
+            }
+            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
         }
-        flush_message(&mut gemini_contents, &current_role, &mut current_parts);
 
         // --- Prompt Injection Logic ---
         let injection_pos = unified_request
@@ -209,9 +558,42 @@ impl BackendAdapter for GeminiBackendAdapter {
             .unwrap_or_default();
         let mut final_system_instruction: Option<GeminiContent> = None;
 
-        if injection_pos == "user" && !combined_prompt_text.is_empty() {
+        if unified_request.tool_compat_mode {
+            // In tool compatibility mode, always inject prompt as system instruction
+            let injection_mode = unified_request
+                .prompt_injection
+                .as_deref()
+                .unwrap_or("enhance");
+            let original_system_prompt =
+                unified_request.system_prompt.as_deref().unwrap_or_default();
+
+            let prompt = if injection_mode == "replace" {
+                combined_prompt_text.to_string()
+            } else {
+                // "enhance" or default
+                [original_system_prompt, combined_prompt_text]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| *s)
+                    .collect::<Vec<&str>>()
+                    .join("\n\n")
+            };
+
+            if !prompt.trim().is_empty() {
+                final_system_instruction = Some(GeminiContent {
+                    role: None, // Conceptual role
+                    parts: vec![GeminiPart {
+                        text: Some(prompt),
+                        ..Default::default()
+                    }],
+                });
+            }
+        } else if injection_pos == "user" && !combined_prompt_text.is_empty() {
             // Find the last user message and append the prompt.
-            if let Some(last_user_msg) = gemini_contents.iter_mut().rfind(|m| m.role == "user") {
+            if let Some(last_user_msg) = gemini_contents
+                .iter_mut()
+                .rfind(|m| m.role.as_deref() == Some("user"))
+            {
                 last_user_msg.parts.insert(
                     0,
                     GeminiPart {
@@ -225,7 +607,7 @@ impl BackendAdapter for GeminiBackendAdapter {
             if let Some(sys_prompt_str) = &unified_request.system_prompt {
                 if !sys_prompt_str.trim().is_empty() {
                     final_system_instruction = Some(GeminiContent {
-                        role: "system".to_string(), // Conceptual role
+                        role: None, // Conceptual role
                         parts: vec![GeminiPart {
                             text: Some(sys_prompt_str.clone()),
                             ..Default::default()
@@ -256,7 +638,7 @@ impl BackendAdapter for GeminiBackendAdapter {
 
             if !prompt.trim().is_empty() {
                 final_system_instruction = Some(GeminiContent {
-                    role: "system".to_string(), // Conceptual role
+                    role: None, // Conceptual role
                     parts: vec![GeminiPart {
                         text: Some(prompt),
                         ..Default::default()
@@ -321,26 +703,31 @@ impl BackendAdapter for GeminiBackendAdapter {
         request_builder = request_builder.header("Content-Type", "application/json");
         request_builder = request_builder.json(&gemini_request);
 
-        #[cfg(debug_assertions)]
-        {
-            match serde_json::to_string_pretty(&gemini_request) {
-                Ok(request_json) => {
-                    log::debug!("Gemini request: {}", request_json);
-                }
-                Err(e) => {
-                    log::error!("Failed to serialize Gemini request: {}", e);
-                    if let Some(tools) = &gemini_request.tools {
-                        for (i, tool) in tools.iter().enumerate() {
-                            if let Err(tool_err) = serde_json::to_string(&tool) {
-                                log::error!("Failed to serialize tool {}: {}", i, tool_err);
-                                log::error!("Tool details: {:?}", tool.function_declarations);
-                            }
-                        }
-                    }
-                    return Err(anyhow::anyhow!("Failed to serialize Gemini request: {}", e));
-                }
-            }
+        if log_proxy_to_file {
+            // Log the request to a file
+            log::info!(target: "ccproxy_logger","Gemini Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&gemini_request).unwrap_or_default());
         }
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     match serde_json::to_string_pretty(&gemini_request) {
+        //         Ok(request_json) => {
+        //             log::debug!("Gemini request: {}", request_json);
+        //         }
+        //         Err(e) => {
+        //             log::error!("Failed to serialize Gemini request: {}", e);
+        //             if let Some(tools) = &gemini_request.tools {
+        //                 for (i, tool) in tools.iter().enumerate() {
+        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
+        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
+        //                         log::error!("Tool details: {:?}", tool.function_declarations);
+        //                     }
+        //                 }
+        //             }
+        //             return Err(anyhow::anyhow!("Failed to serialize Gemini request: {}", e));
+        //         }
+        //     }
+        // }
 
         Ok(request_builder)
     }
@@ -356,21 +743,115 @@ impl BackendAdapter for GeminiBackendAdapter {
         let mut stop_reason = None;
         let mut usage = UnifiedUsage::default();
 
-        if let Some(candidates) = gemini_response.candidates {
-            if let Some(candidate) = candidates.into_iter().next() {
-                for part in candidate.content.parts {
-                    if let Some(text) = part.text {
-                        content_blocks.push(UnifiedContentBlock::Text { text });
+        // Handle tool compatibility mode parsing
+        if backend_response.tool_compat_mode {
+            if let Some(candidates) = gemini_response.candidates {
+                if let Some(candidate) = candidates.into_iter().next() {
+                    if let Some(text) = candidate
+                        .content
+                        .parts
+                        .into_iter()
+                        .find_map(|part| part.text)
+                    {
+                        let mut processed_text = text.clone();
+                        let open_tags = processed_text.matches(TOOL_TAG_START).count();
+                        let close_tags = processed_text.matches(TOOL_TAG_END).count();
+                        let end_tag_len = TOOL_TAG_END.len();
+                        if open_tags > 0 && open_tags != close_tags {
+                            log::warn!(
+                                "Mismatched tool tags in response: {} open, {} close",
+                                open_tags,
+                                close_tags
+                            );
+                        }
+
+                        while let Some(start_pos) = processed_text.find(TOOL_TAG_START) {
+                            // Add text before the tool call as a separate text block
+                            if start_pos > 0 {
+                                content_blocks.push(UnifiedContentBlock::Text {
+                                    text: processed_text[..start_pos].to_string(),
+                                });
+                            }
+
+                            // Search for the end tag *after* the start tag to handle multiple tools correctly
+                            // and prevent panics from invalid slicing.
+                            if let Some(relative_end_pos) =
+                                processed_text[start_pos..].find(TOOL_TAG_END)
+                            {
+                                let end_pos = start_pos + relative_end_pos;
+                                let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
+                                match crate::ccproxy::helper::tool_use_xml::ToolUse::try_from(
+                                    tool_xml,
+                                ) {
+                                    Ok(parsed_tool) => {
+                                        log::debug!(
+                                            "tool_use parse result: name: {}, param: {:?}",
+                                            &parsed_tool.name,
+                                            &parsed_tool.args
+                                        );
+                                        content_blocks.push(parsed_tool.into());
+                                    }
+                                    Err(e) => {
+                                        let tool_xml =
+                                            &processed_text[start_pos..end_pos + end_tag_len];
+
+                                        log::warn!(
+                                            "parse tool xml failed, error: {}, xml: {}",
+                                            e.to_string(),
+                                            tool_xml
+                                        );
+                                        // If parsing fails, treat the text as a regular text block
+                                        content_blocks.push(UnifiedContentBlock::Text {
+                                            text: tool_xml.to_string(),
+                                        });
+
+                                        // Send the corrective reminder.
+                                        content_blocks.push(UnifiedContentBlock::Text {
+                                            text: TOOL_PARSE_ERROR_REMINDER.to_string(),
+                                        });
+                                    }
+                                }
+                                // Remove the parsed tool XML from the text
+                                processed_text =
+                                    processed_text[(end_pos + end_tag_len)..].to_string();
+                            } else {
+                                // Incomplete tool call, treat remaining as text
+                                if !processed_text.is_empty() {
+                                    content_blocks.push(UnifiedContentBlock::Text {
+                                        text: processed_text.clone(),
+                                    });
+                                }
+                                break;
+                            }
+                        }
+                        // Add any remaining text after the last tool call
+                        if !processed_text.is_empty() {
+                            content_blocks.push(UnifiedContentBlock::Text {
+                                text: processed_text,
+                            });
+                        }
                     }
-                    if let Some(function_call) = part.function_call {
-                        content_blocks.push(UnifiedContentBlock::ToolUse {
-                            id: "".to_string(), // Gemini doesn't provide tool_use_id in non-streaming
-                            name: function_call.name,
-                            input: function_call.args,
-                        });
-                    }
+                    stop_reason = candidate.finish_reason.map(|r| r.to_string());
                 }
-                stop_reason = candidate.finish_reason.map(|r| r.to_string());
+            }
+        } else {
+            // Original parsing logic for non-tool compatibility mode
+            if let Some(candidates) = gemini_response.candidates {
+                if let Some(candidate) = candidates.into_iter().next() {
+                    for part in candidate.content.parts {
+                        if let Some(text) = part.text {
+                            content_blocks.push(UnifiedContentBlock::Text { text });
+                        }
+                        if let Some(function_call) = part.function_call {
+                            content_blocks.push(UnifiedContentBlock::ToolUse {
+                                id: get_tool_id(), // Gemini doesn't provide tool_use_id in non-streaming
+                                name: function_call.name,
+                                input: function_call.args,
+                            });
+                        }
+                    }
+                    stop_reason = candidate.finish_reason.map(|r| r.to_string());
+                }
             }
         }
 
@@ -398,6 +879,22 @@ impl BackendAdapter for GeminiBackendAdapter {
     ) -> Result<Vec<UnifiedStreamChunk>, anyhow::Error> {
         let chunk_str = String::from_utf8_lossy(&chunk);
         let mut unified_chunks = Vec::new();
+
+        // Check tool compatibility mode first
+        let tool_compat_mode = {
+            if let Ok(status) = sse_status.read() {
+                status.tool_compat_mode
+            } else {
+                false
+            }
+        };
+
+        if tool_compat_mode {
+            // Process tool compatibility mode
+            return self.process_tool_compat_chunk(chunk, sse_status).await;
+        }
+
+        // Original non-tool-compatibility mode processing
         for line in chunk_str.lines() {
             if line.starts_with("data:") {
                 let data_str = line["data:".len()..].trim();

@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "記錄請求和回應",
-        "logToFileChangedRestartRequired": "記錄請求和回應變更後需要重啟應用程式才能生效",
-        "logToFileNote": "記錄請求和回應到檔案，用於偵錯和分析",
+        "logOrgToFile": "記錄原始請求和回應",
+        "logOrgToFileTip": "記錄原始請求和回應到檔案，用於偵錯和分析",
+        "logProxyToFile": "記錄代理請求和回應",
+        "logProxyToFileTip": "記錄代理請求和回應到檔案，用於偵錯和分析",
         "openLogFile": "開啟日誌檔案",
         "port": "代理連接埠",
         "portChangedRestartRequired": "連接埠號變更後須重啟應用程式才能生效",

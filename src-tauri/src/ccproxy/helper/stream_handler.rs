@@ -38,7 +38,6 @@ pub async fn handle_streamed_response(
 
     let reassembled_stream = ReceiverStream::new(reassembled_receiver);
 
-    let chat_protocol_str = chat_protocol.to_string();
     let sse_status_clone = sse_status.clone();
     let message_id = if let Ok(state) = sse_status.read() {
         state.message_id.clone()
@@ -52,22 +51,23 @@ pub async fn handle_streamed_response(
     };
     let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(message_id, model_id)));
 
+    // let chat_protocol_str = chat_protocol.to_string();
     let unified_stream = reassembled_stream
         .then(move |item| {
             let adapter = backend_adapter.clone();
             let status = sse_status_clone.clone();
-            let chat_protocol_str_clone = chat_protocol_str.clone();
+            // let chat_protocol_str_clone = chat_protocol_str.clone();
             async move {
                 match item {
                     Ok(chunk) => {
-                        #[cfg(debug_assertions)]
-                        {
-                            log::debug!(
-                                "{} recv: {}",
-                                chat_protocol_str_clone,
-                                String::from_utf8_lossy(&chunk)
-                            );
-                        }
+                        // #[cfg(debug_assertions)]
+                        // {
+                        //     log::debug!(
+                        //         "{} recv: {}",
+                        //         chat_protocol_str_clone,
+                        //         String::from_utf8_lossy(&chunk)
+                        //     );
+                        // }
                         // Attempt to adapt the complete chunk
                         let result = adapter
                             .adapt_stream_chunk(chunk, status)

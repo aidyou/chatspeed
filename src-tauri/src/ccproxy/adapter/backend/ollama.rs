@@ -9,9 +9,10 @@ use crate::ccproxy::types::ollama::{
     OllamaChatCompletionRequest, OllamaChatCompletionResponse, OllamaFunctionCall, OllamaMessage,
     OllamaOptions, OllamaStreamResponse, OllamaTool, OllamaToolCall,
 };
+use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_START};
 use crate::ccproxy::{
     adapter::{
-        backend::{update_message_block, TOOL_TAG_END, TOOL_TAG_START},
+        backend::update_message_block,
         unified::{
             SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
             UnifiedStreamChunk, UnifiedUsage,
@@ -34,6 +35,7 @@ impl BackendAdapter for OllamaBackendAdapter {
         _api_key: &str, // Ollama doesn't use API keys
         provider_full_url: &str,
         model: &str,
+        log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
@@ -55,8 +57,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                         // If there are pending tool results, flush them as a single user message first.
                         if !tool_results_buffer.is_empty() {
                             let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
-                                tool_results_buffer.join("\n")
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                                tool_results_buffer.join("\n"),
+                                crate::ccproxy::types::TOOL_RESULT_REMINDER
                             );
                             processed_messages.push(OllamaMessage {
                                 role: "user".to_string(),
@@ -118,7 +121,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                             } = block
                             {
                                 let result_xml = format!(
-                                    "<ccp:tool_result>\n<id>{}</id>\n{}\n</ccp:tool_result>",
+                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
                                     tool_use_id, content
                                 );
                                 tool_results_buffer.push(result_xml);
@@ -129,8 +132,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                         // Flush any pending tool results before processing the user message.
                         if !tool_results_buffer.is_empty() {
                             let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>",
-                                tool_results_buffer.join("\n")
+                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                                tool_results_buffer.join("\n"),
+                                crate::ccproxy::types::TOOL_RESULT_REMINDER
                             );
                             processed_messages.push(OllamaMessage {
                                 role: "user".to_string(),
@@ -175,8 +179,9 @@ impl BackendAdapter for OllamaBackendAdapter {
             // Flush any remaining tool results at the end of the message list.
             if !tool_results_buffer.is_empty() {
                 let results_xml = format!(
-                    "<ccp:tool_results>\n{}\n</ccp:tool_results>",
-                    tool_results_buffer.join("\n")
+                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
+                    tool_results_buffer.join("\n"),
+                    crate::ccproxy::types::TOOL_RESULT_REMINDER
                 );
                 processed_messages.push(OllamaMessage {
                     role: "user".to_string(),
@@ -408,30 +413,35 @@ impl BackendAdapter for OllamaBackendAdapter {
         // Try to serialize the request and log it for debugging
         request_builder = request_builder.json(&ollama_request);
 
-        #[cfg(debug_assertions)]
-        {
-            match serde_json::to_string_pretty(&ollama_request) {
-                Ok(request_json) => {
-                    log::debug!("Ollama request: {}", request_json);
-                }
-                Err(e) => {
-                    log::error!("Failed to serialize Ollama request: {}", e);
-                    if let Some(tools) = &ollama_request.tools {
-                        for (i, tool) in tools.iter().enumerate() {
-                            if let Err(tool_err) = serde_json::to_string(&tool) {
-                                log::error!("Failed to serialize tool {}: {}", i, tool_err);
-                                log::error!(
-                                    "Tool details - name: {}, type: {}",
-                                    tool.function.name,
-                                    tool.r#type
-                                );
-                            }
-                        }
-                    }
-                    return Err(anyhow::anyhow!("Failed to serialize Ollama request: {}", e));
-                }
-            }
+        if log_proxy_to_file {
+            // Log the request to a file
+            log::info!(target: "ccproxy_logger","Ollama Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&ollama_request).unwrap_or_default());
         }
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     match serde_json::to_string_pretty(&ollama_request) {
+        //         Ok(request_json) => {
+        //             log::debug!("Ollama request: {}", request_json);
+        //         }
+        //         Err(e) => {
+        //             log::error!("Failed to serialize Ollama request: {}", e);
+        //             if let Some(tools) = &ollama_request.tools {
+        //                 for (i, tool) in tools.iter().enumerate() {
+        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
+        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
+        //                         log::error!(
+        //                             "Tool details - name: {}, type: {}",
+        //                             tool.function.name,
+        //                             tool.r#type
+        //                         );
+        //                     }
+        //                 }
+        //             }
+        //             return Err(anyhow::anyhow!("Failed to serialize Ollama request: {}", e));
+        //         }
+        //     }
+        // }
 
         Ok(request_builder)
     }
@@ -490,24 +500,33 @@ impl BackendAdapter for OllamaBackendAdapter {
                 if let Some(relative_end_pos) = processed_text[start_pos..].find(TOOL_TAG_END) {
                     let end_pos = start_pos + relative_end_pos;
                     let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
-                    if let Ok(parsed_tool) =
-                        crate::ccproxy::helper::tool_use_xml::ToolUse::try_from(tool_xml)
-                    {
-                        log::debug!(
-                            "tool_use parse result: name: {}, param: {:?}",
-                            &parsed_tool.name,
-                            &parsed_tool.params
-                        );
+                    match crate::ccproxy::helper::tool_use_xml::ToolUse::try_from(tool_xml) {
+                        Ok(parsed_tool) => {
+                            log::debug!(
+                                "tool_use parse result: name: {}, param: {:?}",
+                                &parsed_tool.name,
+                                &parsed_tool.args
+                            );
+                            content_blocks.push(parsed_tool.into());
+                        }
+                        Err(e) => {
+                            let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
+                            log::warn!(
+                                "parse tool xml failed, error: {}, xml: {}",
+                                e.to_string(),
+                                tool_xml
+                            );
 
-                        content_blocks.push(parsed_tool.into());
-                    } else {
-                        let tool_xml = &processed_text[start_pos..end_pos + end_tag_len];
+                            // If parsing fails, treat the text as a regular text block
+                            content_blocks.push(UnifiedContentBlock::Text {
+                                text: tool_xml.to_string(),
+                            });
 
-                        log::warn!("parse tool xml failed, xml: {}", tool_xml);
-                        // If parsing fails, treat the text as a regular text block
-                        content_blocks.push(UnifiedContentBlock::Text {
-                            text: tool_xml.to_string(),
-                        });
+                            // Send the corrective reminder.
+                            content_blocks.push(UnifiedContentBlock::Text {
+                                text: TOOL_PARSE_ERROR_REMINDER.to_string(),
+                            });
+                        }
                     }
                     // Remove the parsed tool XML from the text
                     processed_text = processed_text[(end_pos + end_tag_len)..].to_string();
@@ -887,12 +906,8 @@ impl OllamaBackendAdapter {
             let should_flush = status.tool_compat_fragment_count >= 25
                 || time_since_flush >= 100
                 || status.tool_compat_fragment_buffer.len() > 500
-                || status
-                    .tool_compat_fragment_buffer
-                    .contains(common::TOOL_TAG_START)
-                || status
-                    .tool_compat_fragment_buffer
-                    .contains(common::TOOL_TAG_END);
+                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_START)
+                || status.tool_compat_fragment_buffer.contains(TOOL_TAG_END);
 
             if should_flush {
                 self.flush_tool_compat_buffer(&mut status, unified_chunks);
@@ -975,8 +990,8 @@ impl OllamaBackendAdapter {
     ) {
         if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
             let buffer = &status.tool_compat_buffer;
-            let tool_start = common::TOOL_TAG_START;
-            let tool_end = common::TOOL_TAG_END;
+            let tool_start = TOOL_TAG_START;
+            let tool_end = TOOL_TAG_END;
 
             let mut partial_tag_len = 0;
 

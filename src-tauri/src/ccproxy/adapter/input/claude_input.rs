@@ -10,44 +10,65 @@ use crate::ccproxy::{
     },
     types::{
         claude::{ClaudeNativeContentBlock, ClaudeNativeRequest, ClaudeToolChoice},
-        ChatProtocol,
+        ChatProtocol, TOOL_ARG_ERROR_REMINDER,
     },
 };
 
 /// Converts a single Claude native content block into a unified content block.
 /// This function handles the direct mapping between the source and unified formats.
-fn convert_claude_content_block(block: ClaudeNativeContentBlock) -> Result<UnifiedContentBlock> {
+fn convert_claude_content_block(
+    block: ClaudeNativeContentBlock,
+) -> Result<Vec<UnifiedContentBlock>> {
     match block {
-        ClaudeNativeContentBlock::Text { text } => Ok(UnifiedContentBlock::Text { text }),
-        ClaudeNativeContentBlock::Image { source } => Ok(UnifiedContentBlock::Image {
+        ClaudeNativeContentBlock::Text { text } => Ok(vec![UnifiedContentBlock::Text { text }]),
+        ClaudeNativeContentBlock::Image { source } => Ok(vec![UnifiedContentBlock::Image {
             media_type: source.media_type,
             data: source.data,
-        }),
+        }]),
         ClaudeNativeContentBlock::ToolUse { id, name, input } => {
-            // Claude's tool use input might contain single quotes for JSON keys, which is invalid JSON.
-            // Replace single quotes with double quotes to ensure valid JSON.
-            let cleaned_input_str = input.to_string().replace("'", "\"");
-            let cleaned_input = serde_json::from_str(&cleaned_input_str).unwrap_or_else(|e| {
-                log::warn!("Failed to parse Claude tool input as JSON after cleaning: {}. Original input: {}", e, input);
-                serde_json::json!({})
-            });
-            Ok(UnifiedContentBlock::ToolUse {
-                id,
-                name,
-                input: cleaned_input,
-            })
+            let cleaned_input_str = input.to_string();
+            match serde_json::from_str(&cleaned_input_str) {
+                Ok(cleaned_input) => Ok(vec![UnifiedContentBlock::ToolUse {
+                    id,
+                    name,
+                    input: cleaned_input,
+                }]),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to parse Claude tool input as JSON after cleaning: {}. Original input: {}",
+                        e,
+                        input
+                    );
+                    Ok(vec![
+                        // UnifiedContentBlock::ToolUse {
+                        //     id,
+                        //     name: name.clone(),
+                        //     input: json!({}),
+                        // },
+                        UnifiedContentBlock::Text {
+                            text: format!(
+                                "<tool_code>\n<name>{}</name>\n<input>{}</input>\n</tool_code>",
+                                name, input
+                            ),
+                        },
+                        UnifiedContentBlock::Text {
+                            text: TOOL_ARG_ERROR_REMINDER.to_string(),
+                        },
+                    ])
+                }
+            }
         }
         ClaudeNativeContentBlock::ToolResult {
             tool_use_id,
             content,
             is_error,
-        } => Ok(UnifiedContentBlock::ToolResult {
+        } => Ok(vec![UnifiedContentBlock::ToolResult {
             tool_use_id,
             content, // The source is already a String, which is correct for the unified format.
             is_error: is_error.unwrap_or(false),
-        }),
+        }]),
         ClaudeNativeContentBlock::Thinking { thinking } => {
-            Ok(UnifiedContentBlock::Thinking { thinking })
+            Ok(vec![UnifiedContentBlock::Thinking { thinking }])
         }
     }
 }
@@ -77,7 +98,8 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
                         .content
                         .into_iter()
                         .map(convert_claude_content_block)
-                        .collect::<Result<Vec<_>>>()
+                        .collect::<Result<Vec<Vec<_>>>>()
+                        .map(|vecs| vecs.into_iter().flatten().collect())
                         .map(|content| UnifiedMessage {
                             role: UnifiedRole::Assistant,
                             content,
@@ -110,13 +132,13 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
                         // Create Tool messages for each tool result block
                         for tool_block in tool_result_blocks {
                             messages.push(
-                                convert_claude_content_block(tool_block).map(|unified_block| {
+                                convert_claude_content_block(tool_block).map(|unified_blocks| {
                                     UnifiedMessage {
                                         role: UnifiedRole::Tool,
-                                        content: vec![unified_block],
+                                        content: unified_blocks,
                                         reasoning_content: None,
                                     }
-                                })
+                                }),
                             );
                         }
 
@@ -125,7 +147,8 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
                             let user_message = other_blocks
                                 .into_iter()
                                 .map(convert_claude_content_block)
-                                .collect::<Result<Vec<_>>>()
+                                .collect::<Result<Vec<Vec<_>>>>()
+                                .map(|vecs| vecs.into_iter().flatten().collect())
                                 .map(|content| UnifiedMessage {
                                     role: UnifiedRole::User,
                                     content,
@@ -141,7 +164,8 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
                             .content
                             .into_iter()
                             .map(convert_claude_content_block)
-                            .collect::<Result<Vec<_>>>()
+                            .collect::<Result<Vec<Vec<_>>>>()
+                            .map(|vecs| vecs.into_iter().flatten().collect())
                             .map(|content| UnifiedMessage {
                                 role: UnifiedRole::User,
                                 content,

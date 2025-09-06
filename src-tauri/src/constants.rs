@@ -29,6 +29,7 @@ pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
 pub const CFG_CCPROXY_PORT: &str = "chat_completion_proxy_port";
 pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11434;
 pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";
+pub const CFG_CCPROXY_LOG_PROXY_TO_FILE: &str = "chat_completion_proxy_log_proxy_to_file";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
 pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";

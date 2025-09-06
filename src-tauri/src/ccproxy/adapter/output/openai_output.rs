@@ -1,5 +1,6 @@
 use super::OutputAdapter;
 use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::types::openai::{
     OpenAIChatCompletionChoice, OpenAIChatCompletionResponse, OpenAIMessageContent, OpenAIUsage,
@@ -136,7 +137,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
-                    uuid::Uuid::new_v4().to_string()
+                    get_msg_id()
                 };
                 let model = if let Ok(status) = sse_status.read() {
                     status.model_id.clone()
@@ -161,7 +162,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
-                    uuid::Uuid::new_v4().to_string()
+                    get_msg_id()
                 };
                 let model = if let Ok(status) = sse_status.read() {
                     status.model_id.clone()
@@ -195,7 +196,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
-                    uuid::Uuid::new_v4().to_string()
+                    get_msg_id()
                 };
                 let model = if let Ok(status) = sse_status.read() {
                     status.model_id.clone()
@@ -232,7 +233,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
-                    uuid::Uuid::new_v4().to_string()
+                    get_msg_id()
                 };
                 let model = if let Ok(status) = sse_status.read() {
                     status.model_id.clone()
@@ -263,7 +264,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
-                    uuid::Uuid::new_v4().to_string()
+                    get_msg_id()
                 };
                 let model = if let Ok(status) = sse_status.read() {
                     status.model_id.clone()

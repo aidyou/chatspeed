@@ -25,8 +25,8 @@ pub struct GeminiRequest {
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiContent {
-    #[serde(default)]
-    pub role: String, // "user" or "model"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>, // "user" or "model", omitted for system_instruction
     // Add `serde(default)` to handle cases where the `parts` field is omitted in stream chunks,
     // such as in metadata-only chunks at the end of a stream.
     #[serde(default)]
@@ -381,7 +381,7 @@ impl GeminiRequest {
 
         // Validate each content has valid role
         for content in &self.contents {
-            if content.role != "user" && content.role != "model" {
+            if content.role.as_deref() != Some("user") && content.role.as_deref() != Some("model") {
                 return Err("Content role must be 'user' or 'model'".to_string());
             }
 

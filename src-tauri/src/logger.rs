@@ -212,7 +212,7 @@ pub fn setup_logger(app: &tauri::App) {
         .level(log::LevelFilter::Debug)
         .filter(|record| {
             record.target().contains("chatspeed")
-                || (record.level() < log::LevelFilter::Debug && record.target() != "ccproxy_logger")
+                || (record.level() < log::LevelFilter::Info && record.target() != "ccproxy_logger")
         })
         .format(console_log_formatter)
         .chain(std::io::stdout());
@@ -229,7 +229,7 @@ pub fn setup_logger(app: &tauri::App) {
         .level(log_level)
         .filter(|record| {
             record.target().contains("chatspeed")
-                || (record.level() < log::LevelFilter::Debug && record.target() != "ccproxy_logger")
+                || (record.level() < log::LevelFilter::Info && record.target() != "ccproxy_logger")
         })
         .format(file_log_formatter)
         .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));

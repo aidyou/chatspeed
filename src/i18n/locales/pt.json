@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "Registrar solicitações e respostas",
-        "logToFileChangedRestartRequired": "As alterações no registro de solicitações e respostas exigem uma reinicialização do aplicativo para entrar em vigor",
-        "logToFileNote": "Registrar solicitações e respostas em um arquivo para depuração e análise",
+        "logOrgToFile": "Registrar solicitações e respostas originais",
+        "logOrgToFileTip": "Registrar solicitações e respostas originais em um arquivo para depuração e análise",
+        "logProxyToFile": "Registrar solicitações e respostas do proxy",
+        "logProxyToFileTip": "Registrar solicitações e respostas do proxy em um arquivo para depuração e análise",
         "openLogFile": "Abrir arquivo de log",
         "port": "Porta do proxy",
         "portChangedRestartRequired": "Após a alteração do número da porta, é necessário reiniciar o aplicativo para entrar em vigor",

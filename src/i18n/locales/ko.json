@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "요청 및 응답 기록",
-        "logToFileChangedRestartRequired": "요청 및 응답 기록 변경 사항을 적용하려면 응용 프로그램을 다시 시작해야 합니다.",
-        "logToFileNote": "디버깅 및 분석을 위해 요청 및 응답을 파일에 기록합니다.",
+        "logOrgToFile": "원본 요청 및 응답 기록",
+        "logOrgToFileTip": "디버깅 및 분석을 위해 원본 요청 및 응답을 파일에 기록합니다.",
+        "logProxyToFile": "프록시 요청 및 응답 기록",
+        "logProxyToFileTip": "디버깅 및 분석을 위해 프록시 요청 및 응답을 파일에 기록합니다.",
         "openLogFile": "로그 파일 열기",
         "port": "프록시 포트",
         "portChangedRestartRequired": "포트 번호 변경 후 응용 프로그램을 다시 시작해야 합니다.",

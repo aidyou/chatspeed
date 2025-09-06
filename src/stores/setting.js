@@ -87,6 +87,7 @@ const defaultSettings = {
   chatCompletionProxyKeys: [],
   chatCompletionProxyPort: 11434,
   chatCompletionProxyLogToFile: false,
+  chatCompletionProxyLogProxyToFile: false,
   // Search
   googleApiKey: '',
   googleSearchId: "",

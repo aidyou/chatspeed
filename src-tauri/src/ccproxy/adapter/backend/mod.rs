@@ -6,7 +6,7 @@ mod openai;
 mod traits;
 
 pub use claude::ClaudeBackendAdapter;
-pub use common::{generate_tool_prompt, update_message_block, TOOL_TAG_END, TOOL_TAG_START};
+pub use common::{generate_tool_prompt, update_message_block};
 pub use gemini::GeminiBackendAdapter;
 pub use ollama::OllamaBackendAdapter;
 pub use openai::OpenAIBackendAdapter;

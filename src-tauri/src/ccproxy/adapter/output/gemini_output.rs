@@ -80,7 +80,7 @@ impl OutputAdapter for GeminiOutputAdapter {
             candidates: Some(vec![GeminiCandidate {
                 index: Some(0), // Add missing field
                 content: GeminiContent {
-                    role: "model".to_string(),
+                    role: Some("model".to_string()),
                     parts: gemini_parts,
                 },
                 finish_reason: response.stop_reason.map(|s| s.into()), // Convert stop_reason string to GeminiFinishReason

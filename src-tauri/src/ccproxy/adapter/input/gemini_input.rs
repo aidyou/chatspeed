@@ -39,11 +39,11 @@ pub fn from_gemini(
     }
 
     for content in req.contents {
-        let role = match content.role.as_str() {
-            "user" => UnifiedRole::User,
-            "model" => UnifiedRole::Assistant,
-            "function" => UnifiedRole::Tool,
-            "system" => UnifiedRole::System, // Should be handled by system_instruction, but for safety
+        let role = match content.role.as_deref() {
+            Some("user") => UnifiedRole::User,
+            Some("model") => UnifiedRole::Assistant,
+            Some("function") => UnifiedRole::Tool,
+            Some("system") => UnifiedRole::System, // Should be handled by system_instruction, but for safety
             _ => anyhow::bail!("Invalid or missing role in Gemini message"),
         };
 

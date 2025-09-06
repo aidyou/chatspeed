@@ -4,8 +4,8 @@ use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
-use uuid::Uuid;
 
+use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     adapter::{
@@ -27,7 +27,7 @@ use crate::ccproxy::{
     openai::OpenAIChatCompletionRequest,
     types::ollama::OllamaChatCompletionRequest,
 };
-use crate::constants::CFG_CCPROXY_LOG_TO_FILE;
+use crate::constants::{CFG_CCPROXY_LOG_PROXY_TO_FILE, CFG_CCPROXY_LOG_TO_FILE};
 use crate::db::MainStore;
 
 fn get_proxy_alias_from_body(
@@ -222,17 +222,20 @@ pub async fn handle_chat_completion(
 ) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
 
-    let log_to_file = if let Ok(store) = main_store_arc.read() {
+    let log_org_to_file = if let Ok(store) = main_store_arc.read() {
         store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
     } else {
-        client_query
-            .debug
-            .unwrap_or(crate::ccproxy::helper::DEFAULT_LOG_TO_FILE)
+        client_query.debug.unwrap_or(false)
+    };
+    let log_proxy_to_file = if let Ok(store) = main_store_arc.read() {
+        store.get_config(CFG_CCPROXY_LOG_PROXY_TO_FILE, false)
+    } else {
+        false
     };
 
-    if log_to_file {
+    if log_org_to_file {
         // Log the raw request body
-        log::info!(target: "ccproxy_logger", "{} Request Body: \n{}\n----------------\n", &protocol_string, String::from_utf8_lossy(&client_request_body));
+        log::info!(target: "ccproxy_logger", "{} Origin Request Body: \n{}\n----------------\n", &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
     let proxy_alias =
@@ -276,7 +279,7 @@ pub async fn handle_chat_completion(
             proxy_model,
             is_streaming,
             main_store_arc,
-            log_to_file,
+            log_org_to_file,
         )
         .await?;
         return Ok(result.into_response());
@@ -315,13 +318,7 @@ pub async fn handle_chat_completion(
         unified_request.prompt_injection_position = proxy_model.prompt_injection_position.clone();
     }
 
-    // 2. Resolve model and get backend adapter
-    let proxy_model = ModelResolver::get_ai_model_by_alias(
-        main_store_arc.clone(),
-        proxy_alias.clone(),
-        group_name,
-    )
-    .await?;
+    // 2. Use the already resolved proxy_model from above
 
     let full_url = get_provider_chat_full_url(
         proxy_model.chat_protocol.clone(),
@@ -352,6 +349,7 @@ pub async fn handle_chat_completion(
             &proxy_model.api_key,
             &full_url,
             &proxy_model.model,
+            log_proxy_to_file,
         )
         .await
         .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
@@ -400,7 +398,7 @@ pub async fn handle_chat_completion(
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
 
-        if log_to_file {
+        if log_org_to_file {
             log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Error, Status: {}, Body: \n{}\n---", status_code, error_body_str);
         }
 
@@ -483,7 +481,7 @@ pub async fn handle_chat_completion(
     };
 
     let sse_status = Arc::new(RwLock::new(SseStatus::new(
-        format!("msg_{}", Uuid::new_v4().simple()),
+        get_msg_id(),
         proxy_alias.clone(),
         tool_compat_mode,
     )));
@@ -495,7 +493,7 @@ pub async fn handle_chat_completion(
             backend_adapter,
             output_adapter,
             sse_status,
-            log_to_file,
+            log_org_to_file,
         )
         .await?;
         Ok(res.into_response())
@@ -505,7 +503,7 @@ pub async fn handle_chat_completion(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-        if log_to_file {
+        if log_org_to_file {
             log::info!(target: "ccproxy_logger", "[Proxy] {} Response Body: \n{}\n================\n\n",chat_protocol.to_owned(), String::from_utf8_lossy(&body_bytes));
         }
 

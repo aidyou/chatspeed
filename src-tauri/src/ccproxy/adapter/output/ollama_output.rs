@@ -92,7 +92,7 @@ impl OutputAdapter for OllamaOutputAdapter {
         let model_id = if let Ok(status) = sse_status.read() {
             status.model_id.clone()
         } else {
-            "".to_string()
+            crate::ccproxy::helper::get_msg_id()
         };
 
         let stream_response = match chunk {

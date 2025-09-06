@@ -22,6 +22,7 @@ pub trait BackendAdapter: Send + Sync {
         api_key: &str,
         provider_full_url: &str,
         model: &str,
+        log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error>;
 
     /// Adapts a full `BackendResponse` into a `UnifiedResponse`.

@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "Anfragen und Antworten protokollieren",
-        "logToFileChangedRestartRequired": "Änderungen an der Protokollierung von Anfragen und Antworten erfordern einen Neustart der Anwendung, um wirksam zu werden",
-        "logToFileNote": "Anfragen und Antworten zur Fehlerbehebung und Analyse in einer Datei protokollieren",
+        "logOrgToFile": "Originalanfragen und -antworten protokollieren",
+        "logOrgToFileTip": "Originalanfragen und -antworten zur Fehlerbehebung und Analyse in einer Datei protokollieren",
+        "logProxyToFile": "Proxy-Anfragen und -antworten protokollieren",
+        "logProxyToFileTip": "Proxy-Anfragen und -antworten zur Fehlerbehebung und Analyse in einer Datei protokollieren",
         "openLogFile": "Protokolldatei öffnen",
         "port": "Proxy-Port",
         "portChangedRestartRequired": "Nach Änderung der Portnummer muss die Anwendung neu gestartet werden, um wirksam zu werden",

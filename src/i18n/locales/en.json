@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "Log requests and responses",
-        "logToFileChangedRestartRequired": "Changes to logging requests and responses require an application restart to take effect",
-        "logToFileNote": "Log requests and responses to a file for debugging and analysis",
+        "logOrgToFile": "Log original requests and responses",
+        "logOrgToFileTip": "Log original requests and responses to a file for debugging and analysis",
+        "logProxyToFile": "Log proxy requests and responses",
+        "logProxyToFileTip": "Log proxy requests and responses to a file for debugging and analysis",
         "openLogFile": "Open Log File",
         "port": "Proxy Port",
         "portChangedRestartRequired": "Changes to the port number require an application restart to take effect",

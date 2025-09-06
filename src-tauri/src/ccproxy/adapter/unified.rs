@@ -87,7 +87,7 @@ impl UnifiedRequest {
         // The actual injection is handled by the backend adapters.
 
         // We only inject prompts when tools are present, especially for tool-compat-mode.
-        if self.tools.as_deref().unwrap_or_default().is_empty() && !self.tool_compat_mode {
+        if self.tools.as_deref().unwrap_or_default().is_empty() || !self.tool_compat_mode {
             return;
         }
 

@@ -436,9 +436,10 @@
         }
       },
       "settings": {
-        "logToFile": "Enregistrer les requêtes et les réponses",
-        "logToFileChangedRestartRequired": "Les modifications apportées à l'enregistrement des requêtes et des réponses nécessitent un redémarrage de l'application pour prendre effet",
-        "logToFileNote": "Enregistrer les requêtes et les réponses dans un fichier pour le débogage et l'analyse",
+        "logOrgToFile": "Enregistrer les requêtes et les réponses originales",
+        "logOrgToFileTip": "Enregistrer les requêtes et les réponses originales dans un fichier pour le débogage et l'analyse",
+        "logProxyToFile": "Enregistrer les requêtes et les réponses du proxy",
+        "logProxyToFileTip": "Enregistrer les requêtes et les réponses du proxy dans un fichier pour le débogage et l'analyse",
         "openLogFile": "Ouvrir le fichier journal",
         "port": "Port du proxy",
         "portChangedRestartRequired": "Après modification du numéro de port, l'application doit être redémarrée pour prendre effet",

@@ -15,8 +15,6 @@ use rust_i18n::t;
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 
-pub const DEFAULT_LOG_TO_FILE: bool = false;
-
 #[derive(Deserialize)]
 pub struct CcproxyQuery {
     pub key: Option<String>,
@@ -60,7 +58,7 @@ impl ModelResolver {
         #[cfg(debug_assertions)]
         {
             log::debug!(
-                "proxy groupu: {}, prompt injection: {}",
+                "proxy group: {}, prompt injection: {}",
                 group_name,
                 &prompt_injection
             );
@@ -142,7 +140,7 @@ impl ModelResolver {
             &ai_model_details.name,
             &ai_model_details.base_url,
             &ai_model_details.api_protocol,
-            &global_key.key[..std::cmp::min(8, global_key.key.len())] // Log first 8 chars for debugging
+            &global_key.key[std::cmp::max(0, global_key.key.len() - 8)..] // Log last 8 chars for debugging
         );
 
         if ai_model_details.base_url.is_empty() {
@@ -318,7 +316,7 @@ impl ModelResolver {
                 client_builder = client_builder.no_proxy();
             }
             ProxyType::Http(proxy_url, proxy_username, proxy_password) => {
-                log::info!("Using proxy: {}", proxy_url);
+                log::debug!("Using proxy: {}", proxy_url);
                 if let Ok(mut proxy) = reqwest::Proxy::all(&proxy_url) {
                     if let (Some(user), Some(pass)) = (proxy_username, proxy_password) {
                         if !user.is_empty() && !pass.is_empty() {
@@ -413,4 +411,8 @@ pub fn get_provider_chat_full_url(
 
 pub fn get_tool_id() -> String {
     format!("tool_{}", &uuid::Uuid::new_v4().to_string()[..8])
+}
+
+pub fn get_msg_id() -> String {
+    format!("msg_{}", &uuid::Uuid::new_v4().to_string()[..8])
 }
