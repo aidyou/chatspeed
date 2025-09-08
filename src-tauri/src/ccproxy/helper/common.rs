@@ -2,6 +2,7 @@ use crate::{
     ai::{network::ProxyType, util::get_proxy_type},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
+        helper::proxy_rotator::GlobalApiKey,
         helper::CC_PROXY_ROTATOR,
         types::{BackendModelTarget, ChatCompletionProxyConfig, ProxyModel},
         ChatProtocol,
@@ -171,8 +172,8 @@ impl ModelResolver {
         })
     }
 
-    /// Update the global key pool for a proxy alias with all available keys from all providers.
-    /// This method collects all keys from all backend targets and creates a global pool.
+    /// Atomically updates the key pool for an alias and selects a target for the current request.
+    /// This method ensures that the rotator's key pool is always in sync with the current configuration.
     async fn update_global_key_pool(
         main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         proxy_alias: &str,
@@ -183,52 +184,61 @@ impl ModelResolver {
         let group_name = proxy_group.unwrap_or("default");
         let composite_key = format!("{}/{}", group_name, proxy_alias);
 
-        // get next target index
-        let index = CC_PROXY_ROTATOR.get_next_target_index(&composite_key, backend_targets.len());
-        let target = &backend_targets[index];
+        // Atomically update the entire key pool for this alias
+        let mut new_key_pool = Vec::new();
+        for target in &backend_targets {
+            // Get AI model details for this target.
+            if let Ok(ai_model) = Self::get_ai_model_details(main_store_arc.clone(), target.id) {
+                // Skip providers with no keys (like Ollama)
+                if ai_model.api_key.trim().is_empty() {
+                    continue;
+                }
 
-        // Get AI model details for this target
-        let ai_model = Self::get_ai_model_details(main_store_arc.clone(), target.id)?;
+                let keys: Vec<String> = if ai_model.api_key.contains('\n') {
+                    ai_model
+                        .api_key
+                        .split('\n')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                } else {
+                    vec![ai_model.api_key.trim().to_string()]
+                };
 
-        // Ollama hasn't keys
-        if ai_model.api_protocol == ChatProtocol::Ollama.to_string() && ai_model.api_key.is_empty()
-        {
-            return Ok((target.clone(), ai_model));
+                for key in keys {
+                    // [Gemini] Correctly create the GlobalApiKey struct with all required fields
+                    new_key_pool.push(GlobalApiKey {
+                        key,
+                        provider_id: ai_model.id.unwrap_or_default(),
+                        base_url: ai_model.base_url.clone(),
+                        model_name: target.model.clone(),
+                    });
+                }
+            }
         }
 
-        // Parse all keys for this provider
-        let keys: Vec<String> = if ai_model.api_key.contains('\n') {
-            ai_model
-                .api_key
-                .split('\n')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        } else {
-            let k = ai_model.api_key.trim().to_string();
-            if k.is_empty() {
-                vec![]
-            } else {
-                vec![k]
-            }
-        };
-
         log::info!(
-            "Updated global key pool for composite key '{}': {} keys from {} providers",
+            "Atomically replacing key pool for composite key '{}': {} keys from {} providers",
             composite_key,
-            keys.len(),
+            new_key_pool.len(),
             backend_targets.len()
         );
 
+        // Call the new atomic replacement method
         CC_PROXY_ROTATOR
-            .update_provider_keys_efficient(
-                &composite_key,
-                ai_model.id.unwrap_or_default(),
-                &ai_model.base_url,
-                &target.model,
-                keys,
-            )
+            .replace_pool_for_composite_key(&composite_key, new_key_pool)
             .await;
+
+        // The function still needs to select a target for the CURRENT request.
+        // We preserve the round-robin logic for selecting the provider for this specific call.
+        if backend_targets.is_empty() {
+            log::warn!("No backend targets available for alias '{}'.", proxy_alias);
+            return Err(CCProxyError::NoBackendTargets(proxy_alias.to_string()));
+        }
+        let index = CC_PROXY_ROTATOR.get_next_target_index(&composite_key, backend_targets.len());
+        let target = &backend_targets[index];
+
+        let ai_model = Self::get_ai_model_details(main_store_arc.clone(), target.id)?;
 
         Ok((target.clone(), ai_model))
     }

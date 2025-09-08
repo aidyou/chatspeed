@@ -337,12 +337,12 @@ impl ToolDefinition for WebSearch {
                     "properties": {
                         "kw": {
                             "type": "string",
-                            "description": "Search keyword"
+                            "description": "The search query or keyword. For best results, use specific and concise language. Can also be an array of strings for exact phrase matching."
                         },
                         "page": {
                             "type": "integer",
                             "default": 1,
-                            "description": "Page number"
+                            "description": "The page number of the search results to return. Use this in conjunction with the 'number' parameter to paginate through more than 10 results. Defaults to 1."
                         },
                         "number": {
                             "type": "integer",
@@ -354,7 +354,7 @@ impl ToolDefinition for WebSearch {
                         "time_period": {
                             "type": "string",
                             "enum": ["day", "week", "month", "year"],
-                            "description": "Time range filter"
+                            "description": "Filters search results to a specific time range. Use this to find recent or timely information. If omitted, no time filter is applied."
                         }
                     },
                     "required": ["kw"]

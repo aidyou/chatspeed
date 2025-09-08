@@ -5,25 +5,9 @@ mod tests {
     use super::super::proxy_rotator::{GlobalApiKey, ProxyRotator};
     use std::collections::HashMap;
 
-    async fn update_global_key_pool(
-        proxy_router: &ProxyRotator,
-        proxy_alias: &str,
-        provider_id: i64,
-        base_url: &str,
-        model_name: &str,
-        new_keys: Vec<String>,
-    ) {
-        proxy_router
-            .update_provider_keys_efficient(
-                proxy_alias,
-                provider_id,
-                base_url,
-                model_name,
-                new_keys,
-            )
-            .await;
-    }
-    /// Test model target rotation
+    // [Gemini] The old `update_global_key_pool` helper is removed as tests now use the new public API directly.
+
+    /// Test model target rotation (This test remains unchanged as the underlying method is the same)
     #[test]
     fn test_model_target_rotation() {
         let rotator = ProxyRotator::new();
@@ -42,7 +26,7 @@ mod tests {
         println!("Model target rotation test passed!");
     }
 
-    /// Test global API key rotation across multiple providers
+    /// Test global API key rotation across multiple providers using the new atomic update method
     #[tokio::test]
     async fn test_global_key_rotation() {
         let rotator = ProxyRotator::new();
@@ -76,18 +60,10 @@ mod tests {
             ),
         ];
 
-        // Update global key pool
-        for key in &global_keys {
-            update_global_key_pool(
-                &rotator,
-                proxy_alias,
-                key.provider_id,
-                &key.base_url,
-                &key.model_name,
-                vec![key.key.clone()],
-            )
+        // [Gemini] Update: Call the new atomic method once with the full list of keys.
+        rotator
+            .replace_pool_for_composite_key(proxy_alias, global_keys)
             .await;
-        }
 
         let mut selected_keys = Vec::new();
         for _ in 0..8 {
@@ -96,7 +72,8 @@ mod tests {
             }
         }
 
-        // Should cycle through all keys: openai-key1, openai-key2, claude-key1, gemini-key1, openai-key1, ...
+        // [Gemini] Update: The new method sorts keys internally for predictable rotation.
+        // The expected order is now the sorted order of the keys.
         assert_eq!(
             selected_keys,
             vec![
@@ -113,14 +90,16 @@ mod tests {
         println!("Global key rotation test passed!");
     }
 
-    /// Test empty global key pool
+    /// Test empty global key pool using the new atomic update method
     #[tokio::test]
     async fn test_empty_global_pool() {
         let rotator = ProxyRotator::new();
         let proxy_alias = "empty-pool";
 
-        // Update with empty key pool
-        update_global_key_pool(&rotator, proxy_alias, 0, "", "", vec![]).await;
+        // [Gemini] Update: Call the new atomic method with an empty vector.
+        rotator
+            .replace_pool_for_composite_key(proxy_alias, vec![])
+            .await;
 
         // Should return None
         let key = rotator.get_next_global_key(proxy_alias).await;
@@ -128,21 +107,29 @@ mod tests {
         println!("Empty global pool test passed!");
     }
 
-    /// Test single provider with multiple keys
+    /// Test single provider with multiple keys using the new atomic update method
     #[tokio::test]
     async fn test_single_provider_multiple_keys() {
         let rotator = ProxyRotator::new();
         let proxy_alias = "single-provider";
 
-        update_global_key_pool(
-            &rotator,
-            proxy_alias,
-            1,
-            "https://api.test.com",
-            "model1",
-            vec!["key1".to_string(), "key2".to_string(), "key3".to_string()],
-        )
-        .await;
+        // [Gemini] Update: Build the full Vec<GlobalApiKey> first.
+        let keys = vec!["key1".to_string(), "key2".to_string(), "key3".to_string()];
+        let global_keys: Vec<GlobalApiKey> = keys
+            .into_iter()
+            .map(|k| {
+                GlobalApiKey::new(
+                    k,
+                    1,
+                    "https://api.test.com".to_string(),
+                    "model1".to_string(),
+                )
+            })
+            .collect();
+
+        rotator
+            .replace_pool_for_composite_key(proxy_alias, global_keys)
+            .await;
 
         let mut selected_keys = Vec::new();
         for _ in 0..6 {
@@ -158,46 +145,58 @@ mod tests {
         println!("Single provider multiple keys test passed!");
     }
 
-    /// Test balanced rotation across providers with different key counts
+    /// Test balanced rotation across providers with different key counts using the new atomic update method
     #[tokio::test]
     async fn test_balanced_global_rotation() {
         let rotator = ProxyRotator::new();
         let proxy_alias = "balanced-test";
 
-        // Provider 1: 2 keys, Provider 2: 1 key, Provider 3: 3 keys
-        let global_keys = vec![
+        // [Gemini] Update: Build a single, flat Vec<GlobalApiKey> with all keys.
+        let mut all_keys = Vec::new();
+        all_keys.extend(vec![
             GlobalApiKey::new(
-                "p1-key1,p1-key2".to_string(),
+                "p1-key1".to_string(),
                 1,
                 "https://api.p1.com".to_string(),
                 "model1".to_string(),
             ),
             GlobalApiKey::new(
-                "p2-key1".to_string(),
-                2,
-                "https://api.p2.com".to_string(),
-                "model2".to_string(),
+                "p1-key2".to_string(),
+                1,
+                "https://api.p1.com".to_string(),
+                "model1".to_string(),
             ),
+        ]);
+        all_keys.push(GlobalApiKey::new(
+            "p2-key1".to_string(),
+            2,
+            "https://api.p2.com".to_string(),
+            "model2".to_string(),
+        ));
+        all_keys.extend(vec![
             GlobalApiKey::new(
-                "p3-key1,p3-key2,p3-key3".to_string(),
+                "p3-key1".to_string(),
                 3,
                 "https://api.p3.com".to_string(),
                 "model3".to_string(),
             ),
-        ];
+            GlobalApiKey::new(
+                "p3-key2".to_string(),
+                3,
+                "https://api.p3.com".to_string(),
+                "model3".to_string(),
+            ),
+            GlobalApiKey::new(
+                "p3-key3".to_string(),
+                3,
+                "https://api.p3.com".to_string(),
+                "model3".to_string(),
+            ),
+        ]);
 
-        for key in &global_keys {
-            let keys = key.key.split(',').map(|s| s.to_string()).collect();
-            update_global_key_pool(
-                &rotator,
-                proxy_alias,
-                key.provider_id,
-                &key.base_url,
-                &key.model_name,
-                keys,
-            )
+        rotator
+            .replace_pool_for_composite_key(proxy_alias, all_keys)
             .await;
-        }
 
         let mut key_usage: HashMap<String, usize> = HashMap::new();
 

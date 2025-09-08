@@ -15,7 +15,10 @@ Common reasons for failure:
 </system-reminder>"#;
 
 pub const TOOL_ARG_ERROR_REMINDER: &str = r#"<system-reminder>
-The 'input' argument for your last tool call contained malformed JSON and could not be parsed. Please check the argument format carefully and strictly follow the JSON specification.
+The 'input' argument for your last tool call contained malformed JSON and could not be parsed. The failed call is displayed above in a <ccp:failed_tool_call> tag for your reference.
+
+Please check the argument format carefully and strictly follow the JSON specification. Do not generate <ccp:failed_tool_call> tags yourself.
+
 Common reasons for failure:
 1. The JSON is not well-formed (e.g., trailing commas, mismatched brackets).
 2. Strings and object keys are not enclosed in double quotes ("). Single quotes are not permitted.
@@ -39,6 +42,7 @@ The tools available to you are defined in a `<ccp:tool_define>` block. You will 
 - `<name>`: The tool's name.
 - `<description>`: What the tool does.
 - `<args>`: A list of `<arg>` tags for each argument. The argument's description will indicate if it is `(required)` or `(optional)`.
+- `<arg>`: Defines a parameter for a tool. The `name` attribute is the parameter name, and the `type` attribute is its value type (e.g., `string`, `number`, `array`, `json`). **Warning:** You must explicitly set the `type` attribute for all parameters. If omitted, even structured arrays or objects (JSON) will be treated as a **single string**, leading to validation errors such as "expected type `array` but provided `string`".
 
 ## HOW TO USE TOOLS
 
@@ -55,7 +59,7 @@ To execute a tool
 ## TOOL RESULT FORMAT
 After the system executes your tool call, the result will be provided back to you in a `<ccp:tool_results>` block. This format is **only for the system to give you results**.
 
-**CRITICAL:** You MUST NOT use the `<ccp:tool_results>` or `<ccp:tool_result>` tags in your own responses.
+**CRITICAL:** You MUST NOT use the `<ccp:tool_results>`, `<ccp:tool_result>`, or any related result tags in your responses. These tags are reserved for the system to provide you with tool outputs.
 
 Example of a tool result **the system will send back to you**:
 ```xml
@@ -80,7 +84,7 @@ Example for a value containing '&':
 <ccp:tool_use>
 <name>Search</name>
 <args>
-<arg name="query">echo "Start..." &amp;&amp; sh -c "/path/to/script.sh"</arg>
+<arg name="query" type="string">echo "Start..." &amp;&amp; sh -c "/path/to/script.sh"</arg>
 </args>
 </ccp:tool_use>
 
@@ -101,7 +105,7 @@ First, I'll read the file.
 <ccp:tool_use>
     <name>Read</name>
     <args>
-        <arg name="file_path">path/to/project/config.toml</arg>
+        <arg name="file_path" type="string">path/to/project/config.toml</arg>
     </args>
 </ccp:tool_use>
 
@@ -116,8 +120,8 @@ I will create the `.gitignore` file.
 <ccp:tool_use>
     <name>Write</name>
     <args>
-        <arg name="file_path">path/to/project/.gitignore</arg>
-        <arg name="content">node_modules
+        <arg name="file_path" type="string">path/to/project/.gitignore</arg>
+        <arg name="content" type="string">node_modules
 dist
 .env</arg>
     </args>
@@ -135,7 +139,7 @@ When a tool argument is an array (e.g., a list of items), you MUST format its va
 <ccp:tool_use>
 <name>ToolWithList</name>
 <args>
-<arg name="items" type="json">[
+<arg name="items" type="array">[
   {
     "id": "item1",
     "value": "First item"
@@ -169,8 +173,8 @@ Double quotes inside the code should be written directly. **DO NOT** escape doub
 <ccp:tool_use>
 <name>Write</name>
 <args>
-    <arg name="file_path">path/to/project/main.py</arg>
-    <arg name="content">def main():
+    <arg name="file_path" type="string">path/to/project/main.py</arg>
+    <arg name="content" type="string">def main():
     message = "Hello, World!"
     print(message)
 
@@ -184,9 +188,9 @@ if __name__ == "__main__":
 <ccp:tool_use>
 <name>Write</name>
 <args>
-    <arg name="file_path">path/to/project/main.py</arg>
-    <arg name="content">def main():
-    message = "Hello, World!"
+    <arg name="file_path" type="string">path/to/project/main.py</arg>
+    <arg name="content" type="string">def main():
+    message = \"Hello, World!\"
     print(message)
 
 if __name__ == "__main__":

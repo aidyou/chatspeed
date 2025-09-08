@@ -34,7 +34,7 @@ pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
 pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";
 pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";
-// pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
+pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
 
 //======================================================
 //  main window shortcuts

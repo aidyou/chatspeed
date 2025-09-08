@@ -138,6 +138,21 @@ pub fn auto_complete_and_process_tool_tag(
 
         // Now that the tag is hopefully complete, process the buffer again.
         process_tool_calls_in_buffer(status, unified_chunks);
+    } else {
+        // If we are in a tool call block and there's no partial match of the end tag,
+        // it means the entire end tag is missing.
+        log::warn!(
+            "Entire tool closing tag is missing at end of stream. Attempting auto-completion."
+        );
+        status.tool_compat_buffer.push_str(end_tag);
+
+        log::debug!(
+            "Auto-completed tool tag. New buffer: {}",
+            status.tool_compat_buffer
+        );
+
+        // Now that the tag is hopefully complete, process the buffer again.
+        process_tool_calls_in_buffer(status, unified_chunks);
     }
 }
 

@@ -9,7 +9,7 @@ use crate::ccproxy::{
         },
     },
     gemini::{GeminiPart, GeminiRequest},
-    types::ChatProtocol,
+    types::{ChatProtocol, TOOL_ARG_ERROR_REMINDER},
 };
 
 /// Converts a Gemini-compatible chat completion request into the `UnifiedRequest`.
@@ -47,11 +47,14 @@ pub fn from_gemini(
             _ => anyhow::bail!("Invalid or missing role in Gemini message"),
         };
 
-        let content_blocks = content
+        let content_blocks: Vec<UnifiedContentBlock> = content
             .parts
             .into_iter()
             .map(convert_gemini_part)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<Vec<_>>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
 
         messages.push(UnifiedMessage {
             role,
@@ -179,43 +182,75 @@ pub fn from_gemini(
 }
 
 /// Converts a single Gemini content part to a `UnifiedContentBlock`.
-fn convert_gemini_part(part: GeminiPart) -> Result<UnifiedContentBlock, anyhow::Error> {
+fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, anyhow::Error> {
     if let Some(text) = part.text {
-        Ok(UnifiedContentBlock::Text { text })
+        Ok(vec![UnifiedContentBlock::Text { text }])
     } else if let Some(function_call) = part.function_call {
-        Ok(UnifiedContentBlock::ToolUse {
-            id: uuid::Uuid::new_v4().to_string(), // Generate ID as Gemini might not provide one in request
-            name: function_call.name,
-            input: function_call.args,
-        })
+        let tool_name = function_call.name;
+        let arguments = function_call.args;
+        let mut blocks = Vec::new();
+
+        match arguments {
+            Value::String(s) => match serde_json::from_str(&s) {
+                Ok(parsed_json) => {
+                    blocks.push(UnifiedContentBlock::ToolUse {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: tool_name,
+                        input: parsed_json,
+                    });
+                }
+                Err(_) => {
+                    log::warn!(
+                        "Failed to parse Gemini tool arguments as JSON for tool '{}'. Original arguments: {}",
+                        tool_name, s
+                    );
+                    blocks.extend(vec![
+                        UnifiedContentBlock::Text {
+                            text: format!(
+                                "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
+                                tool_name, s
+                            ),
+                        },
+                        UnifiedContentBlock::Text {
+                            text: TOOL_ARG_ERROR_REMINDER.to_string(),
+                        },
+                    ]);
+                }
+            },
+            _ => {
+                blocks.push(UnifiedContentBlock::ToolUse {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: tool_name,
+                    input: arguments,
+                });
+            }
+        }
+        Ok(blocks)
     } else if let Some(function_response) = part.function_response {
-        // Gemini's function_response is a JSON object, we need to extract the relevant content
         let fc = function_response.response.to_string();
         let content_str = function_response.response["response"]
             .get("result")
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| fc.as_str())
             .to_string();
-        Ok(UnifiedContentBlock::ToolResult {
+        Ok(vec![UnifiedContentBlock::ToolResult {
             tool_use_id: uuid::Uuid::new_v4().to_string(), // Generate ID
             content: content_str,
             is_error: false, // Gemini response doesn't directly indicate error here
-        })
+        }])
     } else if let Some(inline_data) = part.inline_data {
-        Ok(UnifiedContentBlock::Image {
+        Ok(vec![UnifiedContentBlock::Image {
             media_type: inline_data.mime_type,
             data: inline_data.data,
-        })
+        }])
     } else if let Some(file_data) = part.file_data {
-        // For file_data, we might need a new UnifiedContentBlock variant or convert to text/image if possible
-        // For now, we'll convert it to a text block indicating the file URI.
-        Ok(UnifiedContentBlock::Text {
+        Ok(vec![UnifiedContentBlock::Text {
             text: format!(
                 "File data: {} ({})",
                 file_data.file_uri, file_data.mime_type
             ),
-        })
+        }])
     } else {
-        anyhow::bail!("Unsupported Gemini content part");
+        anyhow::bail!("Unsupported Gemini content part")
     }
 }

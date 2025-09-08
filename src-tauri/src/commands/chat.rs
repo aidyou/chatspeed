@@ -49,7 +49,7 @@ use crate::ai::interaction::chat_completion::{
 };
 use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
-use crate::constants::CFG_SEARCH_ENGINE;
+use crate::constants::{CFG_SEARCH_ENGINE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
 use crate::db::MainStore;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::search::SearchProviderName;
@@ -161,7 +161,7 @@ pub async fn chat_completion(
     api_key: Option<String>, // Changed to Option<String>
     chat_id: String,
     messages: Vec<Value>,
-    _network_enabled: Option<bool>,
+    network_enabled: Option<bool>,
     mut metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
 ) -> Result<(), String> {
     #[cfg(debug_assertions)]
@@ -179,73 +179,8 @@ pub async fn chat_completion(
 
     let protocol: ChatProtocol = api_protocol.try_into().map_err(|e: String| e.to_string())?;
 
-    // Ensure the channel for this window is created/retrieved.
-    // This is crucial for global_message_processor_loop to send UI updates.
-    let _window_sender = chat_state
-        .channels
-        .get_or_create_channel(window.clone())
-        .await
-        .map_err(|e| format!("Failed to get or create window channel: {}", e))?;
-
     setup_chat_proxy(main_state.inner().clone(), &mut metadata)
         .map_err(|e| t!("chat.failed_to_setup_proxy", error = e).to_string())?;
-
-    // 如果网络搜索已启用，匹配出最后一条用户提问的信息中的 url
-    // 将 url 的内容抓取出来拼接到最后一条用户消息中
-    // if network_enabled == Some(true) {
-    //     let content_to_search = messages
-    //         .iter()
-    //         .rev()
-    //         .find(|m| m["role"] == "user")
-    //         .and_then(|m| m["content"].as_str())
-    //         .map(|s| s.to_string());
-
-    //     if let Some(content) = content_to_search {
-    //         let urls: Vec<String> = URL_REGEX
-    //             .find_iter(&content)
-    //             .map(|m| m.as_str().to_string())
-    //             .collect();
-
-    //         if !urls.is_empty() {
-    //             match crawler_from_content(&crawler_url, urls).await {
-    //                 Ok(crawled_contents) => {
-    //                     if !crawled_contents.is_empty() {
-    //                         if let Some(last_message) = messages.last_mut() {
-    //                             if last_message.get("role").and_then(Value::as_str) == Some("user")
-    //                             {
-    //                                 let new_content = t!(
-    //                                     "chat.user_message_with_references",
-    //                                     content = content,
-    //                                     crawl_content = &crawled_contents
-    //                                 )
-    //                                 .to_string();
-    //                                 if let Some(obj) = last_message.as_object_mut() {
-    //                                     obj.insert(
-    //                                         "content".to_string(),
-    //                                         Value::String(new_content),
-    //                                     );
-    //                                 }
-    //                             }
-    //                         }
-    //                     }
-    //                     if let Some(sender) = chat_state.channels.get_sender(&window.label()).await
-    //                     {
-    //                         let _ = sender.try_send(ChatResponse::new_with_arc(
-    //                             chat_id.clone(),
-    //                             crawled_contents,
-    //                             MessageType::Reference,
-    //                             metadata.clone(),
-    //                             None,
-    //                         ));
-    //                     }
-    //                 }
-    //                 Err(err) => {
-    //                     log::error!("Failed to crawl content: {}", err);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
 
     // Prepare final_metadata: ensure windowLabel is present.
     // Frontend JS sends metadata with `windowLabel`.
@@ -267,13 +202,17 @@ pub async fn chat_completion(
         .unwrap_or(false);
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
-        Some(
-            chat_state
-                .tool_manager
-                .get_tool_calling_spec(None)
-                .await
-                .map_err(|e| e.to_string())?,
-        )
+        let mut available_tools = chat_state
+            .tool_manager
+            .get_tool_calling_spec(None)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !network_enabled.unwrap_or(false) {
+            available_tools.retain(|tool| {
+                tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
+            });
+        }
+        Some(available_tools)
     } else {
         None
     };
@@ -294,55 +233,6 @@ pub async fn chat_completion(
     )
     .await
 }
-
-/// Use the crawler_url server interface to fetch information about the URLs contained in the content.
-///
-/// # Arguments
-/// * `content` - The content to be searched.
-///
-/// # Returns
-///
-/// A JSON string containing information about the URLs found in the content.
-// pub async fn crawler_from_content(urls: Vec<String>) -> Result<String, String> {
-//     if urls.is_empty() {
-//         return Ok("".to_string());
-//     }
-
-//     // 抓取每个 URL 的内容
-//     let crawled_contents: Vec<Value> = Vec::new();
-//     // TODO: Implement URL crawling logic here
-//     // let crawler = Chp::new(crawler_url.to_string(), None);
-//     // let mut i = 1;
-//     // for url in urls {
-//     //     match crawler.web_crawler(&url, None).await {
-//     //         Ok(data) => {
-//     //             if !data.content.is_empty() {
-//     //                 crawled_contents.push(json!({
-//     //                     "id": i,
-//     //                     "url": url,
-//     //                     "title": data.title,
-//     //                     "content": data.content
-//     //                 }));
-//     //                 i += 1;
-//     //             }
-//     //         }
-//     //         Err(err) => {
-//     //             log::error!("Failed to crawl URL {}: {}", url, err);
-//     //         }
-//     //     }
-//     // }
-//     if crawled_contents.is_empty() {
-//         return Ok("".to_string());
-//     }
-
-//     serde_json::to_string(&crawled_contents).map_err(|e| {
-//         t!(
-//             "chat.json_serialize_crawler_results_failed",
-//             error = e.to_string()
-//         )
-//         .to_string()
-//     })
-// }
 
 /// Tauri command to stop the ongoing chat for a specific API provider.
 /// This command sets the stop flag for the selected chat interface.

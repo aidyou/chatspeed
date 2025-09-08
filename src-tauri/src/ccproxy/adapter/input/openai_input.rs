@@ -11,7 +11,7 @@ use crate::ccproxy::{
             OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart,
             OpenAIToolChoice,
         },
-        ChatProtocol,
+        ChatProtocol, TOOL_ARG_ERROR_REMINDER,
     },
 };
 
@@ -193,13 +193,39 @@ fn convert_openai_content(
 
     if let Some(tool_calls) = tool_calls {
         for tc in tool_calls {
-            blocks.push(UnifiedContentBlock::ToolUse {
-                id: tc.id.unwrap_or_default(),
-                name: tc.function.name.unwrap_or_default(),
-                input: serde_json::from_str(
-                    &tc.function.arguments.unwrap_or_else(|| "{}".to_string()),
-                )?,
-            });
+            let tool_name = tc.function.name.unwrap_or_default();
+            let tool_id = tc.id.unwrap_or_default();
+            let arguments_str = tc.function.arguments.unwrap_or_else(|| "{}".to_string());
+
+            match serde_json::from_str(&arguments_str) {
+                Ok(parsed_args) => {
+                    blocks.push(UnifiedContentBlock::ToolUse {
+                        id: tool_id,
+                        name: tool_name,
+                        input: parsed_args,
+                    });
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to parse OpenAI tool arguments as JSON for tool '{}': {}. Original arguments: {}",
+                        tool_name,
+                        e,
+                        arguments_str
+                    );
+                    // [Gemini] Replicate Claude's error feedback mechanism
+                    blocks.extend(vec![
+                        UnifiedContentBlock::Text {
+                            text: format!(
+                                "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
+                                tool_name, arguments_str
+                            ),
+                        },
+                        UnifiedContentBlock::Text {
+                            text: TOOL_ARG_ERROR_REMINDER.to_string(),
+                        },
+                    ]);
+                }
+            }
         }
     }
 

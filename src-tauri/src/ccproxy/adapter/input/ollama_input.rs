@@ -6,7 +6,7 @@ use crate::ccproxy::{
     get_tool_id,
     types::{
         ollama::{OllamaChatCompletionRequest, OllamaMessage},
-        ChatProtocol,
+        ChatProtocol, TOOL_ARG_ERROR_REMINDER,
     },
 };
 use anyhow::Result;
@@ -158,13 +158,51 @@ fn convert_ollama_message_to_content_blocks(
     // Add tool calls (for 'assistant' messages)
     if let Some(tool_calls) = &msg.tool_calls {
         for tc in tool_calls {
-            blocks.push(UnifiedContentBlock::ToolUse {
-                // Ollama doesn't provide a tool_call_id in the request.
-                // We generate a placeholder, though it won't correlate to a result.
-                id: get_tool_id(),
-                name: tc.function.name.clone(),
-                input: tc.function.arguments.clone(),
-            });
+            let tool_name = tc.function.name.clone();
+            let arguments = tc.function.arguments.clone();
+
+            // Check if the arguments are a string that needs to be parsed, or already a valid JSON value.
+            match arguments {
+                serde_json::Value::String(s) => {
+                    // It's a string. Let's see if it's stringified JSON.
+                    match serde_json::from_str(&s) {
+                        Ok(parsed_json) => {
+                            // It was stringified JSON, push a proper ToolUse block.
+                            blocks.push(UnifiedContentBlock::ToolUse {
+                                id: get_tool_id(),
+                                name: tool_name,
+                                input: parsed_json,
+                            });
+                        }
+                        Err(_) => {
+                            // It's a string, but not valid JSON. This is an error case.
+                            log::warn!(
+                                "Failed to parse Ollama tool arguments as JSON for tool '{}'. Original arguments: {}",
+                                tool_name, s
+                            );
+                            blocks.extend(vec![
+                                UnifiedContentBlock::Text {
+                                    text: format!(
+                                        "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
+                                        tool_name, s
+                                    ),
+                                },
+                                UnifiedContentBlock::Text {
+                                    text: TOOL_ARG_ERROR_REMINDER.to_string(),
+                                },
+                            ]);
+                        }
+                    }
+                }
+                _ => {
+                    // It's already a valid JSON Value (Object, Array, etc.), push a proper ToolUse block.
+                    blocks.push(UnifiedContentBlock::ToolUse {
+                        id: get_tool_id(),
+                        name: tool_name,
+                        input: arguments,
+                    });
+                }
+            }
         }
     }
 

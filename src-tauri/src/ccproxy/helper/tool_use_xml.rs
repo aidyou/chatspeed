@@ -626,6 +626,36 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_tags() {
+        // This is the exact scenario you were worried about
+        let xml_input = r#"<ccp:tool_use>
+            <tool_2a71d8e1>
+            <id>tool_thinking</id>
+            <name>thinking</name>
+            <args>
+            <arg name="content">用户的问题是：macOS 重启后自启动失败，但手动启动正常。从日志看程序能启动，SSH连接也能建立，但耗时很长。
+            主要问题分析：
+            1. SSH密钥路径在系统启动时可能无法访问
+            2. NetworkStateUp可能只是网络接口up，但DNS/routing还没完全就绪
+            3. SSH连接在启动初期网络不稳定时可能失败
+            解决方案思路：
+            1. 将SSH密钥复制到系统可访问的位置，比如/opt/tunfox/
+            2. 添加更多启动条件，如MountPoints（确保文件系统就绪）
+            3. 增加启动延迟或重试机制
+            4. 优化SSH连接超时设置
+            需要检查当前plist是否已经是最优配置，以及是否可以添加更多launchd配置选项。</arg>
+            </args>
+            </tool_2a71d8e1> "#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "thinking");
+        assert_eq!(result.args.len(), 1); // Only 2 top-level parameters
+
+        let arg_names: Vec<&String> = result.args.iter().map(|p| &p.name).collect();
+        assert!(arg_names.contains(&&"content".to_string()));
+    }
+
+    #[test]
     fn test_todo_write_example() {
         // Test the exact example from the user's description
         let xml_input = r#"<ccp:tool_use>

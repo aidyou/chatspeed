@@ -47,7 +47,7 @@ fn convert_claude_content_block(
                         // },
                         UnifiedContentBlock::Text {
                             text: format!(
-                                "<tool_code>\n<name>{}</name>\n<input>{}</input>\n</tool_code>",
+                                "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
                                 name, input
                             ),
                         },

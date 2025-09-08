@@ -4,10 +4,16 @@
       <h2>About ChatSpeed</h2>
       <div class="version">Version: {{ version }}</div>
       <p>
-        ChatSpeed is an innovative open-source AI agent management platform that revolutionizes how you interact with AI
-        models. Beyond traditional chat interfaces, ChatSpeed serves as a unified proxy system enabling "Any Claude, Any
-        Gemini" - seamlessly integrating any AI model into Claude ecosystem or Gemini CLI through advanced agent
-        management and MCP (Model Context Protocol) capabilities.
+        Chatspeed is more than just an AI chat tool; it's a powerful AI proxy and MCP (Model Context
+        Protocol) management platform. At its core is the `ccproxy` engine, a universal adapter
+        designed for AI development. By enabling seamless conversion between major protocols like
+        OpenAI, Claude, Gemini, and Ollama, Chatspeed realizes the vision of 'Any Claude Code, Any
+        Gemini CLI.' This means you can integrate any free, open-source, or cost-effective AI model
+        into your favorite development environment (such as Claude Code or Gemini CLI),
+        significantly reducing development costs. Simultaneously, it is a comprehensive desktop AI
+        assistant that integrates intelligent conversation, AI-assisted diagramming, web search, a
+        knowledge base with smart notes, and an extensible skill system, all designed to
+        comprehensively boost your workflow efficiency.
       </p>
 
       <h3>Core Features</h3>
@@ -15,19 +21,38 @@
         <li>
           AI Agent Management
           <ul>
-            <li>Unified platform for managing various AI chat agents and multimodal content agents</li>
+            <li>
+              Unified platform for managing various AI chat agents and multimodal content agents
+            </li>
             <li>Centralized control center eliminating fragmented AI service management</li>
             <li>Export configured AI agents as reusable tools for other applications</li>
             <li>Seamless API integration and command-line tool output capabilities</li>
           </ul>
         </li>
         <li>
-          MCP (Model Context Protocol) Proxy
+          ccproxy Universal AI Proxy
           <ul>
-            <li>Advanced proxy system enabling "Any Claude" - integrate any AI model into Claude ecosystem</li>
-            <li>"Any Gemini" capability - connect any model to Gemini CLI via ccproxy and OpenRouter</li>
-            <li>Multimodal Content Protocol support for enhanced AI interactions</li>
-            <li>Flexible proxy configuration for seamless model switching</li>
+            <li>
+              <b>Seamless Protocol Conversion:</b> Arbitrarily convert between protocols like
+              OpenAI, Claude, Gemini, and Ollama to achieve "Any Claude Code, Any Gemini CLI".
+            </li>
+            <li>
+              <b>Ultimate Cost Control:</b> Flexibly connect to free or cost-effective models,
+              significantly reducing AI development costs.
+            </li>
+            <li>
+              <b>Tool Calling Compatibility Mode:</b> Empowers models that do not natively support
+              tool calls with function-calling capabilities, greatly expanding their application
+              range.
+            </li>
+            <li>
+              <b>Unified MCP Entry:</b> Aggregates all MCP tools (web search, file operations, etc.)
+              into a single proxy entry point—configure once, use everywhere.
+            </li>
+            <li>
+              <b>Flexible Grouping & Routing:</b> Efficiently handle multi-scenario AI-assisted
+              programming needs through different model groups and routing endpoints.
+            </li>
           </ul>
         </li>
         <li>
@@ -46,7 +71,13 @@
         <li>
           Web Search
           <ul>
-            <li>Integrated search engines: Google, Bing, Baidu</li>
+            <li>
+              Supports multiple search engines:
+              <ul>
+                <li><b>API Access (key required):</b> Google Search, Tavily, Serper</li>
+                <li><b>Built-in Engines (key-free):</b> Bing, DuckDuckGo, Sougou, 360 Search</li>
+              </ul>
+            </li>
             <li>Automatic webpage context parsing via Chatspeed crawler</li>
             <li>Real-time web retrieval expanding AI knowledge</li>
             <li>Deep search with multi-query task decomposition</li>
@@ -99,10 +130,11 @@
 
       <h3>Open Source</h3>
       <p>
-        ChatSpeed is an open-source AI agent management platform built with Vue 3 and Tauri under MIT license.
-        Our mission is to democratize AI agent management and proxy capabilities, making advanced AI integration
-        accessible to developers worldwide. All code is available on <a href="#" @click="openGithub">GitHub</a>,
-        welcoming developer contributions to expand the AI agent ecosystem.
+        ChatSpeed is an open-source AI agent management platform built with Vue 3 and Tauri under
+        MIT license. Our mission is to democratize AI agent management and proxy capabilities,
+        making advanced AI integration accessible to developers worldwide. All code is available on
+        <a href="#" @click="openGithub">GitHub</a>, welcoming developer contributions to expand the
+        AI agent ecosystem.
       </p>
     </div>
     <el-divider />
@@ -110,8 +142,14 @@
       <h2>关于 ChatSpeed</h2>
       <div class="version">版本：{{ version }}</div>
       <p>
-        ChatSpeed 是一款创新的开源 AI 代理管理平台，革命性地改变了您与 AI 模型的交互方式。超越传统聊天界面，ChatSpeed 作为统一代理系统实现"Any Claude, Any
-        Gemini"——通过先进的代理管理和 MCP（模型上下文协议）能力，无缝将任何 AI 模型集成到 Claude 生态系统或 Gemini CLI 中。
+        Chatspeed 不仅仅是一个 AI 聊天工具，它是一个功能强大的 AI 代理和
+        MCP（模型上下文协议）管理平台。其核心是 `ccproxy` 引擎，一个为 AI
+        开发设计的通用适配器。通过在 OpenAI、Claude、Gemini、Ollama
+        等主流协议之间实现无缝转换，Chatspeed 实现了 “Any Claude Code, Any Gemini CLI”
+        的理念。这意味着您可以将任何免费、开源或高性价比的 AI 模型集成到您偏爱的开发环境（如 Claude
+        Code 或 Gemini CLI）中，从而大幅降低开发成本。同时，它也是一个功能全面的桌面 AI
+        助手，集成了智能对话、AI
+        辅助图表、联网搜索、知识库笔记和可扩展的技能系统，旨在全面提升您的工作流效率。
       </p>
 
       <h3>核心功能</h3>
@@ -126,12 +164,24 @@
           </ul>
         </li>
         <li>
-          MCP（模型上下文协议）代理
+          ccproxy 通用 AI 代理
           <ul>
-            <li>先进代理系统实现"Any Claude"——将任何 AI 模型集成到 Claude 生态系统</li>
-            <li>"Any Gemini"能力——通过 ccproxy 和 OpenRouter 将任何模型连接到 Gemini CLI</li>
-            <li>多模态内容协议支持，增强 AI 交互能力</li>
-            <li>灵活的代理配置，实现无缝模型切换</li>
+            <li>
+              <b>无缝协议转换:</b> 在 OpenAI, Claude, Gemini, Ollama 等协议间任意转换，实现 "Any
+              Claude Code, Any Gemini CLI"。
+            </li>
+            <li><b>极致成本控制:</b> 灵活接入免费或高性价比模型，大幅削减 AI 开发成本。</li>
+            <li>
+              <b>工具调用兼容模式:</b>
+              为原生不支持工具调用的模型赋予函数调用能力，极大拓展其应用范围。
+            </li>
+            <li>
+              <b>统一 MCP 入口:</b> 将所有 MCP
+              工具（联网、文件操作等）聚合为统一代理入口，配置一次，处处使用。
+            </li>
+            <li>
+              <b>灵活分组与路由:</b> 通过不同模型分组和路由端点，高效应对多场景的 AI 辅助编程需求。
+            </li>
           </ul>
         </li>
         <li>
@@ -150,7 +200,13 @@
         <li>
           联网搜索
           <ul>
-            <li>支持搜索引擎：Google、Bing、百度</li>
+            <li>
+              支持多种搜索引擎：
+              <ul>
+                <li><b>API 接入（需密钥）:</b> Google 搜索, Tavily, Serper</li>
+                <li><b>内置引擎（免密钥）:</b> Bing, DuckDuckGo, 搜狗, 360搜索</li>
+              </ul>
+            </li>
             <li>
               通过部署 Chatspeed 爬虫组件，可自动解析对话中的网页链接内容作为上下文，增强 AI
               处理能力
@@ -206,10 +262,10 @@
 
       <h3>开源项目</h3>
       <p>
-        ChatSpeed 是基于 Vue 3 和 Tauri 构建的开源 AI 代理管理平台，遵循 MIT 协议。
-        我们的使命是让 AI 代理管理和代理能力民主化，使先进的 AI 集成对全球开发者都触手可及。
-        所有代码均已开源至 <a href="#" @click="openGithub">GitHub 代码平台</a>，
-        欢迎开发者参与贡献，共同扩展 AI 代理生态系统。
+        ChatSpeed 是基于 Vue 3 和 Tauri 构建的开源 AI 代理管理平台，遵循 MIT 协议。 我们的使命是让
+        AI 代理管理和代理能力民主化，使先进的 AI 集成对全球开发者都触手可及。 所有代码均已开源至
+        <a href="#" @click="openGithub">GitHub 代码平台</a>， 欢迎开发者参与贡献，共同扩展 AI
+        代理生态系统。
       </p>
     </div>
   </div>

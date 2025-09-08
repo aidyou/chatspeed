@@ -32,7 +32,7 @@ impl ToolDefinition for WebFetch {
 
     /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Extract content from web pages using a built-in webview scraper"
+        "Extracts and returns the content of a web page from a URL. This tool can process JavaScript-rendered pages, making it suitable for modern websites. Use it to get real-time information, summarize articles, or answer questions based on the content of a specific link provided by the user or found through a search."
     }
 
     /// Returns the function calling specification in JSON format.
@@ -50,15 +50,15 @@ impl ToolDefinition for WebFetch {
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "text"],
-                        "description": "Format of the output content (optional, defaults to markdown)"
+                        "description": "Format for the extracted content. Use 'markdown' to preserve structure, or 'text' for plain text. Defaults to 'markdown'."
                     },
                     "keep_link": {
                         "type": "boolean",
-                        "description": "Keep the original link in the output (optional, defaults to true)"
+                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. Consider setting to false if you only need the text for summarization. Defaults to true."
                     },
                     "keep_image": {
                         "type": "boolean",
-                        "description": "Keep the original image in the output (optional, defaults to false)"
+                        "description": "Whether to include images in the output. Only effective when format is 'markdown'. Only set this to true if you have image-understanding capabilities and the user's query requires analyzing images. Defaults to false."
                     }
                 },
                 "required": ["url"]
