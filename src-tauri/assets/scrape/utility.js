@@ -53,7 +53,9 @@ const baseCleanForMarkdown = el => {
       'embed, video, audio, link, svg, canvas, meta, head, ' +
       'base, template, symbol, button, select, textarea, ' +
       'datalist, dialog, source, picture, track, map'
-  ).forEach(el => el.remove())
+  ).forEach(el => {
+    el.remove()
+  })
 
   return el
 }

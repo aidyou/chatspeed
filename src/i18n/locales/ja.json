@@ -66,6 +66,10 @@
     "showFavoriteConversations": "お気に入りの会話のタイトルを表示",
     "skills": "スキル",
     "takeNote": "智記に保存",
+    "toolCall": "ツール呼び出し",
+    "toolArgs": "引数",
+    "toolResult": "結果",
+    "mcpCall": "MCPツールを呼び出す",
     "translationSkillPromptEmpty": "翻訳スキルのプロンプトは必須です",
     "date": {
       "earlier": "さらに前",

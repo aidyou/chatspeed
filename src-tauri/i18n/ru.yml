@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "ID чата не может быть пустым"
   empty_messages: "Список сообщений не может быть пустым"
   empty_model: "Имя модели не может быть пустым"
+  empty_provider_id: "ID поставщика не может быть пустым"
   failed_to_convert_language_code: "Не удалось преобразовать код языка: %{error}"
   failed_to_create_file: "Не удалось создать файл: %{error}"
   failed_to_detect_language: "Не удалось определить язык"
   failed_to_find_user_message_content: "Не удалось найти содержимое сообщения пользователя"
   failed_to_get_available_languages: "Не удалось получить список доступных языков: %{error}"
-  failed_to_setup_proxy: "Не удалось настроить прокси для чата: %{error}"
   failed_to_write_file: "Не удалось записать в файл: %{error}"
   invalid_search_model: "Недопустимая модель поиска: %{model_name}"
   note_already_exists: "Эта заметка уже существует, нет необходимости добавлять ее снова"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "Неизвестная версия базы данных: %{version}"
 
 http:
-  chp_search_expected_array: "Данные результатов поиска должны быть в формате массива"
   client_build_failed: "Не удалось создать HTTP-клиент: %{error}"
   connection_failed: "Ошибка подключения: %{error}"
-  crawler_failed: "Ошибка сканирования: %{error}"
   download_failed: "Ошибка загрузки: %{error}"
   failed_to_clone_request: "Не удалось клонировать запрос при повторной попытке"
   failed_to_open_file: "Не удалось открыть файл, путь: %{path}, ошибка: %{error}"
   failed_to_read_file: "Не удалось прочитать файл, путь: %{path}, ошибка: %{error}"
   headers_convert_failed: "Не удалось преобразовать конфигурацию заголовков запроса в HttpHeader: %{error}"
-  invalid_response_format: "Недопустимый формат ответа: %{error}"
-  json_parse_failed: "Не удалось разобрать JSON: %{error}"
   mime_parse_failed: "Не удалось разобрать тип MIME"
-  missing_response_body: "Содержимое ответа, возвращенное сервером, пустое, проверьте состояние сервера или повторите попытку позже"
-  missing_response_data: "Поле данных ответа пустое"
   missing_url: "В HTTP-запросе отсутствует параметр URL"
   proxy_config_failed: "Не удалось настроить прокси: %{error}"
   read_response_failed: "Не удалось прочитать ответ: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "Не удалось сохранить файл: %{error}"
   server_file_saved_successfully: "Файл успешно сохранен"
   server_no_available_ports: "В диапазоне %{start_port}-%{max_port} не найдено доступных портов"
-  status_not_ok: "Код состояния не OK: %{status}"
 
 main:
   failed_to_check_window_visibility: "Не удалось проверить видимость окна: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "Запрос не удался (Код состояния: %{status}) - %{error_type}: %{message}"
   request_failed: "Запрос не удался: %{error}"
   response_read_error: "Не удалось прочитать ответ: %{error}"
-  stream:
-    claude_api_error_format: "Ошибка API Claude: %{message}"
-    gemini_parse_error: "Не удалось разобрать ответ Gemini: %{error}"
-    gemini_tool_arg_serialization_error: "Не удалось сериализовать аргументы вызова инструмента Gemini: %{error}"
-    unknown_claude_error_no_details: "Неизвестная ошибка разбора потока Claude (без подробностей)"
 
 proxy:
   error:

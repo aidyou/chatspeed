@@ -1,3 +1,19 @@
+# Chatspeed v1.1.3 Release Notes
+
+v1.1.3 is a hotfix release that addresses missing language options from the previous version, and also includes several stability improvements and new features.
+
+## ✨ Enhancements & New Features
+
+- **Single-Instance Lock**: Implemented a single-instance lock to prevent multiple application instances from running simultaneously. This resolves an issue on macOS where the app would launch twice on system restart if "launch at login" was enabled.
+- **Scraper Proxy for Windows**: The web scraper on Windows will now use the in-app proxy settings for non-authenticated HTTP proxies, improving network configuration consistency.
+
+## 🔧 Bug Fixes & Optimizations
+
+- **Missing Language Options**: Added missing language options to the translation skill.
+- **Scraper Reliability**: Improved the reliability of the generic web scraper by implementing a retry mechanism with exponential backoff for pages that load content dynamically.
+
+---
+
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
 # Chatspeed v1.1.2 Release Notes

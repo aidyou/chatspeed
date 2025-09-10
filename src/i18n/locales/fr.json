@@ -66,6 +66,10 @@
     "showFavoriteConversations": "Afficher les conversations favorites",
     "skills": "Compétences",
     "takeNote": "Enregistrer dans une note",
+    "toolCall": "Appel d'outil",
+    "toolArgs": "Arguments",
+    "toolResult": "Résultat",
+    "mcpCall": "Appeler l'outil MCP",
     "translationSkillPromptEmpty": "L'invite de la compétence de traduction ne peut pas être vide.",
     "date": {
       "earlier": "Plus tôt",

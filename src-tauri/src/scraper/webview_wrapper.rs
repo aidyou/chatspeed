@@ -89,19 +89,35 @@ impl WebviewScraper {
                     &data_str
                 );
 
+                // Check if already completed before doing any processing
+                if is_completed_for_listen.load(Ordering::SeqCst) {
+                    return;
+                }
+
                 match serde_json::from_str::<ScrapeResultMessage>(data_str) {
                     Ok(result) => {
-                        if let Ok(mut guard) = sender_for_listen.lock() {
-                            if let Some(tx) = guard.take() {
-                                if is_completed_for_listen.swap(true, Ordering::SeqCst) {
-                                    return;
+                        // Use compare_exchange to ensure atomic check-and-set
+                        match is_completed_for_listen.compare_exchange(
+                            false,
+                            true,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
+                            Ok(_) => {
+                                // Successfully claimed the handler
+                                if let Ok(mut guard) = sender_for_listen.lock() {
+                                    if let Some(tx) = guard.take() {
+                                        if let Some(success) = result.success {
+                                            let _ = tx.send(Ok(success));
+                                        } else if let Some(error) = result.error {
+                                            let _ = tx.send(Err(anyhow!(error)));
+                                        }
+                                    }
                                 }
-
-                                if let Some(success) = result.success {
-                                    let _ = tx.send(Ok(success));
-                                } else if let Some(error) = result.error {
-                                    let _ = tx.send(Err(anyhow!(error)));
-                                }
+                            }
+                            Err(_) => {
+                                // Already handled by another thread
+                                return;
                             }
                         }
                     }
@@ -144,17 +160,18 @@ impl WebviewScraper {
             .map_err(|e| anyhow!(e.to_string()))?;
 
         let result = async {
-            if tokio::time::timeout(page_timeout, rx_page_load)
-                .await
-                .is_err()
-            {
+            let page_load_result = tokio::time::timeout(page_timeout, rx_page_load).await;
+            if page_load_result.is_err() {
+                // Mark as completed to prevent further processing
+                is_completed.store(true, Ordering::SeqCst);
                 return Err(anyhow!("Page load timed out for URL: {}", url));
             }
 
-            if tokio::time::timeout(page_timeout, rx_dom_content_loaded)
-                .await
-                .is_err()
-            {
+            let dom_content_result =
+                tokio::time::timeout(page_timeout, rx_dom_content_loaded).await;
+            if dom_content_result.is_err() {
+                // Mark as completed to prevent further processing
+                is_completed.store(true, Ordering::SeqCst);
                 return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
             }
 
@@ -164,7 +181,11 @@ impl WebviewScraper {
 
             self.inject_and_run_script(&webview, config, generic_content_rule)?;
 
-            match tokio::time::timeout(page_timeout, rx_scrape_result).await {
+            let scrape_result = tokio::time::timeout(page_timeout, rx_scrape_result).await;
+            // Mark as completed after receiving result or timeout
+            is_completed.store(true, Ordering::SeqCst);
+
+            match scrape_result {
                 Ok(Ok(res)) => res,
                 Ok(Err(_)) => Err(anyhow!("Scrape result channel closed unexpectedly.")),
                 Err(_) => Err(anyhow!("Scraping timed out for URL: {}", url)),
@@ -279,15 +300,51 @@ impl WebviewScraper {
         //     init_script.push_str(block_script);
         // }
 
-        WebviewWindowBuilder::new(
+        #[allow(unused_mut)]
+        let mut webview_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             &window_label,
             WebviewUrl::External(url.parse()?),
         )
         .title("Chatspeed Web Scraper")
         .initialization_script(&init_script)
-        .visible(visible)
-        .build()
-        .map_err(|e| anyhow!("Failed to create webview window: {}", e))
+        .visible(visible);
+
+        #[cfg(target_os = "windows")]
+        {
+            let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
+            if let Ok(store) = main_store.read() {
+                let proxy_type = store.get_config("proxy_type", String::new());
+                let proxy_server = store.get_config("proxy_server", String::new());
+                let proxy_username = store.get_config("proxy_username", String::new());
+                let proxy_password = store.get_config("proxy_password", String::new());
+                // Only apply proxy settings on Windows for non-authenticated proxies.
+                // The `additional_browser_args` does not support passing credentials directly for security reasons.
+                // An authenticated proxy would cause the hidden webview to hang waiting for user input
+                // on a native dialog that cannot be shown, leading to a timeout.
+                if proxy_type == "http"
+                    && !proxy_server.is_empty()
+                    && proxy_username.is_empty()
+                    && proxy_password.is_empty()
+                {
+                    let proxy_arg = format!("--proxy-server={}", proxy_server);
+                    log::info!(
+                        "Applying non-authenticated proxy for scraper webview on Windows: {}",
+                        proxy_arg
+                    );
+                    webview_builder = webview_builder.additional_browser_args(&proxy_arg);
+                } else if !proxy_server.is_empty() {
+                    // If proxy is configured but has authentication, log a warning and skip.
+                    // The webview will then fall back to system network settings.
+                    log::warn!(
+                        "Scraper webview on Windows is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
+                    );
+                }
+            }
+        }
+
+        webview_builder
+            .build()
+            .map_err(|e| anyhow!("Failed to create webview window: {}", e))
     }
 }

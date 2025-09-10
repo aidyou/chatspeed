@@ -249,7 +249,9 @@ impl WebSearch {
                                 Ok(scraped_data) => {
                                     return (
                                         index,
-                                        scraped_data["content"].as_str().map(String::from),
+                                        scraped_data["content"]
+                                            .as_str()
+                                            .map(|s| s.trim().to_string()),
                                         scraped_data["url"].as_str().map(String::from),
                                     );
                                 }
@@ -287,8 +289,9 @@ impl WebSearch {
         for task_result in scraped_contents {
             if let Ok((index, opt_content, opt_url)) = task_result {
                 if let Some(result) = results.get_mut(index) {
-                    if opt_content.is_some() {
+                    if opt_content.as_deref().map_or(false, |s| !s.is_empty()) {
                         result.content = opt_content;
+                        result.snippet = None; // If content is not empty, remove snippet
                     }
 
                     if let Some(url) = opt_url {

@@ -5,13 +5,23 @@
  *  2. Generic scraping: Extracts the main content of a page as Markdown.
  */
 
+// Flag to prevent multiple calls to sendScrapeResult
+let hasSentResult = false
+
 function sendScrapeResult(data) {
-  const ev = 'scrape_result' + (windowLabel ? '_' + windowLabel : '');
-  logger.debug('send '+ev+' , data: ', data?.success || data?.error)
+  // Prevent multiple calls
+  if (hasSentResult) {
+    logger.debug('sendScrapeResult called again, ignoring')
+    return
+  }
+
+  hasSentResult = true
+  const ev = `scrape_result${windowLabel ? `_${windowLabel}` : ''}`
+  logger.debug(`send ${ev} , data: `, data?.success || data?.error)
   sendEvent(ev, data)
 }
 
-;(function () {
+;(() => {
   const urls = [
     'https://www.bing.com/ck/',
     'https://www.so.com/link',
@@ -97,20 +107,23 @@ function sendScrapeResult(data) {
     if (!target) return null
 
     switch (field.type) {
-      case 'attribute':
+      case 'attribute': {
         const attrValue = target.getAttribute(field.attribute)
         const urlAttributes = ['href', 'src', 'srcset', 'data-src', 'poster', 'action']
         if (urlAttributes.includes(field.attribute)) {
           return target[field.attribute] || attrValue // Use property first, fall back to attribute
         }
         return attrValue
+      }
       case 'html':
         return target.innerHTML?.trim()
-      case 'markdown':
+      case 'markdown': {
         const turndownService = new TurndownService()
         return turndownService.turndown(baseCleanForMarkdown(target))
-      default:
+      }
       case 'text':
+        return formatText(target.innerText)
+      default:
         return formatText(target.innerText)
     }
   }
@@ -122,7 +135,12 @@ function sendScrapeResult(data) {
   async function scrapeWithSchema(config) {
     try {
       if (!config.selectors?.base_selector) {
-        return sendScrapeResult({ error: 'selectors.base_selector is required' })
+        if (!hasSentResult) {
+          return sendScrapeResult({
+            error: 'selectors.base_selector is required'
+          })
+        }
+        return
       }
       console.log('base_selector:', config.selectors.base_selector)
 
@@ -131,7 +149,11 @@ function sendScrapeResult(data) {
         try {
           await waitForElement(config.config.wait_for, config.config.wait_timeout || 10000)
         } catch (error) {
-          sendScrapeResult({ error: `Wait for element failed: ${error.message}` })
+          if (!hasSentResult) {
+            sendScrapeResult({
+              error: `Wait for element failed: ${error.message}`
+            })
+          }
           return
         }
       }
@@ -144,7 +166,7 @@ function sendScrapeResult(data) {
         const elements = document.querySelectorAll(config.selectors.base_selector)
         if (!elements.length) {
           tryCount++
-          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+          await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** tryCount))
           continue
         }
 
@@ -165,10 +187,14 @@ function sendScrapeResult(data) {
         break
       }
       console.info('scrape with schema result:', results?.length)
-      sendScrapeResult({ success: JSON.stringify(results) })
+      if (!hasSentResult) {
+        sendScrapeResult({ success: JSON.stringify(results) })
+      }
     } catch (error) {
       logger.error('Schema scraping failed:', error)
-      sendScrapeResult({ error: `Schema scraping failed: ${error.message}` })
+      if (!hasSentResult) {
+        sendScrapeResult({ error: `Schema scraping failed: ${error.message}` })
+      }
     }
   }
 
@@ -176,102 +202,136 @@ function sendScrapeResult(data) {
    * Performs generic content extraction, converting the main body to Markdown.
    */
   async function scrapeGeneric(generic_content_rule = {}) {
-    try {
-      let title = document.title || document.querySelector('h1, h2, h3')?.innerText || ''
+    const maxTry = 3
+    let lastError = 'Unknown error'
 
-      let content
-      const maxTry = 3
-      let tryCount = 0
-      while (!content && tryCount < maxTry) {
-        content = document.body?.cloneNode(true)
+    for (let tryCount = 0; tryCount < maxTry; tryCount++) {
+      try {
+        const title = document.title || document.querySelector('h1, h2, h3')?.innerText || ''
+        const content = document.body?.cloneNode(true)
+
         if (!content) {
-          tryCount++
-          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+          throw new Error('Content scraping failed, cannot find body child elements')
+        }
+
+        // Remove non-content elements
+        const selectorToRemove =
+          'script, style, noscript, form, iframe, frame, object, embed, video, audio, link, svg, canvas, meta, head, base, template, symbol, button, select, textarea, datalist, dialog, source, picture, track, map'
+        content.querySelectorAll(selectorToRemove).forEach(el => {
+          el.remove()
+        })
+
+        if (generic_content_rule.format === 'text') {
+          content.querySelectorAll('nav, aside, header, footer').forEach(el => {
+            el.remove()
+          })
+
+          const textContent = formatText(content?.innerText || '')
+          if (textContent.length < 50) {
+            throw new Error(`Scraped text content is too short (${textContent.length} chars).`)
+          }
+          if (!hasSentResult) {
+            sendScrapeResult({
+              success: JSON.stringify({
+                title,
+                content: textContent,
+                url: window.location.href
+              })
+            })
+          }
+          return // Exit successfully
+        }
+
+        // remove image
+        if (!generic_content_rule.keep_image) {
+          content.querySelectorAll('img')?.forEach(el => {
+            el.remove()
+          })
+        } else {
+          content.querySelectorAll('img')?.forEach(el => {
+            const src = el.src || el.getAttribute('src')
+            if (!src || src.startsWith('data:') || src.startsWith('blob:')) {
+              el.remove()
+              return
+            }
+            const newImg = document.createElement('img')
+            newImg.src = src
+            newImg.alt = el.alt || ''
+            el.replaceWith(newImg)
+          })
+        }
+
+        if (generic_content_rule.keep_link) {
+          // format link
+          const links = content.querySelectorAll('a')
+          links?.forEach(link => {
+            const href = link.href
+            if (href === '' || href.startsWith('#') || href.startsWith('javascript:')) {
+              link.removeAttribute('href')
+            } else {
+              link.setAttribute('href', href)
+            }
+            link.innerText = link.innerText.trim().replace(/\n+/g, ' ')
+          })
+        } else {
+          // Remove links
+          const links = content.querySelectorAll('a')
+          links?.forEach(link => {
+            const textNode = document.createTextNode(link.innerText.replace(/\n+/g, ' ').trim())
+            link.replaceWith(textNode)
+          })
+
+          content.querySelectorAll('nav, aside, header, footer').forEach(el => {
+            el.remove()
+          })
+        }
+
+        content.querySelectorAll(selectorToRemove).forEach(el => {
+          el.remove()
+        })
+
+        const turndownService = new TurndownService({
+          headingStyle: 'atx',
+          hr: '---',
+          bulletListMarker: '*',
+          codeBlockStyle: 'fenced',
+          emDelimiter: '_'
+        })
+        let markdown = turndownService.turndown(content)
+
+        // Basic cleanup
+        markdown = markdown
+          .replace(/\\\[(.*?)\]/g, '[$1]') // Fix escaped brackets
+          .replace(/\n{3,}/g, '\n\n') // Collapse multiple newlines
+          .trim()
+
+        // Check content length after processing
+        if (markdown.length < 50) {
+          throw new Error(`Scraped markdown content is too short (${markdown.length} chars).`)
+        }
+
+        const result = { title, content: markdown, url: window.location.href }
+        if (!hasSentResult) {
+          sendScrapeResult({ success: JSON.stringify(result) })
+        }
+        return // Exit successfully
+      } catch (error) {
+        lastError = error.message
+        logger.error(`Scrape attempt ${tryCount + 1} failed: ${lastError}`)
+        if (tryCount < maxTry - 1) {
+          const delay = 1000 * 2 ** tryCount // 1s, 2s
+          logger.debug(`Waiting ${delay}ms for next retry...`)
+          await new Promise(resolve => setTimeout(resolve, delay))
         }
       }
-      if (!content) {
-        logger.error('Content scraping failed')
-        sendScrapeResult({ error: 'Content scraping failed, cannot find body child elements' })
-        return
-      }
+    }
 
-      // Remove non-content elements
-      let selectorToRemove =
-        'script, style, noscript, form, iframe, frame, object, embed, video, audio, link, svg, canvas, meta, head, base, template, symbol, button, select, textarea, datalist, dialog, source, picture, track, map'
-      content.querySelectorAll(selectorToRemove).forEach(el => el.remove())
-
-      if (generic_content_rule.format === 'text') {
-        content.querySelectorAll('nav, aside, header, footer').forEach(el => el.remove())
-
-        const textContent = formatText(content?.innerText || '')
-        sendScrapeResult({
-          success: JSON.stringify({ title, content: textContent, url: window.location.href })
-        })
-        return
-      }
-
-      // remove image
-      if (!generic_content_rule.keep_image) {
-        content.querySelectorAll('img')?.forEach(el => el.remove())
-      } else {
-        content.querySelectorAll('img')?.forEach(el => {
-          const src = el.src || el.getAttribute('src')
-          if (!src || src.startsWith('data:') || src.startsWith('blob:')) {
-            el.remove()
-            return
-          }
-          const newImg = document.createElement('img')
-          newImg.src = src
-          newImg.alt = el.alt || ''
-          el.replaceWith(newImg)
-        })
-      }
-
-      if (generic_content_rule.keep_link) {
-        // format link
-        const links = content.querySelectorAll('a')
-        links?.forEach(link => {
-          const href = link.href
-          if (href === '' || href.startsWith('#') || href.startsWith('javascript:')) {
-            link.removeAttribute('href')
-          } else {
-            link.setAttribute('href', href)
-          }
-          link.innerText = link.innerText.trim().replace(/\n+/g, ' ')
-        })
-      } else {
-        // Remove links
-        const links = content.querySelectorAll('a')
-        links?.forEach(link => {
-          const textNode = document.createTextNode(link.innerText.replace(/\n+/g, ' ').trim())
-          link.replaceWith(textNode)
-        })
-
-        content.querySelectorAll('nav, aside, header, footer').forEach(el => el.remove())
-      }
-
-      content.querySelectorAll(selectorToRemove).forEach(el => el.remove())
-
-      const turndownService = new TurndownService({
-        headingStyle: 'atx',
-        hr: '---',
-        bulletListMarker: '*',
-        codeBlockStyle: 'fenced',
-        emDelimiter: '_'
+    // If all retries fail
+    logger.error(`Generic scraping failed after ${maxTry} attempts.`)
+    if (!hasSentResult) {
+      sendScrapeResult({
+        error: `Generic scraping failed after ${maxTry} attempts: ${lastError}`
       })
-      let markdown = turndownService.turndown(content)
-
-      // Basic cleanup
-      markdown = markdown
-        .replace(/\\[(.*?)\\]/g, '[$1]') // Fix escaped brackets
-        .replace(/\n{3,}/g, '\n\n') // Collapse multiple newlines
-        .trim()
-      // logger.info('scrape generic title:', title, ', content:', markdown)
-      const result = { title, content: markdown, url: window.location.href }
-      sendScrapeResult({ success: JSON.stringify(result) })
-    } catch (error) {
-      logger.error('scrape generic failed:', error)
-      sendScrapeResult({ error: `Generic scraping failed: ${error.message}` })
     }
   }
 
@@ -279,7 +339,7 @@ function sendScrapeResult(data) {
    * Main entry point for the scraping logic.
    * @param {object | null} config - The configuration object, or null for generic scraping.
    */
-  window.performScrape = async function (config, generic_content_rule) {
+  window.performScrape = async (config, generic_content_rule) => {
     logger.debug('performScrape called, config:', JSON.stringify(config))
     logger.debug('generic_content_rule:', JSON.stringify(generic_content_rule))
 
@@ -309,7 +369,10 @@ function sendScrapeResult(data) {
     } catch (error) {
       // Uniformly catch any errors that may occur during the await process
       logger.error('performScrape failed:', error)
-      sendScrapeResult({ error: `performScrape failed: ${error.message}` })
+      // Only send result if we haven't already sent one
+      if (!hasSentResult) {
+        sendScrapeResult({ error: `performScrape failed: ${error.message}` })
+      }
     }
   }
   ;(async () => {
@@ -324,12 +387,12 @@ function sendScrapeResult(data) {
       let tryCount = 0
       while (!isFinalHttp() && tryCount < maxTry) {
         tryCount++
-        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, tryCount)))
+        await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** tryCount))
       }
 
       if (isFinalHttp()) {
         logger.info('emit page loaded, url:', window.location.href)
-        event.emit('page_loaded_' + windowLabel)
+        event.emit(`page_loaded_${windowLabel}`)
       } else {
         logger.warn('Failed to get a valid URL after multiple retries.')
       }

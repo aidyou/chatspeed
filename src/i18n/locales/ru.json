@@ -66,6 +66,10 @@
     "showFavoriteConversations": "Показать избранные темы",
     "skills": "Навыки",
     "takeNote": "Сохранить в заметки",
+    "toolCall": "Вызов инструмента",
+    "toolArgs": "Аргументы",
+    "toolResult": "Результат",
+    "mcpCall": "Вызвать инструмент MCP",
     "translationSkillPromptEmpty": "Текст запроса для навыка перевода не может быть пустым",
     "date": {
       "earlier": "Ранее",

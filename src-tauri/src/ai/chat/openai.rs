@@ -339,9 +339,7 @@ impl AiChatTrait for OpenAIChat {
             })?
             .config
             .get_ai_model_by_id(provider_id)
-            .map_err(|e| {
-                AiError::InitFailed(t!("db.failed_to_get_model", error = e.to_string()).to_string())
-            })?;
+            .map_err(|e| AiError::InitFailed(e.to_string()))?;
 
         let params = init_extra_params(model_detail.metadata);
 

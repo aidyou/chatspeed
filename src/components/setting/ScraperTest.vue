@@ -158,14 +158,21 @@ const error = ref(null)
 
 const content = computed(() => {
   if (!result.value) return null
-  if (typeof result.value === 'object') {
-    return result.value.content || ''
+  
+  try {
+    if (typeof result.value === 'object') {
+      return result.value.content || ''
+    }
+    if (typeof result.value === 'string') {
+      const json = JSON.parse(result.value)
+      return json.content || ''
+    }
+  } catch (e) {
+    console.error('Failed to parse result:', e)
+    return ''
   }
-  if (typeof result.value === 'string') {
-    const json = JSON.parse(result.value)
-    console.log(typeof json)
-    return json.content || ''
-  }
+  
+  return ''
 })
 
 const runTest = async () => {
@@ -205,7 +212,7 @@ const runTest = async () => {
 
   try {
     const response = await invoke('test_scrape', { requestData: params })
-    result.value = JSON.parse(response)
+    result.value = requestType.value === 'search' ? response : JSON.parse(response)
   } catch (e) {
     error.value = e
     showMessage('Test Failed: ' + e.message)

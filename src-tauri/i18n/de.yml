@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "Chat-ID darf nicht leer sein"
   empty_messages: "Nachrichtenliste darf nicht leer sein"
   empty_model: "Modellname darf nicht leer sein"
+  empty_provider_id: "Anbieter-ID darf nicht leer sein"
   failed_to_convert_language_code: "Sprachcode konnte nicht konvertiert werden: %{error}"
   failed_to_create_file: "Datei konnte nicht erstellt werden: %{error}"
   failed_to_detect_language: "Sprache konnte nicht erkannt werden"
   failed_to_find_user_message_content: "Benutzernachricht konnte nicht gefunden werden"
   failed_to_get_available_languages: "Liste der verfügbaren Sprachen konnte nicht abgerufen werden: %{error}"
-  failed_to_setup_proxy: "Chat-Proxy konnte nicht eingerichtet werden: %{error}"
   failed_to_write_file: "Datei konnte nicht geschrieben werden: %{error}"
   invalid_search_model: "Ungültiges Suchmodell: %{model_name}"
   note_already_exists: "Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "Unbekannte Datenbankversion: %{version}"
 
 http:
-  chp_search_expected_array: "Suchergebnisdaten sollten im Array-Format vorliegen"
   client_build_failed: "HTTP-Client konnte nicht erstellt werden: %{error}"
   connection_failed: "Verbindung fehlgeschlagen: %{error}"
-  crawler_failed: "Crawling fehlgeschlagen: %{error}"
   download_failed: "Download fehlgeschlagen: %{error}"
   failed_to_clone_request: "Anfrage konnte bei Wiederholung nicht geklont werden"
   failed_to_open_file: "Datei konnte nicht geöffnet werden, Pfad: %{path}, Fehler: %{error}"
   failed_to_read_file: "Datei konnte nicht gelesen werden, Pfad: %{path}, Fehler: %{error}"
   headers_convert_failed: "Anfrage-Header-Konfiguration konnte nicht in HttpHeader konvertiert werden: %{error}"
-  invalid_response_format: "Ungültiges Antwortformat: %{error}"
-  json_parse_failed: "JSON konnte nicht verarbeitet werden: %{error}"
   mime_parse_failed: "MIME-Typ konnte nicht verarbeitet werden"
-  missing_response_body: "Der Server hat eine leere Antwort zurückgegeben. Bitte prüfen Sie den Serverstatus oder versuchen Sie es später erneut."
-  missing_response_data: "Das Datenfeld in der Antwort ist leer"
   missing_url: "URL-Parameter für HTTP-Anfrage fehlt"
   proxy_config_failed: "Proxy-Konfiguration fehlgeschlagen: %{error}"
   read_response_failed: "Antwort konnte nicht gelesen werden: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "Datei konnte nicht gespeichert werden: %{error}"
   server_file_saved_successfully: "Datei erfolgreich gespeichert"
   server_no_available_ports: "Kein verfügbarer Port im Bereich %{start_port}-%{max_port} gefunden"
-  status_not_ok: "Statuscode nicht OK: %{status}"
 
 main:
   failed_to_check_window_visibility: "Fenstersichtbarkeit konnte nicht überprüft werden: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "Anfrage fehlgeschlagen (Statuscode: %{status}) - %{error_type}: %{message}"
   request_failed: "Anfrage fehlgeschlagen: %{error}"
   response_read_error: "Antwort konnte nicht gelesen werden: %{error}"
-  stream:
-    claude_api_error_format: "Claude-API-Fehler: %{message}"
-    gemini_parse_error: "Gemini-Antwort konnte nicht verarbeitet werden: %{error}"
-    gemini_tool_arg_serialization_error: "Gemini-Werkzeugaufrufargumente konnten nicht serialisiert werden: %{error}"
-    unknown_claude_error_no_details: "Unbekannter Fehler beim Verarbeiten des Claude-Streams (keine Details)"
 
 proxy:
   error:

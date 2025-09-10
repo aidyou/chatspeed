@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "L'ID de la discussion ne peut pas être vide"
   empty_messages: "La liste des messages ne peut pas être vide"
   empty_model: "Le nom du modèle ne peut pas être vide"
+  empty_provider_id: "L'ID du fournisseur ne peut pas être vide"
   failed_to_convert_language_code: "Échec de la conversion du code de langue : %{error}"
   failed_to_create_file: "Échec de la création du fichier : %{error}"
   failed_to_detect_language: "Échec de la détection de la langue"
   failed_to_find_user_message_content: "Échec de la recherche du contenu du message de l'utilisateur"
   failed_to_get_available_languages: "Échec de l'obtention de la liste des langues disponibles : %{error}"
-  failed_to_setup_proxy: "Échec de la configuration du proxy de discussion : %{error}"
   failed_to_write_file: "Échec de l'écriture dans le fichier : %{error}"
   invalid_search_model: "Modèle de recherche non valide : %{model_name}"
   note_already_exists: "Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "Version de base de données inconnue : %{version}"
 
 http:
-  chp_search_expected_array: "Les données des résultats de recherche doivent être au format tableau"
   client_build_failed: "Échec de la création du client HTTP : %{error}"
   connection_failed: "Échec de la connexion : %{error}"
-  crawler_failed: "Échec de l'exploration : %{error}"
   download_failed: "Échec du téléchargement : %{error}"
   failed_to_clone_request: "Échec du clonage de la requête lors de la nouvelle tentative"
   failed_to_open_file: "Échec de l'ouverture du fichier, chemin : %{path}, erreur : %{error}"
   failed_to_read_file: "Échec de la lecture du fichier, chemin : %{path}, erreur : %{error}"
   headers_convert_failed: "Échec de la conversion de la configuration de l'en-tête de la requête en HttpHeader : %{error}"
-  invalid_response_format: "Format de réponse non valide : %{error}"
-  json_parse_failed: "Échec de l'analyse JSON : %{error}"
   mime_parse_failed: "Échec de l'analyse du type MIME"
-  missing_response_body: "Le contenu de la réponse renvoyé par le serveur est vide, veuillez vérifier l'état du serveur ou réessayer plus tard"
-  missing_response_data: "Le champ de données des données de réponse est vide"
   missing_url: "Paramètre d'URL manquant dans la requête HTTP"
   proxy_config_failed: "Échec de la configuration du proxy : %{error}"
   read_response_failed: "Échec de la lecture de la réponse : %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "Échec de l'enregistrement du fichier : %{error}"
   server_file_saved_successfully: "Fichier enregistré avec succès"
   server_no_available_ports: "Aucun port disponible trouvé dans la plage %{start_port}-%{max_port}"
-  status_not_ok: "Le code d'état n'est pas OK : %{status}"
 
 main:
   failed_to_check_window_visibility: "Échec de la vérification de la visibilité de la fenêtre : %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "Échec de la requête (code d'état : %{status}) - %{error_type} : %{message}"
   request_failed: "Échec de la requête : %{error}"
   response_read_error: "Échec de la lecture de la réponse : %{error}"
-  stream:
-    claude_api_error_format: "Erreur de l'API Claude : %{message}"
-    gemini_parse_error: "Échec de l'analyse de la réponse de Gemini : %{error}"
-    gemini_tool_arg_serialization_error: "Échec de la sérialisation des arguments de l'appel d'outil de Gemini : %{error}"
-    unknown_claude_error_no_details: "Erreur inconnue lors de l'analyse du flux de Claude (aucun détail)"
 
 proxy:
   error:

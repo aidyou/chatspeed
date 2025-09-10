@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "聊天ID不能为空"
   empty_messages: "消息列表不能为空"
   empty_model: "模型名称不能为空"
+  empty_provider_id: "供应商ID不能为空"
   failed_to_convert_language_code: "转换语言代码失败: %{error}"
   failed_to_create_file: "创建文件失败：%{error}"
   failed_to_detect_language: "检测语言失败"
   failed_to_find_user_message_content: "未能找到用户消息内容"
   failed_to_get_available_languages: "获取可用语言列表失败: %{error}"
-  failed_to_setup_proxy: "设置聊天代理失败: %{error}"
   failed_to_write_file: "无法写入文件: %{error}"
   invalid_search_model: "无效的搜索模型: %{model_name}"
   note_already_exists: "该笔记已存在，无需重复添加"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "未知的数据库版本号: %{version}"
 
 http:
-  chp_search_expected_array: "搜索结果数据应为数组格式"
   client_build_failed: "创建HTTP客户端失败: %{error}"
   connection_failed: "连接失败: %{error}"
-  crawler_failed: "爬取失败: %{error}"
   download_failed: "下载失败: %{error}"
   failed_to_clone_request: "请求重试时，无法克隆请求"
   failed_to_open_file: "无法打开文件，地址：%{path}，错误：%{error}"
   failed_to_read_file: "无法读取文件，地址：%{path}，错误：%{error}"
   headers_convert_failed: "无法将请求头配置转换为 HttpHeader: %{error}"
-  invalid_response_format: "无效的响应格式: %{error}"
-  json_parse_failed: "无法解析JSON: %{error}"
   mime_parse_failed: "无法解析MIME类型"
-  missing_response_body: "服务器返回的响应内容为空，请检查服务器状态或稍后重试"
-  missing_response_data: "响应数据的 data 字段为空"
   missing_url: "http请求缺少URL参数"
   proxy_config_failed: "配置代理失败: %{error}"
   read_response_failed: "无法读取响应: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "保存文件失败: %{error}"
   server_file_saved_successfully: "文件保存成功"
   server_no_available_ports: "在范围 %{start_port}-%{max_port} 内未找到可用端口"
-  status_not_ok: "状态码不是OK: %{status}"
 
 main:
   failed_to_check_window_visibility: "无法检查窗口可见性: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "请求失败 (状态码: %{status}) - %{error_type}: %{message}"
   request_failed: "请求失败: %{error}"
   response_read_error: "读取响应失败: %{error}"
-  stream:
-    claude_api_error_format: "Claude API 错误: %{message}"
-    gemini_parse_error: "解析 Gemini 响应失败: %{error}"
-    gemini_tool_arg_serialization_error: "序列化 Gemini 工具调用参数失败: %{error}"
-    unknown_claude_error_no_details: "Claude 流解析未知错误 (无详情)"
 
 proxy:
   error:

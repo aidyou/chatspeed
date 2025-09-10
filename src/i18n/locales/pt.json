@@ -66,6 +66,10 @@
     "showFavoriteConversations": "Mostrar conversas favoritas",
     "skills": "Habilidades",
     "takeNote": "Salvar na anotação",
+    "toolCall": "Chamada de ferramenta",
+    "toolArgs": "Argumentos",
+    "toolResult": "Resultado",
+    "mcpCall": "Chamar ferramenta MCP",
     "translationSkillPromptEmpty": "O prompt da habilidade de tradução não pode estar vazio",
     "date": {
       "earlier": "Mais cedo",

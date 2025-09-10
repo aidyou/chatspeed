@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "El ID del chat не puede estar vacío"
   empty_messages: "La lista de mensajes не puede estar vacía"
   empty_model: "El nombre del modelo не puede estar vacío"
+  empty_provider_id: "El ID del proveedor no puede estar vacío"
   failed_to_convert_language_code: "Error al convertir el código de idioma: %{error}"
   failed_to_create_file: "Error al crear el archivo: %{error}"
   failed_to_detect_language: "Error al detectar el idioma"
   failed_to_find_user_message_content: "No se pudo encontrar el contenido del mensaje del usuario"
   failed_to_get_available_languages: "Error al obtener la lista de idiomas disponibles: %{error}"
-  failed_to_setup_proxy: "Error al configurar el proxy de chat: %{error}"
   failed_to_write_file: "Error al escribir en el archivo: %{error}"
   invalid_search_model: "Modelo de búsqueda no válido: %{model_name}"
   note_already_exists: "Esta nota ya existe, no es necesario agregarla de nuevo"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "Versión de base de datos desconocida: %{version}"
 
 http:
-  chp_search_expected_array: "Los datos de los resultados de la búsqueda deben estar en formato de matriz"
   client_build_failed: "Error al crear el cliente HTTP: %{error}"
   connection_failed: "Error de conexión: %{error}"
-  crawler_failed: "Error de rastreo: %{error}"
   download_failed: "Error de descarga: %{error}"
   failed_to_clone_request: "Error al clonar la solicitud al reintentar"
   failed_to_open_file: "Error al abrir el archivo, ruta: %{path}, error: %{error}"
   failed_to_read_file: "Error al leer el archivo, ruta: %{path}, error: %{error}"
   headers_convert_failed: "Error al convertir la configuración del encabezado de la solicitud a HttpHeader: %{error}"
-  invalid_response_format: "Formato de respuesta no válido: %{error}"
-  json_parse_failed: "Error al analizar JSON: %{error}"
   mime_parse_failed: "Error al analizar el tipo MIME"
-  missing_response_body: "El contenido de la respuesta devuelto por el servidor está vacío. Compruebe el estado del servidor o inténtelo de nuevo más tarde."
-  missing_response_data: "El campo de datos de los datos de la respuesta está vacío"
   missing_url: "Falta el parámetro de URL en la solicitud HTTP"
   proxy_config_failed: "Error al configurar el proxy: %{error}"
   read_response_failed: "Error al leer la respuesta: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "Error al guardar el archivo: %{error}"
   server_file_saved_successfully: "Archivo guardado correctamente"
   server_no_available_ports: "No se encontraron puertos disponibles en el rango %{start_port}-%{max_port}"
-  status_not_ok: "El código de estado no es OK: %{status}"
 
 main:
   failed_to_check_window_visibility: "Error al comprobar la visibilidad de la ventana: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "Error en la solicitud (código de estado: %{status}) - %{error_type}: %{message}"
   request_failed: "Error en la solicitud: %{error}"
   response_read_error: "Error al leer la respuesta: %{error}"
-  stream:
-    claude_api_error_format: "Error de la API de Claude: %{message}"
-    gemini_parse_error: "Error al analizar la respuesta de Gemini: %{error}"
-    gemini_tool_arg_serialization_error: "Error al serializar los argumentos de la llamada a la herramienta de Gemini: %{error}"
-    unknown_claude_error_no_details: "Error desconocido al analizar el flujo de Claude (sin detalles)"
 
 proxy:
   error:

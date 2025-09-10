@@ -66,6 +66,10 @@
     "showFavoriteConversations": "즐겨찾는 대화 주제 보기",
     "skills": "스킬",
     "takeNote": "지식 노트에 저장",
+    "toolCall": "도구 호출",
+    "toolArgs": "매개변수",
+    "toolResult": "결과",
+    "mcpCall": "MCP 도구 호출",
     "translationSkillPromptEmpty": "번역 스킬의 프롬프트가 비어있습니다.",
     "date": {
       "earlier": "더 이전",

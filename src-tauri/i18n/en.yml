@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "Chat ID cannot be empty"
   empty_messages: "Message list cannot be empty"
   empty_model: "Model name cannot be empty"
+  empty_provider_id: "Provider ID cannot be empty"
   failed_to_convert_language_code: "Failed to convert language code: %{error}"
   failed_to_create_file: "Failed to create file: %{error}"
   failed_to_detect_language: "Failed to detect language"
   failed_to_find_user_message_content: "Failed to find user message content"
   failed_to_get_available_languages: "Failed to get available languages list: %{error}"
-  failed_to_setup_proxy: "Failed to setup chat proxy: %{error}"
   failed_to_write_file: "Failed to write file: %{error}"
   invalid_search_model: "Invalid search model: %{model_name}"
   note_already_exists: "This note already exists, no need to add again"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "Unknown database version: %{version}"
 
 http:
-  chp_search_expected_array: "Search result data should be in array format"
   client_build_failed: "Failed to create HTTP client: %{error}"
   connection_failed: "Connection failed: %{error}"
-  crawler_failed: "Crawling failed: %{error}"
   download_failed: "Download failed: %{error}"
   failed_to_clone_request: "Failed to clone request when retrying"
   failed_to_open_file: "Failed to open file, path: %{path}, error: %{error}"
   failed_to_read_file: "Failed to read file, path: %{path}, error: %{error}"
   headers_convert_failed: "Failed to convert request header config to HttpHeader: %{error}"
-  invalid_response_format: "Invalid response format: %{error}"
-  json_parse_failed: "Failed to parse JSON: %{error}"
   mime_parse_failed: "Failed to parse MIME type"
-  missing_response_body: "Server returned empty response body, please check server status or try again later"
-  missing_response_data: "Response data 'data' field is empty"
   missing_url: "HTTP request missing URL parameter"
   proxy_config_failed: "Failed to configure proxy: %{error}"
   read_response_failed: "Failed to read response: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "Failed to save file: %{error}"
   server_file_saved_successfully: "File saved successfully"
   server_no_available_ports: "No available port found in range %{start_port}-%{max_port}"
-  status_not_ok: "Status code not OK: %{status}"
 
 main:
   failed_to_check_window_visibility: "Failed to check window visibility: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "Request failed (status code: %{status}) - %{error_type}: %{message}"
   request_failed: "Request failed: %{error}"
   response_read_error: "Failed to read response: %{error}"
-  stream:
-    claude_api_error_format: "Claude API error: %{message}"
-    gemini_parse_error: "Failed to parse Gemini response: %{error}"
-    gemini_tool_arg_serialization_error: "Failed to serialize Gemini tool call arguments: %{error}"
-    unknown_claude_error_no_details: "Unknown Claude stream parsing error (no details)"
 
 proxy:
   error:

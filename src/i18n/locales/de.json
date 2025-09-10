@@ -66,6 +66,10 @@
     "showFavoriteConversations": "Favorisierte Dialoge anzeigen",
     "skills": "Fähigkeiten",
     "takeNote": "In Notiz speichern",
+    "toolCall": "Werkzeugaufruf",
+    "toolArgs": "Argumente",
+    "toolResult": "Ergebnis",
+    "mcpCall": "MCP-Werkzeug aufrufen",
     "translationSkillPromptEmpty": "Der Prompt für die Übersetzungsfähigkeit darf nicht leer sein.",
     "date": {
       "earlier": "Früher",

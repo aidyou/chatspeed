@@ -24,12 +24,12 @@ chat:
   empty_chat_id: "チャットIDは空にできません"
   empty_messages: "メッセージリストは空にできません"
   empty_model: "モデル名は空にできません"
+  empty_provider_id: "プロバイダーIDは空にできません"
   failed_to_convert_language_code: "言語コードの変換に失敗しました: %{error}"
   failed_to_create_file: "ファイルの作成に失敗しました: %{error}"
   failed_to_detect_language: "言語の検出に失敗しました"
   failed_to_find_user_message_content: "ユーザーメッセージのコンテンツが見つかりませんでした"
   failed_to_get_available_languages: "利用可能な言語リストの取得に失敗しました: %{error}"
-  failed_to_setup_proxy: "チャットプロキシの設定に失敗しました: %{error}"
   failed_to_write_file: "ファイルへの書き込みに失敗しました: %{error}"
   invalid_search_model: "無効な検索モデル: %{model_name}"
   note_already_exists: "このノートは既に存在するため、再度追加する必要はありません"
@@ -122,20 +122,14 @@ db:
   unknown_database_version: "不明なデータベースバージョン: %{version}"
 
 http:
-  chp_search_expected_array: "検索結果データは配列形式である必要があります"
   client_build_failed: "HTTPクライアントの作成に失敗しました: %{error}"
   connection_failed: "接続に失敗しました: %{error}"
-  crawler_failed: "クロールに失敗しました: %{error}"
   download_failed: "ダウンロードに失敗しました: %{error}"
   failed_to_clone_request: "リクエストのリトライ時に、リクエストのクローンに失敗しました"
   failed_to_open_file: "ファイルを開けませんでした、パス: %{path}, エラー: %{error}"
   failed_to_read_file: "ファイルを読み取れませんでした、パス: %{path}, エラー: %{error}"
   headers_convert_failed: "リクエストヘッダー設定をHttpHeaderに変換できませんでした: %{error}"
-  invalid_response_format: "無効なレスポンス形式: %{error}"
-  json_parse_failed: "JSONの解析に失敗しました: %{error}"
   mime_parse_failed: "MIMEタイプの解析に失敗しました"
-  missing_response_body: "サーバーから返された応答コンテンツが空です。サーバーの状態を確認するか、後でもう一度お試しください"
-  missing_response_data: "応答データのdataフィールドが空です"
   missing_url: "HTTPリクエストにURLパラメータがありません"
   proxy_config_failed: "プロキシの設定に失敗しました: %{error}"
   read_response_failed: "レスポンスの読み取りに失敗しました: %{error}"
@@ -147,7 +141,6 @@ http:
   server_failed_to_save_file: "ファイルの保存に失敗しました: %{error}"
   server_file_saved_successfully: "ファイルは正常に保存されました"
   server_no_available_ports: "範囲 %{start_port}-%{max_port} 内に利用可能なポートが見つかりません"
-  status_not_ok: "ステータスコードがOKではありません: %{status}"
 
 main:
   failed_to_check_window_visibility: "ウィンドウの可視性の確認に失敗しました: %{error}"
@@ -212,11 +205,6 @@ network:
   request_failed_with_type: "リクエストに失敗しました (ステータスコード: %{status}) - %{error_type}: %{message}"
   request_failed: "リクエストに失敗しました: %{error}"
   response_read_error: "レスポンスの読み取りに失敗しました: %{error}"
-  stream:
-    claude_api_error_format: "Claude API エラー: %{message}"
-    gemini_parse_error: "Gemini 応答の解析に失敗しました: %{error}"
-    gemini_tool_arg_serialization_error: "Gemini ツール呼び出し引数のシリアル化に失敗しました: %{error}"
-    unknown_claude_error_no_details: "Claude ストリーム解析の不明なエラー (詳細なし)"
 
 proxy:
   error:

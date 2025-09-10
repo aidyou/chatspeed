@@ -66,6 +66,10 @@
     "showFavoriteConversations": "Show Favorite Conversations",
     "skills": "Skills",
     "takeNote": "Save to Note",
+    "toolCall": "Tool Call",
+    "toolArgs": "Arguments",
+    "toolResult": "Result",
+    "mcpCall": "Call MCP Tool",
     "date": {
       "earlier": "Earlier",
       "lastMonth": "Last Month",
