@@ -47,17 +47,14 @@
 use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatState,
 };
-use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, ModelDetails};
+use crate::ai::traits::chat::{MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
-use crate::constants::{CFG_SEARCH_ENGINE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
+use crate::constants::{DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
 use crate::db::MainStore;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
-use crate::search::SearchProviderName;
-use crate::tools::{DeepSearch, ModelName, ToolManager};
 
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::State;
 use whatlang::detect;
@@ -123,13 +120,26 @@ pub fn setup_chat_proxy(
 pub async fn list_models(
     main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     api_protocol: String,
-    api_url: Option<String>,
-    api_key: Option<String>,
+    api_url: Option<&str>,
+    api_key: Option<&str>,
+    metadata: Option<Value>,
 ) -> Result<Vec<ModelDetails>, String> {
-    let mut metadata = Some(json!({"proxyType":"bySetting"}));
+    let mut metadata_val = metadata.unwrap_or_else(|| json!({}));
+    if metadata_val["proxyType"].is_null() {
+        metadata_val["proxyType"] = json!("bySetting");
+    }
+    let mut metadata = Some(metadata_val);
+
     setup_chat_proxy(main_state.inner().clone(), &mut metadata)?;
 
-    list_models_async(api_protocol, api_url, api_key, metadata).await
+    list_models_async(
+        main_state.inner().clone(),
+        api_protocol,
+        api_url,
+        api_key,
+        metadata,
+    )
+    .await
 }
 
 /// Tauri command to interact with the AI chat system.
@@ -154,21 +164,15 @@ pub async fn list_models(
 pub async fn chat_completion(
     window: tauri::Window,
     chat_state: State<'_, Arc<ChatState>>,
-    main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    api_protocol: String,
-    api_url: Option<String>, // Changed to Option<String> to match JS invoke
+    provider_id: i64,
     model: String,
-    api_key: Option<String>, // Changed to Option<String>
     chat_id: String,
     messages: Vec<Value>,
     network_enabled: Option<bool>,
-    mut metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
+    metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
 ) -> Result<(), String> {
-    #[cfg(debug_assertions)]
-    log::debug!("Starting chat completion for protocol: {}", api_protocol);
-
-    if messages.is_empty() {
-        return Err(t!("chat.empty_messages").to_string());
+    if provider_id < 1 {
+        return Err(t!("chat.empty_provider_id").to_string());
     }
     if model.is_empty() {
         return Err(t!("chat.empty_model").to_string());
@@ -176,11 +180,17 @@ pub async fn chat_completion(
     if chat_id.is_empty() {
         return Err(t!("chat.empty_chat_id").to_string());
     }
+    if messages.is_empty() {
+        return Err(t!("chat.empty_messages").to_string());
+    }
 
-    let protocol: ChatProtocol = api_protocol.try_into().map_err(|e: String| e.to_string())?;
-
-    setup_chat_proxy(main_state.inner().clone(), &mut metadata)
-        .map_err(|e| t!("chat.failed_to_setup_proxy", error = e).to_string())?;
+    // Ensure the channel for this window is created/retrieved.
+    // This is crucial for global_message_processor_loop to send UI updates.
+    let _window_sender = chat_state
+        .channels
+        .get_or_create_channel(window.clone())
+        .await
+        .map_err(|e| format!("Failed to get or create window channel: {}", e))?;
 
     // Prepare final_metadata: ensure windowLabel is present.
     // Frontend JS sends metadata with `windowLabel`.
@@ -199,7 +209,7 @@ pub async fn chat_completion(
     let tools_enabled_in_metadata = final_metadata
         .as_ref()
         .and_then(|md_val| md_val.get("toolsEnabled").and_then(Value::as_bool))
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
         let mut available_tools = chat_state
@@ -222,14 +232,13 @@ pub async fn chat_completion(
 
     start_new_chat_interaction(
         chat_state.inner().clone(),
-        protocol,
-        api_url.as_deref(),
+        provider_id,
         model,
-        api_key.as_deref(),
         chat_id,
         messages,
         tools,
         final_metadata,
+        None,
     )
     .await
 }
@@ -343,83 +352,83 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
 ///     }
 /// })
 /// ```
-#[tauri::command]
-pub async fn deep_search(
-    window: tauri::Window,
-    chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    chat_id: &str,
-    question: &str,
-    metadata: Option<Value>,
-) -> Result<(), String> {
-    // Get crawler URL, it use to fetch web page contents
-    let crawler_url = main_store
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
-        .get_config("chatspeedCrawlerUrl", String::new());
+// #[tauri::command]
+// pub async fn deep_search(
+//     window: tauri::Window,
+//     chat_state: State<'_, Arc<ChatState>>,
+//     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+//     chat_id: &str,
+//     question: &str,
+//     metadata: Option<Value>,
+// ) -> Result<(), String> {
+//     // Get crawler URL, it use to fetch web page contents
+//     let crawler_url = main_store
+//         .read()
+//         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
+//         .get_config("chatspeedCrawlerUrl", String::new());
 
-    // Get search engine providers from config
-    // e.g. ["google", "bing", "duckduckgo"]
-    let search_providers = main_store
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
-        .get_config(CFG_SEARCH_ENGINE, vec![])
-        .into_iter()
-        .filter_map(|s: String| s.trim().parse::<SearchProviderName>().ok())
-        .collect::<Vec<SearchProviderName>>();
+//     // Get search engine providers from config
+//     // e.g. ["google", "bing", "duckduckgo"]
+//     let search_providers = main_store
+//         .read()
+//         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?
+//         .get_config(CFG_SEARCH_ENGINE, vec![])
+//         .into_iter()
+//         .filter_map(|s: String| s.trim().parse::<SearchProviderName>().ok())
+//         .collect::<Vec<SearchProviderName>>();
 
-    let tx = chat_state.channels.get_or_create_channel(window).await?;
-    let tx_clone = tx.clone();
-    let callback = move |chunk: Arc<ChatResponse>| {
-        let _ = tx_clone.try_send(chunk);
-    };
+//     let tx = chat_state.channels.get_or_create_channel(window).await?;
+//     let tx_clone = tx.clone();
+//     let callback = move |chunk: Arc<ChatResponse>| {
+//         let _ = tx_clone.try_send(chunk);
+//     };
 
-    let ds = DeepSearch::new(
-        chat_state.inner().clone(),
-        None,
-        crawler_url,
-        search_providers,
-        Arc::new(callback),
-    );
-    let stop_flag = ds.get_stop_flag();
-    chat_state
-        .active_searches
-        .lock()
-        .await
-        .insert(chat_id.to_string(), stop_flag);
+//     let ds = DeepSearch::new(
+//         chat_state.inner().clone(),
+//         None,
+//         crawler_url,
+//         search_providers,
+//         Arc::new(callback),
+//     );
+//     let stop_flag = ds.get_stop_flag();
+//     chat_state
+//         .active_searches
+//         .lock()
+//         .await
+//         .insert(chat_id.to_string(), stop_flag);
 
-    // Get the model configured for the deep search
-    let reasoning_model =
-        ToolManager::get_model(main_store.inner().clone(), ModelName::Reasoning.as_ref()).map_err(
-            |e| {
-                t!(
-                    "tools.failed_to_get_model",
-                    model_type = ModelName::Reasoning.as_ref(),
-                    error = e.to_string()
-                )
-                .to_string()
-            },
-        )?;
-    ds.add_model(ModelName::Reasoning, reasoning_model).await;
-    let general_model =
-        ToolManager::get_model(main_store.inner().clone(), ModelName::General.as_ref()).map_err(
-            |e| {
-                t!(
-                    "tools.failed_to_get_model",
-                    model_type = ModelName::General.as_ref(),
-                    error = e.to_string()
-                )
-                .to_string()
-            },
-        )?;
-    ds.add_model(ModelName::General, general_model).await;
+//     // Get the model configured for the deep search
+//     let reasoning_model =
+//         ToolManager::get_model(main_store.inner().clone(), ModelName::Reasoning.as_ref()).map_err(
+//             |e| {
+//                 t!(
+//                     "tools.failed_to_get_model",
+//                     model_type = ModelName::Reasoning.as_ref(),
+//                     error = e.to_string()
+//                 )
+//                 .to_string()
+//             },
+//         )?;
+//     ds.add_model(ModelName::Reasoning, reasoning_model).await;
+//     let general_model =
+//         ToolManager::get_model(main_store.inner().clone(), ModelName::General.as_ref()).map_err(
+//             |e| {
+//                 t!(
+//                     "tools.failed_to_get_model",
+//                     model_type = ModelName::General.as_ref(),
+//                     error = e.to_string()
+//                 )
+//                 .to_string()
+//             },
+//         )?;
+//     ds.add_model(ModelName::General, general_model).await;
 
-    let _ = ds
-        .execute_deep_search(chat_id, question, metadata, 20)
-        .await?;
+//     let _ = ds
+//         .execute_deep_search(chat_id, question, metadata, 20)
+//         .await?;
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 /// Tauri command to stop the ongoing deep search for a specific chat session.
 /// This command sets the stop flag for the selected chat interface.
@@ -437,20 +446,20 @@ pub async fn deep_search(
 ///
 /// const result = await invoke('stop_deep_search', { chatId: 'unique-chat-id' })
 /// ```
-#[tauri::command]
-pub async fn stop_deep_search(
-    state: State<'_, Arc<ChatState>>,
-    chat_id: &str,
-) -> Result<(), String> {
-    let mut active_searches = state.active_searches.lock().await;
-    if let Some(flag) = active_searches.get(chat_id) {
-        flag.store(true, Ordering::Release);
-        active_searches.remove(chat_id);
-        Ok(())
-    } else {
-        Err(t!("chat.search_not_found").to_string())
-    }
-}
+// #[tauri::command]
+// pub async fn stop_deep_search(
+//     state: State<'_, Arc<ChatState>>,
+//     chat_id: &str,
+// ) -> Result<(), String> {
+//     let mut active_searches = state.active_searches.lock().await;
+//     if let Some(flag) = active_searches.get(chat_id) {
+//         flag.store(true, Ordering::Release);
+//         active_searches.remove(chat_id);
+//         Ok(())
+//     } else {
+//         Err(t!("chat.search_not_found").to_string())
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

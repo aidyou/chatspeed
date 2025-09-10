@@ -8,17 +8,16 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
-use tokio::sync::Mutex;
 
 use super::prompt::{
     GENERATE_QUERIES_PROMPT, GENERATE_REPORT_PROMPT, GET_RELATED_RESULT_PROMPT, SUMMARIZE_PROMPT,
 };
 use crate::{
     ai::{
-        interaction::chat_completion::{complete_chat_async, complete_chat_blocking, ChatState},
+        interaction::chat_completion::{complete_chat_blocking, ChatState},
         traits::chat::{ChatCompletionResult, ChatResponse, MCPToolDeclaration, MessageType},
     },
     db::AiModel,
@@ -370,28 +369,29 @@ impl DeepSearch {
         let chat_metadata = self.merge_metadata(metadata, model.metadata.clone());
 
         for i in 0..3 {
-            let progress_callback = Arc::clone(&self.progress_callback);
-            let callback = move |response: Arc<ChatResponse>| {
-                progress_callback(response);
-            };
-            match complete_chat_async(
-                Some(self.chat_state.clone()),
-                model.api_protocol.clone().try_into()?,
-                Some(&model.base_url),
-                model.default_model.clone(),
-                Some(&model.api_key),
-                chat_id.to_string(),
-                vec![json!({"role": "user", "content": prompt})],
+            let chat_state_clone = self.chat_state.clone();
+            let api_protocol = model.api_protocol.clone();
+            let base_url = model.base_url.clone();
+            let default_model = model.default_model.clone();
+            let api_key = model.api_key.clone();
+            let chat_id_clone = chat_id.to_string();
+            let messages = vec![json!({"role": "user", "content": prompt.clone()})];
+            let metadata_clone = chat_metadata.clone();
+
+            match complete_chat_blocking(
+                chat_state_clone,
+                api_protocol.try_into().unwrap(),
+                Some(base_url.as_str()),
+                default_model,
+                Some(api_key.as_str()),
+                chat_id_clone,
+                messages,
                 None,
-                chat_metadata.clone(),
-                callback,
+                metadata_clone,
             )
             .await
-            .map_err(|e| e.to_string())
             {
-                Ok(_) => {
-                    return Ok(());
-                }
+                Ok(_) => return Ok(()),
                 Err(e) => {
                     if i == 2 {
                         return Err(e);
@@ -869,7 +869,7 @@ impl DeepSearch {
                         results.push(result_clone);
 
                         #[cfg(debug_assertions)]
-                        log::debug!("Crawling finished, URL: {}", &url,);
+                        log::debug!("Crawling finished, URL: {}", &url);
                     } else {
                         self.send_process_message(
                             chat_id,
@@ -1033,6 +1033,7 @@ impl DeepSearch {
         for i in 0..3 {
             let chat_id = uuid::Uuid::new_v4().to_string();
             match complete_chat_blocking(
+                self.chat_state.clone(),
                 model.api_protocol.clone().try_into()?,
                 Some(model.base_url.as_str()),
                 model.default_model.clone(),
@@ -1052,7 +1053,7 @@ impl DeepSearch {
                                 .to_string());
                         }
                         match self.check_stop() {
-                            Ok(_) => {}
+                            Ok(_) => {} // Continue
                             Err(e) => {
                                 return Err(e);
                             }
@@ -1063,7 +1064,6 @@ impl DeepSearch {
                         let content = format_json_str(&chat_result.content);
                         match serde_json::from_str::<Value>(&content) {
                             Ok(parsed) => {
-                                // ensure the formatted JSON is valid and well-formatted
                                 let formatted_content = serde_json::to_string_pretty(&parsed)
                                     .unwrap_or_else(|_| content.clone());
                                 let mut new_result = chat_result.clone();
@@ -1072,7 +1072,7 @@ impl DeepSearch {
                             }
                             Err(e) => {
                                 match self.check_stop() {
-                                    Ok(_) => {}
+                                    Ok(_) => {} // Continue
                                     Err(e) => {
                                         return Err(e);
                                     }
@@ -1092,12 +1092,11 @@ impl DeepSearch {
                         );
                     }
                     match self.check_stop() {
-                        Ok(_) => {}
+                        Ok(_) => {} // Continue
                         Err(e) => {
                             return Err(e);
                         }
                     }
-                    // Wait for 1 second before retrying
                     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                 }
             }
@@ -1216,6 +1215,7 @@ mod test {
 
     use crate::{
         ai::traits::chat::ChatResponse,
+        db::MainStore,
         search::SearchProviderName,
         tools::{DeepSearch, ModelName, ToolManager},
     };
@@ -1230,8 +1230,10 @@ mod test {
         ));
 
         let channel = crate::libs::window_channels::WindowChannels::new();
-        let chat_state =
-            crate::ai::interaction::chat_completion::ChatState::new(std::sync::Arc::new(channel));
+        let chat_state = crate::ai::interaction::chat_completion::ChatState::new(
+            std::sync::Arc::new(channel),
+            main_store.clone(),
+        );
         let process_callback: Arc<dyn Fn(Arc<ChatResponse>) + Send + Sync> = Arc::new(|s| {
             println!("{}", serde_json::to_string(&s).unwrap());
         });

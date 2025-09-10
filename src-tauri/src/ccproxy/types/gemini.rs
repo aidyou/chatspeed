@@ -46,6 +46,8 @@ pub struct GeminiPart {
     pub function_call: Option<GeminiFunctionCall>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "functionResponse")]
     pub function_response: Option<GeminiFunctionResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_metadata: Option<GeminiVideoMetadata>, // Video content
 }
@@ -215,11 +217,13 @@ pub struct GeminiVideoMetadata {
 }
 
 /// Extended thinking configuration for Gemini
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GeminiThinkingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<i32>, // Token budget for internal reasoning, 0 disables thinking
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_thoughts: Option<bool>,
 }
 
 /// Citation metadata for generated content

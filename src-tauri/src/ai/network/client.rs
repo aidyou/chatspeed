@@ -1,10 +1,3 @@
-use std::time::Duration;
-
-use crate::ccproxy::StreamFormat;
-use crate::libs::util::urlencode;
-
-use super::stream::StreamParser;
-use super::{types::*, StreamChunk};
 use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::{
@@ -13,7 +6,12 @@ use reqwest::{
 };
 use rust_i18n::t;
 use serde_json::Value;
+use std::time::Duration;
 use tauri::http::HeaderName;
+
+use super::stream::StreamParser;
+use super::{types::*, StreamChunk};
+use crate::libs::util::urlencode;
 
 #[async_trait]
 pub trait ApiClient: Send + Sync {
@@ -107,12 +105,8 @@ pub trait ApiClient: Send + Sync {
     /// let format = StreamFormat::Custom(custom_parser);
     /// let result = client.process_stream_chunk(chunk, &format).await?;
     /// ```
-    async fn process_stream_chunk(
-        &self,
-        chunk: Bytes,
-        format: &StreamFormat,
-    ) -> Result<Vec<StreamChunk>, String> {
-        StreamParser::parse_chunk(chunk, format).await
+    async fn process_stream_chunk(&self, chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
+        StreamParser::parse_openai(chunk)
     }
 }
 

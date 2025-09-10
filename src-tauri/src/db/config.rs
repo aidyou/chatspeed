@@ -25,7 +25,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn set_config(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
             [key, &value.to_string()],
@@ -73,7 +76,10 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let max_sort_index: i32 = conn
             .query_row(
                 "SELECT COALESCE(MAX(sort_index), -1) FROM ai_model",
@@ -96,39 +102,39 @@ impl MainStore {
             })?;
 
         conn.execute(
-                "INSERT INTO ai_model (
+            "INSERT INTO ai_model (
                     name, models, default_model, api_protocol, base_url, api_key,
                     max_tokens, temperature, top_p, top_k, sort_index, disabled,
                     is_default, is_official, official_id, metadata
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    name,
-                    serde_json::to_string(&models)
-                        .map_err(|e| {
-                            error!("Failed to serialize models: {:?}, err: {}", &models, e);
-                            e
-                        })
-                        .unwrap_or_default(),
-                    default_model,
-                    api_protocol,
-                    base_url,
-                    api_key,
-                    max_tokens,
-                    temperature,
-                    top_p,
-                    top_k,
-                    new_sort_index,
-                    disabled,
-                    false,
-                    false,
-                    "",
-                    metadata_str,
-                ),
-            )
-            .map_err(|e| {
-                error!("Failed to add AI model: {}", e);
-                e
-            })?;
+            (
+                name,
+                serde_json::to_string(&models)
+                    .map_err(|e| {
+                        error!("Failed to serialize models: {:?}, err: {}", &models, e);
+                        e
+                    })
+                    .unwrap_or_default(),
+                default_model,
+                api_protocol,
+                base_url,
+                api_key,
+                max_tokens,
+                temperature,
+                top_p,
+                top_k,
+                new_sort_index,
+                disabled,
+                false,
+                false,
+                "",
+                metadata_str,
+            ),
+        )
+        .map_err(|e| {
+            error!("Failed to add AI model: {}", e);
+            e
+        })?;
 
         if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
@@ -163,7 +169,10 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -216,7 +225,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_model_order(&mut self, model_ids: Vec<i64>) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         for (index, id) in model_ids.iter().enumerate() {
             conn.execute(
                 "UPDATE ai_model SET sort_index = ? WHERE id = ?",
@@ -241,7 +253,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_ai_model(&mut self, id: i64) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
         if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
@@ -274,7 +289,10 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<AiSkill, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         // Get the current maximum sort_index
         let max_sort_index: i32 = conn.query_row(
             "SELECT COALESCE(MAX(sort_index), -1) FROM ai_skill",
@@ -360,7 +378,10 @@ impl MainStore {
             }
         }
 
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -393,7 +414,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_skill_order(&mut self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         for (index, id) in skill_ids.iter().enumerate() {
             conn.execute(
                 "UPDATE ai_skill SET sort_index = ? WHERE id = ?",
@@ -414,7 +438,10 @@ impl MainStore {
     /// # Returns
     /// The logo of the AI skill.
     pub fn get_skill_logo(&mut self, id: i64) -> Result<String, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         return conn
             .query_row("SELECT logo FROM ai_skill WHERE id = ?", [id], |row| {
                 row.get::<_, String>(0)
@@ -452,7 +479,10 @@ impl MainStore {
             }
         }
 
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
         if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);

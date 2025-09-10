@@ -129,7 +129,14 @@ pub fn from_openai(
                 user_id: Some(user_id),
             },
         ),
-        thinking: None,      // OpenAI doesn't support thinking mode
+        thinking: if req.reasoning_effort.is_some() {
+            Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                include_thoughts: Some(true),
+                budget_tokens: None, // No direct mapping from reasoning_effort to a token budget
+            })
+        } else {
+            None
+        },
         cache_control: None, // OpenAI doesn't support cache control
         // Gemini-specific parameters - map OpenAI response_format to Gemini fields
         safety_settings: None, // OpenAI doesn't have safety settings

@@ -70,6 +70,7 @@ pub struct ProxyModel {
     pub prompt_injection_position: Option<String>,
     pub prompt_text: String,
     pub tool_filter: HashMap<String, i8>,
+    // ratio of the temperature
     pub temperature: f32,
     // pub max_context: usize,
 }

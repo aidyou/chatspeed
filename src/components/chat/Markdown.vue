@@ -36,7 +36,8 @@
       v-mermaid
       v-table
       v-think
-      v-html="parseMarkdown(content, reference)" />
+      v-tools
+      v-html="parseMarkdown(content, reference, toolCalls)" />
   </div>
 </template>
 <script setup>
@@ -59,6 +60,10 @@ const props = defineProps({
   reasoning: {
     type: String,
     default: ''
+  },
+  toolCalls: {
+    type: Array,
+    default: () => []
   }
 })
 

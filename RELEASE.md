@@ -1,5 +1,40 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.2 Release Notes
+
+Version 1.1.2 focuses on optimizing tool-calling functionality and user experience, enhancing stability and compatibility by refactoring core modules.
+
+## ✨ New Features & Major Improvements
+
+1.  **New Tool Call Architecture**
+    - Refactored the chat module to unify all models through ccproxy, enabling tool-calling capabilities for all models.
+    - Simplified model settings by removing the previous "Tool-Calling Capability" switch; all supported models now have tool-calling enabled by default.
+    - Optimized the parsing and display of tool calls, showing them and their results in real-time during AI conversations.
+    - Added support for displaying complete tool call records in chat history.
+
+2.  **Improved UI**
+    - Added a network control switch, allowing users to easily enable or disable web search functionality.
+    - Improved chat interface interaction; tool calls are now displayed as a separate component that can be expanded or collapsed to view parameters and results.
+    - Optimized the model addition process, fixing an issue where the "Import Model" button might not be displayed.
+
+## 🔧 Technical Optimizations
+
+- Refactored tool-calling related components to improve code maintainability.
+- Optimized the ccproxy authentication mechanism to support internal request validation.
+- Improved the tool call parsing logic to enhance support for complex parameters.
+- Updated the display style for tool calls to provide a better visual experience.
+- Optimized the tool compatibility mode in the ccproxy module to improve adaptability for different models.
+- **Optimized Key Rotation Mechanism**: Refactored the proxy's key management, using atomic updates to ensure the stability and reliability of multi-key rotation and fixing potential race conditions.
+
+## 🐞 Bug Fixes
+
+- Fixed an issue where the "Import Model" button might not be displayed when adding a model.
+- Fixed an issue where tool call results were not displayed completely.
+- Optimized network request handling to improve stability.
+- Fixed several UI display issues to enhance user experience.
+
+---
+
 # ChatSpeed v1.1.1 Release Notes
 
 v1.1.1 is a maintenance release focused on improving stability and fixing issues. We have deeply optimized the internal logic of the `ccproxy` proxy module, especially in protocol compatibility and tool handling, to ensure more reliable and precise AI interaction.
@@ -56,7 +91,3 @@ We have greatly optimized the prompts to assist the AI in forming a more robust 
 
 - Fixed a state management bug in the stream processor that caused tool call parsing to fail.
 - Fixed an issue where an XML parameter value would incorrectly become `0` or `false` if it could not be parsed as the specified type (e.g., number). It now safely falls back to preserving the original string, preventing data corruption.
-
----
-
-We believe v1.1.0 will bring you a more powerful and reliable AI proxy experience. We have already felt the significant improvements ourselves while using the proxy module to connect clients like `claude code`, `zed`, and `crush`.

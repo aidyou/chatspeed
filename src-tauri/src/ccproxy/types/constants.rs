@@ -7,26 +7,21 @@ pub const TOOL_PARSE_ERROR_REMINDER: &str = r#"<system-reminder>
 Your last tool call had an invalid XML format and could not be parsed. Please check carefully and strictly follow the tool usage specifications.
 Common reasons for failure:
 1. Required arguments are missing.
-2. Special XML characters were not escaped. You must escape the following characters in argument values:
-- `&` must be written as `&amp;`
-- `<` must be written as `&lt;`
-- `>` must be written as `&gt;`
-3. You tried to escape a character that should not be escaped. All characters other than `<>&` should be written directly without escaping. For example, write double quotes as `"` not `\\"`.
+2. XML special characters `&`, `<`, `>` must be escaped as `&amp;`, `&lt;`, `&gt;` respectively.
+3. Do not escape other characters (e.g., `"`).
 </system-reminder>"#;
 
 pub const TOOL_ARG_ERROR_REMINDER: &str = r#"<system-reminder>
-The 'input' argument for your last tool call contained malformed JSON and could not be parsed. The failed call is displayed above in a <ccp:failed_tool_call> tag for your reference.
-
-Please check the argument format carefully and strictly follow the JSON specification. Do not generate <ccp:failed_tool_call> tags yourself.
-
+Your last tool call's argument contained malformed JSON and could not be parsed. The failed call is displayed above in a <ccp:failed_tool_call> tag for your reference.
+Please review JSON format carefully. Do not generate <ccp:failed_tool_call> tags yourself.
 Common reasons for failure:
-1. The JSON is not well-formed (e.g., trailing commas, mismatched brackets).
-2. Strings and object keys are not enclosed in double quotes ("). Single quotes are not permitted.
-3. The JSON structure does not match the tool's required input schema.
+1. Malformed JSON (e.g., trailing commas, mismatched brackets).
+2. Incorrectly quoted JSON strings/keys (must use double quotes).
+3. JSON structure does not match the tool's input schema.
 </system-reminder>"#;
 
 pub const TOOL_RESULT_REMINDER: &str = r#"<system-reminder>
-This is the result of your last tool call. Use this information to decide your next step. Do not output `<ccp:tool_results>` tags yourself.
+This is the result of your last tool call. Use it to decide your next step. Do not output `<ccp:tool_results>` tags.
 </system-reminder>"#;
 
 pub const TOOL_COMPAT_MODE_PROMPT: &str = r###"<cs:tool-use-guide>
@@ -42,22 +37,20 @@ The tools available to you are defined in a `<ccp:tool_define>` block. You will 
 - `<name>`: The tool's name.
 - `<description>`: What the tool does.
 - `<args>`: A list of `<arg>` tags for each argument. The argument's description will indicate if it is `(required)` or `(optional)`.
-- `<arg>`: Defines a parameter for a tool. The `name` attribute is the parameter name, and the `type` attribute is its value type (e.g., `string`, `number`, `array`, `json`). **Warning:** You must explicitly set the `type` attribute for all parameters. If omitted, even structured arrays or objects (JSON) will be treated as a **single string**, leading to validation errors such as "expected type `array` but provided `string`".
+- `<arg>`: Defines a tool parameter.
+    - `name`: Parameter name.
+    - `type`: Value type (e.g., `string`, `number`, `array`, `json`). **Warning:** ALWAYS explicitly set `type`. Omitting it defaults to `string`, causing validation errors for non-string types.
 
 ## HOW TO USE TOOLS
 
-To execute a tool
-**You MUST:**
+To execute a tool **You MUST:**
 - Wrap every tool call in `<ccp:tool_use>` tags.
 - Include the tool's `<name>`.
-- Include a `<args>` block containing all required arguments for that tool.
+- Include a `<args>` block with all required arguments.
 - Escape special XML characters in argument values.
 
-**You MUST NOT:**
-- Include an `<id>` tag in your output. The system assigns the ID automatically. This is a critical rule.
-
 ## TOOL RESULT FORMAT
-After the system executes your tool call, the result will be provided back to you in a `<ccp:tool_results>` block. This format is **only for the system to give you results**.
+The system will provide tool call results in a `<ccp:tool_results>` block. This format is **only for system output**.
 
 **CRITICAL:** You MUST NOT use the `<ccp:tool_results>`, `<ccp:tool_result>`, or any related result tags in your responses. These tags are reserved for the system to provide you with tool outputs.
 
@@ -73,46 +66,61 @@ Example of a tool result **the system will send back to you**:
 You should use this result to formulate a natural language response or to decide on the next tool call.
 
 ## XML CHARACTER ESCAPING
-This is a critical rule. Only the following three characters have special meaning in XML and MUST be escaped when they appear in an argument's value:
+**CRITICAL:** Only `&`, `<`, `>` have special XML meaning and MUST be escaped in argument values:
 - `&` must be written as `&amp;`
 - `<` must be written as `&lt;`
 - `>` must be written as `&gt;`
 
-**All other characters are treated as literal characters and will be used as-is.** This includes double quotes (`"`), single quotes (`'`), backslashes (`\`), newlines, and all other symbols. DO NOT attempt to escape them.
+**All other characters are literal (e.g., `\"`, `\'`, `\\`, newlines) and MUST NOT be escaped.**
 
 Example for a value containing '&':
 <ccp:tool_use>
-<name>Search</name>
-<args>
-<arg name="query" type="string">echo "Start..." &amp;&amp; sh -c "/path/to/script.sh"</arg>
-</args>
+    <name>Search</name>
+    <args>
+        <arg name="query" type="string">echo "Start..." &amp;&amp; sh -c "/path/to/script.sh"</arg>
+    </args>
 </ccp:tool_use>
 
 ## CRITICAL FORMATTING RULES
-1. **NO Markdown**: Never use ```xml or any code block delimiters
-2. **Plain Text**: Output XML tags directly in your response text
-3. **No Wrapping**: Don't wrap XML in any special formatting
-4. **Direct Output**: Treat XML as regular response content, not code
-5. **Fill Required Arguments**: Never submit a tool call with an empty `<args>` block if the tool has required arguments.
-6. **NEVER Escape Tool Tags**: The `<ccp:tool_use>` and other defining XML tags must be output as plain text. DO NOT escape them (e.g., do not write `&lt;ccp:tool_use&gt;`). Only the *values inside* a `<arg>` tag should be escaped.
+1. **NO Markdown**: Do not use code block delimiters (e.g., ```xml).
+2. **Plain Text**: Output XML tags directly.
+3. **No Wrapping**: Do not wrap XML in special formatting.
+4. **Direct Output**: Treat XML as regular content, not code.
+5. **Fill Required Arguments**: Never submit an empty `<args>` block if required.
+6. **NEVER Escape Tool Tags**: Do not escape `<ccp:tool_use>` or other defining XML tags. Only escape values *inside* an `<arg>` tag.
+7. **Direct Tool Use**: When performing tasks, directly call the appropriate tools instead of outputting code (e.g., diff code or shell commands).
 
 ## EXAMPLES
 Note: The `Read` and `Write` tools below are just examples. You should use the actual tools available in the provided tools list. The path is relative to the project root.
 
-### Example 1: Reading a File
+### Example 1: Reading a File with Correct Type Annotations
 **✅ CORRECT**:
 First, I'll read the file.
 <ccp:tool_use>
     <name>Read</name>
     <args>
         <arg name="file_path" type="string">path/to/project/config.toml</arg>
+        <arg name="offset" type="number">100</arg>
+        <arg name="limit" type="number">200</arg>
     </args>
 </ccp:tool_use>
 
-**❌ WRONG** (Do not output raw commands):
+**❌ WRONG** (Missing type attributes - will be parsed as strings):
+<ccp:tool_use>
+    <name>Read</name>
+    <args>
+        <arg name="file_path" type="string">path/to/project/config.toml</arg>
+        <arg name="offset">100</arg>
+        <arg name="limit">200</arg>
+    </args>
+</ccp:tool_use>
+
+**❌ WRONG** (Raw commands not allowed):
 ```bash
 cat path/to/project/config.toml
 ```
+
+**Key Point:** ALWAYS specify the `type` attribute for parameters. Without it, values are automatically parsed as strings. This will cause tool calls to fail for non-string types (e.g., numbers, arrays, or objects) that expect a specific type.
 
 ### Example 2: Creating a File
 **✅ CORRECT**:
@@ -127,47 +135,48 @@ dist
     </args>
 </ccp:tool_use>
 
-**❌ WRONG** (Do not output raw commands):
+**❌ WRONG** (Raw commands not allowed):
 ```bash
 echo "node_modules\ndist\n.env" > path/to/project/.gitignore
 ```
 
 ### Example 3: Using Array Arguments
-When a tool argument is an array (e.g., a list of items), you MUST format its value as a single JSON array string and explicitly set the type attribute to `json`.
+For array arguments (e.g., a list of items), format the value as a single JSON array string and set the type attribute appropriately (e.g., `array`, `json`).
 
 **✅ CORRECT**:
 <ccp:tool_use>
-<name>ToolWithList</name>
+<name>TodoWrite</name>
 <args>
 <arg name="items" type="array">[
   {
-    "id": "item1",
-    "value": "First item"
+    "activeForm": "Task description",
+    "content": "Task details",
+    "status": "completed"
   },
-  {
-    "id": "item2",
-    "value": "Second item"
-  }
+  // ... (more items)
 ]</arg>
 </args>
 </ccp:tool_use>
 
 **❌ WRONG** (Do not format array arguments as nested XML tags):
 <ccp:tool_use>
-    <name>ToolWithList</name>
+    <name>TodoWrite</name>
     <args>
     <items>
         <item>
-            <id>item1</id>
-            <value>First item</value>
+            <id>1</id>
+            <activeForm>Task description</activeForm>
+            <content>Task details</content>
+            <status>completed</status>
         </item>
+        <!-- ... (more items) -->
     </items>
     </args>
 </ccp:tool_use>
 
-### Example 4: Writing Python Code
-When providing code, place the entire block within a single argument. All indentation and whitespace will be preserved.
-Double quotes inside the code should be written directly. **DO NOT** escape double quotes with backslashes (`\`).
+### Example 4: Writing Code
+Place the entire code block within a single argument. Indentation and whitespace are preserved.
+Write double quotes directly; **DO NOT** escape them with backslashes (`\`).
 
 **✅ CORRECT**:
 <ccp:tool_use>
@@ -197,6 +206,20 @@ if __name__ == "__main__":
     main()
 </arg>
 </args>
+</ccp:tool_use>
+
+## OPTIONAL PARAMETERS
+Optional arguments (marked `(optional)`) can be:
+1. **Omitted** if not needed.
+2. **Included** with an empty value if supported.
+
+**Example with optional parameters:**
+<ccp:tool_use>
+    <name>Read</name>
+    <args>
+        <arg name="file_path" type="string">path/to/file</arg>
+        <!-- limit and offset is optional and omitted when the entire file  -->
+    </args>
 </ccp:tool_use>
 
 ## DECISION FRAMEWORK

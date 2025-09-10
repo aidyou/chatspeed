@@ -323,6 +323,22 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 }
             });
 
+        let reasoning_effort = if let Some(thinking) = &unified_request.thinking {
+            if matches!(thinking.include_thoughts, Some(true)) {
+                let effort = match thinking.budget_tokens {
+                    Some(budget) if budget < 4096 => "low",
+                    Some(budget) if budget >= 4096 && budget <= 16384 => "medium",
+                    Some(budget) if budget > 16384 => "high",
+                    _ => "medium", // Default for Some(0) or None
+                };
+                Some(effort.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // --- New Prompt Injection Logic ---
         let injection_pos = unified_request
             .prompt_injection_position
@@ -436,6 +452,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
             top_logprobs: unified_request.top_logprobs,
             stream_options: None,
             logit_bias: None, // Not supported in unified request yet
+            reasoning_effort,
+            store: None, // Not supported in unified request yet
         };
 
         let mut request_builder = client.post(full_provider_url);
@@ -649,10 +667,18 @@ impl BackendAdapter for OpenAIBackendAdapter {
 
         let usage = openai_response
             .usage
-            .map(|u| UnifiedUsage {
-                input_tokens: u.prompt_tokens,
-                output_tokens: u.completion_tokens,
-                ..Default::default()
+            .map(|u| {
+                let thoughts_tokens = u
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens);
+
+                UnifiedUsage {
+                    input_tokens: u.prompt_tokens,
+                    output_tokens: u.completion_tokens,
+                    thoughts_tokens,
+                    ..Default::default()
+                }
             })
             .unwrap_or_default();
 

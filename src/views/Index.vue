@@ -191,6 +191,9 @@
                       ? getModelLogo(message.metadata.provider)
                       : currentModel?.logo
                   " />
+                <span class="provider" v-if="message.metadata?.provider">
+                  {{ message.metadata.provider }}
+                </span>
               </div>
               <div class="content-container">
                 <!-- <div
@@ -208,6 +211,7 @@
                   :content="message.content"
                   :reference="message.metadata?.reference || []"
                   :reasoning="message.metadata?.reasoning || ''"
+                  :toolCalls="message.metadata?.toolCall || []"
                   :log="chatState.log"
                   :plan="chatState.plan"
                   v-else />
@@ -296,6 +300,7 @@
                   :reasoning="chatState.reasoning"
                   :log="chatState.log"
                   :plan="chatState.plan"
+                  :toolCalls="chatState.toolCall || []"
                   :is-reasoning="chatState.isReasoning" />
               </div>
             </div>
@@ -575,7 +580,8 @@ const getDefaultChatState = () => ({
   isReasoning: false,
   log: [],
   plan: [],
-  model: ''
+  model: '',
+  toolCall: []
 })
 
 const chatState = ref(getDefaultChatState())
@@ -983,21 +989,13 @@ const dispatchChatCompletion = async (messageId = null) => {
       try {
         console.log('tool enabled:', toolsEnabled.value)
         await invoke('chat_completion', {
-          apiProtocol: currentModel.value.apiProtocol,
-          apiUrl: currentModel.value.baseUrl,
-          apiKey: currentModel.value.apiKey,
+          providerId: currentModel.value.id,
           model: currentModel.value.defaultModel,
           chatId: lastChatId.value,
           messages: messages,
           networkEnabled: networkEnabled.value,
           metadata: {
-            maxTokens: currentModel.value.maxTokens,
-            temperature: currentModel.value.temperature,
-            topP: currentModel.value.topP,
-            topK: currentModel.value.topK,
             windowLabel: settingStore.windowLabel,
-            proxyType: proxyType.value,
-            model: currentModel.value.defaultModel,
             toolsEnabled: toolsEnabled.value,
             reasoning: currentModelDetail.value?.reasoning || false
           }
@@ -1146,9 +1144,7 @@ const genTitleByAi = () => {
   }
   titleChatId.value = Uuid()
   invoke('chat_completion', {
-    apiProtocol: genModel.apiProtocol,
-    apiUrl: genModel.baseUrl,
-    apiKey: genModel.apiKey,
+    providerId: genModel.id,
     model: model,
     chatId: titleChatId.value,
     messages: messages,
@@ -1158,7 +1154,6 @@ const genTitleByAi = () => {
       action: 'gen_title',
       conversationId: chatStore.currentConversationId,
       windowLabel: settingStore.windowLabel,
-      proxyType: proxyType.value,
       toolsEnabled: toolsEnabled.value
     }
   }).catch(error => {
@@ -1267,7 +1262,6 @@ const handleChatMessage = async payload => {
       break
     case 'text':
       chatState.value.message += payload?.chunk || ''
-
       // handle deepseek-r1 reasoning flag `<think></think>`
       if (
         chatState.value.message.startsWith('<think>') &&
@@ -1276,6 +1270,26 @@ const handleChatMessage = async payload => {
         const messages = chatState.value.message.split('</think>')
         chatState.value.reasoning = messages[0].replace('<think>', '').trim()
         chatState.value.message = messages[1].trim()
+      }
+      break
+
+    case 'toolCalls':
+      if (!chatState.value.message.includes('<!--[ToolCalls]-->')) {
+        chatState.value.message += '\n<!--[ToolCalls]-->\n'
+      }
+      break
+
+    case 'toolResults':
+      if (typeof payload?.chunk === 'string') {
+        const parsedChunk = JSON.parse(payload?.chunk || '[]')
+        if (Array.isArray(parsedChunk)) {
+          chatState.value.toolCall.push(...parsedChunk)
+        } else {
+          console.error('Expected an array but got:', typeof parsedChunk)
+        }
+      } else {
+        chatState.value.toolCall.push(...payload?.chunk)
+        hasToolCalls = true
       }
       break
 
@@ -1292,6 +1306,9 @@ const handleChatMessage = async payload => {
           console.log('chunk', payload?.chunk)
         }
       }
+      break
+    default:
+      console.warn('Unknown message type:', payload?.type, payload?.chunk)
       break
   }
 
@@ -1322,6 +1339,7 @@ const handleChatMessage = async payload => {
           ? [...chatState.value.reference]
           : []
       const originalReasoning = chatState.value.reasoning || ''
+      const originalToolCall = chatState.value.toolCall || []
 
       // 提前重置状态（核心优化点）
       chatState.value = getDefaultChatState()
@@ -1339,7 +1357,8 @@ const handleChatMessage = async payload => {
             tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
             provider: payload?.metadata?.model || currentModel.value.defaultModel || '',
             reference: originalReference,
-            reasoning: originalReasoning
+            reasoning: originalReasoning,
+            toolCall: originalToolCall
           }
         )
         // 一次性更新所有状态，减少DOM重绘次数
@@ -2107,7 +2126,7 @@ const onTakeNote = message => {
 
     .message {
       display: flex;
-      flex-direction: row;
+      flex-direction: column;
       align-items: flex-start;
       margin-bottom: var(--cs-space);
       position: relative;
@@ -2118,6 +2137,12 @@ const onTakeNote = message => {
         align-items: center;
         margin: 0 var(--cs-space-xs);
         flex-shrink: 0;
+
+        .provider {
+          font-size: var(--cs-font-size-sm);
+          color: var(--cs-text-color-secondary);
+          margin-left: var(--cs-space-xxs);
+        }
       }
 
       .content-container {
@@ -2143,6 +2168,8 @@ const onTakeNote = message => {
       &.assistant {
         .content-container {
           flex: 1;
+          margin-left: var(--cs-space-lg);
+          width: calc(100vw - var(--cs-space-lg));
 
           &.chatting {
             flex: unset;

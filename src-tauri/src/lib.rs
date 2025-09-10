@@ -154,8 +154,8 @@ pub async fn run() -> Result<()> {
             stop_chat,
             sync_state,
             detect_language,
-            deep_search,
-            stop_deep_search,
+            // deep_search,
+            // stop_deep_search,
             // mcp
             list_mcp_servers,
             add_mcp_server,
@@ -500,9 +500,10 @@ pub async fn run() -> Result<()> {
 
             // Setup ChatState and manage it
             let app_handle_for_chat_state = app.handle().clone();
-            let chat_state = ChatState::new_with_apphandle(
+            let chat_state = ChatState::new(
                 Arc::new(WindowChannels::new()),
                 Some(app_handle_for_chat_state),
+                main_store.clone(),
             );
             let tm = chat_state.tool_manager.clone();
             let app_handle_for_tm = app.handle().clone();

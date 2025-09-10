@@ -169,9 +169,9 @@
                       <span v-if="model.reasoning" class="model-icon">
                         <cs name="reasoning" color="var(--cs-color-primary)" />
                       </span>
-                      <span v-if="model.functionCall" class="model-icon">
+                      <!-- <span v-if="model.functionCall" class="model-icon">
                         <cs name="function" color="var(--cs-color-primary)" />
-                      </span>
+                      </span> -->
                       <span v-if="model?.imageInput" class="model-icon">
                         <cs name="image-add" color="var(--cs-color-primary)" />
                       </span>
@@ -371,9 +371,9 @@
                 <span v-if="model.reasoning" class="model-icon">
                   <cs name="reasoning" color="var(--cs-color-primary)" />
                 </span>
-                <span v-if="model.functionCall" class="model-icon">
+                <!-- <span v-if="model.functionCall" class="model-icon">
                   <cs name="function" color="var(--cs-color-primary)" />
-                </span>
+                </span> -->
                 <span v-if="model.imageInput" class="model-icon">
                   <cs name="image-add" color="var(--cs-color-primary)" />
                 </span>
@@ -433,9 +433,9 @@
       <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
         <el-switch v-model="modelConfigForm.reasoning" />
       </el-form-item>
-      <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
+      <!-- <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
         <el-switch v-model="modelConfigForm.functionCall" />
-      </el-form-item>
+      </el-form-item> -->
       <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
         <el-switch v-model="modelConfigForm.imageInput" />
       </el-form-item>
@@ -801,7 +801,7 @@ const defaultModelConfig = {
   id: '',
   name: '',
   group: '',
-  functionCall: false,
+  // functionCall: false,
   reasoning: false,
   imageInput: false
 }
@@ -913,17 +913,22 @@ watchEffect(async () => {
   const canFetch = essentialParamsPresentAndDialogVisible && (apiKey || apiKeyIsOptional)
 
   if (canFetch) {
-    fetchedProviderModelsFromServer(protocol, baseUrl, apiKey)
+    fetchedProviderModelsFromServer(protocol, baseUrl, apiKey, {
+      proxyType: modelForm.value.proxyType,
+      proxyUsername: modelForm.value.proxyUsername,
+      proxyPassword: modelForm.value.proxyPassword
+    })
   } else {
     fetchedProviderModels.value = []
   }
 })
 
-const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey) => {
+const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metadata) => {
   isLoadingProviderModels.value = true
   fetchedProviderModels.value = []
   try {
-    fetchedProviderModels.value = (await modelStore.listModels(protocol, baseUrl, apiKey)) || []
+    fetchedProviderModels.value =
+      (await modelStore.listModels(protocol, baseUrl, apiKey, metadata)) || []
   } catch (error) {
     console.error('Failed to fetch provider models:', error)
     fetchedProviderModels.value = []
@@ -1004,7 +1009,7 @@ const onProviderModelSave = () => {
       name: model.name,
       group: model.family || t('settings.model.ungrouped'),
       reasoning: model.reasoning || false,
-      functionCall: model.functionCall || false,
+      // functionCall: model.functionCall || false,
       imageInput: model.imageInput || false
     }))
   console.log('modelsToAdd', modelsToAdd)

@@ -296,6 +296,52 @@ impl ModelResolver {
             })
     }
 
+    pub async fn get_ai_model_by_provider_and_model(
+        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        provider_id: i64,
+        model_id: String,
+    ) -> ProxyResult<ProxyModel> {
+        let ai_model_detail = Self::get_ai_model_details(main_store_arc.clone(), provider_id)?;
+
+        let api_keys: Vec<String> = ai_model_detail
+            .api_key
+            .split('\n')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let selected_api_key = if api_keys.is_empty() {
+            // If there are no keys after trimming and filtering, return an empty string.
+            // This might be the case for Ollama or if keys are not configured.
+            "".to_string()
+        } else if api_keys.len() == 1 {
+            // If there's only one key, no need for rotation.
+            api_keys[0].clone()
+        } else {
+            // If there are multiple keys, use the rotator.
+            let composite_key = format!("internal_provider_key_rotation/{}", provider_id);
+            let index = CC_PROXY_ROTATOR.get_next_target_index(&composite_key, api_keys.len());
+            api_keys
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| "".to_string()) // Fallback, though index should be valid.
+        };
+
+        Ok(ProxyModel {
+            provider: ai_model_detail.name.clone(),
+            chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
+            base_url: ai_model_detail.base_url,
+            model: model_id,
+            api_key: selected_api_key,
+            metadata: ai_model_detail.metadata.clone(),
+            prompt_injection: "off".to_string(),
+            prompt_injection_position: Some("system".to_string()),
+            prompt_text: "".to_string(),
+            tool_filter: HashMap::new(),
+            temperature: 1.0,
+        })
+    }
+
     fn get_proxy_group(
         main_store_arc: Arc<std::sync::RwLock<MainStore>>,
         group_name: &str,
@@ -362,6 +408,10 @@ impl ModelResolver {
 /// - http-referer
 /// - Any header starting with "x-" (custom headers)
 pub fn should_forward_header(name_str: &str) -> bool {
+    if name_str == "x-provider-id" || name_str == "x-model-id" || name_str == "x-internal-request" {
+        return false;
+    }
+
     return name_str == "x-request-id"
             || name_str == "user-agent"
             || name_str == "accept-language"

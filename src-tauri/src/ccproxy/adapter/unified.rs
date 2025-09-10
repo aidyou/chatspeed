@@ -82,12 +82,8 @@ pub struct UnifiedRequest {
 
 impl UnifiedRequest {
     pub fn enhance_prompt(&mut self) {
-        // This function now only prepares the combined prompt from tool definitions and enhancement text.
-        // It no longer merges with the original system_prompt.
-        // The actual injection is handled by the backend adapters.
-
-        // We only inject prompts when tools are present, especially for tool-compat-mode.
-        if self.tools.as_deref().unwrap_or_default().is_empty() || !self.tool_compat_mode {
+        // We only inject prompts when tools are present.
+        if self.tools.as_deref().unwrap_or_default().is_empty() {
             return;
         }
 
@@ -200,9 +196,10 @@ pub struct UnifiedMetadata {
 }
 
 /// Unified thinking configuration (for Claude and Gemini)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UnifiedThinking {
-    pub budget_tokens: i32, // Token budget for internal reasoning
+    pub budget_tokens: Option<i32>, // Token budget for internal reasoning
+    pub include_thoughts: Option<bool>,
 }
 
 /// Unified cache control configuration (primarily for Claude)

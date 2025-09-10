@@ -84,6 +84,11 @@ pub struct OpenAIChatCompletionRequest {
     // Advanced parameters
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logit_bias: Option<HashMap<String, f32>>, // Token ID to bias value mapping (-100 to 100)
+    // Reasoning models
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize
@@ -110,6 +115,14 @@ pub struct OpenAIUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CompletionTokensDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
 }
 
 // For streaming

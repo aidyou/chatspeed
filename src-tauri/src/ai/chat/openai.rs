@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use reqwest::Response;
-use serde::Deserialize;
+use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
@@ -15,54 +15,31 @@ use crate::ai::traits::chat::{
     ChatResponse, FinishReason, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration,
 };
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
-use crate::ai::util::{
-    get_family_from_model_id, get_proxy_type, init_extra_params, is_function_call_supported,
-    is_image_input_supported, is_reasoning_supported, update_or_create_metadata,
-};
+use crate::ai::util::{init_extra_params, update_or_create_metadata};
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
-use crate::{ai::error::AiError, impl_stoppable};
-
-const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-
-#[derive(Deserialize, Debug)]
-struct OpenAIModel {
-    id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    object: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    created: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    owned_by: Option<String>,
-    // We can add more fields if needed from the OpenAI response, like 'permission'
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenAIListModelsResponse {
-    data: Vec<OpenAIModel>,
-}
+use crate::{
+    ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
+};
 
 /// OpenAI chat implementation
 #[derive(Clone)]
 pub struct OpenAIChat {
     stop_flag: Arc<Mutex<bool>>,
     client: DefaultApiClient,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
 }
 
 impl OpenAIChat {
     /// Creates a new instance of OpenAIChat
-    pub fn new() -> Self {
+    pub fn new(main_store: Arc<std::sync::RwLock<MainStore>>) -> Self {
         Self {
             stop_flag: Arc::new(Mutex::new(false)),
             client: DefaultApiClient::new(ErrorFormat::OpenAI),
+            main_store,
         }
     }
 
     /// Processes streaming response
-    ///
-    /// # Arguments
-    /// * `response` - Raw streaming response from OpenAI API
-    /// * `callback` - Function for sending updates to the client
-    /// * `metadata_option` - Optional metadata to include in callbacks
     async fn handle_stream_response(
         &self,
         chat_id: String,
@@ -93,25 +70,21 @@ impl OpenAIChat {
 
             match event {
                 Ok(chunk) => {
-                    let chunks = self
-                        .client
-                        .process_stream_chunk(chunk, &StreamFormat::OpenAI)
-                        .await
-                        .map_err(|e| {
-                            let err = AiError::StreamProcessingFailed {
-                                provider: provider_name.clone(),
-                                details: e.to_string(),
-                            };
-                            log::error!("{} stream processing error: {}", provider_name, err);
-                            callback(ChatResponse::new_with_arc(
-                                chat_id.clone(),
-                                err.to_string(),
-                                MessageType::Error,
-                                metadata_option.clone(),
-                                Some(FinishReason::Error),
-                            ));
-                            err
-                        })?;
+                    let chunks = self.client.process_stream_chunk(chunk).await.map_err(|e| {
+                        let err = AiError::StreamProcessingFailed {
+                            provider: provider_name.clone(),
+                            details: e.to_string(),
+                        };
+                        log::error!("{} stream processing error: {}", provider_name, err);
+                        callback(ChatResponse::new_with_arc(
+                            chat_id.clone(),
+                            err.to_string(),
+                            MessageType::Error,
+                            metadata_option.clone(),
+                            Some(FinishReason::Error),
+                        ));
+                        err
+                    })?;
 
                     for chunk in chunks {
                         if let Some(new_usage) = chunk.usage {
@@ -229,7 +202,7 @@ impl OpenAIChat {
                                         callback(ChatResponse::new_with_arc(
                                             chat_id.clone(),
                                             serialized_assistant_action,
-                                            MessageType::AssistantAction,
+                                            MessageType::ToolCalls,
                                             metadata_option.clone(),
                                             None,
                                         ));
@@ -254,7 +227,7 @@ impl OpenAIChat {
                                             callback(ChatResponse::new_with_arc(
                                                 chat_id.clone(),
                                                 serialized_tcd,
-                                                MessageType::ToolCall,
+                                                MessageType::ToolResults,
                                                 metadata_option.clone(),
                                                 None,
                                             ));
@@ -339,9 +312,8 @@ impl AiChatTrait for OpenAIChat {
     /// Implements chat functionality for OpenAI API
     ///
     /// # Arguments
-    /// * `api_url` - Optional API endpoint URL
+    /// * `provider_id` - provider id
     /// * `model` - The model to use
-    /// * `api_key` - Optional API key
     /// * `chat_id` - Unique identifier for the chat session
     /// * `messages` - The chat messages
     /// * `tools` - Optional tools to use
@@ -349,23 +321,31 @@ impl AiChatTrait for OpenAIChat {
     /// * `callback` - Function for sending updates to the client
     async fn chat(
         &self,
-        api_url: Option<&str>,
+        provider_id: i64,
         model: &str,
-        api_key: Option<&str>,
         chat_id: String,
         messages: Vec<Value>,
         tools: Option<Vec<MCPToolDeclaration>>,
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError> {
-        let (params, metadata_option) = init_extra_params(extra_params.clone());
+        let model_detail = self
+            .main_store
+            .read()
+            .map_err(|e| {
+                AiError::InitFailed(
+                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                )
+            })?
+            .config
+            .get_ai_model_by_id(provider_id)
+            .map_err(|e| {
+                AiError::InitFailed(t!("db.failed_to_get_model", error = e.to_string()).to_string())
+            })?;
 
-        let provider_name_for_error =
-            if api_url.is_some() && api_url != Some(OPENAI_DEFAULT_API_BASE) {
-                "OpenAI Compatible".to_string() // User-facing name for compatible APIs
-            } else {
-                "OpenAI".to_string()
-            };
+        let params = init_extra_params(model_detail.metadata);
+
+        let url = crate::constants::get_static_var(&crate::constants::CHAT_COMPLETION_PROXY);
 
         let mut payload = json!({
             "model": model,
@@ -376,26 +356,20 @@ impl AiChatTrait for OpenAIChat {
         // Add optional parameters if they exist and are not null
         if let Some(obj) = payload.as_object_mut() {
             // Handle max_tokens if provided
-            if let Some(max_tokens_val) = params.get("max_tokens").and_then(|v| v.as_u64()) {
-                if max_tokens_val > 0 {
-                    obj.insert("max_tokens".to_string(), json!(max_tokens_val));
-                }
+            if model_detail.max_tokens > 0 {
+                obj.insert("max_tokens".to_string(), json!(model_detail.max_tokens));
             }
 
             // Handle temperature if provided
             // OpenAI temperature range is typically 0 to 2.
-            if let Some(temperature_val) = params.get("temperature").and_then(|v| v.as_f64()) {
-                // You might want to add validation here, e.g., if temperature_val >= 0.0 && temperature_val <= 2.0
-                if temperature_val >= 0.0 && temperature_val <= 2.0 {
-                    obj.insert("temperature".to_string(), json!(temperature_val));
-                }
+            // You might want to add validation here, e.g., if temperature_val >= 0.0 && temperature_val <= 2.0
+            if model_detail.temperature >= 0.0 && model_detail.temperature <= 2.0 {
+                obj.insert("temperature".to_string(), json!(model_detail.temperature));
             }
 
             // Zero -> unset
-            if let Some(top_p) = params.get("top_p").as_ref().and_then(|v| v.as_f64()) {
-                if top_p > 0.0 && top_p <= 1.0 {
-                    obj.insert("top_p".to_string(), json!(top_p));
-                }
+            if model_detail.top_p > 0.0 && model_detail.top_p <= 1.0 {
+                obj.insert("top_p".to_string(), json!(model_detail.top_p));
             }
 
             // frequency_penalty: OpenAI default is 0.0. Range: -2.0 to 2.0.
@@ -453,7 +427,7 @@ impl AiChatTrait for OpenAIChat {
                 }
             }
 
-            match tools {
+            match tools.as_ref() {
                 Some(tools) => {
                     let openai_tools = tools
                         .into_iter()
@@ -474,45 +448,42 @@ impl AiChatTrait for OpenAIChat {
             }
         }
 
-        #[cfg(debug_assertions)]
-        log::debug!(
-            "OpenAI Request Body (final): {}",
-            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        let internal_api_key = INTERNAL_CCPROXY_API_KEY.read().clone();
+        let headers = json!({
+            "X-Provider-Id": provider_id.to_string(),
+            "X-Model-Id": model,
+            "X-Internal-Request": "true",
+        });
+
+        let config = ApiConfig::new(
+            Some(url),
+            Some(internal_api_key),
+            crate::ai::network::ProxyType::None, // No proxy, as we are calling localhost
+            Some(headers),
         );
 
+        let endpoint = match tools.as_ref() {
+            Some(t) => {
+                if t.is_empty() {
+                    "/v1/chat/completions"
+                } else {
+                    "/compat_mode/v1/chat/completions"
+                }
+            }
+            None => "/v1/chat/completions",
+        };
         let response = self
             .client
-            .post_request(
-                &ApiConfig::new(
-                    Some(api_url.unwrap_or(OPENAI_DEFAULT_API_BASE).to_string()),
-                    api_key.map(String::from),
-                    get_proxy_type(extra_params),
-                    None,
-                ),
-                "chat/completions",
-                payload,
-                true,
-            )
+            .post_request(&config, endpoint, payload, true)
             .await
-            .map_err(|network_err| {
-                let err = AiError::ApiRequestFailed {
-                    provider: provider_name_for_error.clone(),
-                    details: network_err.to_string(),
-                };
-                log::error!("{} API request failed: {}", provider_name_for_error, err);
-                callback(ChatResponse::new_with_arc(
-                    chat_id.clone(),
-                    err.to_string(),
-                    MessageType::Error,
-                    metadata_option.clone(),
-                    Some(FinishReason::Error),
-                ));
-                err
+            .map_err(|e| AiError::ApiRequestFailed {
+                provider: model_detail.api_protocol.clone(),
+                details: e.to_string(),
             })?;
 
         if response.is_error {
             let err = AiError::ApiRequestFailed {
-                provider: provider_name_for_error.clone(),
+                provider: model_detail.api_protocol.clone(),
                 details: response.content.clone(),
             };
             // log::error!("{} API returned an error: {}", provider_name_for_error, err);
@@ -520,7 +491,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 err.to_string(),
                 MessageType::Error,
-                metadata_option,
+                extra_params,
                 Some(FinishReason::Error),
             ));
             return Err(err);
@@ -531,8 +502,8 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 raw_response,
                 callback,
-                metadata_option,
-                provider_name_for_error,
+                extra_params,
+                model_detail.name.clone(),
             )
             .await
         } else {
@@ -540,7 +511,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 response.content.clone(),
                 MessageType::Finished,
-                metadata_option,
+                extra_params,
                 Some(FinishReason::Error),
             ));
             Ok(response.content)
@@ -549,107 +520,20 @@ impl AiChatTrait for OpenAIChat {
 
     async fn list_models(
         &self,
+        api_protocol: String,
         api_url: Option<&str>,
         api_key: Option<&str>,
         extra_args: Option<Value>,
     ) -> Result<Vec<ModelDetails>, AiError> {
-        let base_url = api_url.unwrap_or(OPENAI_DEFAULT_API_BASE);
-        let mut effective_api_key = api_key.map(String::from);
-
-        let mut custom_headers = json!({});
-        if let Some(args) = &extra_args {
-            if let Some(key_from_extra) = args.get("api_key").and_then(|v| v.as_str()) {
-                if !key_from_extra.is_empty() {
-                    effective_api_key = Some(key_from_extra.to_string());
-                }
+        let model_details = match ChatProtocol::from_str(&api_protocol) {
+            Ok(ChatProtocol::Claude) => {
+                super::list_models::claude_list_models(api_url, api_key, extra_args).await
             }
-            if let Some(org_id) = args.get("organization").and_then(|v| v.as_str()) {
-                if !org_id.is_empty() {
-                    custom_headers
-                        .as_object_mut()
-                        .unwrap()
-                        .insert("OpenAI-Organization".to_string(), json!(org_id));
-                }
+            Ok(ChatProtocol::Gemini) => {
+                super::list_models::gemini_list_models(api_url, api_key, extra_args).await
             }
-        }
-
-        let config = ApiConfig::new(
-            Some(base_url.to_string()),
-            effective_api_key, // Handled by DefaultApiClient for Bearer token
-            get_proxy_type(extra_args.clone()), // Pass extra_args for proxy settings
-            if custom_headers.as_object().map_or(true, |m| m.is_empty()) {
-                None
-            } else {
-                Some(custom_headers)
-            },
-        );
-
-        let response = self
-            .client
-            .get_request(&config, "/models", None)
-            .await
-            .map_err(|e| AiError::ApiRequestFailed {
-                provider: "OpenAI".to_string(),
-                details: e,
-            })?;
-
-        if response.is_error || response.content.is_empty() {
-            return Err(AiError::ApiRequestFailed {
-                provider: "OpenAI".to_string(),
-                details: response.content,
-            });
-        }
-
-        #[cfg(debug_assertions)]
-        log::debug!("OpenAI list_models response: {}", &response.content);
-
-        let models_response: OpenAIListModelsResponse = serde_json::from_str(&response.content)
-            .map_err(|e| {
-                log::error!(
-                    "Failed to parse OpenAI models response: {}, content:{}",
-                    e,
-                    &response.content
-                );
-                AiError::ResponseParseFailed {
-                    provider: "OpenAI".to_string(),
-                    details: e.to_string(),
-                }
-            })?;
-
-        let model_details: Vec<ModelDetails> = models_response
-            .data
-            .into_iter()
-            .fold(std::collections::HashMap::new(), |mut acc, model| {
-                acc.insert(model.id.to_lowercase(), model);
-                acc
-            })
-            .into_values()
-            .map(|model| {
-                let id = model.id.to_lowercase();
-
-                ModelDetails {
-                    id: model.id.clone(),
-                    name: model.id, // OpenAI API doesn't provide a separate "friendly name"
-                    protocol: ChatProtocol::OpenAI,
-                    max_input_tokens: None,  // Not provided by /v1/models
-                    max_output_tokens: None, // Not provided by /v1/models
-                    description: Some(format!(
-                        "Owned by: {}",
-                        model.owned_by.as_deref().unwrap_or("unknown")
-                    )),
-                    last_updated: DateTime::from_timestamp(model.created.unwrap_or_default(), 0)
-                        .map(|dt: DateTime<Utc>| dt.to_rfc3339()),
-                    family: get_family_from_model_id(&id),
-                    function_call: Some(is_function_call_supported(&id)),
-                    reasoning: Some(is_reasoning_supported(&id)),
-                    image_input: Some(is_image_input_supported(&id)),
-                    metadata: Some(json!({
-                        "object": model.object.unwrap_or_default(),
-                        "owned_by": model.owned_by.unwrap_or_default(),
-                    })),
-                }
-            })
-            .collect();
+            _ => super::list_models::openai_list_models(api_url, api_key, extra_args).await,
+        }?;
 
         Ok(model_details)
     }

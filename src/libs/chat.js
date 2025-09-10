@@ -17,7 +17,6 @@ const THINK_CONTENT_REGEX = /<think>[\s\S]+?<\/think>/
 const PLACEHOLDER_RESTORE_REGEX = /___(?:CODE|MATH|BLOCK_MATH|THINK)_\d+___/g
 
 const MATH_BLOCK_REGEX = /\$\$([\s\S]+?)\$\$/g
-const MATH_INLINE_REGEX = /\$([^\n]+?)\$/g
 const CHINESE_CHARS_REGEX = /[\u4e00-\u9fa5]/
 const CHINESE_CHARS_GROUP_REGEX = /([\u4e00-\u9fa5]+)/g
 
@@ -284,11 +283,11 @@ export const htmlspecialchars = text => {
 /**
  * modify parseMarkdown function
  */
-export const parseMarkdown = (content, reference) => {
+export const parseMarkdown = (content, reference, toolCalls) => {
   content = content ? content.trim() : ''
   if (!content) return ''
 
-  let refs = ''
+  // let refs = ''
   // format refs [1,2,3](@ref) -> [^1][^2][^3]
   content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
     return numbers
@@ -422,6 +421,10 @@ export const parseMarkdown = (content, reference) => {
   //   return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
   // })
 
+  if (toolCalls) {
+    content = content.replace('<!--[ToolCalls]-->', createToolCall(toolCalls))
+  }
+
   const renderer = new marked.Renderer()
 
   renderer.code = ev => {
@@ -448,5 +451,37 @@ export const parseMarkdown = (content, reference) => {
     return `<pre><code class="language-${lang}">${htmlspecialchars(ev.text)}</code></pre>`
   }
 
-  return marked(refs + content, { renderer })
+  return marked(content, { renderer })
+}
+
+const createToolCall = toolCalls => {
+  let tools = ''
+  toolCalls.forEach(call => {
+    const functionName = call?.function?.name
+    if (functionName) {
+      tools += '<div class="chat-tool-calls">'
+      if (functionName.includes('__MCP__')) {
+        const names = functionName.split('__MCP__')
+        if (names.length === 2) {
+          tools += `<div class="tool-name">${i18n.global.t('chat.mcpCall')} ${names[0]}::${names[1]}</div>`
+        } else {
+          tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${functionName}</div>`
+        }
+      } else {
+        tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${functionName}</div>`
+      }
+      const result =
+        typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
+      tools += `<div class="tool-codes" style="display:none;">
+      <div class="tool-code"><h3>📝 ${i18n.global.t('chat.toolArgs')}</h3>
+          <pre><code class="language-json" disable-titlebar>${call.function.arguments}</code></pre>
+        </div>
+        <div class="tool-code"><h3>🎯 ${i18n.global.t('chat.toolResult')}</h3>
+          <pre><code class="language-json" disable-titlebar>${result}</code></pre>
+        </div>
+        </div>
+      </div>`
+    }
+  })
+  return tools
 }

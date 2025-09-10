@@ -474,10 +474,14 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     user_id: m.user_id.clone(),
                 }
             }),
-            thinking: unified_request.thinking.as_ref().map(|t| {
-                crate::ccproxy::types::claude::ClaudeThinking {
-                    thinking_type: "enabled".to_string(),
-                    budget_tokens: t.budget_tokens,
+            thinking: unified_request.thinking.as_ref().and_then(|t| {
+                if matches!(t.include_thoughts, Some(true)) {
+                    Some(crate::ccproxy::types::claude::ClaudeThinking {
+                        thinking_type: "enabled".to_string(),
+                        budget_tokens: t.budget_tokens.unwrap_or(1024), // Use 1024 as a reasonable default
+                    })
+                } else {
+                    None
                 }
             }),
             cache_control: unified_request.cache_control.as_ref().map(|c| {

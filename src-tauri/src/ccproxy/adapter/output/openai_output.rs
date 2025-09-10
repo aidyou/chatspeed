@@ -3,8 +3,8 @@ use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStream
 use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::types::openai::{
-    OpenAIChatCompletionChoice, OpenAIChatCompletionResponse, OpenAIMessageContent, OpenAIUsage,
-    UnifiedChatMessage,
+    CompletionTokensDetails, OpenAIChatCompletionChoice, OpenAIChatCompletionResponse,
+    OpenAIMessageContent, OpenAIUsage, UnifiedChatMessage,
 };
 
 use axum::response::{IntoResponse, Response};
@@ -93,6 +93,11 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 prompt_tokens: response.usage.input_tokens,
                 completion_tokens: response.usage.output_tokens,
                 total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+                completion_tokens_details: response.usage.thoughts_tokens.map(|t| {
+                    CompletionTokensDetails {
+                        reasoning_tokens: Some(t),
+                    }
+                }),
             }),
         };
 

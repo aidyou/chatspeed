@@ -4,6 +4,7 @@ use crate::{
         helper::CcproxyQuery,
         types::ChatCompletionProxyKeysConfig,
     },
+    constants::INTERNAL_CCPROXY_API_KEY,
     db::MainStore,
 };
 
@@ -22,6 +23,26 @@ pub async fn authenticate_request(
         log::debug!("Skipping authentication for local request.");
         return Ok(());
     }
+
+    // Check for internal request header
+    if let Some(internal_header) = headers.get("X-Internal-Request") {
+        if internal_header == "true" {
+            if let Some(auth_header) = headers.get("authorization") {
+                if let Ok(auth_str) = auth_header.to_str() {
+                    if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                        let internal_key = INTERNAL_CCPROXY_API_KEY.read().clone();
+                        if token.trim() == internal_key {
+                            log::debug!("Internal request authenticated successfully.");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            log::warn!("Internal request authentication failed.");
+            return Err(CCProxyError::InvalidToken);
+        }
+    }
+
     // In order of priority, we check for an API key in:
     // 1. "Authorization: Bearer <token>" header (OpenAI format)
     // 2. "x-api-key: <token>" header (Claude format)

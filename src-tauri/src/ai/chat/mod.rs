@@ -1,4 +1,2 @@
-pub mod claude;
-pub mod gemini;
-// pub mod huggingface;
+mod list_models;
 pub mod openai;

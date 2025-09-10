@@ -6,6 +6,9 @@ pub enum AiError {
     #[error("{}", t!("chat.error.api_request_failed", provider = .provider, details = .details))]
     ApiRequestFailed { provider: String, details: String },
 
+    #[error("{0}")]
+    InitFailed(String),
+
     #[error("{}", t!("chat.error.invalid_input", details =.0))]
     InvalidInput(String),
 

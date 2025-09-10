@@ -66,6 +66,10 @@
     "showFavoriteConversations": "显示收藏的对话主题",
     "skills": "技能",
     "takeNote": "保存到智记",
+    "toolCall": "工具调用",
+    "toolArgs": "参数",
+    "toolResult": "结果",
+    "mcpCall": "调用 MCP 工具",
     "translationSkillPromptEmpty": "翻译技能的提示词不能为空",
     "date": {
       "earlier": "更早",

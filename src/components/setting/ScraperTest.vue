@@ -106,12 +106,13 @@
       <div class="item" v-if="result">
         <div class="label">Scraper Result</div>
         <div class="value">
-          <el-input
-            type="textarea"
-            :rows="10"
-            v-model="result"
-            readonly
-            resize="vertical"></el-input>
+          <el-input type="textarea" :rows="10" v-model="result" readonly resize="vertical" />
+        </div>
+      </div>
+      <div class="item" v-if="content">
+        <div class="label">Scraper Content</div>
+        <div class="value">
+          <el-input type="textarea" :rows="10" v-model="content" readonly resize="vertical" />
         </div>
       </div>
       <div class="item" v-if="error">
@@ -131,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { showMessage } from '@/libs/util'
 
@@ -154,6 +155,18 @@ const timePeriod = ref('')
 const loading = ref(false)
 const result = ref(null)
 const error = ref(null)
+
+const content = computed(() => {
+  if (!result.value) return null
+  if (typeof result.value === 'object') {
+    return result.value.content || ''
+  }
+  if (typeof result.value === 'string') {
+    const json = JSON.parse(result.value)
+    console.log(typeof json)
+    return json.content || ''
+  }
+})
 
 const runTest = async () => {
   loading.value = true
@@ -192,7 +205,7 @@ const runTest = async () => {
 
   try {
     const response = await invoke('test_scrape', { requestData: params })
-    result.value = response
+    result.value = JSON.parse(response)
   } catch (e) {
     error.value = e
     showMessage('Test Failed: ' + e.message)

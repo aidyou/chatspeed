@@ -167,7 +167,8 @@ pub fn from_gemini(
             .and_then(|config| config.thinking_config.as_ref())
             .map(
                 |thinking| crate::ccproxy::adapter::unified::UnifiedThinking {
-                    budget_tokens: thinking.thinking_budget.unwrap_or(0),
+                    budget_tokens: thinking.thinking_budget,
+                    include_thoughts: thinking.include_thoughts,
                 },
             ),
         cache_control: None, // Gemini uses cached_content instead

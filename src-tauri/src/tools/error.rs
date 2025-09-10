@@ -41,3 +41,9 @@ pub enum ToolError {
     #[error("{0}")]
     Store(String),
 }
+
+impl From<String> for ToolError {
+    fn from(s: String) -> Self {
+        ToolError::Execution(s)
+    }
+}

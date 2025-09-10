@@ -41,7 +41,8 @@ pub async fn handle_direct_forward(
 
     // Forward relevant headers from client
     for (name, value) in client_headers.iter() {
-        if should_forward_header(name.as_str()) {
+        let name_str = name.as_str().to_lowercase();
+        if should_forward_header(&name_str) {
             match ReqwestHeaderValue::from_bytes(value.as_bytes()) {
                 Ok(h) => {
                     if let Ok(n) = ReqwestHeaderName::from_str(name.clone().as_str()) {

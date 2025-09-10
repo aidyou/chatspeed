@@ -8,29 +8,28 @@
  * 4. `mermaid`: Renders Mermaid diagrams and Markmap mindmaps
  * 5. `think`: Toggles the visibility of think content
  */
-
-// Regular expressions for Mermaid diagram syntax normalization
-const MERMAID_ARROW_LABEL_REGEX = /---\s*(\w+)\s*-->/g;
-const MERMAID_ARROW_LABEL_ALT_REGEX = /--\s*(\w+)\s*-->/g;
-const MERMAID_ARROW_SPACE_REGEX = /(\w+)\s+-->\s*(\w+)/g;
-const MERMAID_ARROW_END_REGEX = /(\w+)\s*-->\s*$/gm;
-const MERMAID_EMPTY_LINE_REGEX = /^\s*[\r\n]/gm;
-const MERMAID_ARROW_LABEL_END_REGEX = /\w+\s*-->\s*\|[^|]+\|\s*$/g;
-
-// Regular expressions for Markmap and date formatting
-const MARKMAP_STYLE_REGEX = /.markmap\s*{[^}]*}/;
-const DATE_SEPARATOR_REGEX = /[-:T]/g;
-
-import hljs from 'highlight.js'
 import i18n from '@/i18n'
-import mermaid from 'mermaid'
-import { Markmap } from 'markmap-view'
-import { Transformer } from 'markmap-lib'
+import { openUrl } from '@/libs/util'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
-import { openUrl } from '@/libs/util'
+import hljs from 'highlight.js'
 import katex from 'katex'
+import { Transformer } from 'markmap-lib'
+import { Markmap } from 'markmap-view'
+import mermaid from 'mermaid'
 
+
+// Regular expressions for Mermaid diagram syntax normalization
+const MERMAID_ARROW_LABEL_REGEX = /---\s*(\w+)\s*-->/g
+const MERMAID_ARROW_LABEL_ALT_REGEX = /--\s*(\w+)\s*-->/g
+const MERMAID_ARROW_SPACE_REGEX = /(\w+)\s+-->\s*(\w+)/g
+const MERMAID_ARROW_END_REGEX = /(\w+)\s*-->\s*$/gm
+const MERMAID_EMPTY_LINE_REGEX = /^\s*[\r\n]/gm
+const MERMAID_ARROW_LABEL_END_REGEX = /\w+\s*-->\s*\|[^|]+\|\s*$/g
+
+// Regular expressions for Markmap and date formatting
+const MARKMAP_STYLE_REGEX = /.markmap\s*{[^}]*}/
+const DATE_SEPARATOR_REGEX = /[-:T]/g
 // =================================================
 // Mermaid Diagram Processing
 // =================================================
@@ -44,7 +43,7 @@ const MERMAID_CONFIG = {
   fontSize: 14,
   flowchart: {
     htmlLabels: true,
-    curve: 'linear',
+    curve: 'linear'
   },
   suppressErrorRendering: true,
   logLevel: 5,
@@ -63,14 +62,16 @@ mermaid.initialize(MERMAID_CONFIG)
  * @param {string} content - Raw Mermaid diagram content
  * @returns {string} - Normalized Mermaid diagram content
  */
-const processMermaidContent = (content) => {
+const processMermaidContent = content => {
   content = content.trim()
 
   // Ensure proper graph declaration
-  if (!content.startsWith('graph') &&
+  if (
+    !content.startsWith('graph') &&
     !content.startsWith('sequenceDiagram') &&
-    !content.startsWith('classDiagram')) {
-    content = 'graph TD\n' + content
+    !content.startsWith('classDiagram')
+  ) {
+    content = `graph TD\n${content}`
   }
 
   // Normalize arrow syntax
@@ -100,12 +101,12 @@ const MARKMAP_LAYOUT_CONFIG = {
 
 // Base layout parameters for mindmap
 const MINDMAP_LAYOUT_PARAMS = {
-  minHeight: 200,    // Minimum height of the mindmap
-  maxHeight: 800,    // Maximum height constraint
-  nodeHeight: 20,    // Height of each node
-  levelSpacing: 15,  // Vertical spacing between levels
-  nodeSpacing: 10,   // Vertical spacing between nodes at same level
-  padding: 10        // Padding at top and bottom
+  minHeight: 200, // Minimum height of the mindmap
+  maxHeight: 800, // Maximum height constraint
+  nodeHeight: 20, // Height of each node
+  levelSpacing: 15, // Vertical spacing between levels
+  nodeSpacing: 10, // Vertical spacing between nodes at same level
+  padding: 10 // Padding at top and bottom
 }
 
 // Initialize transformers
@@ -123,7 +124,7 @@ const transformer = new Transformer()
 function calculateMapDimensions(root) {
   let maxDepth = 0
   let maxWidth = 0
-  let levelWidths = new Map()
+  const levelWidths = new Map()
 
   // Recursively traverse the tree to calculate dimensions
   function traverse(node, depth = 0) {
@@ -133,13 +134,15 @@ function calculateMapDimensions(root) {
 
     // Recursively process child nodes
     if (node.children?.length > 0) {
-      node.children.forEach(child => traverse(child, depth + 1))
+      node.children.forEach(child => {
+        traverse(child, depth + 1)
+      })
     }
   }
 
   traverse(root)
   // Find the maximum width across all levels
-  levelWidths.forEach((width) => {
+  levelWidths.forEach(width => {
     maxWidth = Math.max(maxWidth, width)
   })
 
@@ -158,18 +161,12 @@ function calculateMapDimensions(root) {
  */
 function calculateOptimalHeight(root) {
   const { maxDepth, levelWidths } = calculateMapDimensions(root)
-  const {
-    minHeight,
-    maxHeight,
-    nodeHeight,
-    levelSpacing,
-    nodeSpacing,
-    padding
-  } = MINDMAP_LAYOUT_PARAMS
+  const { minHeight, maxHeight, nodeHeight, levelSpacing, nodeSpacing, padding } =
+    MINDMAP_LAYOUT_PARAMS
 
   // Calculate maximum height needed for any single level
   let maxLevelHeight = 0
-  levelWidths.forEach((nodesCount) => {
+  levelWidths.forEach(nodesCount => {
     // Height for each level = number of nodes * (node height + spacing between nodes)
     const levelHeight = nodesCount * (nodeHeight + nodeSpacing)
     maxLevelHeight = Math.max(maxLevelHeight, levelHeight)
@@ -177,9 +174,9 @@ function calculateOptimalHeight(root) {
 
   // Calculate total content height
   // contentHeight = maximum level height + (spacing between levels * number of levels)
-  const contentHeight = maxLevelHeight + (levelSpacing * maxDepth)
+  const contentHeight = maxLevelHeight + levelSpacing * maxDepth
   // Add padding to top and bottom
-  const totalHeight = contentHeight + (padding * 2)
+  const totalHeight = contentHeight + padding * 2
 
   // Return height bounded between minHeight and maxHeight
   return Math.min(Math.max(minHeight, totalHeight), maxHeight)
@@ -278,7 +275,8 @@ function resolveCssVariables(svg) {
  * @returns {HTMLElement} The download button element
  */
 function createDownloadButton(container, type) {
-  const name = type === 'mermaid' ? i18n.global.t('common.diagram') : i18n.global.t('common.mindmap')
+  const name =
+    type === 'mermaid' ? i18n.global.t('common.diagram') : i18n.global.t('common.mindmap')
   const titleBar = document.createElement('div')
   titleBar.classList.add('code-title-bar')
   const title = document.createElement('span')
@@ -297,10 +295,12 @@ function createDownloadButton(container, type) {
   const handleSvgDownload = async () => {
     try {
       const filePath = await save({
-        filters: [{
-          name: 'SVG Image',
-          extensions: ['svg']
-        }],
+        filters: [
+          {
+            name: 'SVG Image',
+            extensions: ['svg']
+          }
+        ],
         defaultPath: `${name}-${new Date().toISOString().replace(DATE_SEPARATOR_REGEX, '').slice(0, 14)}.svg`
       })
 
@@ -431,7 +431,7 @@ async function renderMermaidDiagrams(el) {
       const TRANSFORM_WAIT_TIME = MARKMAP_LAYOUT_CONFIG.duration + ANIMATION_BUFFER
 
       // Protection timeout to prevent infinite waiting
-      let protectedTimer = setTimeout(() => {
+      const protectedTimer = setTimeout(() => {
         if (!svg.hasAttribute('data-initial-transform')) {
           const gElement = svg.querySelector('g')
           if (gElement) {
@@ -446,10 +446,9 @@ async function renderMermaidDiagrams(el) {
       }, 2000) // 2 seconds protection timeout
 
       // Create observer to monitor changes
-      const observer = new MutationObserver((mutations) => {
+      const observer = new MutationObserver(_mutations => {
         const gElement = svg.querySelector('g')
         if (gElement) {
-
           // Wait for animation completion before getting final transform value
           setTimeout(() => {
             const transform = gElement.getAttribute('transform')
@@ -476,7 +475,6 @@ async function renderMermaidDiagrams(el) {
         attributeFilter: ['transform'],
         characterData: false
       })
-
 
       // Create download button after Markmap rendering
       const downloadBtn = createDownloadButton(el, 'markmap')
@@ -540,18 +538,21 @@ function createCopyButton(iconClass, text, onClick) {
  * @param {string} iconClass - Original icon class
  */
 function handleCopy(button, btnTxt, copyText, iconClass) {
-  navigator.clipboard.writeText(copyText).then(() => {
-    button.classList.remove(iconClass)
-    button.classList.add(COPY_BUTTON_CONFIG.code.successIcon)
-    button.innerText = i18n.global.t('common.copied')
-    setTimeout(() => {
-      button.classList.remove(COPY_BUTTON_CONFIG.code.successIcon)
-      button.classList.add(iconClass)
-      button.innerText = btnTxt
-    }, 3000)
-  }).catch(err => {
-    console.error('Could not copy text: ', err)
-  })
+  navigator.clipboard
+    .writeText(copyText)
+    .then(() => {
+      button.classList.remove(iconClass)
+      button.classList.add(COPY_BUTTON_CONFIG.code.successIcon)
+      button.innerText = i18n.global.t('common.copied')
+      setTimeout(() => {
+        button.classList.remove(COPY_BUTTON_CONFIG.code.successIcon)
+        button.classList.add(iconClass)
+        button.innerText = btnTxt
+      }, 3000)
+    })
+    .catch(err => {
+      console.error('Could not copy text: ', err)
+    })
 }
 
 /**
@@ -565,8 +566,12 @@ function createTitleBar(block) {
   // Create language label
   const languageLabel = document.createElement('span')
   languageLabel.classList.add('code-language-label')
-  const languageClass = block.getAttribute('class')?.split(' ')
-    .find(cls => cls.startsWith('language-'))?.replace('language-', '') || ''
+  const languageClass =
+    block
+      .getAttribute('class')
+      ?.split(' ')
+      .find(cls => cls.startsWith('language-'))
+      ?.replace('language-', '') || ''
   languageLabel.innerText = languageClass
 
   titleBar.appendChild(languageLabel)
@@ -583,9 +588,9 @@ function createTitleBar(block) {
     COPY_BUTTON_CONFIG.markdown.icon,
     COPY_BUTTON_CONFIG.markdown.text(),
     () => {
-      const copyText = languageClass ?
-        '```' + languageClass + '\n' + block.innerText.trim() + '\n```\n' :
-        block.innerText.trim()
+      const copyText = languageClass
+        ? `\`\`\`${languageClass}\n${block.innerText.trim()}\n\`\`\`\n`
+        : block.innerText.trim()
       handleCopy(
         markdownCopyBtn.button,
         COPY_BUTTON_CONFIG.markdown.text(),
@@ -666,20 +671,26 @@ const DIRECTIVE_CONFIG = {
     name: 'highlight',
     handlers: {
       mounted: el => {
-        el.querySelectorAll('pre code').forEach((block) => {
+        el.querySelectorAll('pre code').forEach(block => {
           hljs.highlightElement(block)
-          if (!block.parentElement.querySelector('div')) {
+          if (
+            !block.parentElement.querySelector('div') &&
+            !block.hasAttribute('disable-titlebar')
+          ) {
             createTitleBar(block)
           }
         })
       },
       updated: el => {
-        el.querySelectorAll('pre code').forEach((block) => {
+        el.querySelectorAll('pre code').forEach(block => {
           if (block?.attributes?.['data-highlighted']?.value === 'yes') {
             return
           }
           hljs.highlightElement(block)
-          if (!block.parentElement.querySelector('div')) {
+          if (
+            !block.parentElement.querySelector('div') &&
+            !block.hasAttribute('disable-titlebar')
+          ) {
             createTitleBar(block)
           }
         })
@@ -688,7 +699,9 @@ const DIRECTIVE_CONFIG = {
         // Clean up code title bar event listeners
         el.querySelectorAll('pre').forEach(pre => {
           if (pre._codeTitleBarCleanup) {
-            pre._codeTitleBarCleanup.forEach(cleanup => cleanup())
+            pre._codeTitleBarCleanup.forEach(cleanup => {
+              cleanup()
+            })
             delete pre._codeTitleBarCleanup
           }
         })
@@ -699,7 +712,7 @@ const DIRECTIVE_CONFIG = {
     name: 'link',
     handlers: {
       mounted: el => {
-        const handleClick = async (e) => {
+        const handleClick = async e => {
           if (e.target.tagName === 'A') {
             e.preventDefault()
             e.stopPropagation()
@@ -725,7 +738,7 @@ const DIRECTIVE_CONFIG = {
     name: 'table',
     handlers: {
       mounted: el => {
-        el.querySelectorAll('table').forEach((block) => {
+        el.querySelectorAll('table').forEach(block => {
           if (!block.parentElement.classList.contains('table-container')) {
             const container = document.createElement('div')
             container.className = 'table-container'
@@ -735,7 +748,7 @@ const DIRECTIVE_CONFIG = {
         })
       },
       updated: el => {
-        el.querySelectorAll('table').forEach((block) => {
+        el.querySelectorAll('table').forEach(block => {
           if (!block.parentElement.classList.contains('table-container')) {
             const container = document.createElement('div')
             container.className = 'table-container'
@@ -781,10 +794,12 @@ const DIRECTIVE_CONFIG = {
     name: 'mermaid',
     handlers: {
       mounted: renderMermaidDiagrams,
-      unmounted: (el) => {
+      unmounted: el => {
         // Clean up event listeners
         if (el._diagramCleanup) {
-          el._diagramCleanup.forEach(cleanup => cleanup())
+          el._diagramCleanup.forEach(cleanup => {
+            cleanup()
+          })
           delete el._diagramCleanup
         }
       }
@@ -805,6 +820,17 @@ const DIRECTIVE_CONFIG = {
       // },
       unmounted: el => {
         removeThinkEvents(el)
+      }
+    }
+  },
+  tools: {
+    name: 'tools',
+    handlers: {
+      mounted: el => {
+        bindToolCallEvents(el)
+      },
+      unmounted: el => {
+        removeToolCallEvents(el)
       }
     }
   }
@@ -851,7 +877,7 @@ function bindThinkEvents(el) {
   const titles = el.querySelectorAll('.chat-think-title')
   titles.forEach(title => {
     const content = title.nextElementSibling
-    if (content && content.classList.contains('think-content')) {
+    if (content?.classList.contains('think-content')) {
       title.style.cursor = 'pointer'
       const clickHandler = () => {
         const isHidden = content.style.display === 'none'
@@ -864,6 +890,36 @@ function bindThinkEvents(el) {
       }
       title._thinkClickHandler = clickHandler
       title.addEventListener('click', clickHandler)
+    }
+  })
+}
+
+function bindToolCallEvents(el) {
+  const titles = el.querySelectorAll('.chat-tool-calls>.tool-name')
+  titles.forEach(title => {
+    const content = title.nextElementSibling
+    if (content?.classList.contains('tool-codes')) {
+      title.style.cursor = 'pointer'
+      const clickHandler = () => {
+        const isHidden = content.style.display === 'none'
+        content.style.display = isHidden ? 'block' : 'none'
+        if (isHidden) {
+          title.classList.add('expanded')
+        } else {
+          title.classList.remove('expanded')
+        }
+      }
+      title._thinkClickHandler = clickHandler
+      title.addEventListener('click', clickHandler)
+    }
+  })
+}
+function removeToolCallEvents(el) {
+  const titles = el.querySelectorAll('.chat-tool-calls>.tool-name')
+  titles.forEach(title => {
+    if (title._thinkClickHandler) {
+      title.removeEventListener('click', title._thinkClickHandler)
+      delete title._thinkClickHandler
     }
   })
 }

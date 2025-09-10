@@ -231,7 +231,8 @@ pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<U
         // Claude-specific parameters
         metadata: req.metadata.map(|m| UnifiedMetadata { user_id: m.user_id }),
         thinking: req.thinking.map(|t| UnifiedThinking {
-            budget_tokens: t.budget_tokens,
+            budget_tokens: Some(t.budget_tokens),
+            include_thoughts: Some(t.thinking_type == "enabled"),
         }),
         cache_control: req.cache_control.map(|c| UnifiedCacheControl {
             cache_type: c.cache_type,

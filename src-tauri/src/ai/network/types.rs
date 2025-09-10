@@ -1,5 +1,5 @@
 use reqwest::Response;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
 
@@ -192,75 +192,6 @@ impl ErrorFormat {
 }
 
 // =================================================
-// ================== Response struct ==============
-// =================================================
-
-// =================================================
-// Gemini response struct
-// =================================================
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GeminiResponse {
-    pub candidates: Option<Vec<Candidate>>,
-    pub usage_metadata: Option<UsageMetadata>,
-    #[serde(default, rename = "promptFeedback")]
-    pub prompt_feedback: Option<PromptFeedback>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageMetadata {
-    pub prompt_token_count: u64,
-    pub total_token_count: u64,
-    #[serde(default)] // In case this field is not always present in all Gemini responses
-    pub candidates_token_count: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptFeedback {
-    #[serde(default)]
-    pub block_reason: Option<String>,
-    pub safety_ratings: Vec<SafetyRating>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct SafetyRating {
-    pub category: String,
-    pub probability: String, // e.g., "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Candidate {
-    pub content: Content,
-    #[serde(default, rename = "finishReason")]
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Content {
-    pub parts: Option<Vec<Part>>,
-    #[serde(default)] // Add default in case role is not always present
-    pub role: Option<String>, // Added field for role
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Part {
-    #[serde(default)]
-    pub text: Option<String>,
-    #[serde(default, rename = "functionCall")]
-    pub function_call: Option<GeminiFunctionCall>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GeminiFunctionCall {
-    pub name: String,
-    pub args: Value, // Gemini args are typically a JSON object
-}
-
-// =================================================
 // OpenAI compatible response format
 // =================================================
 #[derive(Debug, Deserialize)]
@@ -308,58 +239,4 @@ pub struct OpenAIUsage {
     pub total_tokens: u64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
-}
-
-// =================================================
-// Claude stream event
-// =================================================
-
-/// Claude stream event types
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClaudeEventType {
-    MessageStart,
-    ContentBlockStart,
-    ContentBlockDelta,
-    ContentBlockStop,
-    MessageDelta,
-    MessageStop,
-    Ping,
-    Error,
-}
-
-/// Claude stream event
-#[derive(Debug, Deserialize)]
-pub struct ClaudeStreamEvent {
-    #[serde(rename = "type")]
-    pub event_type: ClaudeEventType,
-    /// Content block object (only available in content_block_start events)
-    #[serde(default)]
-    pub content_block: Option<ClaudeContentBlock>,
-    #[serde(default)]
-    pub index: Option<u32>,
-    #[serde(default)]
-    pub delta: Option<Value>,
-    #[serde(default)]
-    pub error: Option<Value>,
-    #[serde(default)]
-    pub usage: Option<Value>,
-    /// Full message object (only available in message_start/message_stop events)
-    #[serde(default)]
-    pub message: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ClaudeContentBlock {
-    #[serde(rename = "type")]
-    pub block_type: String, // "text" or "tool_use"
-    #[serde(default)]
-    pub text: Option<String>, // For text blocks
-    #[serde(default)]
-    pub id: Option<String>, // For tool_use blocks
-    #[serde(default)]
-    pub name: Option<String>, // For tool_use blocks
-    #[serde(default)]
-    pub input: Option<Value>, // For tool_use blocks (initial empty object)
 }

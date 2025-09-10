@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::ai::network::ProxyType;
 
@@ -9,38 +9,33 @@ use crate::ai::network::ProxyType;
 ///
 /// # Returns
 /// Returns the metadata as a `Value` object. It is used to pass metadata back to the UI.
-pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
-    let excluded_keys = [
-        "stream",
-        "maxTokens",
-        "temperature",
-        "topP",
-        "topK",
-        "presencePenalty",
-        "frequencyPenalty",
-        "responseFormat",
-        "stop",
-        "n",
-        "user",
-        "toolChoice",
-        "proxyType",
-        "proxyServer",
-        "proxyUsername",
-        "proxyPassword",
-    ];
-    let metadata = extra_params
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(k, _)| !excluded_keys.contains(&k.as_str()))
-        .collect::<Map<_, _>>();
-    let metadata_option = if metadata.is_empty() {
-        None
-    } else {
-        Some(Value::Object(metadata))
-    };
-    metadata_option
-}
+// pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
+//     let excluded_keys = [
+//         "presencePenalty",
+//         "frequencyPenalty",
+//         "responseFormat",
+//         "stop",
+//         "n",
+//         "user",
+//         "toolChoice",
+//         "proxyType",
+//         "proxyServer",
+//         "proxyUsername",
+//         "proxyPassword",
+//     ];
+//     let metadata = extra_params
+//         .and_then(|v| v.as_object().cloned())
+//         .unwrap_or_default()
+//         .into_iter()
+//         .filter(|(k, _)| !excluded_keys.contains(&k.as_str()))
+//         .collect::<Map<_, _>>();
+//     let metadata_option = if metadata.is_empty() {
+//         None
+//     } else {
+//         Some(Value::Object(metadata))
+//     };
+//     metadata_option
+// }
 
 /// Initialize the extra parameters.
 ///
@@ -48,29 +43,8 @@ pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
 /// * `extra_params`: The extra parameters from the API request.
 ///
 /// # Returns
-/// Returns the initialized extra parameters as a `Value` object and the metadata as a Option<Value> object.
-pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) {
-    // The parameters are camelCase from the frontend
-    let stream = extra_params
-        .as_ref()
-        .and_then(|params| params.get("stream").and_then(|v| v.as_bool()));
-    let max_tokens = extra_params
-        .as_ref()
-        .and_then(|params| params.get("maxTokens").and_then(|v| v.as_u64()));
-    let temperature = extra_params
-        .as_ref()
-        .and_then(|params| params.get("temperature").and_then(|v| v.as_f64()));
-    let top_p = extra_params
-        .as_ref()
-        .and_then(|params| params.get("topP").and_then(|v| v.as_f64()));
-    let top_k = extra_params
-        .as_ref()
-        .and_then(|params| params.get("topK").and_then(|v| v.as_u64()));
-    let top_k = match top_k {
-        Some(value) if value > 0 => value,
-        _ => 0,
-    };
-
+/// Returns the initialized extra parameters as a `Value` object.
+pub fn init_extra_params(extra_params: Option<Value>) -> Value {
     // OpenAI API: number, Optional, Defaults to 0.0
     // Number between -2.0 and 2.0.
     // Positive values penalize new tokens based on whether they appear in the text so far,
@@ -157,11 +131,6 @@ pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) 
 
     // Keep the Rust underscore style for the final JSON keys
     let mut body = json!({
-        "stream": stream.unwrap_or(true),
-        "max_tokens": max_tokens.unwrap_or(4096),
-        "temperature": temperature.unwrap_or(1.0),
-        "top_p": top_p.unwrap_or(0.0),
-        "top_k": top_k,
         "presence_penalty": presence_penalty.unwrap_or(0.0),
         "frequency_penalty": frequency_penalty.unwrap_or(0.0),
         "stop_sequences": stop_sequences.map_or(Value::Null, |s| json!(s)),
@@ -181,7 +150,7 @@ pub fn init_extra_params(extra_params: Option<Value>) -> (Value, Option<Value>) 
         }
     }
 
-    (body, get_meta_data(extra_params))
+    body
 }
 
 /// Update or create metadata options.

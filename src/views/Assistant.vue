@@ -4,11 +4,25 @@
       <div class="input-container">
         <div class="icons upperLayer" v-if="canChat">
           <cs name="menu" @click.stop="selectGroupVisible = !selectGroupVisible" />
-          <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" v-if="crawlerAvailable" />
+          <el-tooltip
+            :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+            :hide-after="0"
+            placement="top">
+            <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" />
+          </el-tooltip>
         </div>
-        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
-          :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
-          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
+        <el-input
+          class="input upperLayer"
+          ref="inputRef"
+          v-model="inputMessage"
+          type="textarea"
+          :disabled="!canChat"
+          :autosize="{ minRows: 1, maxRows: 5 }"
+          :placeholder="$t('assistant.chatPlaceholder')"
+          @input="onInput"
+          @keydown.enter="onKeyEnter"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd" />
       </div>
       <div class="transaction" v-if="isTranslation">
         <el-dropdown trigger="click">
@@ -22,8 +36,11 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
-                }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
+              }}</el-dropdown-item>
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                @click="fromLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -43,8 +60,11 @@
             <el-dropdown-menu>
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
-                }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
+              }}</el-dropdown-item>
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
@@ -63,7 +83,10 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" placement="bottom">
+        <el-tooltip
+          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
+          :hide-after="0"
+          placement="bottom">
           <cs name="pin" />
         </el-tooltip>
       </div>
@@ -97,10 +120,18 @@
     <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
-        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0"
-          :disabled="!skill.metadata.description" transition="none">
-          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
+        <el-tooltip
+          v-for="(skill, index) in skills"
+          :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description"
+          placement="top"
+          :hide-after="0"
+          :disabled="!skill.metadata.description"
+          transition="none">
+          <div
+            class="skill-item-compact"
+            :class="{ active: skillIndex === index }"
+            @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -118,7 +149,9 @@
               <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
               <div class="content" ref="chatMessagesRef">
                 <div class="chat-reference" v-if="chatState.reference.length > 0">
-                  <div class="chat-reference-title" :class="{ expanded: showReference }"
+                  <div
+                    class="chat-reference-title"
+                    :class="{ expanded: showReference }"
                     @click="showReference = !showReference">
                     <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
                   </div>
@@ -129,22 +162,45 @@
                   </ul>
                 </div>
                 <div class="chat-think" v-if="chatState.reasoning != ''">
-                  <div class="chat-think-title" :class="{ expanded: showThink }" @click="showThink = !showThink">
+                  <div
+                    class="chat-think-title"
+                    :class="{ expanded: showThink }"
+                    @click="showThink = !showThink">
                     <span>{{
                       $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
-                      }}</span>
+                    }}</span>
                   </div>
-                  <div v-show="showThink" class="think-content" v-highlight v-link v-table v-katex
+                  <div
+                    v-show="showThink"
+                    class="think-content"
+                    v-highlight
+                    v-link
+                    v-table
+                    v-katex
                     v-html="parseMarkdown(chatState.reasoning)"></div>
                 </div>
-                <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think v-mermaid />
+                <ChatToolCalls
+                  v-if="chatState.toolCall.length > 0"
+                  :tool-calls="chatState.toolCall" />
+                <div
+                  v-html="currentAssistantMessageHtml"
+                  v-highlight
+                  v-link
+                  v-table
+                  v-katex
+                  v-think
+                  v-mermaid />
               </div>
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
-            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
+          <div
+            class="skill-item"
+            v-for="(skill, index) in skills"
+            :key="skill.id"
+            :class="{ active: skillIndex === index }"
+            @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -156,14 +212,26 @@
     <footer class="footer" v-if="!isChatting && currentAssistantMessage">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" placement="top" transition="none">
+          <el-tooltip
+            :content="$t('chat.quoteMessage')"
+            :hide-after="0"
+            placement="top"
+            transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" placement="top" transition="none"
+          <el-tooltip
+            :content="$t('chat.resendMessage')"
+            :hide-after="0"
+            placement="top"
+            transition="none"
             v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" placement="top" transition="none"
+          <el-tooltip
+            :content="$t('chat.goToChat')"
+            :hide-after="0"
+            placement="top"
+            transition="none"
             v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
@@ -176,10 +244,17 @@
     <div class="select-group upperLayer" ref="selectGroupRef" v-if="selectGroupVisible">
       <div class="selector arrow">
         <div class="selector-content">
-          <div class="item" v-for="model in providers" @click.stop="onModelSelect(model)" :key="model.id"
+          <div
+            class="item"
+            v-for="model in providers"
+            @click.stop="onModelSelect(model)"
+            :key="model.id"
             :class="{ active: currentModelProvider.id === model.id }">
             <div class="name">
-              <img :src="model.providerLogo" v-if="model.providerLogo !== ''" class="provider-logo" />
+              <img
+                :src="model.providerLogo"
+                v-if="model.providerLogo !== ''"
+                class="provider-logo" />
               <avatar :text="model.name" size="16" v-else />
               <span>{{ model.name }}</span>
             </div>
@@ -197,7 +272,11 @@
                 {{ group }}
               </div>
             </div>
-            <div class="item" v-for="(model, index) in models" @click.stop="onSubModelSelect(model.id)" :key="index"
+            <div
+              class="item"
+              v-for="(model, index) in models"
+              @click.stop="onSubModelSelect(model.id)"
+              :key="index"
               :class="{ active: currentModelProvider?.defaultModel === model.id }">
               <div class="name">
                 <span>{{ model.name || model.id.split('/').pop() }}</span>
@@ -221,6 +300,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 import SkillItem from '@/components/chat/SkillItem.vue'
+import ChatToolCalls from '@/components/chat/ToolCall.vue'
 
 import { chatPreProcess, parseMarkdown } from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
@@ -246,15 +326,6 @@ const windowStore = useWindowStore()
 // network connection and deep search
 // When enabled, it will automatically crawl the URLs in user queries
 const networkEnabled = ref(csGetStorage(csStorageKey.assistNetworkEnabled, true))
-// When deep search is enabled, the AI will automatically plan the user's questions
-// and break them down into executable steps for research.
-const crawlerAvailable = computed(() => {
-  return (
-    settingStore.settings.chatspeedCrawler != '' &&
-    settingStore.settings.chatspeedCrawler.startsWith('http')
-  )
-})
-
 const selectGroupRef = ref(null)
 const selectGroupVisible = ref(false)
 
@@ -275,7 +346,8 @@ const getDefaultChatState = () => ({
   message: '',
   reference: [],
   reasoning: '',
-  isReasoning: false
+  isReasoning: false,
+  toolCall: []
 })
 const chatState = ref(getDefaultChatState())
 const showThink = ref(true)
@@ -329,9 +401,6 @@ const isTranslation = computed(() => {
  * Check if the current skill has tools enabled
  */
 const toolsEnabled = computed(() => {
-  if (!currentModelProvider.value?.functionCall) {
-    return false
-  }
   // 1. If no skill is selected, tools can be enabled (global tools or default behavior)
   if (!currentSkill.value) {
     return true // Or based on a global setting if you have one for non-skill scenarios
@@ -340,17 +409,15 @@ const toolsEnabled = computed(() => {
   return !isTranslation.value && !!currentSkill.value.metadata?.toolsEnabled
 })
 
-const cicleIndex = ref(0)
-const cicle = ['◒', '◐', '◓', '◑', '☯']
 const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
-    ? ((cicleIndex.value = (cicleIndex.value + 1) % 4),
-      parseMarkdown(
-        currentAssistantMessage.value + (isChatting.value ? ' ' + cicle[cicleIndex.value] : ''),
+    ? parseMarkdown(
+        currentAssistantMessage.value +
+          (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
         chatState.value?.reference || []
-      ))
+      )
     : isChatting.value
-      ? '<div class="cs cs-loading cs-spin cs-md"></div>'
+      ? '<div class="cs cs-loading cs-spin"></div>'
       : ''
 )
 
@@ -550,20 +617,13 @@ const dispatchChatCompletion = async () => {
 
   try {
     await invoke('chat_completion', {
-      apiProtocol: currentModelProvider.value.apiProtocol,
-      apiUrl: currentModelProvider.value.baseUrl,
-      apiKey: currentModelProvider.value.apiKey,
+      providerId: currentModelProvider.value.id,
       model: currentModelProvider.value.defaultModel,
       chatId: lastChatId.value,
       messages: messages,
       networkEnabled: networkEnabled.value,
       metadata: {
-        maxTokens: currentModelProvider.value.maxTokens,
-        temperature: currentModelProvider.value.temperature,
-        topP: currentModelProvider.value.topP,
-        topK: currentModelProvider.value.topK,
         windowLabel: settingStore.windowLabel,
-        proxyType: proxyType.value,
         toolsEnabled: toolsEnabled.value
       }
     })
@@ -627,6 +687,25 @@ const handleChatMessage = async payload => {
         chatState.value.reasoning = messages[0].replace('<think>', '').trim()
         chatState.value.message = messages[1].trim()
       }
+    case 'toolCalls':
+      if (!chatState.value.message.includes('<!--[ToolCalls]-->')) {
+        chatState.value.message += '\n<!--[ToolCalls]-->\n'
+      }
+      break
+
+    case 'toolResults':
+      if (typeof payload?.chunk === 'string') {
+        const parsedChunk = JSON.parse(payload?.chunk || '[]')
+        if (Array.isArray(parsedChunk)) {
+          chatState.value.toolCall.push(...parsedChunk)
+        } else {
+          console.error('Expected an array but got:', typeof parsedChunk)
+        }
+      } else {
+        chatState.value.toolCall.push(...payload?.chunk)
+        hasToolCalls = true
+      }
+      break
       break
   }
 
@@ -968,7 +1047,7 @@ const onAddModel = () => {
         }
       }
 
-      .input>.el-textarea__inner {
+      .input > .el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
         border-radius: var(--cs-border-radius-lg);

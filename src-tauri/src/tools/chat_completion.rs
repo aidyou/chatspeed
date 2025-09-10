@@ -5,7 +5,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use super::ModelName;
 use crate::{
-    ai::{interaction::chat_completion::complete_chat_blocking, traits::chat::MCPToolDeclaration},
+    ai::{
+        interaction::chat_completion::{complete_chat_blocking, ChatState},
+        traits::chat::MCPToolDeclaration,
+    },
     db::AiModel,
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
@@ -13,13 +16,15 @@ use crate::{
 /// A function that sends an HTTP request.
 pub struct ChatCompletion {
     models: Arc<tokio::sync::RwLock<HashMap<ModelName, AiModel>>>,
+    chat_state: Arc<ChatState>,
 }
 
 impl ChatCompletion {
     /// Creates a new instance of the `ChatCompletion` function.
-    pub fn new() -> Self {
+    pub fn new(chat_state: Arc<ChatState>) -> Self {
         Self {
             models: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            chat_state,
         }
     }
 
@@ -159,13 +164,9 @@ impl ToolDefinition for ChatCompletion {
             .and_then(|v| serde_json::from_value::<Vec<MCPToolDeclaration>>(v.clone()).ok());
 
         let result = complete_chat_blocking(
-            model
-                .api_protocol
-                .try_into()
-                .map_err(|e| ToolError::Initialization(e))?,
-            Some(model.base_url.as_str()),
+            self.chat_state.clone(),
+            model.id.unwrap_or_default(),
             model.default_model,
-            Some(model.api_key.as_str()),
             chat_id,
             messages.to_vec(),
             tools,
@@ -193,14 +194,24 @@ impl ToolDefinition for ChatCompletion {
     }
 }
 
+#[cfg(test)]
 mod tests {
+    use tauri::Manager;
+
+    use crate::ai::interaction::chat_completion::ChatState;
+    use std::sync::Arc;
+
     #[tokio::test]
     async fn test_chat_completion_execute() {
         for (key, value) in std::env::vars() {
             println!("{}: {}", key, value);
         }
 
-        let chat_completion = crate::tools::chat_completion::ChatCompletion::new();
+        let app = crate::test::get_app_handle();
+        let chat_state = app.state::<Arc<ChatState>>().inner();
+
+        let chat_completion =
+            crate::tools::chat_completion::ChatCompletion::new(chat_state.clone());
 
         let params = serde_json::json!({
             "chat_protocol": "openai",

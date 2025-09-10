@@ -86,7 +86,9 @@ lazy_static! {
     // log dir: ${app_data}/log, it will be initialized at startup in @src-tauri/src/logger.rs L108 `setup_logger`
     pub static ref LOG_DIR: Arc<PLRwLock<PathBuf>> = Arc::new(PLRwLock::new(PathBuf::new()));
     // chat completion proxy
-    pub static ref CHAT_COMPLETION_PROXY: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("http://localhost:11434")));
+    pub static ref CHAT_COMPLETION_PROXY: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from(format!("http://localhost:{}", CFG_CCPROXY_PORT_DEFAULT))));
+    // internal ccproxy api key
+    pub static ref INTERNAL_CCPROXY_API_KEY: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(uuid::Uuid::new_v4().to_string()));
 
     // Just for Development environment data directory
     pub static ref STORE_DIR: Arc<PLRwLock<PathBuf>> = {

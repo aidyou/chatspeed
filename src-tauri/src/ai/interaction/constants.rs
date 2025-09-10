@@ -1,11 +1,4 @@
-use lazy_static::*;
 use phf::phf_map;
-
-use crate::ai::interaction::key_rotator::ApiKeyRotator;
-
-lazy_static! {
-    pub static ref API_KEY_ROTATOR: ApiKeyRotator = ApiKeyRotator::new();
-}
 
 pub static BASE_URL: phf::Map<&'static str, &'static str> = phf_map! {
     "aliyuncs" => "https://dashscope.aliyuncs.com/compatible-mode/v1", // 阿里云

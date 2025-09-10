@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 use std::{default::Default, fmt::Display, sync::Arc};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum MessageType {
-    AssistantAction, // Assistant tool selection
+    ToolCalls, // Assistant tool selection
     Error,
     Finished,
     Log,
@@ -20,7 +20,7 @@ pub enum MessageType {
     Step,
     Text,
     Think,
-    ToolCall,
+    ToolResults,
 }
 
 impl Default for MessageType {
@@ -45,7 +45,7 @@ impl<'de> Deserialize<'de> for MessageType {
 impl From<MessageType> for &str {
     fn from(value: MessageType) -> Self {
         match value {
-            MessageType::AssistantAction => "assistant_action",
+            MessageType::ToolCalls => "tool_calls",
             MessageType::Error => "error",
             MessageType::Finished => "finished",
             MessageType::Log => "log",
@@ -54,7 +54,7 @@ impl From<MessageType> for &str {
             MessageType::Reference => "reference",
             MessageType::Step => "step",
             MessageType::Text => "text",
-            MessageType::ToolCall => "tool_call",
+            MessageType::ToolResults => "tool_results",
         }
     }
 }
@@ -68,7 +68,7 @@ impl From<MessageType> for String {
 impl MessageType {
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
-            "assistant_action" => Some(MessageType::AssistantAction),
+            "tool_calls" => Some(MessageType::ToolCalls),
             "error" => Some(MessageType::Error),
             "finished" => Some(MessageType::Finished),
             "log" => Some(MessageType::Log),
@@ -77,7 +77,7 @@ impl MessageType {
             "reference" => Some(MessageType::Reference),
             "step" => Some(MessageType::Step),
             "text" => Some(MessageType::Text),
-            "tool_call" => Some(MessageType::ToolCall),
+            "tool_results" => Some(MessageType::ToolResults),
             _ => {
                 warn!(
                     "Unrecognized message type: '{}', will be handled by deserializer default.",
@@ -90,7 +90,7 @@ impl MessageType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum FinishReason {
     Stop,          // Corresponds to OpenAI "stop"
     Length,        // Corresponds to OpenAI "length"
@@ -141,7 +141,7 @@ impl ChatResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[allow(unused)]
 pub struct Usage {
     pub total_tokens: u64,
@@ -150,7 +150,7 @@ pub struct Usage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct ChatCompletionResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(unused)]
@@ -372,9 +372,8 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
     /// Sends a chat request to the AI API and processes the response.
     ///
     /// # Arguments
-    /// - `api_url`: The URL of the AI API endpoint.
+    /// - `provider_id`: The ID of the AI API endpoint.
     /// - `model`: The model to be used for the chat.
-    /// - `api_key`: The API key for authentication.
     /// - `messages`: A vector of messages in the expected format for the AI API.
     ///   Each message is represented as a JSON object containing:
     ///   - `role`: A string indicating the role of the message sender.
@@ -407,9 +406,8 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
     /// - A `Result` containing the full response as a `String` or an error if the request fails.
     async fn chat(
         &self,
-        api_url: Option<&str>,
+        provider_id: i64,
         model: &str,
-        api_key: Option<&str>,
         chat_id: String,
         messages: Vec<Value>,
         tools: Option<Vec<MCPToolDeclaration>>,
@@ -420,6 +418,7 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
     /// Lists available models from the AI API provider.
     ///
     /// # Arguments
+    /// - `api_protocol`: Protocol of the AI API, e.g. "OpenAi", "Gemini".
     /// - `api_url`: Optional URL of the AI API endpoint. If None, uses default endpoint.
     /// - `api_key`: Optional API key for authentication. Required if API needs authentication.
     /// - `extra_args`: Optional additional arguments for the request.
@@ -434,8 +433,9 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
     ///   - On failure: `AiError` with details about what went wrong
     async fn list_models(
         &self,
+        api_protocol: String,
         api_url: Option<&str>,
         api_key: Option<&str>,
-        extra_args: Option<serde_json::Value>,
+        extra_args: Option<Value>,
     ) -> Result<Vec<ModelDetails>, AiError>;
 }

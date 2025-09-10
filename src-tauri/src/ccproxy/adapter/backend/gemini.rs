@@ -688,7 +688,8 @@ impl BackendAdapter for GeminiBackendAdapter {
                 response_schema: unified_request.response_schema.clone(),
                 thinking_config: unified_request.thinking.as_ref().map(|t| {
                     crate::ccproxy::types::gemini::GeminiThinkingConfig {
-                        thinking_budget: Some(t.budget_tokens),
+                        thinking_budget: t.budget_tokens,
+                        include_thoughts: t.include_thoughts,
                     }
                 }),
             }),
@@ -839,10 +840,14 @@ impl BackendAdapter for GeminiBackendAdapter {
             if let Some(candidates) = gemini_response.candidates {
                 if let Some(candidate) = candidates.into_iter().next() {
                     for part in candidate.content.parts {
-                        if let Some(text) = part.text {
+                        if matches!(part.thought, Some(true)) {
+                            if let Some(text) = part.text {
+                                content_blocks
+                                    .push(UnifiedContentBlock::Thinking { thinking: text });
+                            }
+                        } else if let Some(text) = part.text {
                             content_blocks.push(UnifiedContentBlock::Text { text });
-                        }
-                        if let Some(function_call) = part.function_call {
+                        } else if let Some(function_call) = part.function_call {
                             content_blocks.push(UnifiedContentBlock::ToolUse {
                                 id: get_tool_id(), // Gemini doesn't provide tool_use_id in non-streaming
                                 name: function_call.name,
@@ -927,7 +932,14 @@ impl BackendAdapter for GeminiBackendAdapter {
                 if let Some(candidates) = gemini_response.candidates {
                     for candidate in candidates {
                         for part in candidate.content.parts {
-                            if let Some(text) = part.text.clone() {
+                            if matches!(part.thought, Some(true)) {
+                                if let Some(text) = part.text.clone() {
+                                    if !text.is_empty() {
+                                        unified_chunks
+                                            .push(UnifiedStreamChunk::Thinking { delta: text });
+                                    }
+                                }
+                            } else if let Some(text) = part.text.clone() {
                                 if !text.is_empty() {
                                     if let Ok(mut status) = sse_status.write() {
                                         if status.text_delta_count == 0 {
@@ -960,9 +972,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     }
                                     unified_chunks.push(UnifiedStreamChunk::Text { delta: text });
                                 }
-                            }
-
-                            if let Some(function_call) = part.function_call.clone() {
+                            } else if let Some(function_call) = part.function_call.clone() {
                                 // Gemini's functionCall in a stream for parallel calls is a COMPLETE, ATOMIC event.
                                 // It is NOT a delta of a larger call.
                                 // Therefore, for each one, we must emit a full Start -> Delta -> End sequence.

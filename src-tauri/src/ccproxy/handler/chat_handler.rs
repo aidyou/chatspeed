@@ -238,17 +238,35 @@ pub async fn handle_chat_completion(
         log::info!(target: "ccproxy_logger", "{} Origin Request Body: \n{}\n----------------\n", &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
-    let proxy_alias =
-        get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)?;
+    let proxy_model = if let (Some(provider_id), Some(model_id)) = (
+        client_headers
+            .get("X-Provider-Id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<i64>().ok()),
+        client_headers
+            .get("X-Model-Id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+    ) {
+        ModelResolver::get_ai_model_by_provider_and_model(
+            main_store_arc.clone(),
+            provider_id,
+            model_id,
+        )
+        .await?
+    } else {
+        let proxy_alias =
+            get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)?;
 
-    let group_name = group_name.as_deref();
+        let group_name = group_name.as_deref();
 
-    let proxy_model = ModelResolver::get_ai_model_by_alias(
-        main_store_arc.clone(),
-        proxy_alias.clone(),
-        group_name,
-    )
-    .await?;
+        ModelResolver::get_ai_model_by_alias(
+            main_store_arc.clone(),
+            proxy_alias.clone(),
+            group_name,
+        )
+        .await?
+    };
 
     //======================================================
     // Direct send request to ai server

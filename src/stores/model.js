@@ -285,9 +285,9 @@ export const useModelStore = defineStore('modelProvider', () => {
    * List all models
    * @returns {Promise<Array>}
    */
-  const listModels = (apiProtocol, apiUrl, apiKey) => {
+  const listModels = (apiProtocol, apiUrl, apiKey, metadata) => {
     return new Promise((resolve, reject) => {
-      invoke('list_models', { apiProtocol, apiUrl, apiKey })
+      invoke('list_models', { apiProtocol, apiUrl, apiKey, metadata })
         .then((models) => {
           console.log(models)
           resolve(models)

@@ -38,13 +38,16 @@
         v-katex
         v-html="parseMarkdown(reasoning)"></div>
     </div>
+    <ChatToolCalls v-if="toolParsed.length > 0" :tool-calls="toolCalls" />
     <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+
 import { parseMarkdown } from '@/libs/chat'
+import ChatToolCalls from './ToolCall.vue'
 
 const props = defineProps({
   content: {
@@ -74,6 +77,10 @@ const props = defineProps({
   plan: {
     type: Array,
     default: () => []
+  },
+  toolCalls: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -101,11 +108,13 @@ watch(
 )
 
 const cicleIndex = ref(0)
-const cicle = ['◒', '◐', '◓', '◑', '☯']
 const currentAssistantMessageHtml = computed(() =>
   props.content
-    ? ((cicleIndex.value = (cicleIndex.value + 1) % 5),
-      parseMarkdown(props.content + cicle[cicleIndex.value], props.reference))
+    ? parseMarkdown(props.content + ' <span class="cs cs-spin-linear">☯</span>', props.reference)
     : '<div class="cs cs-loading cs-spin"></div>'
 )
+
+const toolParsed = computed(() => {
+  return props.toolCalls && props.toolCalls.length > 0 ? props.toolCalls : []
+})
 </script>

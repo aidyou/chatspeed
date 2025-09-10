@@ -125,12 +125,26 @@ impl OutputAdapter for GeminiOutputAdapter {
                 // Ok(vec![event.data(data.to_string())])
                 Ok(vec![])
             }
-            UnifiedStreamChunk::Thinking { delta } | UnifiedStreamChunk::Text { delta } => {
+            UnifiedStreamChunk::Text { delta } => {
                 let data = json!({
                     "candidates": [{
                         "content": {
                             "role": "model",
                             "parts": [{ "text": delta }]
+                        }
+                    }]
+                });
+                Ok(vec![event.data(data.to_string())])
+            }
+            UnifiedStreamChunk::Thinking { delta } => {
+                let data = json!({
+                    "candidates": [{
+                        "content": {
+                            "role": "model",
+                            "parts": [{
+                                "text": delta,
+                                "thought": serde_json::Value::Object(Default::default())
+                            }]
                         }
                     }]
                 });

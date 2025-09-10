@@ -41,9 +41,11 @@ pub fn get_app_handle() -> tauri::AppHandle<tauri::test::MockRuntime> {
     let main_store = crate::db::MainStore::new(get_db_path()).expect("Failed to create main store");
     let main_store = Arc::new(std::sync::RwLock::new(main_store));
     let window_channels = Arc::new(crate::libs::window_channels::WindowChannels::new());
-    let chat_state = Arc::new(crate::ai::interaction::chat_completion::ChatState::new(
+    let chat_state = crate::ai::interaction::chat_completion::ChatState::new(
         window_channels,
-    ));
+        None,
+        main_store.clone(),
+    );
 
     let app = tauri::test::mock_builder()
         .manage(main_store)
