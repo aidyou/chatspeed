@@ -314,44 +314,31 @@ impl WebviewScraper {
 
         #[cfg(target_os = "windows")]
         {
-            // Read config and determine proxy argument in one go.
-            // The lock is released immediately after this block.
-            let proxy_arg_option: Option<String> = {
-                let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
-                if let Ok(store) = main_store.read() {
-                    let proxy_type = store.get_config("proxy_type", String::new());
-                    let proxy_server = store.get_config("proxy_server", String::new());
-                    let proxy_username = store.get_config("proxy_username", String::new());
-                    let proxy_password = store.get_config("proxy_password", String::new());
+            let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
+            let mut proxy_arg_option: Option<String> = None;
 
-                    // Only apply proxy settings on Windows for non-authenticated proxies.
-                    if proxy_type == "http"
-                        && !proxy_server.is_empty()
-                        && proxy_username.is_empty()
-                        && proxy_password.is_empty()
-                    {
-                        Some(format!("--proxy-server={}", proxy_server))
-                    } else if !proxy_server.is_empty() {
-                        // If proxy is configured but has authentication, log a warning and skip.
-                        log::warn!(
-                        "Scraper webview on Windows is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
+            if let Ok(store) = main_store.read() {
+                let proxy_type = store.get_config("proxy_type", String::new());
+                let proxy_server = store.get_config("proxy_server", String::new());
+                let proxy_username = store.get_config("proxy_username", String::new());
+                let proxy_password = store.get_config("proxy_password", String::new());
+
+                if proxy_type == "http"
+                    && !proxy_server.is_empty()
+                    && proxy_username.is_empty()
+                    && proxy_password.is_empty()
+                {
+                    proxy_arg_option = Some(format!("--proxy-server={}", proxy_server));
+                } else if !proxy_server.is_empty() {
+                    log::warn!(
+                        "Scraper webview is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
                     );
-                        None
-                    } else {
-                        None
-                    }
-                } else {
-                    None
                 }
-            };
+            }
 
-            // Apply the argument if it was generated.
-            if let Some(proxy_arg) = proxy_arg_option {
-                log::info!(
-                    "Applying proxy for scraper webview on Windows: {}",
-                    proxy_arg
-                );
-                webview_builder = webview_builder.additional_browser_args(&proxy_arg);
+            if let Some(arg) = proxy_arg_option {
+                log::info!("Applying proxy for scraper webview: {}", arg);
+                webview_builder = webview_builder.additional_browser_args(&arg);
             }
         }
 

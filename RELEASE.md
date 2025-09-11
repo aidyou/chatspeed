@@ -1,8 +1,8 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
-# Chatspeed v1.1.4 Release Notes
+# Chatspeed v1.1.5 Release Notes
 
-v1.1.4 is a hotfix release that incorporates all features planned for v1.1.3 and resolves the build-breaking lifetime issue.
+v1.1.5 is a hotfix release that incorporates all features planned for prior versions and resolves the build-breaking lifetime issue.
 
 ## ✨ Enhancements & New Features
 
@@ -11,7 +11,7 @@ v1.1.4 is a hotfix release that incorporates all features planned for v1.1.3 and
 
 ## 🔧 Bug Fixes & Optimizations
 
-- **Fixed Build Error**: Resolved a Rust lifetime error (E0597) related to the state lock during the creation of the scraper webview, which was preventing v1.1.3 from compiling.
+- **Fixed Build Error**: Resolved a Rust lifetime error (E0597) related to the state lock during the creation of the scraper webview, which was preventing previous versions from compiling.
 - **Missing Language Options**: Added missing language options to the translation skill.
 - **Scraper Reliability**: Improved the reliability of the generic web scraper by implementing a retry mechanism with exponential backoff for pages that load content dynamically.
 
