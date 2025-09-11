@@ -687,6 +687,8 @@ const handleChatMessage = async payload => {
         chatState.value.reasoning = messages[0].replace('<think>', '').trim()
         chatState.value.message = messages[1].trim()
       }
+      break
+
     case 'toolCalls':
       if (!chatState.value.message.includes('<!--[ToolCalls]-->')) {
         chatState.value.message += '\n<!--[ToolCalls]-->\n'
@@ -705,7 +707,6 @@ const handleChatMessage = async payload => {
         chatState.value.toolCall.push(...payload?.chunk)
         hasToolCalls = true
       }
-      break
       break
   }
 

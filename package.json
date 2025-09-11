@@ -17,7 +17,7 @@
     "@tauri-apps/plugin-opener": "~2",
     "@tauri-apps/plugin-process": "^2.3.0",
     "@tauri-apps/plugin-shell": "^2.2.0",
-    "element-plus": "^2.8.5",
+    "element-plus": "^2.11.0",
     "he": "^1.2.0",
     "highlight.js": "^11.10.0",
     "katex": "^0.16.11",

@@ -1,5 +1,16 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.6 Release Notes
+
+v1.1.6 is a hotfix release that addresses front-end display issues and updates dependencies.
+
+## 🔧 Bug Fixes & Optimizations
+
+- **Fix Front-end Display Issue**: Resolved a bug in Assistant window when parsing AI data from the server, which caused any text to incorrectly trigger tool flags and result in unexpected line breaks in the frontend display
+- **Dependency Update**: Updated element-plus dependency from v2.8.5 to v2.11.0
+
+---
+
 # Chatspeed v1.1.5 Release Notes
 
 v1.1.5 is a hotfix release that incorporates all features planned for prior versions and resolves the build-breaking lifetime issue.
