@@ -1,5 +1,15 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.7 Release Notes
+
+v1.1.7 is an emergency hotfix release that resolves an issue preventing model addition due to simplified model configuration.
+
+## 🔧 Emergency Fix
+
+- **Fix Model Addition Issue**: Resolved a critical issue where users were unable to add new models due to changes in the model configuration structure.
+
+---
+
 # Chatspeed v1.1.6 Release Notes
 
 v1.1.6 is a hotfix release that addresses front-end display issues and updates dependencies.
