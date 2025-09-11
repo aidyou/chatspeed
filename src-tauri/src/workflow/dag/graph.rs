@@ -1,4 +1,3 @@
-use log::debug;
 use rust_i18n::t;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -223,25 +222,25 @@ impl WorkflowGraph {
     /// 调试输出
     #[cfg(debug_assertions)]
     pub async fn debug_print(&self) {
-        debug!("Workflow Graph Structure:");
-        debug!("Nodes: {}", self.nodes.len());
+        log::debug!("Workflow Graph Structure:");
+        log::debug!("Nodes: {}", self.nodes.len());
         for (id, node) in &self.nodes {
-            debug!("  [{}] {:?}", id, node.r#type);
+            log::debug!("  [{}] {:?}", id, node.r#type);
         }
 
-        debug!("Edges: {}", self.edges.len());
+        log::debug!("Edges: {}", self.edges.len());
         for edge in &self.edges {
-            debug!("  {} -> {}", edge.from, edge.to);
+            log::debug!("  {} -> {}", edge.from, edge.to);
         }
 
-        debug!("Adjacency Map:");
+        log::debug!("Adjacency Map:");
         for (node, successors) in &self.adjacency_map {
-            debug!("  {} => [{}]", node, successors.join(", "));
+            log::debug!("  {} => [{}]", node, successors.join(", "));
         }
 
-        debug!("In-Degree Map:");
+        log::debug!("In-Degree Map:");
         for (node, degree) in self.in_degree_map.lock().await.iter() {
-            debug!("  {}: {}", node, degree);
+            log::debug!("  {}: {}", node, degree);
         }
     }
 

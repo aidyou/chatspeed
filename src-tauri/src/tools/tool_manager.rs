@@ -665,19 +665,19 @@ impl ToolManager {
 
         // Register MCP tools if available
         if let Some(declarations) = tools_declarations {
-            // Always insert if Some, even if 'declarations' is an empty Vec.
-            // This allows the frontend to distinguish between "server not found in mcp_tools"
-            // and "server found, but has no tools".
-            let tool_count = declarations.len();
-            mcp_tools_guard.insert(name.clone(), declarations);
             #[cfg(debug_assertions)]
             {
+                let tool_count = declarations.len();
                 log::debug!(
                     "MCP tools for server {} registered (count: {}).",
                     name,
                     tool_count
                 );
             }
+            // Always insert if Some, even if 'declarations' is an empty Vec.
+            // This allows the frontend to distinguish between "server not found in mcp_tools"
+            // and "server found, but has no tools".
+            mcp_tools_guard.insert(name.clone(), declarations);
         } else {
             // tools_declarations was None, e.g. if list_tools failed.
             #[cfg(debug_assertions)]

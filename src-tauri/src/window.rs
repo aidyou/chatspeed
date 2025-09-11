@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use log::{debug, error, warn};
+use log::{error, warn};
 use rust_i18n::t;
 use serde::Deserialize;
 use serde::Serialize;
@@ -98,14 +98,17 @@ fn is_position_on_any_screen<R: tauri::Runtime>(
 
             #[cfg(debug_assertions)]
             {
-                debug!(
+                log::debug!(
                     "is_position_on_any_screen: Checking position ({}, {}) with window_size {}x{}",
-                    position_x, position_y, window_size.width, window_size.height
+                    position_x,
+                    position_y,
+                    window_size.width,
+                    window_size.height
                 );
-                debug!("Available monitors for position check (is_position_on_any_screen):");
+                log::debug!("Available monitors for position check (is_position_on_any_screen):");
 
                 for (i, monitor) in monitors.iter().enumerate() {
-                    debug!(
+                    log::debug!(
                         "  Monitor {}: Name: {:?}, Position: {:?}, Size: {:?}, ScaleFactor: {}",
                         i,
                         monitor.name(),
@@ -124,7 +127,7 @@ fn is_position_on_any_screen<R: tauri::Runtime>(
             };
 
             #[cfg(debug_assertions)]
-            debug!(
+            log::debug!(
                 "Window rect for check (is_position_on_any_screen): {:?}",
                 window_rect
             );
@@ -140,13 +143,13 @@ fn is_position_on_any_screen<R: tauri::Runtime>(
                 };
 
                 #[cfg(debug_assertions)]
-                debug!(
+                log::debug!(
                     "  Checking against monitor_rect (is_position_on_any_screen): {:?}",
                     monitor_rect
                 );
                 if window_rect.intersects(&monitor_rect) {
                     #[cfg(debug_assertions)]
-                    debug!(
+                    log::debug!(
                         "  Intersection FOUND with monitor {:?} ({:?}) (is_position_on_any_screen)",
                         monitor.name(),
                         monitor_pos
@@ -678,7 +681,7 @@ pub fn restore_window_config(
         let saved_pos = window_position_config;
 
         #[cfg(debug_assertions)]
-        debug!(
+        log::debug!(
             "Attempting to restore window '{}' to position: ({}, {}) on screen '{}'",
             window.label(),
             saved_pos.x,
@@ -732,7 +735,7 @@ pub fn restore_window_config(
                             primary_monitor_opt.as_ref().and_then(|m| m.name());
 
                         #[cfg(debug_assertions)]
-                        debug!(
+                        log::debug!(
                             "Performing suspicious screen check. Primary monitor: {:?}",
                             primary_monitor_name
                         );
@@ -798,7 +801,7 @@ pub fn restore_window_config(
                     }
                 } else {
                     #[cfg(debug_assertions)]
-                    debug!(
+                    log::debug!(
                         "Window '{}' position restored to: ({}, {})",
                         window.label(),
                         saved_pos.x,
@@ -820,7 +823,7 @@ pub fn restore_window_config(
         } else {
             // Saved position is (0,0), which we treat as "center" or "unspecified"
             #[cfg(debug_assertions)] // Changed to debug as this is a common case for first launch or reset
-            debug!(
+            log::debug!(
                 "Saved position for window '{}' is (0,0) or default. Centering window.",
                 window.label(),
             );

@@ -24,11 +24,11 @@ impl Context {
             }
             Value::Array(arr) => {
                 let mut result = Vec::new();
-                for (index, item) in arr.iter().enumerate() {
+                for (_index, item) in arr.iter().enumerate() {
                     let resolved = Box::pin(self.resolve_params_inner(item.clone())).await?;
                     #[cfg(debug_assertions)]
                     {
-                        debug!("Array element [{}] resolved result: {}", index, resolved);
+                        debug!("Array element [{}] resolved result: {}", _index, resolved);
                     }
 
                     result.push(resolved);

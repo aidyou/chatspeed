@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -8,6 +7,9 @@ use tauri::{
     AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent, Wry,
 };
+
+#[cfg(debug_assertions)]
+use serde_json::Value;
 
 use super::types::{FullConfig, GenericContentRule};
 use crate::constants::CFG_SCRAPER_DEBUG_MODE;
@@ -312,34 +314,44 @@ impl WebviewScraper {
 
         #[cfg(target_os = "windows")]
         {
-            let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
-            if let Ok(store) = main_store.read() {
-                let proxy_type = store.get_config("proxy_type", String::new());
-                let proxy_server = store.get_config("proxy_server", String::new());
-                let proxy_username = store.get_config("proxy_username", String::new());
-                let proxy_password = store.get_config("proxy_password", String::new());
-                // Only apply proxy settings on Windows for non-authenticated proxies.
-                // The `additional_browser_args` does not support passing credentials directly for security reasons.
-                // An authenticated proxy would cause the hidden webview to hang waiting for user input
-                // on a native dialog that cannot be shown, leading to a timeout.
-                if proxy_type == "http"
-                    && !proxy_server.is_empty()
-                    && proxy_username.is_empty()
-                    && proxy_password.is_empty()
-                {
-                    let proxy_arg = format!("--proxy-server={}", proxy_server);
-                    log::info!(
-                        "Applying non-authenticated proxy for scraper webview on Windows: {}",
-                        proxy_arg
-                    );
-                    webview_builder = webview_builder.additional_browser_args(&proxy_arg);
-                } else if !proxy_server.is_empty() {
-                    // If proxy is configured but has authentication, log a warning and skip.
-                    // The webview will then fall back to system network settings.
-                    log::warn!(
+            // Read config and determine proxy argument in one go.
+            // The lock is released immediately after this block.
+            let proxy_arg_option: Option<String> = {
+                let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
+                if let Ok(store) = main_store.read() {
+                    let proxy_type = store.get_config("proxy_type", String::new());
+                    let proxy_server = store.get_config("proxy_server", String::new());
+                    let proxy_username = store.get_config("proxy_username", String::new());
+                    let proxy_password = store.get_config("proxy_password", String::new());
+
+                    // Only apply proxy settings on Windows for non-authenticated proxies.
+                    if proxy_type == "http"
+                        && !proxy_server.is_empty()
+                        && proxy_username.is_empty()
+                        && proxy_password.is_empty()
+                    {
+                        Some(format!("--proxy-server={}", proxy_server))
+                    } else if !proxy_server.is_empty() {
+                        // If proxy is configured but has authentication, log a warning and skip.
+                        log::warn!(
                         "Scraper webview on Windows is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
                     );
+                        None
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
+            };
+
+            // Apply the argument if it was generated.
+            if let Some(proxy_arg) = proxy_arg_option {
+                log::info!(
+                    "Applying proxy for scraper webview on Windows: {}",
+                    proxy_arg
+                );
+                webview_builder = webview_builder.additional_browser_args(&proxy_arg);
             }
         }
 
