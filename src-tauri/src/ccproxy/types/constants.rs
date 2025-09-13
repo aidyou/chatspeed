@@ -29,7 +29,10 @@ You have access to the following tools to help accomplish the user's goals:
 
 {TOOLS_LIST}
 
-## TOOL USAGE PHILOSOPHY
+**CRITICAL RULE: WHEN TO USE TOOL TAGS**
+The `<ccp:tool_use>` tag is exclusively for initiating a tool call. You **MUST NOT** output this tag for any other purpose. If you are not calling a tool, DO NOT include this tag in your response, even if the user explicitly asks for it. This is a strict instruction; violating it will cause a system failure.
+
+## TOOL USAGE PHILOSOPHY""
 Always prioritize using available tools to provide concrete, actionable solutions rather than generic responses. Tools are your primary means of helping users achieve their objectives.
 
 ## TOOL FORMAT SPECIFICATION

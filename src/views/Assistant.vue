@@ -2,28 +2,30 @@
   <div class="assistant-page" @click="selectGroupVisible = false">
     <header class="header">
       <div class="input-container">
+        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
+          :autosize="{ minRows: 3, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
+          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
+
         <div class="icons upperLayer" v-if="canChat">
-          <cs name="menu" @click.stop="selectGroupVisible = !selectGroupVisible" />
-          <el-tooltip
-            :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-            :hide-after="0"
-            placement="top">
+          <!-- model selector -->
+          <ModelSelector v-model="currentModelProvider" position="top" :useProviderAvatar="true" :triggerSize="14"
+            @model-select="onModelSelect" @sub-model-select="onSubModelSelect"
+            @selection-complete="onSelectionComplete" />
+
+          <!-- netowrk switch -->
+          <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)" :hide-after="0"
+            :enterable="false" placement="top">
             <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" />
           </el-tooltip>
+
+          <!-- MCP switch -->
+          <el-tooltip :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)" :hide-after="0"
+            :enterable="false" placement="top" v-if="mcpServers.length > 0">
+            <cs name="mcp" @click="onToggleMcp" :class="{ active: mcpEnabled }" />
+          </el-tooltip>
         </div>
-        <el-input
-          class="input upperLayer"
-          ref="inputRef"
-          v-model="inputMessage"
-          type="textarea"
-          :disabled="!canChat"
-          :autosize="{ minRows: 1, maxRows: 5 }"
-          :placeholder="$t('assistant.chatPlaceholder')"
-          @input="onInput"
-          @keydown.enter="onKeyEnter"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd" />
       </div>
+
       <div class="transaction" v-if="isTranslation">
         <el-dropdown trigger="click">
           <span class="el-dropdown-link">
@@ -37,10 +39,7 @@
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                @click="fromLang = lang.code">
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -61,10 +60,7 @@
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                :checked="toLang === lang.code"
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
@@ -83,9 +79,7 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip
-          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
-          :hide-after="0"
+        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" :enterable="false"
           placement="bottom">
           <cs name="pin" />
         </el-tooltip>
@@ -120,18 +114,10 @@
     <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
-        <el-tooltip
-          v-for="(skill, index) in skills"
-          :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description"
-          placement="top"
-          :hide-after="0"
-          :disabled="!skill.metadata.description"
-          transition="none">
-          <div
-            class="skill-item-compact"
-            :class="{ active: skillIndex === index }"
-            @click="onSelectSkill(index)">
+        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0" :enterable="false"
+          :disabled="!skill.metadata.description" transition="none">
+          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -149,9 +135,7 @@
               <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
               <div class="content" ref="chatMessagesRef">
                 <div class="chat-reference" v-if="chatState.reference.length > 0">
-                  <div
-                    class="chat-reference-title"
-                    :class="{ expanded: showReference }"
+                  <div class="chat-reference-title" :class="{ expanded: showReference }"
                     @click="showReference = !showReference">
                     <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
                   </div>
@@ -162,45 +146,23 @@
                   </ul>
                 </div>
                 <div class="chat-think" v-if="chatState.reasoning != ''">
-                  <div
-                    class="chat-think-title"
-                    :class="{ expanded: showThink }"
-                    @click="showThink = !showThink">
+                  <div class="chat-think-title" :class="{ expanded: showThink }" @click="showThink = !showThink">
                     <span>{{
                       $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
                     }}</span>
                   </div>
-                  <div
-                    v-show="showThink"
-                    class="think-content"
-                    v-highlight
-                    v-link
-                    v-table
-                    v-katex
+                  <div v-show="showThink" class="think-content" v-highlight v-link v-table v-katex
                     v-html="parseMarkdown(chatState.reasoning)"></div>
                 </div>
-                <ChatToolCalls
-                  v-if="chatState.toolCall.length > 0"
-                  :tool-calls="chatState.toolCall" />
-                <div
-                  v-html="currentAssistantMessageHtml"
-                  v-highlight
-                  v-link
-                  v-table
-                  v-katex
-                  v-think
-                  v-mermaid />
+                <ChatToolCalls v-if="chatState.toolCall.length > 0" :tool-calls="chatState.toolCall" />
+                <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think v-mermaid />
               </div>
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div
-            class="skill-item"
-            v-for="(skill, index) in skills"
-            :key="skill.id"
-            :class="{ active: skillIndex === index }"
-            @click="onSkillItemClick(index)">
+          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
+            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -212,27 +174,16 @@
     <footer class="footer" v-if="!isChatting && currentAssistantMessage">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip
-            :content="$t('chat.quoteMessage')"
-            :hide-after="0"
-            placement="top"
+          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" :enterable="false" placement="top"
             transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.resendMessage')"
-            :hide-after="0"
-            placement="top"
-            transition="none"
-            v-if="userMessage">
+          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" :enterable="false" placement="top"
+            transition="none" v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.goToChat')"
-            :hide-after="0"
-            placement="top"
-            transition="none"
-            v-if="userMessage">
+          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" :enterable="false" placement="top"
+            transition="none" v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
           <cs name="copy" @click="onCopyMessage()" class="icon-copy" />
@@ -240,55 +191,6 @@
       </div>
     </footer>
 
-    <!-- model selector -->
-    <div class="select-group upperLayer" ref="selectGroupRef" v-if="selectGroupVisible">
-      <div class="selector arrow">
-        <div class="selector-content">
-          <div
-            class="item"
-            v-for="model in providers"
-            @click.stop="onModelSelect(model)"
-            :key="model.id"
-            :class="{ active: currentModelProvider.id === model.id }">
-            <div class="name">
-              <img
-                :src="model.providerLogo"
-                v-if="model.providerLogo !== ''"
-                class="provider-logo" />
-              <avatar :text="model.name" size="16" v-else />
-              <span>{{ model.name }}</span>
-            </div>
-            <div class="icon" v-if="currentModelProvider.id === model.id">
-              <cs name="check" />
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="selector">
-        <div class="selector-content">
-          <template v-for="(models, group) in currentSubModels" :key="group">
-            <div class="item group" @click.stop>
-              <div class="name">
-                {{ group }}
-              </div>
-            </div>
-            <div
-              class="item"
-              v-for="(model, index) in models"
-              @click.stop="onSubModelSelect(model.id)"
-              :key="index"
-              :class="{ active: currentModelProvider?.defaultModel === model.id }">
-              <div class="name">
-                <span>{{ model.name || model.id.split('/').pop() }}</span>
-              </div>
-              <div class="icon" v-if="currentModelProvider?.defaultModel === model.id">
-                <cs name="check" />
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -301,8 +203,9 @@ import { listen } from '@tauri-apps/api/event'
 
 import SkillItem from '@/components/chat/SkillItem.vue'
 import ChatToolCalls from '@/components/chat/ToolCall.vue'
+import ModelSelector from '@/components/chat/ModelSelector.vue'
 
-import { chatPreProcess, parseMarkdown } from '@/libs/chat'
+import { buildUserMessage, chatPreProcess, parseMarkdown, handleChatMessage as handleChatMessageCommon } from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import { csStorageKey } from '@/config/config'
@@ -315,6 +218,7 @@ import { useSkillStore } from '@/stores/skill'
 import { getAvailableLanguages } from '@/i18n/langUtils'
 import { languageConfig } from '@/i18n'
 import { useWindowStore } from '@/stores/window'
+import { useMcpStore } from '@/stores/mcp'
 const { t } = useI18n()
 
 const chatStore = useChatStore()
@@ -322,12 +226,13 @@ const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const settingStore = useSettingStore()
 const windowStore = useWindowStore()
+const mcpStore = useMcpStore()
 
 // network connection and deep search
 // When enabled, it will automatically crawl the URLs in user queries
-const networkEnabled = ref(csGetStorage(csStorageKey.assistNetworkEnabled, true))
-const selectGroupRef = ref(null)
-const selectGroupVisible = ref(false)
+const networkEnabled = ref(csGetStorage(csStorageKey.assistNetworkEnabled, false))
+// MCP enabled state
+const mcpEnabled = ref(csGetStorage(csStorageKey.assistMcpEnabled, false))
 
 const isAlwaysOnTop = computed(() => windowStore.assistantAlwaysOnTop)
 
@@ -362,19 +267,38 @@ const toLang = ref('')
 let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 
-const providers = computed(() => modelStore.getAvailableProviders)
 // Do not remove this, it's useful when user does not set default model at assistant dialog
 const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
-const currentSubModels = computed(() =>
-  currentModelProvider.value.models?.reduce((groups, x) => {
-    if (!x.group) {
-      x.group = t('settings.model.ungrouped')
+
+watch(() => chatErrorMessage.value, (nv) => {
+  if (nv && userMessage.value) {
+    inputMessage.value = userMessage.value
+  }
+});
+
+// Watch for changes in modelStore.providers to keep currentModelProvider in sync
+watch(() => modelStore.providers, (newProviders) => {
+  const currentId = currentModelProvider.value?.id;
+  if (currentId) {
+    const updatedProvider = newProviders.find(p => p.id === currentId);
+    if (updatedProvider) {
+      // If the provider still exists, update the local ref with the latest data from the store.
+      // This ensures that the `models` array within the provider is also updated.
+      currentModelProvider.value = { ...updatedProvider };
+    } else {
+      // The selected provider was deleted. Fallback to default.
+      const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog);
+      let model = modelStore.getModelProviderById(mid);
+      if (!model && newProviders.length > 0) {
+        model = modelStore.defaultModelProvider;
+      }
+      currentModelProvider.value = model ? { ...model } : {};
     }
-    groups[x.group] = groups[x.group] || []
-    groups[x.group].push(x)
-    return groups
-  }, {})
-)
+  } else if (newProviders.length > 0) {
+    // No provider was selected, but now there are providers. Select default.
+    currentModelProvider.value = { ...modelStore.defaultModelProvider };
+  }
+}, { deep: true });
 
 const canChat = computed(() => modelStore.getAvailableProviders.length > 0)
 
@@ -409,13 +333,16 @@ const toolsEnabled = computed(() => {
   return !isTranslation.value && !!currentSkill.value.metadata?.toolsEnabled
 })
 
+// MCP servers for visibility control
+const mcpServers = computed(() => mcpStore.servers)
+
 const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
     ? parseMarkdown(
-        currentAssistantMessage.value +
-          (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
-        chatState.value?.reference || []
-      )
+      currentAssistantMessage.value +
+      (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
+      chatState.value?.reference || []
+    )
     : isChatting.value
       ? '<div class="cs cs-loading cs-spin"></div>'
       : ''
@@ -588,10 +515,12 @@ const dispatchChatCompletion = async () => {
     metadata.sourceLang = fromLang.value
     metadata.targetLang = toLang.value
   }
+  let quotedMessage = buildUserMessage(inputMessage.value, quoteMessage.value)
+  quoteMessage.value = ''
+
   const messages = await chatPreProcess(
-    inputMessage.value,
+    quotedMessage,
     [],
-    quoteMessage.value,
     currentSkill.value,
     metadata
   )
@@ -599,7 +528,6 @@ const dispatchChatCompletion = async () => {
     console.log('chat messages is empty')
     return
   }
-  console.log('chat messages:', messages)
 
   userMessage.value = inputMessage.value
   chatErrorMessage.value = ''
@@ -622,6 +550,7 @@ const dispatchChatCompletion = async () => {
       chatId: lastChatId.value,
       messages: messages,
       networkEnabled: networkEnabled.value,
+      mcpEnabled: mcpEnabled.value,
       metadata: {
         windowLabel: settingStore.windowLabel,
         toolsEnabled: toolsEnabled.value
@@ -639,94 +568,33 @@ const payloadMetadata = ref({})
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  let isDone = false
-  chatState.value.isReasoning = payload?.type == 'reasoning'
-  switch (payload?.type) {
-    case 'step':
-      currentAssistantMessage.value = payload?.chunk || ''
-      return
-    case 'reference':
-      if (payload?.chunk) {
-        try {
-          if (typeof payload?.chunk === 'string') {
-            const parsedChunk = JSON.parse(payload?.chunk || '[]')
-            if (Array.isArray(parsedChunk)) {
-              chatState.value.reference.push(...parsedChunk)
-            } else {
-              console.error('Expected an array but got:', typeof parsedChunk)
-            }
-          } else {
-            chatState.value.reference.push(...payload?.chunk)
-          }
-        } catch (e) {
-          console.error('error on parse reference:', e)
-          console.log('chunk', payload?.chunk)
-        }
+  // Use the common handler for shared logic
+  handleChatMessageCommon(
+    payload,
+    chatState,
+    {
+      currentAssistantMessage,
+      chatErrorMessage,
+      isChatting
+    },
+    async (payload, chatStateValue) => {
+      // Custom completion handler for Assistant.vue
+      payloadMetadata.value = {
+        tokens: payload?.metadata?.tokens?.total || 0,
+        prompt: payload?.metadata?.tokens?.prompt || 0,
+        completion: payload?.metadata?.tokens?.completion || 0,
+        provider: currentModelProvider.value.defaultModel || '',
+        reference: chatStateValue?.reference || [],
+        reasoning: chatStateValue?.reasoning || ''
       }
-      break
-    case 'reasoning':
-      chatState.value.reasoning += payload?.chunk || ''
-      break
-    case 'error':
-      chatErrorMessage.value = payload?.chunk || ''
-      isDone = true
-      break
-    case 'finished':
-      isDone = true
-      chatState.value.message += payload?.chunk || ''
-      break
-    case 'text':
-      chatState.value.message += payload?.chunk || ''
+      nextTick(scrollToBottomIfNeeded)
+    }
+  )
 
-      // handle deepseek-r1 reasoning flag `<think></think>`
-      if (
-        chatState.value.message.startsWith('<think>') &&
-        chatState.value.message.includes('</think>')
-      ) {
-        const messages = chatState.value.message.split('</think>')
-        chatState.value.reasoning = messages[0].replace('<think>', '').trim()
-        chatState.value.message = messages[1].trim()
-      }
-      break
-
-    case 'toolCalls':
-      if (!chatState.value.message.includes('<!--[ToolCalls]-->')) {
-        chatState.value.message += '\n<!--[ToolCalls]-->\n'
-      }
-      break
-
-    case 'toolResults':
-      if (typeof payload?.chunk === 'string') {
-        const parsedChunk = JSON.parse(payload?.chunk || '[]')
-        if (Array.isArray(parsedChunk)) {
-          chatState.value.toolCall.push(...parsedChunk)
-        } else {
-          console.error('Expected an array but got:', typeof parsedChunk)
-        }
-      } else {
-        chatState.value.toolCall.push(...payload?.chunk)
-        hasToolCalls = true
-      }
-      break
-  }
-
-  currentAssistantMessage.value = chatState.value.message || ''
+  // Handle scroll behavior
   nextTick(() => {
     scrollToBottomIfNeeded()
   })
-
-  if (isDone) {
-    isChatting.value = false
-    payloadMetadata.value = {
-      tokens: payload?.metadata?.tokens?.total || 0,
-      prompt: payload?.metadata?.tokens?.prompt || 0,
-      completion: payload?.metadata?.tokens?.completion || 0,
-      provider: currentModelProvider.value.defaultModel || '',
-      reference: chatState.value?.reference || [],
-      reasoning: chatState.value?.reasoning || ''
-    }
-    nextTick(scrollToBottomIfNeeded)
-  }
 }
 
 // =================================================
@@ -792,19 +660,27 @@ const onPin = async () => {
  * @param {Object} model model config
  */
 const onModelSelect = model => {
-  currentModelProvider.value = { ...model }
+  // ModelSelector组件会通过v-model自动更新currentModelProvider
+  // 这里只需要处理localStorage存储
   csSetStorage(csStorageKey.defaultModelIdAtDialog, model.id)
 }
 
 /**
  * Handle sub model select event
  * @param {Object} model model config
+ * @param {String} modelId sub model id
  */
-const onSubModelSelect = model => {
-  currentModelProvider.value.defaultModel = model
-  selectGroupVisible.value = false
+const onSubModelSelect = (model, modelId) => {
+  // ModelSelector组件会通过v-model自动更新currentModelProvider
+  // 这里只需要处理localStorage存储
+  csSetStorage(csStorageKey.defaultModelAtDialog, modelId)
+}
+
+/**
+ * Handle selection complete event
+ */
+const onSelectionComplete = () => {
   inputRef.value?.focus()
-  csSetStorage(csStorageKey.defaultModelAtDialog, model)
 }
 
 /**
@@ -898,6 +774,14 @@ const onToggleNetwork = () => {
 }
 
 /**
+ * Toggle the MCP enabled state
+ */
+const onToggleMcp = () => {
+  mcpEnabled.value = !mcpEnabled.value
+  csSetStorage(csStorageKey.mcpEnabled, mcpEnabled.value)
+}
+
+/**
  * Handle composition start event
  */
 const onCompositionStart = () => {
@@ -927,10 +811,12 @@ const onInput = () => {
  * Handle enter key event
  */
 const onKeyEnter = event => {
-  if (event.shiftKey) {
-    return
-  }
-  if (!composing.value && !compositionJustEnded.value) {
+  // Determine send behavior based on user setting
+  const shouldSend = settingStore.settings.sendMessageKey === 'Enter'
+    ? !event.shiftKey  // Enter to send, Shift+Enter for line break
+    : event.shiftKey   // Shift+Enter to send, Enter for line break
+
+  if (shouldSend && !composing.value && !compositionJustEnded.value) {
     event.preventDefault()
     dispatchChatCompletion()
   }
@@ -948,8 +834,6 @@ const onKeydown = event => {
     event.preventDefault()
     event.stopPropagation()
     skillIndex.value = (skillIndex.value - 1 + skills.value.length) % skills.value.length
-  } else if (event.key === 'Escape') {
-    selectGroupVisible.value = false
   } else if (event.altKey) {
     switch (event.code) {
       case 'KeyC':
@@ -1028,6 +912,7 @@ const onAddModel = () => {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-direction: row-reverse;
 
       .icons {
         display: flex;
@@ -1042,13 +927,15 @@ const onAddModel = () => {
         gap: var(--cs-space-xs);
 
         .cs {
+          color: var(--cs-text-color-secondary);
+
           &:hover {
             color: var(--cs-color-primary);
           }
         }
       }
 
-      .input > .el-textarea__inner {
+      .input>.el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
         border-radius: var(--cs-border-radius-lg);
@@ -1208,6 +1095,8 @@ const onAddModel = () => {
         }
 
         &.error {
+          display: unset;
+
           .content {
             margin: var(--cs-space-sm);
             width: calc(100% - var(--cs-space-sm) * 2);
@@ -1215,6 +1104,7 @@ const onAddModel = () => {
             color: var(--cs-error-color);
             background-color: var(--cs-error-bg-color);
             position: relative;
+            padding-top: var(--cs-space-lg);
 
             .icons {
               position: absolute;
@@ -1272,118 +1162,6 @@ const onAddModel = () => {
   }
 }
 
-.select-group {
-  position: absolute;
-  top: 45px;
-  left: 10px;
-  display: flex;
-  flex-direction: row;
-  gap: var(--cs-space-xxs);
-  z-index: 10;
-
-  .selector {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    background-color: var(--cs-bg-color);
-    border: 1px solid var(--cs-border-color);
-    border-radius: var(--cs-border-radius-md);
-    box-shadow: 0 2px 12px 0 var(--cs-shadow-color);
-
-    .selector-content {
-      max-width: 200px;
-      min-width: 150px;
-      max-height: 200px;
-      overflow: auto;
-      padding: var(--cs-space-xs);
-    }
-
-    &.arrow {
-      &::before {
-        content: '';
-        position: absolute;
-        top: -9px;
-        left: var(--cs-space-sm);
-        // left: 50%;
-        // transform: translateX(-50%);
-        border-width: 0 9px 9px;
-        border-style: solid;
-        border-color: transparent transparent var(--cs-border-color) transparent;
-        pointer-events: none;
-      }
-
-      &::after {
-        content: '';
-        position: absolute;
-        top: -8px;
-        left: calc(var(--cs-space-sm) + 1px);
-        // left: 50%;
-        // transform: translateX(-50%);
-        border-width: 0 8px 8px;
-        border-style: solid;
-        border-color: transparent transparent var(--cs-bg-color) transparent;
-        pointer-events: none;
-      }
-    }
-
-    .item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: var(--cs-space-xs) var(--cs-space-sm);
-      border-radius: var(--cs-border-radius);
-      cursor: pointer;
-
-      &:hover {
-        background-color: var(--cs-bg-color-deep);
-      }
-
-      &.active {
-        color: var(--cs-color-primary);
-      }
-
-      .name {
-        display: flex;
-        align-items: center;
-        gap: var(--cs-space-xs);
-        max-width: calc(100% - 24px);
-
-        span {
-          white-space: nowrap;
-          text-overflow: ellipsis;
-          overflow: hidden;
-          font-size: var(--cs-font-size-sm);
-        }
-
-        .provider-logo {
-          width: 16px;
-          height: 16px;
-          border-radius: 16px;
-        }
-      }
-
-      .icon {
-        flex-shrink: 0;
-        display: flex;
-      }
-
-      &.group {
-        border-bottom: 1px solid var(--cs-border-color);
-        border-radius: 0;
-
-        &:hover {
-          background: none;
-          cursor: default;
-        }
-
-        .name {
-          font-size: var(--cs-font-size-sm);
-          color: var(--cs-text-color-secondary);
-        }
-      }
-    }
-  }
-}
 
 .pin-btn {
   cursor: pointer;

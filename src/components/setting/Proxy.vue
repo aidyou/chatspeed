@@ -23,25 +23,25 @@
                     {{ alias }}
                     <small>{{
                       $t('settings.proxy.mapsToModels', { count: proxyTargets.length })
-                      }}</small>
+                    }}</small>
                   </div>
                 </div>
 
                 <div class="value">
                   <el-tooltip :content="$t('settings.proxy.copyProxyAlias')" placement="top" :hide-after="0"
-                    transition="none">
+                    :enterable="false" transition="none">
                     <span class="icon" @click="copyModelToClipboard(alias)">
                       <cs name="copy" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
                   <el-tooltip :content="$t('settings.proxy.editProxy')" placement="top" :hide-after="0"
-                    transition="none">
+                    :enterable="false" transition="none">
                     <span class="icon" @click="openEditDialog(groupName, alias, proxyTargets)">
                       <cs name="edit" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
                   <el-tooltip :content="$t('settings.proxy.deleteProxy')" placement="top" :hide-after="0"
-                    transition="none">
+                    :enterable="false" transition="none">
                     <span class="icon" @click="handleDeleteProxyConfirmation(groupName, alias)">
                       <cs name="trash" size="16px" color="secondary" />
                     </span>
@@ -84,13 +84,13 @@
                 </div>
                 <div class="value">
                   <el-tooltip :content="$t('settings.proxy.proxyKey.copyKey')" placement="top" :hide-after="0"
-                    transition="none">
+                    :enterable="false" transition="none">
                     <span class="icon" @click="copyKeyToClipboard(keyItem.token)">
                       <cs name="copy" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
                   <el-tooltip :content="$t('settings.proxy.proxyKey.deleteKey')" placement="top" :hide-after="0"
-                    transition="none">
+                    :enterable="false" transition="none">
                     <span class="icon" @click="handleDeleteKeyConfirmation(index)">
                       <cs name="trash" size="16px" color="secondary" />
                     </span>
@@ -126,7 +126,7 @@
                   {{ $t('settings.proxy.settings.port') }}
                   <small class="important">{{
                     $t('settings.proxy.settings.portChangedRestartRequired')
-                    }}</small>
+                  }}</small>
                 </div>
               </div>
               <div class="value">

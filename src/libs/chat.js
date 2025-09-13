@@ -1,14 +1,14 @@
-import { invoke } from '@tauri-apps/api/core'
-import { marked } from 'marked'
 import i18n from '@/i18n/index.js'
+import { invoke } from '@tauri-apps/api/core'
 import he from 'he'
+import { marked } from 'marked'
 
 // Regular expressions
 const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g
 const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g
 const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g
 const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g
-const REFERENCE_BLOCK_REGEX = /\`\[\^[0-9]+\]\`/g
+const REFERENCE_BLOCK_REGEX = /`\[\^[0-9]+\]`/g
 const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g
 const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/ // just deal the first think tag
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g
@@ -32,7 +32,7 @@ const settingStore = useSettingStore()
  * - Tool pages: Usually uses skills but can also handle regular chat
  *
  * @param {string} inputMessage - User's input message
- * @param {Array<{role: string, content: string}>} historyMessages - Previous conversation messages
+ * @param {Array<{role: string, content: string, metadata: Object<{toolCalls: Array<{name: string, args: Object}>}>}>} historyMessages - Previous conversation messages
  * @param {string} quoteMessage - Previously quoted AI response
  * @param {Object} [skill] - Optional skill configuration
  * @param {string} [skill.prompt] - Skill prompt template
@@ -44,19 +44,12 @@ const settingStore = useSettingStore()
  * @param {string} [metadata.targetLang] - Target language for translation
  * @returns {Array<{role: string, content: string}>} Processed messages ready for AI
  */
-export const chatPreProcess = async (
-  inputMessage,
-  historyMessages,
-  quoteMessage,
-  skill,
-  metadata = {}
-) => {
+export const chatPreProcess = async (inputMessage, historyMessages, skill, metadata = {}) => {
   const messages = []
   const skillType = skill?.metadata?.type
   const useSystemRole = skill?.metadata?.useSystemRole
   const prompt = skill?.prompt?.trim() || ''
   let processedPrompt = ''
-  let userMessage = ''
 
   // Handle translation skill separately
   if (skillType === 'translation') {
@@ -73,30 +66,24 @@ export const chatPreProcess = async (
   } else {
     if (useSystemRole) {
       // Handle regular skills
-      userMessage = buildUserMessage(inputMessage, quoteMessage)
       if (prompt) {
         messages.push({ role: 'system', content: prompt })
       }
-      messages.push({ role: 'user', content: userMessage })
+      messages.push({ role: 'user', content: inputMessage })
     } else {
       // Combine prompt and user message based on whether prompt contains {content}
       let finalContent = ''
       if (prompt.includes('{content}')) {
-        finalContent = buildUserMessage(prompt.replace(/\{content\}/g, inputMessage), quoteMessage)
+        finalContent = prompt.replace(/\{content\}/g, inputMessage)
       } else {
-        finalContent = buildUserMessage(
-          prompt ? `${prompt}\n\n${inputMessage}` : inputMessage,
-          quoteMessage
-        )
+        finalContent = prompt ? `${prompt}\n\n${inputMessage}` : inputMessage
       }
-
       messages.push({ role: 'user', content: finalContent })
     }
   }
 
   // Add history messages to the messages array
   const history = buildHistoryMessages(historyMessages)
-  console.log(history)
 
   // Handle system role messages
   if (useSystemRole && messages[0]?.role === 'system') {
@@ -111,9 +98,10 @@ export const chatPreProcess = async (
 /**
  * Converts history messages array to the format expected by AI
  * Performs deep copy to avoid modifying original messages
+ * Handles tool calls by splitting them into separate assistant and tool messages
  *
- * @param {Array<{role: string, content: string}>} historyMessages - Array of previous conversation messages
- * @returns {Array<{role: string, content: string}>} Formatted history messages
+ * @param {Array<{role: string, content: string, metadata: Object}>} historyMessages - Array of previous conversation messages
+ * @returns {Array<{role: string, content: string, tool_calls?: Array, tool_call_id?: string}>} Formatted history messages
  */
 function buildHistoryMessages(historyMessages) {
   const acc = historyMessages.reduceRight(
@@ -131,22 +119,82 @@ function buildHistoryMessages(historyMessages) {
 
       // Skip if current message has same role as the last message added to the accumulator.
       // This ensures the roles are always alternating.
-      if (acc.messages.length > 0 && message.role === acc.messages[0].role) {
-        return acc
+      // Note: With tool calls, we may have sequences like: user -> assistant -> tool -> user
+      // So we need to check the original role, not the potentially added tool messages
+      if (acc.messages.length > 0) {
+        const lastOriginalRole = acc.lastOriginalRole || acc.messages[0].role
+        if (message.role === lastOriginalRole) {
+          return acc
+        }
       }
 
-      // Collect message
-      acc.messages.unshift({
-        role: message.role,
-        content:
-          message.role === 'assistant'
-            ? message.content.replace(/<think>[\s\S]*?<\/think>/g, '')
-            : message.content
-      })
+      if (message.role === 'assistant') {
+        // Handle assistant messages with potential tool calls
+        const cleanContent = message.content.replace(/<think>[\s\S]*?<\/think>/g, '')
+        const toolCalls = message.metadata?.toolCall
 
+        if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+          // Only include tool calls if this is the most recent assistant message with tools
+          // This prevents context overflow from accumulating too many historical tool results
+          const shouldIncludeToolResults = !acc.hasIncludedToolResults
+
+          if (shouldIncludeToolResults) {
+            // Mark that we've included tool results to prevent including older ones
+            acc.hasIncludedToolResults = true
+
+            // Add tool result messages (in reverse order since we're using unshift)
+            for (let i = toolCalls.length - 1; i >= 0; i--) {
+              const toolCall = toolCalls[i]
+              acc.messages.unshift({
+                role: 'tool',
+                content:
+                  typeof toolCall.result === 'string'
+                    ? toolCall.result
+                    : JSON.stringify(toolCall.result),
+                tool_call_id: toolCall.id
+              })
+            }
+
+            // Add assistant message with tool_calls since we are including the results
+            acc.messages.unshift({
+              role: 'assistant',
+              content: cleanContent,
+              tool_calls: toolCalls.map(toolCall => ({
+                id: toolCall.id,
+                type: toolCall.type || 'function',
+                function: {
+                  name: toolCall.function.name,
+                  arguments: toolCall.function.arguments
+                }
+              }))
+            })
+          } else {
+            // If not including tool results, add a regular assistant message without tool_calls
+            acc.messages.unshift({
+              role: 'assistant',
+              content: cleanContent
+            })
+          }
+        } else {
+          // Regular assistant message without tool calls
+          acc.messages.unshift({
+            role: 'assistant',
+            content: cleanContent
+          })
+        }
+      } else {
+        // User message - keep as is
+        acc.messages.unshift({
+          role: message.role,
+          content: message.content
+        })
+      }
+
+      // Track the last original role for alternating check
+      acc.lastOriginalRole = message.role
       return acc
     },
-    { messages: [], stop: false }
+    { messages: [], stop: false, lastOriginalRole: null, hasIncludedToolResults: false }
   )
 
   const processedMessages = acc.messages
@@ -167,11 +215,11 @@ function buildHistoryMessages(historyMessages) {
  * @param {string} quoteMessage - Previously quoted AI response
  * @returns {string} Combined message with quote and input
  */
-function buildUserMessage(inputMessage, quoteMessage) {
+export function buildUserMessage(inputMessage, quoteMessage) {
   if (!quoteMessage) {
     return inputMessage || ''
   }
-  return `${quoteMessage}\n\n${i18n.global.t('chat.quoteMessagePrompt')}\n\n${inputMessage}`
+  return `<quoted-response>\n${quoteMessage}\n</quoted-response>\n\n<system-reminder>User quoted your response. Please respond considering the quoted content.</system-reminder>\n\n${inputMessage}`
 }
 
 /**
@@ -287,25 +335,28 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   content = content ? content.trim() : ''
   if (!content) return ''
 
+  // remove reminder
+  content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
+
   // let refs = ''
   // format refs [1,2,3](@ref) -> [^1][^2][^3]
   content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
     return numbers
       .split(',')
-      .map(num => `[^${num.trim()}]`)
+      .map(num => `(^${num.trim()})`)
       .join('')
   })
   // format refs [^1^] -> [^1]
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
-    return `[^${number.trim()}]`
+    return `(^${number.trim()})`
   })
   // format refs [[1]] -> [^1]
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_2_REGEX, (_match, number) => {
-    return `[^${number.trim()}]`
+    return `(^${number.trim()})`
   })
   // format refs [citation:1] -> [^1]
   content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
-    return `[^${number.trim()}]`
+    return `(^${number.trim()})`
   })
 
   // Text like `[1]` needs to be replaced first; otherwise, the subsequent reference parsing will be converted to a code block by mk.
@@ -322,10 +373,13 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   if (Array.isArray(reference) && reference.length > 0) {
     reference.forEach(item => {
       content = content.replace(
-        new RegExp(`\\[\\^${item.id}\\]`, 'g'),
-        `<a href="${item.url}" class="reference-link" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
+        new RegExp(`\\(\\^${item.id}\\)`, 'g'),
+        `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
       )
     })
+  } else {
+    //remove all reference blocks
+    content = content.replace(/\\(^\\\d+\\)/g, '')
   }
 
   // Replace placeholders back to original reference text
@@ -454,6 +508,125 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   return marked(content, { renderer })
 }
 
+/**
+ * Handle chat message from backend stream
+ * This function extracts the common logic from Index.vue and Assistant.vue handleChatMessage
+ *
+ * @param {Object} payload - The payload from chat_stream event
+ * @param {Object} chatStateRef - The chat state ref object (reactive ref)
+ * @param {Object} refs - Object containing reactive references
+ * @param {Function} refs.currentAssistantMessage - Ref for current assistant message
+ * @param {Function} refs.chatErrorMessage - Ref for chat error message
+ * @param {Function} refs.isChatting - Ref for chatting state
+ * @param {Function} onComplete - Optional callback when message is completed
+ * @returns {boolean} - Returns true if message is done, false otherwise
+ */
+export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
+  let isDone = false
+  const chatState = chatStateRef.value
+  chatState.isReasoning = payload?.type === 'reasoning'
+
+  switch (payload?.type) {
+    case 'step':
+      refs.currentAssistantMessage.value = payload?.chunk || ''
+      return false
+    case 'reference':
+      if (payload?.chunk) {
+        console.log('reference', payload?.chunk)
+        try {
+          if (typeof payload?.chunk === 'string') {
+            const parsedChunk = JSON.parse(payload?.chunk || '[]')
+            if (Array.isArray(parsedChunk)) {
+              chatState.reference.push(...parsedChunk)
+            } else {
+              console.error('Expected an array but got:', typeof parsedChunk)
+            }
+          } else {
+            if (payload.chunk) {
+              chatState.reference.push(...payload.chunk)
+            }
+          }
+        } catch (e) {
+          console.error('error on parse reference:', e)
+          console.log('chunk', payload?.chunk)
+        }
+      }
+      break
+    case 'reasoning':
+      chatState.reasoning += payload?.chunk || ''
+      break
+    case 'error':
+      refs.chatErrorMessage.value = payload?.chunk || ''
+      isDone = true
+      break
+    case 'finished':
+      isDone = true
+      chatState.message += payload?.chunk || ''
+      break
+    case 'text':
+      chatState.message += payload?.chunk || ''
+      // handle deepseek-r1 reasoning flag `<think></think>`
+      if (chatState.message.startsWith('<think>') && chatState.message.includes('</think>')) {
+        const messages = chatState.message.split('</think>')
+        chatState.reasoning = messages[0].replace('<think>', '').trim()
+        chatState.message = messages[1].trim()
+      }
+      break
+
+    case 'toolCalls':
+      if (!chatState.message.includes('<!--[ToolCalls]-->')) {
+        chatState.message += '\n<!--[ToolCalls]-->\n'
+      }
+      break
+
+    case 'toolResults':
+      if (typeof payload?.chunk === 'string') {
+        const parsedChunk = JSON.parse(payload?.chunk || '[]')
+        if (Array.isArray(parsedChunk)) {
+          chatState.toolCall.push(...parsedChunk)
+        } else {
+          console.error('Expected an array but got:', typeof parsedChunk)
+        }
+      } else {
+        if (payload?.chunk) {
+          chatState.toolCall.push(...payload.chunk)
+        }
+      }
+      break
+
+    case 'log':
+      chatState.log.push(payload?.chunk || '')
+      break
+    case 'plan':
+      if (payload?.chunk) {
+        try {
+          const plan = JSON.parse(payload?.chunk || '[]')
+          chatState.plan = Array.isArray(plan) ? [...plan] : []
+        } catch (e) {
+          console.log('error on parse plan:', e)
+          console.log('chunk', payload?.chunk)
+        }
+      }
+      break
+    default:
+      console.warn('Unknown message type:', payload?.type, payload?.chunk)
+      break
+  }
+
+  // Update current assistant message
+  refs.currentAssistantMessage.value = chatState.message || ''
+
+  // Handle completion
+  if (isDone) {
+    refs.isChatting.value = false
+    if (onComplete && typeof onComplete === 'function') {
+      onComplete(payload, chatState)
+    }
+  }
+
+  return isDone
+}
+
 const createToolCall = toolCalls => {
   let tools = ''
   toolCalls.forEach(call => {
@@ -463,21 +636,25 @@ const createToolCall = toolCalls => {
       if (functionName.includes('__MCP__')) {
         const names = functionName.split('__MCP__')
         if (names.length === 2) {
-          tools += `<div class="tool-name">${i18n.global.t('chat.mcpCall')} ${names[0]}::${names[1]}</div>`
+          tools += `<div class="tool-name">${i18n.global.t('chat.mcpCall')} ${htmlspecialchars(names[0])}::${htmlspecialchars(names[1])}</div>`
         } else {
-          tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${functionName}</div>`
+          tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</div>`
         }
       } else {
-        tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${functionName}</div>`
+        tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</div>`
       }
       const result =
         typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
+      // Escape HTML in arguments and result to prevent XSS and highlight.js warnings
+      const escapedArguments = htmlspecialchars(call.function.arguments || '')
+      // const escapedResult = htmlspecialchars(result || '')
+
       tools += `<div class="tool-codes" style="display:none;">
       <div class="tool-code"><h3>📝 ${i18n.global.t('chat.toolArgs')}</h3>
-          <pre><code class="language-json" disable-titlebar>${call.function.arguments}</code></pre>
+         <pre><code language="json">${escapedArguments}</code></pre>
         </div>
         <div class="tool-code"><h3>🎯 ${i18n.global.t('chat.toolResult')}</h3>
-          <pre><code class="language-json" disable-titlebar>${result}</code></pre>
+          <code data-result="${encodeURIComponent(result)}" class="tool-results"></code>
         </div>
         </div>
       </div>`

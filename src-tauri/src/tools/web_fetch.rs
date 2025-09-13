@@ -54,7 +54,7 @@ impl ToolDefinition for WebFetch {
                     },
                     "keep_link": {
                         "type": "boolean",
-                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. Consider setting to false if you only need the text for summarization. Defaults to true."
+                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. Enable this when navigation through links on the page is required. Defaults to false."
                     },
                     "keep_image": {
                         "type": "boolean",
@@ -95,7 +95,7 @@ impl ToolDefinition for WebFetch {
             .unwrap_or("markdown")
             .to_string()
             .into();
-        let keep_link = params["keep_link"].as_bool().unwrap_or(true);
+        let keep_link = params["keep_link"].as_bool().unwrap_or(false);
         let keep_image = params["keep_image"].as_bool().unwrap_or(false);
         let request = ScrapeRequest::Content(ContentOptions {
             url: url.to_string(),
@@ -104,7 +104,7 @@ impl ToolDefinition for WebFetch {
             keep_image,
         });
         // Create scraper instance
-        let content = engine::run(self.app_handle.clone(), request)
+        let result = engine::run(self.app_handle.clone(), request)
             .await
             .map_err(|e| {
                 ToolError::Execution(
@@ -115,16 +115,46 @@ impl ToolDefinition for WebFetch {
                     )
                     .to_string(),
                 )
-            })?;
+            });
 
-        // Return the scraped content as JSON
-        Ok(ToolCallResult::success(
-            Some(content.clone()),
-            Some(json!({
-                "url": url,
-                "content": content,
-            })),
-        ))
+        match result {
+            Ok(content) => {
+                let format_webpage = |content: &str| -> String {
+                    format!(
+                        "<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n</webpage>",
+                        &url, content
+                    )
+                };
+
+                let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<system-reminder>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</system-reminder>", &url);
+
+                let content_formated = if content.is_empty() {
+                    empty_prompt
+                } else {
+                    let web_content = serde_json::from_str::<Value>(&content)
+                        .ok()
+                        .and_then(|json| {
+                            json.get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|x| x.to_string())
+                        })
+                        .unwrap_or(content.clone());
+
+                    if web_content.is_empty() {
+                        empty_prompt
+                    } else {
+                        format_webpage(&web_content)
+                    }
+                };
+
+                // Return the scraped content as JSON
+                Ok(ToolCallResult::success(
+                    Some(content_formated),
+                    Some(json!({"url": url,"content":content})),
+                ))
+            }
+            Err(e) => Ok(ToolCallResult::error(e.to_string())),
+        }
     }
 }
 

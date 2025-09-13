@@ -83,7 +83,7 @@ export const useChatStore = defineStore('chat', () => {
           }
         })
       }
-      const title = i18n.global.t('chat.newConversation') + ' ' + (maxId + 1);
+      const title = i18n.global.t(`chat.conversation`) + ' ' + (maxId + 1);
       invoke('add_conversation', { title }).then((conversationId) => {
         if (conversationId) {
           setCurrentConversationId(conversationId)

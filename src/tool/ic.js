@@ -8,7 +8,12 @@
  * If a file with the same name exists, it will be overwritten.
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "fs";
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const projectRoot = join(__dirname, '..', '..');
 
 /**
  * Parse command line arguments and return configuration object
@@ -17,7 +22,7 @@ import { join } from 'path';
 function parseArguments() {
   let argv = process.argv.splice(2);
   let iconfontDir = '';
-  let output = '../components/icon';
+  let output = join(projectRoot, 'src', 'components', 'icon');
 
   argv.forEach((x, idx) => {
     if (x == '-d') {
@@ -38,13 +43,6 @@ function parseArguments() {
     console.error('The specified iconfont directory does not exist: ' + iconfontDir);
     process.exit();
   }
-  if (!output) {
-    output = '../components/icon';
-    if (!existsSync(output)) {
-      output = './';
-    }
-  }
-
   return { iconfontDir, output };
 }
 
@@ -139,7 +137,7 @@ function processLogoFiles(logoClass, iconfontDir, output) {
   });
 
   if (logoSvg.length > 0) {
-    let logoSvgOutput = '../../public/logoSvg.js';
+    let logoSvgOutput = join(projectRoot, 'public', 'logoSvg.js');
     writeFileSync(
       logoSvgOutput,
       'var logoSvg=\'<svg>' + logoSvg.join('') + '</svg>\';' +

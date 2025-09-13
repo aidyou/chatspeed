@@ -188,6 +188,7 @@ function sendScrapeResult(data) {
       }
       console.info('scrape with schema result:', results?.length)
       if (!hasSentResult) {
+        // Empty search results are valid, not an error
         sendScrapeResult({ success: JSON.stringify(results) })
       }
     } catch (error) {

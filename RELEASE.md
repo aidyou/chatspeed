@@ -1,5 +1,30 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Release History
+
+## 1.1.8 - 2025-09-13
+
+This update focuses on **comprehensive user experience optimizations** and **core feature enhancements**, bringing you a smoother, smarter, and more personalized experience.
+
+### ✨ UI & Interaction Optimizations
+
+- **Unified Layout**: Redesigned the toolbars at the top of the main interface and below the input box for a more unified and convenient interactive experience.
+- **MCP Switch**: Added a global switch for the Model Context Protocol (MCP) on the main interface to easily enable or disable it.
+- **Customizable Send Key**: Added an option in Settings to switch the send message shortcut between `Enter` and `Shift+Enter` to suit different user habits.
+
+### 🚀 Efficiency Improvements
+
+- **New Conversation Shortcut**: Added a global `Cmd/Ctrl + N` shortcut to quickly start a new chat anytime.
+- **Toggle Sidebar**: Added a `Cmd/Ctrl + B` shortcut to quickly expand or collapse the conversation list sidebar.
+
+### 🧠 Core AI Enhancements
+
+- **Global System Prompt**: Introduced a new system prompt to help the AI better understand your environment and intent, providing more intelligent responses.
+- **API Compatibility Fix**: Resolved a format compatibility issue with Tool Calls in chat history that caused API request failures.
+- **Markdown Parsing Fix**: Fixed a conflict between the reference format `(^id)` and standard Markdown syntax, ensuring correct link rendering.
+
+---
+
 # Chatspeed v1.1.7 Release Notes
 
 v1.1.7 is an emergency hotfix release that resolves an issue preventing model addition due to simplified model configuration.

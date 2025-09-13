@@ -106,9 +106,6 @@ impl ToolManager {
         // =================================================
         // Built-in tools
         // =================================================
-        // Register time tool
-        self.register_tool(Arc::new(crate::tools::CurrentTime::new()))
-            .await?;
 
         // Register search tool
         let search_engine = main_store

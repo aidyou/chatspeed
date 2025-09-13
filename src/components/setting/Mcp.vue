@@ -3,7 +3,7 @@
     <!-- 顶部标题和添加按钮 -->
     <div class="title">
       <span>{{ $t('settings.mcp.title') }}</span>
-      <el-tooltip :content="$t('settings.mcp.addServer')" placement="left" :hide-after="0">
+      <el-tooltip :content="$t('settings.mcp.addServer')" placement="left" :hide-after="0" :enterable="false">
         <span class="icon" @click="showPresetMcpDialog">
           <cs name="add" />
         </span>
@@ -18,9 +18,9 @@
             <div class="server-left">
               <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
                 <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded &&
-                    server.status === 'running'
-                    ? 'caret-down'
-                    : 'caret-right'
+                  server.status === 'running'
+                  ? 'caret-down'
+                  : 'caret-right'
                   " />
               </div>
               <avatar :text="server.name" :size="32" />
@@ -35,25 +35,27 @@
 
             <div class="value">
               <el-tooltip :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
-                placement="top" :hide-after="0" transition="none">
+                placement="top" :hide-after="0" :enterable="false" transition="none">
                 <el-switch :disabled="mcpStore.getOrInitServerUiState(server.id).loading"
                   :model-value="!server.disabled" :loading="mcpStore.getOrInitServerUiState(server.id).loading"
                   @update:model-value="toggleServerStatus(server)" />
               </el-tooltip>
 
-              <el-tooltip :content="$t('settings.mcp.restart')" placement="top" :hide-after="0" transition="none"
-                :disabled="server.disabled">
+              <el-tooltip :content="$t('settings.mcp.restart')" placement="top" :hide-after="0" :enterable="false"
+                transition="none" :disabled="server.disabled">
                 <span class="icon" :class="{ disabled: server.disabled }" @click="restartMcpServer(server)">
                   <cs name="restart" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
 
-              <el-tooltip :content="$t('settings.mcp.editServer')" placement="top" :hide-after="0" transition="none">
+              <el-tooltip :content="$t('settings.mcp.editServer')" placement="top" :hide-after="0" :enterable="false"
+                transition="none">
                 <span class="icon" @click="openEditDialog(server)">
                   <cs name="edit" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
-              <el-tooltip :content="$t('settings.mcp.deleteServer')" placement="top" :hide-after="0" transition="none">
+              <el-tooltip :content="$t('settings.mcp.deleteServer')" placement="top" :hide-after="0" :enterable="false"
+                transition="none">
                 <span class="icon" @click="handleDeleteServerConfirmation(server)">
                   <cs name="trash" size="16px" color="secondary" />
                 </span>

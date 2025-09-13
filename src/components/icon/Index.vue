@@ -49,11 +49,11 @@ watch(
       localIconStyle.value['color'] = newColor
     }
   },
-  { immediate: true } // 初始值设置
+  { immediate: true }
 )
 
 const mergeStyle = computed(() => {
-  let icStyle = { ...localIconStyle.value } // 使用本地副本
+  let icStyle = { ...localIconStyle.value }
   if (props.size) {
     let fontSize = '14px'
     const sizeDict = {
@@ -135,6 +135,7 @@ const iconClass = computed(() => {
 .active {
   color: var(--cs-color-primary) !important;
 }
+
 .cs-md {
   font-size: 1.5em;
 }
@@ -143,10 +144,12 @@ const iconClass = computed(() => {
 .cs-lg {
   font-size: 2em;
 }
+
 .cs-3x,
 .cs-xl {
   font-size: 3em;
 }
+
 .cs-4x,
 .cs-xxl {
   font-size: 4em;

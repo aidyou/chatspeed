@@ -717,7 +717,13 @@ const DIRECTIVE_CONFIG = {
             e.preventDefault()
             e.stopPropagation()
             try {
-              await openUrl(e.target.href)
+              const url = e.target.href.toLowerCase()
+              if(url.startsWith('http://') || url.startsWith('https://')) {
+                await openUrl(e.target.href)
+              } else {
+                console.error('Invalid URL:', url)
+                return;
+              }
             } catch (error) {
               console.error('Failed to open URL:', error)
             }
@@ -905,6 +911,26 @@ function bindToolCallEvents(el) {
         content.style.display = isHidden ? 'block' : 'none'
         if (isHidden) {
           title.classList.add('expanded')
+
+          const codeElement = content.querySelector('code[data-result]')
+          if (codeElement) {
+            try {
+              const encodedResult = codeElement.getAttribute('data-result')
+              const decodedResult = decodeURIComponent(encodedResult)
+
+              codeElement.textContent = decodedResult
+              codeElement.removeAttribute('data-result')
+
+              if (codeElement.parentElement.tagName !== 'PRE') {
+                const pre = document.createElement('pre')
+                codeElement.parentNode.insertBefore(pre, codeElement)
+                pre.appendChild(codeElement)
+              }
+            } catch (e) {
+              console.error('Failed to decode or display tool result:', e)
+              codeElement.textContent = 'Error displaying tool result.'
+            }
+          }
         } else {
           title.classList.remove('expanded')
         }

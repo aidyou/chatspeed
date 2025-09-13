@@ -47,17 +47,112 @@
 use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatState,
 };
+use crate::ai::interaction::constants::{SYSTEM_PROMPT, TOOL_USAGE_GUIDANCE};
 use crate::ai::traits::chat::{MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
 use crate::constants::{DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
 use crate::db::MainStore;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
+use crate::tools::MCP_TOOL_NAME_SPLIT;
 
+use chrono::{DateTime, Local};
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::env;
 use std::sync::Arc;
 use tauri::State;
 use whatlang::detect;
+
+/// Generates environment information for the AI assistant
+fn generate_environment_info() -> String {
+    let os = env::consts::OS;
+    let arch = env::consts::ARCH;
+    let family = env::consts::FAMILY;
+
+    // Get current time in both UTC and local timezone
+    // let utc_now: DateTime<Utc> = Utc::now();
+    let local_now: DateTime<Local> = Local::now();
+
+    // Get shell information
+    let shell = env::var("SHELL")
+        .or_else(|_| env::var("COMSPEC"))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    // Get additional useful environment variables
+    // let user = env::var("USER")
+    //     .or_else(|_| env::var("USERNAME"))
+    //     .unwrap_or_else(|_| "unknown".to_string());
+
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    format!(
+        r#"<environment>
+Operating System: {} ({})
+Architecture: {}
+Current Local Time: {}
+Shell: {}
+Home Directory: {}
+</environment>"#,
+        os,
+        family,
+        arch,
+        local_now.format("%Y-%m-%d %H:%M:%S %Z"),
+        shell,
+        home
+    )
+}
+
+/// Prepares messages with system prompts and environment information
+fn prepare_messages_with_system_context(mut messages: Vec<Value>, has_tools: bool) -> Vec<Value> {
+    let mut system_content = SYSTEM_PROMPT.to_string();
+
+    // Add tool usage guidance if tools are available
+    if has_tools {
+        system_content.push_str(TOOL_USAGE_GUIDANCE);
+    }
+
+    // Find existing system message from user
+    let mut user_system_content = String::new();
+    let mut user_system_index = None;
+
+    for (i, message) in messages.iter().enumerate() {
+        if message.get("role").and_then(|r| r.as_str()) == Some("system") {
+            if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+                user_system_content = content.to_string();
+                user_system_index = Some(i);
+                break;
+            }
+        }
+    }
+
+    // Remove user's system message if found
+    if let Some(index) = user_system_index {
+        messages.remove(index);
+    }
+
+    // Combine system prompts: our system prompt + tool guidance + user's system prompt
+    if !user_system_content.is_empty() {
+        system_content.push_str("\n\n");
+        system_content.push_str(&user_system_content);
+    }
+
+    // Add environment information
+    system_content.push_str("\n\n");
+    system_content.push_str(&generate_environment_info());
+
+    // Create the final system message
+    let system_message = json!({
+        "role": "system",
+        "content": system_content
+    });
+
+    // Insert at the beginning
+    messages.insert(0, system_message);
+
+    messages
+}
 
 pub fn setup_chat_proxy(
     main_state: Arc<std::sync::RwLock<MainStore>>,
@@ -169,6 +264,7 @@ pub async fn chat_completion(
     chat_id: String,
     messages: Vec<Value>,
     network_enabled: Option<bool>,
+    mcp_enabled: Option<bool>,
     metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
 ) -> Result<(), String> {
     if provider_id < 1 {
@@ -222,20 +318,27 @@ pub async fn chat_completion(
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
             });
         }
+        if !mcp_enabled.unwrap_or(false) {
+            available_tools.retain(|tool| !tool.name.contains(MCP_TOOL_NAME_SPLIT));
+        }
         Some(available_tools)
     } else {
         None
     };
 
+    // Prepare messages with system context
+    let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
+    let prepared_messages = prepare_messages_with_system_context(messages, has_tools);
+
     #[cfg(debug_assertions)]
-    log::debug!("Processed messages count: {}", messages.len());
+    log::debug!("Processed messages count: {}", prepared_messages.len());
 
     start_new_chat_interaction(
         chat_state.inner().clone(),
         provider_id,
         model,
         chat_id,
-        messages,
+        prepared_messages,
         tools,
         final_metadata,
         None,

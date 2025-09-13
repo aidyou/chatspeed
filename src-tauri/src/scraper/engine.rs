@@ -34,10 +34,10 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
             let max_per_page = if config.config.max_results_per_page > 0 {
                 config.config.max_results_per_page
             } else {
-                25
+                10
             };
             let page = options.page.unwrap_or(1).max(1);
-            let number = options.number.unwrap_or(5) as usize;
+            let number = options.number.unwrap_or(5).min(10) as usize;
             let start = SystemTime::now();
             let since_the_epoch = start.duration_since(UNIX_EPOCH).map_err(|e| {
                 anyhow::anyhow!("Failed to get duration since epoch: {}", e.to_string())
@@ -53,10 +53,13 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
                     if config.config.url_template.contains("duckduckgo.com") {
                         get_duckduckgo_offset(page)
                     } else {
-                        (page - 1) * (number as u32)
+                        (page - 1).checked_mul(number as u32).unwrap_or(0)
                     }
                 }
-                _ => (page as i32 + config.config.page_offset) as u32,
+                _ => {
+                    let page_with_offset = (page as i32).saturating_add(config.config.page_offset);
+                    page_with_offset.max(0) as u32
+                }
             };
 
             let time_period = if let Some(time_period_str) = options.time_period.as_deref() {
@@ -93,8 +96,12 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
                 .await
                 .map(|result_str| {
                     if let Ok(results) = serde_json::from_str::<Vec<SearchResult>>(&result_str) {
-                        serde_json::to_string(&results[..number.min(results.len())])
-                            .unwrap_or_default()
+                        let limited_results = if results.len() > number {
+                            &results[..number]
+                        } else {
+                            &results[..]
+                        };
+                        serde_json::to_string(limited_results).unwrap_or_default()
                     } else {
                         result_str
                     }

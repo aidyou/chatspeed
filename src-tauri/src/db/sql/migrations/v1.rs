@@ -197,7 +197,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
     // add init data
     (
         "add_init_models",
-        r#"INSERT OR IGNORE INTO `ai_model` (`id`,`name`,`models`,`default_model`,`api_protocol`,`base_url`,`api_key`,`max_tokens`,`temperature`,`top_p`,`top_k`,`sort_index`,`is_default`,`disabled`,`is_official`,`official_id`,`metadata`) VALUES (1,'Pollinations','[{"id":"openai","name":"openai","group":"ChatGPT","reasoning":false,"functionCall":true},{"id":"openai-fast","name":"openai-fast","group":"ChatGPT","reasoning":false,"functionCall":true},{"id":"openai-roblox","name":"openai-roblox","group":"ChatGPT","reasoning":false,"functionCall":true}]','openai-fast','openai','https://text.pollinations.ai/openai','',4096,0.6,1.0,40,0,0,0,0,'','{"frequencyPenalty":0,"logo":"","n":null,"presencePenalty":0,"proxyPassword":"","proxyServer":"","proxyType":"bySetting","proxyUsername":"","responseFormat":"text","stop":""}');"#,
+        r#"INSERT OR IGNORE INTO `ai_model` (`id`,`name`,`models`,`default_model`,`api_protocol`,`base_url`,`api_key`,`max_tokens`,`temperature`,`top_p`,`top_k`,`sort_index`,`is_default`,`disabled`,`is_official`,`official_id`,`metadata`) VALUES (1,'Pollinations','[{"id":"openai-fast","name":"openai-fast","group":"ChatGPT","reasoning":false},{"id":"qwen-coder","name":"qwen-coder","group":"Qwen","reasoning":false},{"id":"gemini","name":"gemini","group":"Gemini","reasoning":false}]','openai-fast','openai','https://text.pollinations.ai/openai','',4096,0.6,1.0,40,0,0,0,0,'','{"frequencyPenalty":0,"logo":"","n":null,"presencePenalty":0,"proxyPassword":"","proxyServer":"","proxyType":"bySetting","proxyUsername":"","responseFormat":"text","stop":""}');"#,
     ),
     (
         "add_init_conversation",

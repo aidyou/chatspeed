@@ -25,7 +25,9 @@ const csStorageKey = {
   networkEnabled: 'networkEnabled',
   assistNetworkEnabled: 'assistNetworkEnabled',
   deepSearchEnabled: 'deepSearchEnabled',
-  disableContext: 'disableContext'
+  disableContext: 'disableContext',
+  mcpEnabled: 'mcpEnabled',
+  assistMcpEnabled: 'assistMcpEnabled'
 }
 Object.freeze(csStorageKey)
 

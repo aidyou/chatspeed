@@ -389,8 +389,8 @@ impl ToolDefinition for WebSearch {
             ));
         }
 
-        let number = params["number"].as_i64().unwrap_or(10);
-        let page = params["page"].as_i64().unwrap_or(1);
+        let number = params["number"].as_i64().unwrap_or(5).min(10).max(1);
+        let page = params["page"].as_i64().unwrap_or(1).max(1);
         let time_period = params["time_period"].as_str().unwrap_or("");
 
         let period = match time_period {
@@ -431,18 +431,31 @@ impl ToolDefinition for WebSearch {
             results.len()
         );
 
-        Ok(ToolCallResult::success(
-            Some(
-                results
+        let results_with_id = results
+            .iter()
+            .enumerate()
+            .map(|(index, r)| {
+                let mut sr = r.clone();
+                sr.id = index + 1;
+                sr
+            })
+            .collect::<Vec<_>>();
+        let result_string = if results_with_id.is_empty() {
+            "<cs:search-results><!--Not Results--></cs:search-results><system-reminder>No web search results. Suggestions: check your spelling, try different keywords, adjust the time range, or use more general terms.</system-reminder>".to_string()
+        } else {
+            format!(
+                "<cs:search-results>{}</cs:search-results>",
+                results_with_id
                     .iter()
-                    .map(|r| r.to_string())
+                    .map(|sr| sr.to_string())
                     .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            Some(json!({
-                "query": &search_params,
-                "results": results
-            })),
+                    .join("\n")
+            )
+        };
+
+        Ok(ToolCallResult::success(
+            Some(result_string),
+            Some(json!(results_with_id)),
         ))
     }
 }

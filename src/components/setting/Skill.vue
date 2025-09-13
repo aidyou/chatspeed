@@ -26,17 +26,20 @@
 
           <!-- manage icons -->
           <div class="value">
-            <el-tooltip :content="$t('settings.skill.edit')" placement="top" :hide-after="0" transition="none">
+            <el-tooltip :content="$t('settings.skill.edit')" placement="top" :hide-after="0" :enterable="false"
+              transition="none">
               <div class="icon" @click="editSkill(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.skill.copy')" placement="top" :hide-after="0" transition="none">
+            <el-tooltip :content="$t('settings.skill.copy')" placement="top" :hide-after="0" :enterable="false"
+              transition="none">
               <div class="icon" @click="copySkill(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.skill.delete')" placement="top" :hide-after="0" transition="none">
+            <el-tooltip :content="$t('settings.skill.delete')" placement="top" :hide-after="0" :enterable="false"
+              transition="none">
               <div class="icon" @click="deleteSkill(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
               </div>

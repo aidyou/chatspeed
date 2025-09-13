@@ -12,7 +12,7 @@ use crate::search::{BuiltInSearch, GoogleSearch, SerperSearch, TavilySearch};
 /// are omitted from the JSON output when they are `None`.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResult {
-    #[serde(default, skip_deserializing, skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub id: usize,
     pub title: String,
     pub url: String,
@@ -33,35 +33,35 @@ impl Display for SearchResult {
         write!(f, "<cs:webpage>\n")?;
 
         if self.id > 0 {
-            write!(f, "<cs:id>{}</cs:id>\n", self.id)?;
+            write!(f, "<id>{}</id>\n", self.id)?;
         }
 
         write!(
             f,
-            "<cs:title>{}</cs:title>\n<cs:url>{}</cs:url>\n",
+            "<title>{}</title>\n<url>{}</url>\n",
             self.title, self.url
         )?;
 
         let mut write_content = false;
         if let Some(c) = self.content.as_ref() {
             if !c.is_empty() {
-                write!(f, "<cs:content>{}</cs:content>\n", c)?;
+                write!(f, "<content>{}</content>\n", c)?;
                 write_content = true;
             }
         }
         if !write_content {
             if let Some(s) = self.snippet.as_ref() {
-                write!(f, "<cs:snippet>{}</cs:snippet>\n", s)?;
+                write!(f, "<snippet>{}</snippet>\n", s)?;
             }
         }
         if let Some(s) = self.sitename.as_ref() {
-            write!(f, "<cs:sitename>{}</cs:sitename>\n", s)?;
+            write!(f, "<sitename>{}</sitename>\n", s)?;
         }
         if let Some(pb) = self.publish_date.as_ref() {
-            write!(f, "<cs:publish_date>{}</cs:publish_date>\n", pb)?;
+            write!(f, "<publish_date>{}</publish_date>\n", pb)?;
         }
         if let Some(s) = self.score.as_ref() {
-            write!(f, "<cs:score>{}</cs:score>\n", s)?;
+            write!(f, "<score>{}</score>\n", s)?;
         }
         write!(f, "</cs:webpage>\n")?;
         Ok(())

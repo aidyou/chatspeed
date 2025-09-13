@@ -24,6 +24,7 @@ const defaultSettings = {
   // chat settings
   historyMessages: 1,
   conversationTitleGenModel: { id: '', model: '' },
+  sendMessageKey: 'Enter',
   // shortcut settings
   mainWindowVisibleShortcut: 'F2',
   noteWindowVisibleShortcut: 'ALT+N',

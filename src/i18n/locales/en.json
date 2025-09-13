@@ -9,8 +9,10 @@
     "clearContext": "Clear Context",
     "confirmDeleteConversation": "Are you sure you want to delete this conversation?",
     "confirmDeleteMessage": "Are you sure you want to delete this message?",
-    "context": "Context",
+    "collapseSidebar": "Collapse Sidebar (Cmd/Ctrl+B)",
+    "expandSidebar": "Expand Sidebar (Cmd/Ctrl+B)",
     "contextCleared": "Context cleared",
+    "conversation": "Conversation",
     "conversationNotFound": "Conversation not found or deleted",
     "conversationTitle": "Conversation Title",
     "conversationTitleUpdated": "Conversation title updated",
@@ -41,11 +43,10 @@
     "haveNoModel": "You haven't added any models yet. Please click \"Add Model+\" in the title bar to add one.",
     "inputMessagePlaceholder": "Enter {at} to call up a skill",
     "messageCopied": "Message copied",
+    "newConversaction": "New Conversation (Cmd/Ctrl + N)",
     "mindmapError": "Failed to render mind map",
-    "network": "Network",
     "networkDisabled": "Network Disabled",
     "networkEnabled": "Network Enabled: Automatically fetch content from links or search for related information.",
-    "newConversation": "New Conversation",
     "noteDeleteConfirmContent": "Are you sure you want to delete this note?",
     "noteDeleteConfirmTitle": "Delete Confirmation",
     "noteSaved": "Note saved",
@@ -57,7 +58,6 @@
     "noteTitlePlaceholder": "Please enter note title",
     "noteTitleRequired": "Please enter a title",
     "quoteMessage": "Quote Message",
-    "quoteMessagePrompt": "= = = = = = = = = = =\n\nAbove is your previous reply, let's continue this topic.\n\n= = = = = = = = = = =",
     "reasoning": "Reasoning...",
     "reasoningProcess": "Deep thought processed",
     "reference": "Referencing {count} documents",
@@ -70,6 +70,8 @@
     "toolArgs": "Arguments",
     "toolResult": "Result",
     "mcpCall": "Call MCP Tool",
+    "mcpDisabled": "Disable MCP Tools",
+    "mcpEnabled": "Enable MCP Tools",
     "date": {
       "earlier": "Earlier",
       "lastMonth": "Last Month",
@@ -92,7 +94,8 @@
       "autoDetection": "Auto Detection",
       "errorOnDetectLanguage": "Failed to detect language, please manually select the source language, error: {error}"
     },
-    "translationSkillPromptEmpty": "Prompt for translation skill cannot be empty"
+    "translationSkillPromptEmpty": "Prompt for translation skill cannot be empty",
+    "useSkills": "Use Skills"
   },
   "common": {
     "autoHide": "Auto-hide when window loses focus",
@@ -204,6 +207,8 @@
       "websearchModelTooltip": "Used to generate search keywords from your conversations. Please do not use inference models, otherwise it will be very slow!",
       "wordSelectionToolbar": "AI Word Selection Toolbar",
       "workflowSettings": "Workflow Settings",
+      "sendMessageKey": "Send Message Key",
+      "sendMessageKeyTooltip": "The default key for sending messages is Enter, you can adjust it according to your habits",
       "proxyTypes": {
         "http": "HTTP Proxy",
         "none": "No Proxy",
@@ -364,6 +369,7 @@
       "proxyServerRequired": "Please enter the proxy server address",
       "reasoning": "Reasoning Model",
       "searchByIdOrName": "Search by ID or name",
+      "select": "Select Model",
       "stop": "Stop Token",
       "stopPlaceholder": "Sets the tokens at which the model will stop generating text. Separate multiple with newlines.",
       "temperature": "Temperature",

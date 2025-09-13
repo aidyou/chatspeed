@@ -1,9 +1,6 @@
 <template>
   <div class="chat-tool-calls" v-for="(call, index) in toolParsed" :key="index">
-    <div
-      class="tool-name"
-      :class="{ expanded: showToolCalls }"
-      @click="showToolCalls = !showToolCalls">
+    <div class="tool-name" :class="{ expanded: showToolCalls }" @click="showToolCalls = !showToolCalls">
       <template v-if="call.function?.mcpName">
         {{ i18n.global.t('chat.mcpCall') }} {{ call.function.mcpName }}::{{
           call.function.name
@@ -16,11 +13,11 @@
     <div class="tool-codes" v-show="showToolCalls">
       <div class="tool-code">
         <h3>📝 {{ i18n.global.t('chat.toolArgs') }}</h3>
-        <pre><code class="language-json" disable-titlebar>{{ call.function.arguments }}</code></pre>
+        <pre><code disable-titlebar>{{ call.function.arguments }}</code></pre>
       </div>
       <div class="tool-code">
         <h3>🎯 {{ i18n.global.t('chat.toolResult') }}</h3>
-        <pre><code class="language-json" disable-titlebar>{{ call.result }}</code></pre>
+        <pre><code class="tool-results">{{ call.result }}</code></pre>
       </div>
     </div>
   </div>

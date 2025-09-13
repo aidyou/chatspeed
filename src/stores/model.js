@@ -85,7 +85,9 @@ export const useModelStore = defineStore('modelProvider', () => {
    * @param {Array|null} value
    */
   const setModelProviders = (value) => {
-    providers.value = isEmpty(value) ? [] : [...value]
+    const newProviders = isEmpty(value) ? [] : [...value]
+    console.log('setModelProviders: updating providers', providers.value.length, '->', newProviders.length)
+    providers.value = newProviders
     console.log('providers', providers.value)
   }
 
@@ -107,9 +109,11 @@ export const useModelStore = defineStore('modelProvider', () => {
           providers.value = [];
           return;
         }
-        providers.value = result.map(model => {
+        const newProviders = result.map(model => {
           return processModelLogo(model)
         });
+        console.log('updateModelStore: updating providers', providers.value.length, '->', newProviders.length)
+        providers.value = newProviders;
         console.debug('models', providers.value)
 
         initDefaultModel();
@@ -209,13 +213,15 @@ export const useModelStore = defineStore('modelProvider', () => {
       const command = formData.id ? 'update_ai_model' : 'add_ai_model'
       invoke(command, formData)
         .then((modelData) => {
+          const processedModel = processModelLogo(modelData)
           if (formData.id) {
             const modelIndex = providers.value.findIndex(m => m.id === formData.id)
             if (modelIndex !== -1) {
-              providers.value[modelIndex] = { ...processModelLogo(modelData) }
+              // Use splice to ensure reactivity
+              providers.value.splice(modelIndex, 1, processedModel)
             }
           } else {
-            providers.value.push(processModelLogo(modelData))
+            providers.value.push(processedModel)
           }
 
           // Update default model

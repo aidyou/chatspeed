@@ -9,6 +9,7 @@ use tokio::sync::{
 };
 
 use crate::ccproxy::ChatProtocol;
+use crate::constants::DEFAULT_WEB_SEARCH_TOOL;
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -738,7 +739,7 @@ async fn global_message_processor_loop(
                         });
                     }
                 } else {
-                    // 这是AI初次请求执行工具
+                    // This is the AI's initial request to execute a tool
                     if let Ok(tool_decl_to_execute) =
                         serde_json::from_str::<ToolCallDeclaration>(&response_chunk.chunk)
                     {
@@ -746,12 +747,11 @@ async fn global_message_processor_loop(
                         let tool_name = tool_decl_to_execute.name.clone();
                         let arguments_str_opt = tool_decl_to_execute.arguments.clone();
 
-                        // 为派生任务克隆必要的数据
                         let cs_arc_clone = chat_state_arc.clone();
                         let cid_clone = chat_id.clone();
                         let t_name_clone = tool_name.clone();
                         let tc_id_clone = tool_call_id.clone();
-                        let metadata_clone = response_chunk.metadata.clone(); // 此元数据包含 chat_param
+                        let metadata_clone = response_chunk.metadata.clone(); // The metadata include chat_param
 
                         tokio::spawn(async move {
                             let args_value = arguments_str_opt
@@ -789,18 +789,50 @@ async fn global_message_processor_loop(
                                 }
                             };
 
+                            // Check if this is a web search result and extract reference information
+                            let mut reference_data: Option<Vec<Value>> = None;
+                            if t_name_clone == DEFAULT_WEB_SEARCH_TOOL {
+                                if let Some(structured_content) =
+                                    tool_execution_actual_result.get("structured_content")
+                                {
+                                    if let Ok(search_results) =
+                                        serde_json::from_value::<Vec<SearchResult>>(
+                                            structured_content.clone(),
+                                        )
+                                    {
+                                        if !search_results.is_empty() {
+                                            reference_data = Some(
+                                                search_results
+                                                    .iter()
+                                                    .map(|result| {
+                                                        json!({
+                                                            "id": result.id,
+                                                            "title": result.title,
+                                                            "url": result.url
+                                                        })
+                                                    })
+                                                    .collect(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
                             let tool_result_msg_for_history = json!({
                                 "role": "tool",
                                 "tool_call_id": tc_id_clone.clone(),
                                 "name": t_name_clone.clone(),
-                                "content": tool_execution_actual_result.as_str().map(String::from).unwrap_or_else(||
-                                    serde_json::to_string(&tool_execution_actual_result).unwrap_or_else(|_| {
-                                        "Failed to serialize tool result".to_string()
-                                    })
+                                "content": tool_execution_actual_result.get("content").and_then(|c| c.as_str()).map(String::from).unwrap_or_else(||
+                                    tool_execution_actual_result.as_str().map(String::from).unwrap_or_else(||
+                                        serde_json::to_string(&tool_execution_actual_result).unwrap_or_else(|_| {
+                                            "Failed to serialize tool result".to_string()
+                                        })
+                                    )
                                 ),
                             });
 
-                            let mut new_metadata = metadata_clone.unwrap_or_else(|| json!({}));
+                            let mut new_metadata =
+                                metadata_clone.clone().unwrap_or_else(|| json!({}));
                             if let Some(obj) = new_metadata.as_object_mut() {
                                 obj.insert(
                                     "is_internal_tool_result".to_string(),
@@ -818,6 +850,25 @@ async fn global_message_processor_loop(
                                 Some(new_metadata),
                                 None,
                             );
+
+                            // Send reference data if available (for web search results)
+                            if let Some(ref_data) = reference_data {
+                                let reference_response = ChatResponse::new_with_arc(
+                                    cid_clone.clone(),
+                                    serde_json::to_string(&ref_data).unwrap_or_default(),
+                                    MessageType::Reference,
+                                    metadata_clone.clone(),
+                                    None,
+                                );
+
+                                if let Err(e) = cs_arc_clone
+                                    .dispatcher_input_tx
+                                    .send(reference_response)
+                                    .await
+                                {
+                                    log::error!("Failed to send reference data back to dispatcher for chat_id {}: {}", cid_clone, e);
+                                }
+                            }
 
                             if let Err(e) = cs_arc_clone
                                 .dispatcher_input_tx

@@ -4,9 +4,21 @@
       <!-- header -->
       <titlebar :show-menu-button="settingStore.settings.showMenuButton">
         <template #left>
-          <div class="icon-btn upperLayer" @click="onToggleSidebar">
-            <cs name="sidebar" />
-          </div>
+          <el-tooltip
+            :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
+            placement="bottom"
+            :hide-after="0"
+            :enterable="false"
+          >
+            <div class="icon-btn upperLayer" @click="onToggleSidebar">
+              <cs name="sidebar" />
+            </div>
+          </el-tooltip>
+        </template>
+        <template #center>
+          <!-- 中间位置空出来给用户放其他内容 -->
+        </template>
+        <template #right>
           <div
             class="icon-btn upperLayer pin-btn"
             @click="onPin"
@@ -14,91 +26,10 @@
             <el-tooltip
               :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)"
               :hide-after="0"
+              :enterable="false"
               placement="bottom">
               <cs name="pin" />
             </el-tooltip>
-          </div>
-        </template>
-        <template #center>
-          <div class="model-selector" v-if="modelProviders.length > 0">
-            <el-dropdown @command="onModelChange" trigger="click">
-              <div class="dropdown-text upperLayer">
-                <span class="text">
-                  <img
-                    :src="currentModel?.providerLogo"
-                    v-if="currentModel?.providerLogo !== ''"
-                    class="provider-logo-sm" />
-                  <avatar :text="currentModel?.name" size="12px" v-else />
-                  {{ currentModel?.name }}
-                </span>
-                <cs name="caret-down" />
-              </div>
-              <template #dropdown>
-                <el-dropdown-menu class="dropdown">
-                  <el-dropdown-item
-                    v-for="model in modelProviders"
-                    :key="model.id"
-                    :command="model.id"
-                    :class="{ 'is-active': currentModel.id === model.id }">
-                    <div class="item">
-                      <div class="name">
-                        <img
-                          :src="model.providerLogo"
-                          v-if="model.providerLogo !== ''"
-                          class="provider-logo" />
-                        <avatar :text="model.name" size="16px" v-else />
-                        {{ model.name }}
-                      </div>
-                    </div>
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-dropdown @command="onSubModelChange" trigger="click">
-              <div class="dropdown-text upperLayer">
-                <span class="text">{{ currentModelAlias }}</span>
-                <cs name="caret-down" />
-              </div>
-              <template #dropdown>
-                <el-dropdown-menu class="dropdown">
-                  <template v-for="(models, group) in currentSubModels" :key="group">
-                    <el-dropdown-item disabled>
-                      <div class="item">
-                        <div class="name">
-                          {{ group }}
-                        </div>
-                      </div>
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-for="(model, index) in models"
-                      :divided="index == 0"
-                      :key="index"
-                      :command="model.id"
-                      :class="{ 'is-active': currentModel?.defaultModel === model.id }">
-                      <div class="item">
-                        <div class="name">
-                          {{ model.name || model.id.split('/').pop() }}
-                        </div>
-                      </div>
-                    </el-dropdown-item>
-                  </template>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-          <div class="model-selector" v-else>
-            <div class="icon-btn dropdown-text upperLayer" @click="onOpenSettingWindow('model')">
-              <span class="text">{{ $t('settings.model.add') }}</span>
-              <cs name="add" style="margin-left: var(--cs-space-xs)" />
-            </div>
-          </div>
-        </template>
-        <template #right>
-          <div
-            class="icon-btn upperLayer"
-            :class="{ disabled: !canCreateNewConversation }"
-            @click="newChat">
-            <cs name="new-chat" />
           </div>
         </template>
       </titlebar>
@@ -116,6 +47,7 @@
               :content="$t('chat.showFavoriteConversations')"
               placement="top"
               :hide-after="0"
+              :enterable="false"
               transition="none">
               <cs
                 class="favourite-flag-icon"
@@ -212,14 +144,13 @@
                   :reference="message.metadata?.reference || []"
                   :reasoning="message.metadata?.reasoning || ''"
                   :toolCalls="message.metadata?.toolCall || []"
-                  :log="chatState.log"
-                  :plan="chatState.plan"
                   v-else />
                 <div class="metadata">
                   <div class="buttons">
                     <el-tooltip
                       :content="$t('chat.resendMessage')"
                       :hide-after="0"
+                      :enterable="false"
                       placement="top"
                       transition="none"
                       v-if="message.role == 'user'">
@@ -228,6 +159,7 @@
                     <el-tooltip
                       :content="$t('chat.quoteMessage')"
                       :hide-after="0"
+                      :enterable="false"
                       placement="top"
                       transition="none"
                       v-else>
@@ -236,6 +168,7 @@
                     <el-tooltip
                       :content="$t('chat.copyMessage')"
                       :hide-after="0"
+                      :enterable="false"
                       placement="top"
                       transition="none">
                       <cs name="copy" @click="onCopyMessage(message.id)" class="icon-copy" />
@@ -243,6 +176,7 @@
                     <el-tooltip
                       :content="$t('chat.takeNote')"
                       :hide-after="0"
+                      :enterable="false"
                       placement="top"
                       transition="none"
                       v-if="message.role != 'user'">
@@ -251,6 +185,7 @@
                     <el-tooltip
                       :content="$t('chat.deleteMessage')"
                       :hide-after="0"
+                      :enterable="false"
                       placement="top"
                       transition="none">
                       <cs name="delete" @click="onDeleteMessage(message.id)" class="icon-delete" />
@@ -292,6 +227,9 @@
               <div class="avatar">
                 <logo
                   :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
+                <span class="provider">
+                  {{ currentModel.defaultModel }}
+                </span>
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
                 <chatting
@@ -362,6 +300,18 @@
               <!-- chat icons -->
               <div class="input-footer">
                 <div class="icons">
+                  <!-- model selector -->
+                  <label v-if="modelProviders.length > 0" class="default">
+                    <ModelSelector position="bottom" :useProviderAvatar="true" :triggerSize="16" />
+                  </label>
+                  <label
+                    v-else
+                    class="icon-btn dropdown-text upperLayer"
+                    @click="onOpenSettingWindow('model')">
+                    <cs name="add" class="small" />
+                    {{ $t('settings.model.add') }}
+                  </label>
+
                   <!-- <el-tooltip
                     :content="
                       $t(`chat.${!deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled'}`)
@@ -374,29 +324,58 @@
                     </label>
                   </el-tooltip> -->
                   <el-tooltip
+                    :content="$t('chat.useSkills')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top"
+                    v-if="!deepSearchEnabled">
+                    <label
+                      @click="onToggleSkillSelector"
+                      :class="{ active: isSkillListVisible }"
+                      v-if="!deepSearchEnabled">
+                      <cs class="small" name="tool" />
+                    </label>
+                  </el-tooltip>
+                  <el-tooltip
                     :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
                     :hide-after="0"
+                    :enterable="false"
                     placement="top"
                     v-if="!deepSearchEnabled">
                     <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
                       <cs name="connected" class="small" />
-                      {{ $t('chat.network') }}
                     </label>
                   </el-tooltip>
-                  <label
-                    @click="onToggleSkillSelector"
-                    :class="{ active: isSkillListVisible }"
-                    v-if="!deepSearchEnabled">
-                    <cs class="small" name="tool" />{{ $t('chat.skills') }}
-                  </label>
+                  <el-tooltip
+                    :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top"
+                    v-if="mcpServers.length > 0">
+                    <label @click="onToggleMcp" :class="{ active: mcpEnabled }">
+                      <cs name="mcp" class="small" />
+                    </label>
+                  </el-tooltip>
                   <el-tooltip
                     :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
                     :hide-after="0"
+                    :enterable="false"
                     placement="top"
                     v-if="!deepSearchEnabled">
                     <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
                       <cs name="clear-context" class="small" />
-                      {{ $t('chat.context') }}
+                    </label>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t('chat.newConversaction')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
+                    <label @click="newChat" :class="{ disabled: !canCreateNewConversation }">
+                      <cs
+                        name="new-chat"
+                        class="small"
+                        :class="{ disabled: !canCreateNewConversation }" />
                     </label>
                   </el-tooltip>
                 </div>
@@ -492,9 +471,14 @@ import markdown from '@/components/chat/Markdown.vue'
 import chatting from '@/components/chat/Chatting.vue'
 import SkillList from '@/components/chat/SkillList.vue'
 import Titlebar from '@/components/window/Titlebar.vue'
+import ModelSelector from '@/components/chat/ModelSelector.vue'
 
 import { csStorageKey } from '@/config/config'
-import { chatPreProcess } from '@/libs/chat'
+import {
+  buildUserMessage,
+  chatPreProcess,
+  handleChatMessage as handleChatMessageCommon
+} from '@/libs/chat'
 import { getModelLogo } from '@/libs/logo'
 import { getLanguageByCode } from '@/i18n/langUtils'
 import { isEmpty, showMessage, csGetStorage, csSetStorage, Uuid } from '@/libs/util'
@@ -504,6 +488,7 @@ import { useModelStore } from '@/stores/model'
 import { useNoteStore } from '@/stores/note'
 import { useSettingStore } from '@/stores/setting'
 import { useWindowStore } from '@/stores/window'
+import { useMcpStore } from '@/stores/mcp'
 
 const { t } = useI18n()
 const unlistenChunkResponse = ref(null)
@@ -514,6 +499,7 @@ const modelStore = useModelStore()
 const noteStore = useNoteStore()
 const windowStore = useWindowStore()
 const settingStore = useSettingStore()
+const mcpStore = useMcpStore()
 
 const mainWindowIsAlwaysOnTop = computed(() => windowStore.mainWindowAlwaysOnTop)
 
@@ -551,7 +537,7 @@ const sidebarCollapsed = ref(!windowStore.chatSidebarShow)
 const sidebarWidth = computed(() => (sidebarCollapsed.value ? '0px' : '200px'))
 const searchQuery = ref('')
 
-// 每次只加载20条消息，根据用户滚动，用户向上滚动触顶后再加载一页
+// Only load 20 messages at a time. Based on the user's scrolling, load the next page when the user scrolls up to the top.
 const observerTarget = ref(null)
 const messageReady = ref(false)
 const messagesForShow = ref([])
@@ -592,6 +578,9 @@ const networkEnabled = ref(csGetStorage(csStorageKey.networkEnabled, true))
 // When deep search is enabled, the AI will automatically plan the user's questions
 // and break them down into executable steps for research.
 const deepSearchEnabled = ref(csGetStorage(csStorageKey.deepSearchEnabled, false))
+
+// MCP enabled state
+const mcpEnabled = ref(csGetStorage(csStorageKey.mcpEnabled, true))
 
 const skillListRef = ref(null)
 const selectedSkill = ref(null)
@@ -656,9 +645,6 @@ const isTranslation = computed(() => {
  * Check if the current skill has tools enabled
  */
 const toolsEnabled = computed(() => {
-  if (!currentModelDetail.value?.functionCall) {
-    return false
-  }
   // 1. If no skill is selected, tools can be enabled (global tools or default behavior)
   if (!selectedSkill.value) {
     return true
@@ -666,6 +652,9 @@ const toolsEnabled = computed(() => {
   // 2. If a skill is selected, it must not be a translation skill AND its metadata must allow tools
   return !isTranslation.value && !!selectedSkill.value.metadata?.toolsEnabled
 })
+
+// MCP servers for visibility control
+const mcpServers = computed(() => mcpStore.servers)
 
 // listen AI response, update scroll
 watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
@@ -847,7 +836,6 @@ const loadMessagesForObserver = async () => {
   if (!messageReady.value || isLoadingMore.value) {
     return
   }
-
   const totalMessages = chatStore.messages.length
   const loadedMessages = messagesForShow.value.length
 
@@ -937,22 +925,21 @@ const dispatchChatCompletion = async (messageId = null) => {
   }
 
   let userMessage = ''
-  // 如果回复消息，则将回复消息设置为空
-  if (replyMessage.value) {
-    userMessage =
-      replyMessage.value.replace(/<think[^>]*>[\s\S]+?<\/think>/g, '').trim() +
-      '\n\n' +
-      t('chat.quoteMessagePrompt') +
-      '\n\n'
-    replyMessage.value = ''
-  }
-
   userMessage += messageId
     ? chatStore.messages.find(m => m.id === messageId)?.content?.trim() || ''
     : inputMessage.value.trim()
   if (!userMessage) {
     console.error('no user message to send')
     return
+  }
+
+  // If there is a reply message, set the reply message to empty
+  if (replyMessage.value) {
+    userMessage = buildUserMessage(
+      userMessage,
+      replyMessage.value.replace(/<think[^>]*>[\s\S]+?<\/think>/g, '').trim()
+    )
+    replyMessage.value = ''
   }
 
   let historyMessages = []
@@ -965,12 +952,12 @@ const dispatchChatCompletion = async (messageId = null) => {
       historyMessages.pop()
     }
   }
-  const messages = await chatPreProcess(userMessage, historyMessages, '', selectedSkill.value, {})
+  const messages = await chatPreProcess(userMessage, historyMessages, selectedSkill.value, {})
   if (messages.length < 1) {
     console.error('no messages to send')
     return
   }
-  console.log('messages:', messages)
+  // console.log('messages:', messages)
 
   resetScrollBehavior() // reset scroll behavior
 
@@ -994,6 +981,7 @@ const dispatchChatCompletion = async (messageId = null) => {
           chatId: lastChatId.value,
           messages: messages,
           networkEnabled: networkEnabled.value,
+          mcpEnabled: mcpEnabled.value,
           metadata: {
             windowLabel: settingStore.windowLabel,
             toolsEnabled: toolsEnabled.value,
@@ -1223,169 +1211,89 @@ const handleTitleGenerated = payload => {
  * Handle chat message event
  */
 const handleChatMessage = async payload => {
-  let isDone = false
-  chatState.value.isReasoning = payload?.type == 'reasoning'
-  switch (payload?.type) {
-    case 'step':
-      currentAssistantMessage.value = payload?.chunk || ''
-      return
-    case 'reference':
-      if (payload?.chunk) {
-        console.log('reference', payload?.chunk)
+  // Use the common handler for shared logic
+  const isDone = handleChatMessageCommon(
+    payload,
+    chatState,
+    {
+      currentAssistantMessage,
+      chatErrorMessage,
+      isChatting
+    },
+    async (payload, chatStateValue) => {
+      // Custom completion handler for Index.vue
+      lastChatId.value = ''
+      if (chatStateValue.message.trim().length > 0) {
+        // Save the current scroll position and height for subsequent restoration
+        const scrollInfo = {
+          top: chatMessagesRef.value.scrollTop,
+          height: chatMessagesRef.value.scrollHeight,
+          isAtBottom:
+            chatMessagesRef.value.scrollTop + chatMessagesRef.value.clientHeight >=
+            chatMessagesRef.value.scrollHeight - 10
+        }
+        // Save the current state for subsequent restoration
+        const originalMessage = chatStateValue.message.trim()
+        const originalReference =
+          chatStateValue.reference && Array.isArray(chatStateValue.reference)
+            ? [...chatStateValue.reference]
+            : []
+        const originalReasoning = chatStateValue.reasoning || ''
+        const originalToolCall = chatStateValue.toolCall || []
+
+        // Reset the state in advance (core optimization point)
+        chatState.value = getDefaultChatState()
+        currentAssistantMessage.value = ''
+
         try {
-          if (typeof payload?.chunk === 'string') {
-            const parsedChunk = JSON.parse(payload?.chunk || '[]')
-            if (Array.isArray(parsedChunk)) {
-              chatState.value.reference.push(...parsedChunk)
-            } else {
-              console.error('Expected an array but got:', typeof parsedChunk)
+          await chatStore.addChatMessage(
+            chatStore.currentConversationId,
+            'assistant',
+            originalMessage,
+            {
+              tokens: payload?.metadata?.tokens?.total || 0,
+              prompt: payload?.metadata?.tokens?.prompt || 0,
+              completion: payload?.metadata?.tokens?.completion || 0,
+              tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
+              provider: payload?.metadata?.model || currentModel.value.defaultModel || '',
+              reference: originalReference,
+              reasoning: originalReasoning,
+              toolCall: originalToolCall
             }
-          } else {
-            chatState.value.reference.push(...payload?.chunk)
+          )
+
+          // Restore the scroll position after the DOM is updated
+          nextTick(() => {
+            if (scrollInfo.isAtBottom) {
+              // If it was originally at the bottom, scroll to the new bottom
+              scrollToBottom()
+            } else {
+              // Otherwise, try to maintain the relative scroll position
+              const heightDiff = chatMessagesRef.value.scrollHeight - scrollInfo.height
+              chatMessagesRef.value.scrollTop = scrollInfo.top + heightDiff
+            }
+          })
+
+          // generate title if needed
+          if (chatStore.messages.length <= 2) {
+            genTitleByAi()
           }
-        } catch (e) {
-          console.error('error on parse reference:', e)
-          console.log('chunk', payload?.chunk)
+        } catch (error) {
+          chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
         }
       }
-      break
-    case 'reasoning':
-      chatState.value.reasoning += payload?.chunk || ''
-      break
-    case 'error':
-      chatErrorMessage.value = payload?.chunk || ''
-      isDone = true
-      break
-    case 'finished':
-      isDone = true
-      chatState.value.message += payload?.chunk || ''
-      break
-    case 'text':
-      chatState.value.message += payload?.chunk || ''
-      // handle deepseek-r1 reasoning flag `<think></think>`
-      if (
-        chatState.value.message.startsWith('<think>') &&
-        chatState.value.message.includes('</think>')
-      ) {
-        const messages = chatState.value.message.split('</think>')
-        chatState.value.reasoning = messages[0].replace('<think>', '').trim()
-        chatState.value.message = messages[1].trim()
-      }
-      break
+    }
+  )
 
-    case 'toolCalls':
-      if (!chatState.value.message.includes('<!--[ToolCalls]-->')) {
-        chatState.value.message += '\n<!--[ToolCalls]-->\n'
-      }
-      break
-
-    case 'toolResults':
-      if (typeof payload?.chunk === 'string') {
-        const parsedChunk = JSON.parse(payload?.chunk || '[]')
-        if (Array.isArray(parsedChunk)) {
-          chatState.value.toolCall.push(...parsedChunk)
-        } else {
-          console.error('Expected an array but got:', typeof parsedChunk)
-        }
-      } else {
-        chatState.value.toolCall.push(...payload?.chunk)
-        hasToolCalls = true
-      }
-      break
-
-    case 'log':
-      chatState.value.log.push(payload?.chunk || '')
-      break
-    case 'plan':
-      if (payload?.chunk) {
-        try {
-          const plan = JSON.parse(payload?.chunk || '[]')
-          chatState.value.plan = Array.isArray(plan) ? [...plan] : []
-        } catch (e) {
-          console.log('error on parse plan:', e)
-          console.log('chunk', payload?.chunk)
-        }
-      }
-      break
-    default:
-      console.warn('Unknown message type:', payload?.type, payload?.chunk)
-      break
-  }
-
+  // Handle model metadata
   chatState.value.model = payload?.metadata?.model || currentModel.value.defaultModel || ''
-  currentAssistantMessage.value = chatState.value.message
+
+  // Handle scroll behavior
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
       scrollToBottomIfNeeded()
     }
   })
-
-  if (isDone) {
-    isChatting.value = false
-    lastChatId.value = ''
-    if (chatState.value.message.trim().length > 0) {
-      // 保存当前滚动位置和高度，用于后续恢复
-      const scrollInfo = {
-        top: chatMessagesRef.value.scrollTop,
-        height: chatMessagesRef.value.scrollHeight,
-        isAtBottom:
-          chatMessagesRef.value.scrollTop + chatMessagesRef.value.clientHeight >=
-          chatMessagesRef.value.scrollHeight - 10
-      }
-      // 保存当前状态用于后续恢复
-      const originalMessage = chatState.value.message.trim()
-      const originalReference =
-        chatState.value.reference && Array.isArray(chatState.value.reference)
-          ? [...chatState.value.reference]
-          : []
-      const originalReasoning = chatState.value.reasoning || ''
-      const originalToolCall = chatState.value.toolCall || []
-
-      // 提前重置状态（核心优化点）
-      chatState.value = getDefaultChatState()
-      currentAssistantMessage.value = ''
-
-      try {
-        await chatStore.addChatMessage(
-          chatStore.currentConversationId,
-          'assistant',
-          originalMessage,
-          {
-            tokens: payload?.metadata?.tokens?.total || 0,
-            prompt: payload?.metadata?.tokens?.prompt || 0,
-            completion: payload?.metadata?.tokens?.completion || 0,
-            tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
-            provider: payload?.metadata?.model || currentModel.value.defaultModel || '',
-            reference: originalReference,
-            reasoning: originalReasoning,
-            toolCall: originalToolCall
-          }
-        )
-        // 一次性更新所有状态，减少DOM重绘次数
-        // chatState.value = getDefaultChatState()
-        // currentAssistantMessage.value = ''
-
-        // 在DOM更新后恢复滚动位置
-        nextTick(() => {
-          if (scrollInfo.isAtBottom) {
-            // 如果原本在底部，则滚动到新的底部
-            scrollToBottom()
-          } else {
-            // 否则尝试保持相对滚动位置
-            const heightDiff = chatMessagesRef.value.scrollHeight - scrollInfo.height
-            chatMessagesRef.value.scrollTop = scrollInfo.top + heightDiff
-          }
-        })
-
-        // generate title if needed
-        if (chatStore.messages.length <= 2) {
-          genTitleByAi()
-        }
-      } catch (error) {
-        chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
-      }
-    }
-  }
 }
 
 // =================================================
@@ -1415,9 +1323,18 @@ const setupObserver = () => {
   return () => observer.disconnect()
 }
 
+const osType = ref('') // To store OS type from backend
+
 onMounted(async () => {
   if (inputRef.value) {
     inputRef.value.focus()
+  }
+
+  try {
+    const osInfo = await invoke('get_os_info')
+    osType.value = osInfo.os
+  } catch (e) {
+    console.error('Failed to get OS info:', e)
   }
 
   await chatStore.loadConversations() // Ensure this is awaited
@@ -1507,6 +1424,7 @@ onMounted(async () => {
   cleanupObserver.value = setupObserver()
 
   windowStore.initMainWindowAlwaysOnTop()
+  window.addEventListener('keydown', handleGlobalKeyDown)
 })
 
 onBeforeUnmount(() => {
@@ -1523,6 +1441,7 @@ onBeforeUnmount(() => {
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)
 
   cleanupObserver.value?.()
+  window.removeEventListener('keydown', handleGlobalKeyDown)
 })
 
 // =================================================
@@ -1621,38 +1540,6 @@ const onDeleteConversation = id => {
 
 const onOpenSettingWindow = type => {
   invoke('open_setting_window', { settingType: type })
-}
-
-/**
- * Set the default model
- * @param {Object} id model config
- */
-const onModelChange = id => {
-  modelStore.setDefaultModelProvider(modelProviders.value.find(model => model.id === id))
-}
-
-/**
- * Set the default sub model
- * @param {String} modelId sub model id
- */
-const onSubModelChange = modelId => {
-  currentModel.value.defaultModel = modelId
-  modelStore.setDefaultModelProvider(currentModel.value)
-  const logo = currentModel.value?.metadata?.logo || ''
-  // update the database record
-  modelStore
-    .setModelProvider({
-      ...currentModel.value,
-      defaultModel: modelId,
-      metadata: {
-        ...currentModel.value.metadata,
-        proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
-        logo: logo
-      }
-    })
-    .catch(error => {
-      console.error(error)
-    })
 }
 
 /**
@@ -1780,6 +1667,14 @@ const onToggleNetwork = () => {
 }
 
 /**
+ * Toggle the MCP enabled state
+ */
+const onToggleMcp = () => {
+  mcpEnabled.value = !mcpEnabled.value && mcpServers.value.length > 0
+  csSetStorage(csStorageKey.mcpEnabled, mcpEnabled.value)
+}
+
+/**
  * Toggle the deep search enabled state
  */
 const onDeepSearchEnabled = () => {
@@ -1814,6 +1709,25 @@ const onGlobalClearContext = () => {
   csSetStorage(csStorageKey.disableContext, disableContext.value)
 }
 
+const handleGlobalKeyDown = event => {
+  // Use OS type from backend. `std::env::consts::OS` returns "macos" for macOS.
+  const isMac = osType.value === 'macos'
+  const modifierPressed = isMac ? event.metaKey : event.ctrlKey
+
+  if (modifierPressed) {
+    switch (event.key.toLowerCase()) {
+      case 'n':
+        event.preventDefault()
+        newChat()
+        break
+      case 'b':
+        event.preventDefault()
+        onToggleSidebar()
+        break
+    }
+  }
+}
+
 // =================================================
 // handle keyboard events
 // =================================================
@@ -1846,11 +1760,13 @@ const onKeyEnter = event => {
     return
   }
 
-  if (event.shiftKey) {
-    // if shift+enter is pressed, allow line breaks
-    return
-  }
-  if (!composing.value && !compositionJustEnded.value) {
+  // Determine send behavior based on user setting
+  const shouldSend =
+    settingStore.settings.sendMessageKey === 'Enter'
+      ? !event.shiftKey // Enter to send, Shift+Enter for line break
+      : event.shiftKey // Shift+Enter to send, Enter for line break
+
+  if (shouldSend && !composing.value && !compositionJustEnded.value) {
     event.preventDefault()
     sendMessageAuto()
   }
@@ -2178,6 +2094,10 @@ const onTakeNote = message => {
       }
 
       &.error {
+        display: flex;
+        flex-direction: row;
+        gap: var(--cs-space-sm);
+
         .avatar {
           .cs {
             color: var(--cs-error-color) !important;
@@ -2310,14 +2230,17 @@ const onTakeNote = message => {
           padding: var(--cs-space-xs) var(--cs-space-sm);
           border: 1px solid var(--cs-bg-color);
 
-          &:hover,
+          &:not(.disabled):not(.default):hover,
           &.active {
             color: var(--cs-color-primary);
-            border: 1px solid var(--cs-color-primary);
 
             .cs {
               color: var(--cs-color-primary);
             }
+          }
+
+          &.active {
+            border: 1px solid var(--cs-color-primary);
           }
         }
       }
