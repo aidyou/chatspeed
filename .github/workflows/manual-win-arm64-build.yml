@@ -1,0 +1,86 @@
+name: Manual Windows ARM64 Build Test
+
+on:
+  workflow_dispatch: # Allows manual triggering from the Actions tab
+
+permissions:
+  contents: read # This workflow only needs to read the repository content
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust ARM64 Target
+        run: rustup target add aarch64-pc-windows-msvc
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          key: ${{ runner.os }}-vcpkg-aarch64-pc-windows-msvc-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-aarch64-pc-windows-msvc-
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-rust-aarch64-pc-windows-msvc"
+          workspaces: src-tauri
+
+      - name: Setup vcpkg env
+        shell: pwsh
+        run: |
+          $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=arm64-windows-static" >> $env:GITHUB_ENV
+          echo "CARGO_CFG_TARGET_ARCH=aarch64" >> $env:GITHUB_ENV
+          echo "VCPKG_INSTALLED_DIR=$VCPKG_ROOT/installed" >> $env:GITHUB_ENV
+          echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
+          echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
+
+      - name: Install dependencies via vcpkg
+        shell: pwsh
+        run: |
+          $TRIPLET = "arm64-windows-static"
+          Write-Host "Installing dependencies for triplet: $TRIPLET"
+          vcpkg install "sqlite3:$TRIPLET"
+          vcpkg install "bzip2:$TRIPLET"
+
+      - name: Setup Rust env
+        shell: pwsh
+        run: |
+          echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+          echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
+          echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: yarn
+
+      - name: Enable Corepack for Yarn
+        run: corepack enable
+
+      - name: Install Frontend Dependencies
+        run: yarn install --immutable
+
+      - name: Build Frontend
+        run: yarn build
+
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target aarch64-pc-windows-msvc
