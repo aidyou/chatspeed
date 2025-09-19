@@ -59,14 +59,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     UnifiedRole::Assistant => {
                         // If there are pending tool results, flush them as a single user message first.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(UnifiedChatMessage {
                                 role: Some("user".to_string()),
-                                content: Some(OpenAIMessageContent::Text(results_xml)),
+                                content: Some(OpenAIMessageContent::Text(
+                                    tool_results_buffer.join("\n"),
+                                )),
                                 ..Default::default()
                             });
                             tool_results_buffer.clear();
@@ -118,7 +115,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             } = block
                             {
                                 let result_xml = format!(
-                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
+                                    "<cs:tool_result id=\"{}\">{}</cs:tool_result>",
                                     tool_use_id, content
                                 );
                                 tool_results_buffer.push(result_xml);
@@ -128,14 +125,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     UnifiedRole::User => {
                         // Flush any pending tool results before processing the user message.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(UnifiedChatMessage {
                                 role: Some("user".to_string()),
-                                content: Some(OpenAIMessageContent::Text(results_xml)),
+                                content: Some(OpenAIMessageContent::Text(
+                                    tool_results_buffer.join("\n"),
+                                )),
                                 ..Default::default()
                             });
                             tool_results_buffer.clear();
@@ -169,14 +163,9 @@ impl BackendAdapter for OpenAIBackendAdapter {
 
             // Flush any remaining tool results at the end of the message list.
             if !tool_results_buffer.is_empty() {
-                let results_xml = format!(
-                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                    tool_results_buffer.join("\n"),
-                    crate::ccproxy::types::TOOL_RESULT_REMINDER,
-                );
                 processed_messages.push(UnifiedChatMessage {
                     role: Some("user".to_string()),
-                    content: Some(OpenAIMessageContent::Text(results_xml)),
+                    content: Some(OpenAIMessageContent::Text(tool_results_buffer.join("\n"))),
                     ..Default::default()
                 });
             }
@@ -672,11 +661,16 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     .completion_tokens_details
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
+                let prompt_cached_tokens = u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens);
 
                 UnifiedUsage {
                     input_tokens: u.prompt_tokens,
                     output_tokens: u.completion_tokens,
                     thoughts_tokens,
+                    prompt_cached_tokens,
                     ..Default::default()
                 }
             })
@@ -995,15 +989,23 @@ impl OpenAIBackendAdapter {
         let usage = openai_chunk
             .usage
             .clone()
-            .map(|u| UnifiedUsage {
-                input_tokens: u.prompt_tokens,
-                output_tokens: u.completion_tokens,
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-                tool_use_prompt_tokens: None,
-                thoughts_tokens: None,
-                cached_content_tokens: None,
-                ..Default::default()
+            .map(|u| {
+                let thoughts_tokens = u
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.reasoning_tokens);
+                let prompt_cached_tokens = u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens);
+
+                UnifiedUsage {
+                    input_tokens: u.prompt_tokens,
+                    output_tokens: u.completion_tokens,
+                    thoughts_tokens,
+                    prompt_cached_tokens,
+                    ..Default::default()
+                }
             })
             .unwrap_or_default();
 

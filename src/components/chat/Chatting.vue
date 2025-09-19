@@ -22,6 +22,7 @@
         </li>
       </ul>
     </div>
+
     <div class="chat-think" v-if="reasoning != ''">
       <div
         class="chat-think-title"
@@ -38,7 +39,7 @@
         v-katex
         v-html="parseMarkdown(reasoning)"></div>
     </div>
-    <ChatToolCalls v-if="toolParsed.length > 0" :tool-calls="toolCalls" />
+    <!-- <ChatToolCalls v-if="toolParsed.length > 0" :tool-calls="toolCalls" /> -->
     <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think />
   </div>
 </template>
@@ -47,7 +48,7 @@
 import { ref, computed, watch } from 'vue'
 
 import { parseMarkdown } from '@/libs/chat'
-import ChatToolCalls from './ToolCall.vue'
+// import ChatToolCalls from './ToolCall.vue'
 
 const props = defineProps({
   content: {
@@ -110,7 +111,11 @@ watch(
 const cicleIndex = ref(0)
 const currentAssistantMessageHtml = computed(() =>
   props.content
-    ? parseMarkdown(props.content + ' <span class="cs cs-spin-linear">☯</span>', props.reference)
+    ? parseMarkdown(
+        props.content + ' <span class="cs cs-spin-linear">☯</span>',
+        props.reference,
+        props.toolCalls
+      )
     : '<div class="cs cs-loading cs-spin"></div>'
 )
 

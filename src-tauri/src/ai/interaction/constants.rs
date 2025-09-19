@@ -59,10 +59,12 @@ pub const TOOL_USAGE_GUIDANCE: &str = r###"
 You have access to additional capabilities through tools:
 
 ### Web Search
-- Use for current events, recent news, real-time data, and factual verification
-- Search results are provided in `<cs:search-results>` tags with unique IDs
-- When referencing search results in your response, create citations using the format `(^id)` where `id` matches the result's `<id>` value
-- Always cite sources with URLs when sharing search results
+- Use for current events, recent news, real-time data, and factual verification.
+- This tool returns a list of search results with titles, URLs, and snippets of text.
+- **Parameter**: Use `kw` (not `query`) as the parameter name for search keywords
+- If you need the full content of a specific URL from the search results, you MUST use the `WebFetch` tool with that URL.
+- When referencing search results in your response, create citations using the format `[[id]]` where `id` matches the result's `<id>` value.
+- Always cite sources with URLs when sharing search results.
 - Summarize findings clearly and highlight the most relevant information
 
 ### Web Fetch

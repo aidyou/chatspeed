@@ -901,10 +901,11 @@ function bindThinkEvents(el) {
 }
 
 function bindToolCallEvents(el) {
-  const titles = el.querySelectorAll('.chat-tool-calls>.tool-name')
-  titles.forEach(title => {
-    const content = title.nextElementSibling
-    if (content?.classList.contains('tool-codes')) {
+  const toolCallContainers = el.querySelectorAll('.chat-tool-calls')
+  toolCallContainers.forEach(toolCallContainer => {
+    const title = toolCallContainer.querySelector('.tool-name')
+    const content = toolCallContainer.querySelector('.tool-codes')
+    if (title && content) {
       title.style.cursor = 'pointer'
       const clickHandler = () => {
         const isHidden = content.style.display === 'none'
@@ -935,17 +936,17 @@ function bindToolCallEvents(el) {
           title.classList.remove('expanded')
         }
       }
-      title._thinkClickHandler = clickHandler
+      title._toolCallClickHandler = clickHandler
       title.addEventListener('click', clickHandler)
     }
   })
 }
 function removeToolCallEvents(el) {
-  const titles = el.querySelectorAll('.chat-tool-calls>.tool-name')
+  const titles = el.querySelectorAll('.chat-tool-calls .tool-name')
   titles.forEach(title => {
-    if (title._thinkClickHandler) {
-      title.removeEventListener('click', title._thinkClickHandler)
-      delete title._thinkClickHandler
+    if (title._toolCallClickHandler) {
+      title.removeEventListener('click', title._toolCallClickHandler)
+      delete title._toolCallClickHandler
     }
   })
 }

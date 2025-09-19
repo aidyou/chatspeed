@@ -38,6 +38,8 @@ impl From<MCPToolDeclaration> for Tool {
             input_schema,
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
         }
     }
 }
@@ -86,6 +88,72 @@ impl McpProxyHandler {
             tool_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
+
+    /// Ensures the tool map is loaded, reloads if empty
+    async fn ensure_tool_map_loaded(&self) -> Result<(), McpError> {
+        let tool_map_guard = self.tool_map.read().await;
+        if !tool_map_guard.is_empty() {
+            return Ok(());
+        }
+        drop(tool_map_guard);
+
+        log::debug!("Tool map is empty, reloading tools...");
+        
+        // Rebuild tool map using the same logic as list_tools
+        let exclude_tools = HashSet::from(["chat_completion".to_string()]);
+        let all_tools = self
+            .chat_state
+            .tool_manager
+            .get_tool_calling_spec(Some(exclude_tools))
+            .await
+            .unwrap_or_default();
+
+        let mut new_tool_map = HashMap::new();
+        let mut used_short_names = HashSet::new();
+
+        for tool_spec in all_tools {
+            // Built-in tools
+            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT) {
+                let tool_name = tool_spec.name.clone();
+                new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));
+                continue;
+            }
+
+            // mcp tools
+            // disable the tool of mcp proxy itself
+            if tool_spec.name.matches(MCP_TOOL_NAME_SPLIT).count() > 1 {
+                continue;
+            }
+
+            let parts: Vec<&str> = tool_spec.name.splitn(2, MCP_TOOL_NAME_SPLIT).collect();
+            if parts.len() == 2 {
+                let server_name = parts[0].to_string();
+                let original_tool_name = parts[1].to_string();
+
+                let display_name = if !used_short_names.contains(&original_tool_name) {
+                    original_tool_name.clone()
+                } else {
+                    format!("{}_{}", server_name, original_tool_name)
+                };
+
+                if new_tool_map.contains_key(&display_name) {
+                    continue;
+                }
+
+                used_short_names.insert(display_name.clone());
+                new_tool_map.insert(
+                    display_name.clone(),
+                    ToolReference::new(Some(server_name.clone()), original_tool_name.clone()),
+                );
+            }
+        }
+
+        // Update the shared tool map
+        let mut tool_map = self.tool_map.write().await;
+        *tool_map = new_tool_map;
+
+        Ok(())
+    }
 }
 
 impl ServerHandler for McpProxyHandler {
@@ -94,8 +162,11 @@ impl ServerHandler for McpProxyHandler {
             protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
-                name: "Chatspeed MCP Proxy".to_string(),
+                name: "Chatspeed MCP Hub".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                title: Some("Chatspeed".to_string()),
+                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
+                icons: None,
             },
             instructions: Some(t!("mcp.proxy.service_description").to_string()),
         }
@@ -186,15 +257,19 @@ impl ServerHandler for McpProxyHandler {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Ensure tool map is loaded
+        self.ensure_tool_map_loaded().await?;
+
         let tool_map_guard = self.tool_map.read().await;
         let tool_ref = match tool_map_guard.get(request.name.as_ref()) {
             Some(tool) => tool.clone(),
             None => {
                 let error = json!({"error":t!("mcp.proxy.tool_not_found", tool_name = request.name).to_string()});
                 return Ok(CallToolResult {
-                    content: Some(error.to_string().into_contents()),
+                    content: error.to_string().into_contents(),
                     structured_content: Some(error),
                     is_error: Some(true),
+                    meta: None,
                 });
             }
         };
@@ -234,13 +309,16 @@ impl ServerHandler for McpProxyHandler {
                     serde_json::from_value::<ToolCallResult>(tool_result.clone())
                 {
                     (
-                        result.content.map(|s| s.into_contents()),
+                        result
+                            .content
+                            .map(|s| s.into_contents())
+                            .unwrap_or_default(),
                         // result.structured_content,
                         None,
                     )
                 } else {
                     (
-                        Some(tool_result.to_string().into_contents()),
+                        tool_result.to_string().into_contents(),
                         Some(tool_result.clone()),
                     )
                 };
@@ -248,15 +326,17 @@ impl ServerHandler for McpProxyHandler {
                     content,
                     structured_content,
                     is_error: Some(false),
+                    meta: None,
                 })
             }
             Err(e) => {
                 let error = json!({"error":t!("mcp.proxy.tool_execution_error", error = e.to_string())
                 .to_string()});
                 Ok(CallToolResult {
-                    content: Some(error.to_string().into_contents()),
+                    content: error.to_string().into_contents(),
                     structured_content: Some(error),
                     is_error: Some(true),
+                    meta: None,
                 })
             }
         }

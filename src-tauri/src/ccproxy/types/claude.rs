@@ -142,7 +142,7 @@ pub struct ClaudeNativeResponse {
     pub error: Option<ClaudeNativeError>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ClaudeNativeUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,

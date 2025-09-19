@@ -208,7 +208,7 @@ fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, any
                     blocks.extend(vec![
                         UnifiedContentBlock::Text {
                             text: format!(
-                                "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
+                                "<cs:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</cs:failed_tool_call>",
                                 tool_name, s
                             ),
                         },

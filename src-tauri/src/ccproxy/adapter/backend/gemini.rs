@@ -52,21 +52,43 @@ impl GeminiBackendAdapter {
                             gemini_schema.insert(key.clone(), Self::extract_gemini_schema(value));
                         }
                         "type" => {
-                            if let Some(arr) = value.as_array() {
-                                if let Some(first_type) = arr.iter().find(|v| !v.is_null()) {
-                                    gemini_schema.insert(key.clone(), first_type.clone());
-                                }
+                            let type_val = if let Some(arr) = value.as_array() {
+                                arr.iter()
+                                    .find(|v| !v.is_null())
+                                    .cloned()
+                                    .unwrap_or_else(|| value.clone())
                             } else {
-                                gemini_schema.insert(key.clone(), value.clone());
+                                value.clone()
+                            };
+
+                            if let Some(type_str) = type_val.as_str() {
+                                let new_type = match type_str {
+                                    "string" | "boolean" | "array" | "object" => type_val.clone(),
+                                    "number" | "float" | "double" => json!("number"),
+                                    "integer" | "int" | "int32" | "int64" | "uint" | "uint32"
+                                    | "uint64" => json!("integer"),
+                                    _ => {
+                                        log::warn!(
+                                            "Unknown type '{}' in schema, defaulting to string",
+                                            type_str
+                                        );
+                                        json!("string")
+                                    }
+                                };
+                                gemini_schema.insert(key.clone(), new_type);
+                            } else {
+                                gemini_schema.insert(key.clone(), type_val);
                             }
                         }
                         "format" => {
                             if let serde_json::Value::String(format_str) = value {
                                 match format_str.as_str() {
+                                    // Pass through supported formats
                                     "float" | "double" | "int32" | "int64" => {
                                         gemini_schema.insert(key.clone(), value.clone());
                                     }
-                                    "uint" | "uint32" | "uint64" => {
+                                    // Unsigned to signed
+                                    "uint" | "uint32" | "uint64" | "int" | "integer" => {
                                         gemini_schema.insert(key.clone(), json!("int64"));
                                     }
                                     _ => {
@@ -188,6 +210,7 @@ impl GeminiBackendAdapter {
                                     load_duration: None,
                                     prompt_eval_duration: None,
                                     eval_duration: None,
+                                    prompt_cached_tokens: None,
                                 })
                                 .unwrap_or_default();
 
@@ -327,15 +350,10 @@ impl BackendAdapter for GeminiBackendAdapter {
                     UnifiedRole::Assistant => {
                         // If there are pending tool results, flush them as a single user message first.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(GeminiContent {
                                 role: Some("user".to_string()),
                                 parts: vec![GeminiPart {
-                                    text: Some(results_xml),
+                                    text: Some(tool_results_buffer.join("\n")),
                                     ..Default::default()
                                 }],
                             });
@@ -390,7 +408,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                             } = block
                             {
                                 let result_xml = format!(
-                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
+                                    "<cs:tool_result id=\"{}\">{}</cs:tool_result>",
                                     tool_use_id, content
                                 );
                                 tool_results_buffer.push(result_xml);
@@ -400,15 +418,10 @@ impl BackendAdapter for GeminiBackendAdapter {
                     UnifiedRole::User => {
                         // Flush any pending tool results before processing the user message.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER,
-                            );
                             processed_messages.push(GeminiContent {
                                 role: Some("user".to_string()),
                                 parts: vec![GeminiPart {
-                                    text: Some(results_xml),
+                                    text: Some(tool_results_buffer.join("\n")),
                                     ..Default::default()
                                 }],
                             });
@@ -445,15 +458,10 @@ impl BackendAdapter for GeminiBackendAdapter {
 
             // Flush any remaining tool results at the end of the message list.
             if !tool_results_buffer.is_empty() {
-                let results_xml = format!(
-                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                    tool_results_buffer.join("\n"),
-                    crate::ccproxy::types::TOOL_RESULT_REMINDER,
-                );
                 processed_messages.push(GeminiContent {
                     role: Some("user".to_string()),
                     parts: vec![GeminiPart {
-                        text: Some(results_xml),
+                        text: Some(tool_results_buffer.join("\n")),
                         ..Default::default()
                     }],
                 });
@@ -1062,6 +1070,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     load_duration: None,
                                     prompt_eval_duration: None,
                                     eval_duration: None,
+                                    prompt_cached_tokens: None,
                                 })
                                 .unwrap_or_default();
                             unified_chunks

@@ -162,10 +162,13 @@ impl WebviewScraper {
             .map_err(|e| anyhow!(e.to_string()))?;
 
         let result = async {
-            let page_load_result = tokio::time::timeout(page_timeout, rx_page_load).await;
+            // Use shorter timeout for page load to fail fast on problematic pages
+            let page_load_timeout = std::cmp::min(page_timeout, Duration::from_secs(15));
+            let page_load_result = tokio::time::timeout(page_load_timeout, rx_page_load).await;
             if page_load_result.is_err() {
                 // Mark as completed to prevent further processing
                 is_completed.store(true, Ordering::SeqCst);
+                log::warn!("Page load timed out for URL: {} after {:?}", url, page_load_timeout);
                 return Err(anyhow!("Page load timed out for URL: {}", url));
             }
 
@@ -174,6 +177,7 @@ impl WebviewScraper {
             if dom_content_result.is_err() {
                 // Mark as completed to prevent further processing
                 is_completed.store(true, Ordering::SeqCst);
+                log::warn!("DOMContentLoaded timed out for URL: {} after {:?}", url, page_timeout);
                 return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
             }
 
@@ -181,16 +185,42 @@ impl WebviewScraper {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
 
-            self.inject_and_run_script(&webview, config, generic_content_rule)?;
+            // Add retry mechanism for script injection
+            let mut injection_attempts = 0;
+            const MAX_INJECTION_ATTEMPTS: i32 = 3;
+            
+            while injection_attempts < MAX_INJECTION_ATTEMPTS {
+                match self.inject_and_run_script(&webview, config.as_ref().cloned(), generic_content_rule.clone()) {
+                    Ok(_) => break,
+                    Err(e) => {
+                        injection_attempts += 1;
+                        log::warn!("Script injection attempt {} failed: {}", injection_attempts, e);
+                        if injection_attempts >= MAX_INJECTION_ATTEMPTS {
+                            is_completed.store(true, Ordering::SeqCst);
+                            return Err(anyhow!("Script injection failed after {} attempts: {}", MAX_INJECTION_ATTEMPTS, e));
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
 
             let scrape_result = tokio::time::timeout(page_timeout, rx_scrape_result).await;
             // Mark as completed after receiving result or timeout
             is_completed.store(true, Ordering::SeqCst);
 
             match scrape_result {
-                Ok(Ok(res)) => res,
-                Ok(Err(_)) => Err(anyhow!("Scrape result channel closed unexpectedly.")),
-                Err(_) => Err(anyhow!("Scraping timed out for URL: {}", url)),
+                Ok(Ok(res)) => {
+                    log::debug!("Scraping succeeded for URL: {}", url);
+                    res
+                },
+                Ok(Err(e)) => {
+                    log::error!("Scrape result channel error: {:?}", e);
+                    Err(anyhow!("Scrape result channel error: {:?}", e))
+                },
+                Err(_) => {
+                    log::warn!("Scraping timed out for URL: {} after {:?}", url, page_timeout);
+                    Err(anyhow!("Scraping timed out for URL: {}", url))
+                },
             }
         }
         .await;
@@ -315,7 +345,7 @@ impl WebviewScraper {
         #[cfg(target_os = "windows")]
         {
             let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
-            let mut proxy_arg_option: Option<String> = None;
+            let mut browser_args = vec!["--mute-audio".to_string()];
 
             if let Ok(store) = main_store.read() {
                 let proxy_type = store.get_config("proxy_type", String::new());
@@ -328,7 +358,7 @@ impl WebviewScraper {
                     && proxy_username.is_empty()
                     && proxy_password.is_empty()
                 {
-                    proxy_arg_option = Some(format!("--proxy-server={}", proxy_server));
+                    browser_args.push(format!("--proxy-server={}", proxy_server));
                 } else if !proxy_server.is_empty() {
                     log::warn!(
                         "Scraper webview is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
@@ -336,10 +366,15 @@ impl WebviewScraper {
                 }
             }
 
-            if let Some(arg) = proxy_arg_option {
-                log::info!("Applying proxy for scraper webview: {}", arg);
-                webview_builder = webview_builder.additional_browser_args(&arg);
-            }
+            let args_string = browser_args.join(" ");
+            log::debug!("Applying browser arguments for scraper webview: {}", args_string);
+            webview_builder = webview_builder.additional_browser_args(&args_string);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Mute audio on non-Windows platforms
+            webview_builder = webview_builder.additional_browser_args("--mute-audio");
         }
 
         webview_builder

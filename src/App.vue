@@ -280,6 +280,10 @@ const handleDragStart = e => {
 
 const handleDragEnd = e => {
   windowStore.setMouseEventState(false)
+  // Fix rounded corners on macOS after dragging
+  if (windowStore.os === 'macos') {
+    windowStore.fixRoundedCorners()
+  }
 }
 </script>
 
@@ -294,12 +298,7 @@ body {
   width: 100vw;
   overflow: hidden;
   background: var(--cs-bg-color);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border-radius: var(--cs-border-radius-md);
-
-  border: 0.5px solid var(--cs-border-color);
-  box-sizing: border-box;
 
   .titlebar {
     height: var(--cs-titlebar-height);

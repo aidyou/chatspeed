@@ -14,13 +14,28 @@ use tokio_util::sync::CancellationToken;
 ///
 /// # Arguments
 /// * `chat_state` - Chat state instance for accessing the tool manager
+/// * `shutdown_token` - Optional cancellation token for graceful shutdown
 ///
 /// # Returns
 /// Returns an Axum Router configured for the MCP service.
 pub fn create_mcp_router(chat_state: Arc<ChatState>) -> Router {
-    // Create a dummy cancellation token, as it's required by SseServerConfig,
-    // but the actual server lifecycle will be managed by the main ccproxy server.
-    let cancellation_token = CancellationToken::new();
+    create_mcp_router_with_shutdown(chat_state, None)
+}
+
+/// Creates a router for the MCP proxy server with optional shutdown token.
+///
+/// # Arguments
+/// * `chat_state` - Chat state instance for accessing the tool manager
+/// * `shutdown_token` - Optional cancellation token for graceful shutdown
+///
+/// # Returns
+/// Returns an Axum Router configured for the MCP service.
+pub fn create_mcp_router_with_shutdown(
+    chat_state: Arc<ChatState>, 
+    shutdown_token: Option<CancellationToken>
+) -> Router {
+    // Use provided token or create a new one for SSE server lifecycle management
+    let cancellation_token = shutdown_token.unwrap_or_else(CancellationToken::new);
 
     // The SseServerConfig no longer needs a bind address, as it's not binding a port itself.
     // The paths are kept at the root, as the main router will handle nesting.
@@ -28,9 +43,11 @@ pub fn create_mcp_router(chat_state: Arc<ChatState>) -> Router {
         bind: "0.0.0.0:0".parse().unwrap(), // Dummy address
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
-        ct: cancellation_token,
+        ct: cancellation_token.clone(),
         sse_keep_alive: Some(Duration::from_secs(30)),
     };
+
+    log::info!("Creating MCP proxy router with SSE keep-alive: 30s");
 
     // Create SSE server and get the router
     let (sse_server, router) = SseServer::new(sse_config);

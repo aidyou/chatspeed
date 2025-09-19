@@ -223,7 +223,7 @@ fn convert_openai_content(
                     blocks.extend(vec![
                         UnifiedContentBlock::Text {
                             text: format!(
-                                "<ccp:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</ccp:failed_tool_call>",
+                                "<cs:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</cs:failed_tool_call>",
                                 tool_name, arguments_str
                             ),
                         },

@@ -341,6 +341,8 @@ function sendScrapeResult(data) {
    * @param {object | null} config - The configuration object, or null for generic scraping.
    */
   window.performScrape = async (config, generic_content_rule) => {
+    // Reset the flag at the start of each scrape operation
+    hasSentResult = false
     logger.debug('performScrape called, config:', JSON.stringify(config))
     logger.debug('generic_content_rule:', JSON.stringify(generic_content_rule))
 

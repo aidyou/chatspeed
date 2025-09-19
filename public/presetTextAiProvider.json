@@ -448,8 +448,40 @@
       "documentationUrl": "https://docs.hyperbolic.xyz/",
       "modelListUrl": "https://docs.hyperbolic.xyz/docs/models",
       "keyApplyUrl": "https://app.hyperbolic.xyz/settings"
+    },
+    {
+      "protocol": "openai",
+      "name": "Moonshot AI(月之暗面)",
+      "logo": "https://statics.moonshot.cn/moonshot-ai/favicon.ico",
+      "desc": "Moonshot AI is a company that develops artificial intelligence technology, committed to creating a more intelligent and convenient future through innovation.",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "models": [],
+      "maxTokens": 8192,
+      "temperature": 0.6,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://platform.moonshot.cn/docs",
+      "modelListUrl": "",
+      "keyApplyUrl": "https://platform.moonshot.cn/console/api-keys"
+    },
+
+    {},
+    {
+      "protocol": "openai",
+      "name": "Minimax",
+      "logo": "https://www.minimaxi.com/favicon.ico",
+      "desc": "MiniMax offers Foundation AI models (text/audio/image/video)",
+      "baseUrl": "https://api.minimaxi.com/v1",
+      "models": [],
+      "maxTokens": 4096,
+      "temperature": 0.6,
+      "topP": 0.9,
+      "topK": 40,
+      "documentationUrl": "https://platform.minimaxi.com/document/guides",
+      "modelListUrl": "https://platform.minimaxi.com/document/models_intro",
+      "keyApplyUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key"
     }
   ],
-  "version": "1.0.0",
-  "lastUpdated": "2025-08-07T14:52:04+08:00"
+  "version": "1.0.1",
+  "lastUpdated": "2025-09-19T10:00:00+08:00"
 }

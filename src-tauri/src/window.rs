@@ -170,67 +170,6 @@ fn is_position_on_any_screen<R: tauri::Runtime>(
     }
 }
 
-/// Fixes a visual artifact bug in Tauri v2 where transparent windows initially lack shadows and borders
-/// This is a temporary workaround and can be removed once the issue is fixed in Tauri
-///
-/// 修复 Tauri v2 中透明窗口初始化时缺少阴影和边框的视觉 bug
-/// 这是一个临时的解决方案，当 Tauri 官方修复此问题后可以移除此函数
-///
-/// # How it works
-/// The function triggers a minimal resize by temporarily increasing the window height by 1 pixel
-/// and then restoring it, which forces the window manager to properly render the window decorations
-///
-/// # 工作原理
-/// 通过临时将窗口高度增加 1 像素然后还原的方式触发一个最小的调整，
-/// 这样可以强制窗口管理器正确渲染窗口装饰效果
-///
-/// # Arguments 参数
-/// * `window` - Reference to the window that needs fixing
-///            需要修复的窗口引用
-/// * `size` - Optional window size. If not provided, current window size will be used
-///          可选的窗口大小。如果未提供，将使用当前窗口大小
-///
-/// # Returns 返回值
-/// * `Result<(), Box<dyn std::error::Error>>` - Success or error if the operation fails
-///                                            操作成功返回 Ok(()), 失败返回错误
-///
-/// # Note 注意
-/// This function can be removed once Tauri fixes the transparent window initialization issue
-/// 当 Tauri 修复透明窗口初始化问题后，可以移除此函数
-pub async fn fix_window_visual(
-    _window: &tauri::WebviewWindow,
-    _size: Option<WindowSize>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        use tauri::LogicalSize;
-        let mut size = _size
-            .map(|s| LogicalSize::new(s.width, s.height))
-            .unwrap_or_else(|| {
-                _window
-                    .inner_size()
-                    .unwrap_or(PhysicalSize::new(0, 0))
-                    .to_logical(_window.scale_factor().unwrap_or(1.0))
-            });
-
-        if size.width == 0.0 || size.height == 0.0 {
-            return Ok(());
-        }
-
-        size.height += 1.0;
-        _window.set_size(tauri::Size::Logical(size))?;
-        log::info!("Window size set to: {}x{}", size.width, size.height);
-
-        // wait for window to be resized
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-        size.height -= 1.0;
-        log::info!("Window size restored to: {}x{}", size.width, size.height);
-        _window.set_size(tauri::Size::Logical(size))?;
-    }
-    Ok(())
-}
-
 /// Helper to get the user's always-on-top preference for a given window label.
 fn get_user_always_on_top_preference(label: &str) -> bool {
     match label {
@@ -321,7 +260,7 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     if let Some(_) = app.get_webview_window(window_label) {
         show_and_focus_window(app, window_label);
     } else {
-        match WebviewWindowBuilder::new(
+        let _ = WebviewWindowBuilder::new(
             app,
             window_label,
             tauri::WebviewUrl::App(format!("/{}", window_label).into()),
@@ -331,20 +270,7 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
         .skip_taskbar(true)
         .min_inner_size(445.0, 500.0)
         .center()
-        .build()
-        {
-            Ok(window) => {
-                let window_clone = window.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = fix_window_visual(&window_clone, None).await {
-                        error!("Failed to fix window visual: {}", e);
-                    }
-                });
-            }
-            Err(e) => {
-                error!("Create assistant window error: {}", e);
-            }
-        }
+        .build();
     }
 }
 
@@ -403,12 +329,6 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
 
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
-
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
-                log::error!("Failed to fix note window visual: {}", e);
-            }
-        });
     }
     Ok(())
 }
@@ -482,12 +402,6 @@ pub async fn create_or_focus_setting_window(
 
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
-
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::window::fix_window_visual(&webview_window, None).await {
-                log::error!("Failed to fix settings window visual: {}", e);
-            }
-        });
     }
 
     Ok(())
@@ -657,22 +571,6 @@ pub fn restore_window_config(
             } else {
                 warn!("Failed to get scale factor, position check might be less accurate.");
             }
-
-            let window_clone = window.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = crate::window::fix_window_visual(
-                    &window_clone,
-                    Some(saved_size), // Pass the saved logical size
-                )
-                .await
-                {
-                    log::error!(
-                        "Failed to fix window visual for '{}': {}",
-                        window_clone.label(),
-                        e
-                    );
-                }
-            });
         }
 
         // restore window position

@@ -56,14 +56,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                     UnifiedRole::Assistant => {
                         // If there are pending tool results, flush them as a single user message first.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(OllamaMessage {
                                 role: "user".to_string(),
-                                content: results_xml,
+                                content: tool_results_buffer.join("\n"),
                                 images: None,
                                 tool_calls: None,
                                 thinking: None,
@@ -121,7 +116,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                             } = block
                             {
                                 let result_xml = format!(
-                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
+                                    "<cs:tool_result id=\"{}\">{}</cs:tool_result>",
                                     tool_use_id, content
                                 );
                                 tool_results_buffer.push(result_xml);
@@ -131,14 +126,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                     UnifiedRole::User => {
                         // Flush any pending tool results before processing the user message.
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(OllamaMessage {
                                 role: "user".to_string(),
-                                content: results_xml,
+                                content: tool_results_buffer.join("\n"),
                                 images: None,
                                 tool_calls: None,
                                 thinking: None,
@@ -178,14 +168,9 @@ impl BackendAdapter for OllamaBackendAdapter {
 
             // Flush any remaining tool results at the end of the message list.
             if !tool_results_buffer.is_empty() {
-                let results_xml = format!(
-                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                    tool_results_buffer.join("\n"),
-                    crate::ccproxy::types::TOOL_RESULT_REMINDER
-                );
                 processed_messages.push(OllamaMessage {
                     role: "user".to_string(),
-                    content: results_xml,
+                    content: tool_results_buffer.join("\n"),
                     images: None,
                     tool_calls: None,
                     thinking: None,

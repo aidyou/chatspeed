@@ -77,9 +77,10 @@ impl ToolCallResult {
 impl From<ToolCallResult> for rmcp::model::CallToolResult {
     fn from(value: ToolCallResult) -> Self {
         Self {
-            content: value.content.map(|c| c.into_contents()),
+            content: value.content.map(|c| c.into_contents()).unwrap_or_default(),
             structured_content: value.structured_content,
             is_error: value.is_error,
+            meta: None,
         }
     }
 }

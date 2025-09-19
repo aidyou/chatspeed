@@ -1,17 +1,15 @@
 use async_trait::async_trait;
-use futures::future::join_all;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{str::FromStr, sync::Arc};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    constants::{CFG_SEARCH_ENGINE, VIDEO_AND_IMAGE_DOMAINS},
+    constants::CFG_SEARCH_ENGINE,
     db::MainStore,
-    scraper::types::StrapeContentFormat,
     search::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
-        SearchResult, SerperSearch, TavilySearch,
+        SerperSearch, TavilySearch,
     },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
@@ -159,15 +157,15 @@ impl WebSearch {
     /// Extract keywords from params
     ///
     /// # Arguments
-    /// * `params` - The parameters for the function, which must contain a "kw" field
+    /// * `params` - The parameters for the function, which must contain a "query" field
     ///             and it must be a string or array of strings.
-    ///             When the kw is array, it will be joined by space with double quotes.
+    ///             When the query is array, it will be joined by space with double quotes.
     ///             `["foo", "bar"]` -> `"foo" "bar"`
     ///
     /// # Returns
     /// * `Result<String, ToolError>` - The encoded keywords
     pub fn extract_keywords(params: &Value) -> Result<String, ToolError> {
-        match &params["kw"] {
+        match &params["query"] {
             Value::String(s) => {
                 let s = s.trim();
                 if s.is_empty() {
@@ -196,126 +194,126 @@ impl WebSearch {
         }
     }
 
-    pub async fn scrape_content(
-        &self,
-        mut results: Vec<SearchResult>,
-    ) -> Result<Vec<SearchResult>, ToolError> {
-        if results.is_empty() {
-            return Ok(results);
-        }
+    // pub async fn scrape_content(
+    //     &self,
+    //     mut results: Vec<SearchResult>,
+    // ) -> Result<Vec<SearchResult>, ToolError> {
+    //     if results.is_empty() {
+    //         return Ok(results);
+    //     }
 
-        let main_store = self
-            .app_handle
-            .state::<Arc<std::sync::RwLock<MainStore>>>()
-            .inner();
-        let concurrency = {
-            let store = main_store
-                .read()
-                .map_err(|e| ToolError::Store(e.to_string()))?;
-            store.get_config(crate::constants::CFG_SCRAPER_CONCURRENCY_COUNT, 3_u64) as usize
-        };
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+    //     let main_store = self
+    //         .app_handle
+    //         .state::<Arc<std::sync::RwLock<MainStore>>>()
+    //         .inner();
+    //     let concurrency = {
+    //         let store = main_store
+    //             .read()
+    //             .map_err(|e| ToolError::Store(e.to_string()))?;
+    //         store.get_config(crate::constants::CFG_SCRAPER_CONCURRENCY_COUNT, 3_u64) as usize
+    //     };
+    //     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-        let mut scrape_tasks = Vec::new();
+    //     let mut scrape_tasks = Vec::new();
 
-        for (index, result) in results.iter().enumerate() {
-            if result.content.as_deref().unwrap_or("").is_empty() && !result.url.is_empty() {
-                let app_handle = self.app_handle.clone();
-                let url = result.url.clone();
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| ToolError::Execution(e.to_string()))?;
+    //     for (index, result) in results.iter().enumerate() {
+    //         if result.content.as_deref().unwrap_or("").is_empty() && !result.url.is_empty() {
+    //             let app_handle = self.app_handle.clone();
+    //             let url = result.url.clone();
+    //             let permit = semaphore
+    //                 .clone()
+    //                 .acquire_owned()
+    //                 .await
+    //                 .map_err(|e| ToolError::Execution(e.to_string()))?;
 
-                let task = tokio::spawn(async move {
-                    let _permit = permit;
+    //             let task = tokio::spawn(async move {
+    //                 let _permit = permit;
 
-                    // 1. Wrap the core scraping logic in an async block
-                    let scrape_future = async {
-                        let request = crate::scraper::types::ScrapeRequest::Content(
-                            crate::scraper::types::ContentOptions {
-                                url: url.clone(), // clone url for logging on timeout
-                                content_format: StrapeContentFormat::Markdown,
-                                keep_link: false,
-                                keep_image: false,
-                            },
-                        );
+    //                 // 1. Wrap the core scraping logic in an async block
+    //                 let scrape_future = async {
+    //                     let request = crate::scraper::types::ScrapeRequest::Content(
+    //                         crate::scraper::types::ContentOptions {
+    //                             url: url.clone(), // clone url for logging on timeout
+    //                             content_format: StrapeContentFormat::Markdown,
+    //                             keep_link: false,
+    //                             keep_image: false,
+    //                         },
+    //                     );
 
-                        if let Ok(scraped_json_str) =
-                            crate::scraper::engine::run(app_handle, request).await
-                        {
-                            match serde_json::from_str::<Value>(&scraped_json_str) {
-                                Ok(scraped_data) => {
-                                    return (
-                                        index,
-                                        scraped_data["content"]
-                                            .as_str()
-                                            .map(|s| s.trim().to_string()),
-                                        scraped_data["url"].as_str().map(String::from),
-                                    );
-                                }
-                                Err(e) => {
-                                    log::error!(
-                                        "Failed to parse scraped JSON: {}, rawdata: {}",
-                                        e,
-                                        scraped_json_str
-                                    );
-                                }
-                            }
-                        }
-                        (index, None, None)
-                    };
+    //                     if let Ok(scraped_json_str) =
+    //                         crate::scraper::engine::run(app_handle, request).await
+    //                     {
+    //                         match serde_json::from_str::<Value>(&scraped_json_str) {
+    //                             Ok(scraped_data) => {
+    //                                 return (
+    //                                     index,
+    //                                     scraped_data["content"]
+    //                                         .as_str()
+    //                                         .map(|s| s.trim().to_string()),
+    //                                     scraped_data["url"].as_str().map(String::from),
+    //                                 );
+    //                             }
+    //                             Err(e) => {
+    //                                 log::error!(
+    //                                     "Failed to parse scraped JSON: {}, rawdata: {}",
+    //                                     e,
+    //                                     scraped_json_str
+    //                                 );
+    //                             }
+    //                         }
+    //                     }
+    //                     (index, None, None)
+    //                 };
 
-                    // 2. Wrap the future with tokio::time::timeout
-                    let timeout_duration = std::time::Duration::from_secs(10);
-                    if let Ok(result) = tokio::time::timeout(timeout_duration, scrape_future).await
-                    {
-                        // If completed within 10 seconds, return its result
-                        result
-                    } else {
-                        // If timeout occurs
-                        log::warn!("Scraping task for url {} timed out after 10 seconds.", &url);
-                        // Return a tuple indicating failure
-                        (index, None, None)
-                    }
-                });
-                scrape_tasks.push(task);
-            }
-        }
+    //                 // 2. Wrap the future with tokio::time::timeout
+    //                 let timeout_duration = std::time::Duration::from_secs(10);
+    //                 if let Ok(result) = tokio::time::timeout(timeout_duration, scrape_future).await
+    //                 {
+    //                     // If completed within 10 seconds, return its result
+    //                     result
+    //                 } else {
+    //                     // If timeout occurs
+    //                     log::warn!("Scraping task for url {} timed out after 10 seconds.", &url);
+    //                     // Return a tuple indicating failure
+    //                     (index, None, None)
+    //                 }
+    //             });
+    //             scrape_tasks.push(task);
+    //         }
+    //     }
 
-        let scraped_contents = join_all(scrape_tasks).await;
+    //     let scraped_contents = join_all(scrape_tasks).await;
 
-        for task_result in scraped_contents {
-            if let Ok((index, opt_content, opt_url)) = task_result {
-                if let Some(result) = results.get_mut(index) {
-                    if opt_content.as_deref().map_or(false, |s| !s.is_empty()) {
-                        result.content = opt_content;
-                        result.snippet = None; // If content is not empty, remove snippet
-                    }
+    //     for task_result in scraped_contents {
+    //         if let Ok((index, opt_content, opt_url)) = task_result {
+    //             if let Some(result) = results.get_mut(index) {
+    //                 if opt_content.as_deref().map_or(false, |s| !s.is_empty()) {
+    //                     result.content = opt_content;
+    //                     result.snippet = None; // If content is not empty, remove snippet
+    //                 }
 
-                    if let Some(url) = opt_url {
-                        result.url = url;
-                    }
-                }
-            }
-        }
+    //                 if let Some(url) = opt_url {
+    //                     result.url = url;
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        #[cfg(debug_assertions)]
-        log::debug!("Current results: {}", results.len());
+    //     #[cfg(debug_assertions)]
+    //     log::debug!("Current results: {}", results.len());
 
-        // Filter out video and image domains
-        results.retain(|result| {
-            !VIDEO_AND_IMAGE_DOMAINS
-                .iter()
-                .any(|domain| result.url.contains(domain))
-        });
+    //     // Filter out video and image domains
+    //     results.retain(|result| {
+    //         !VIDEO_AND_IMAGE_DOMAINS
+    //             .iter()
+    //             .any(|domain| result.url.contains(domain))
+    //     });
 
-        #[cfg(debug_assertions)]
-        log::debug!("Filtered results: {}", results.len());
+    //     #[cfg(debug_assertions)]
+    //     log::debug!("Filtered results: {}", results.len());
 
-        Ok(results)
-    }
+    //     Ok(results)
+    // }
 }
 
 #[async_trait]
@@ -327,7 +325,7 @@ impl ToolDefinition for WebSearch {
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "Performs a web search using the configured search engine. It can retrieve a list of search results. If the initial search results lack content, it will automatically attempt to scrape the content from the web pages."
+        "Performs a web search returns a list of results with titles, URLs, and snippets. The `snippets` in search results typically provide only limited summary information. To obtain complete and detailed content, select the most relevant links from the search results and use the `WebFetch` tool to retrieve full page content. If fetching from one page fails, try other relevant links from the search results."
     }
 
     /// Returns the function calling spec.
@@ -338,7 +336,7 @@ impl ToolDefinition for WebSearch {
             input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "kw": {
+                        "query": {
                             "type": "string",
                             "description": "The search query or keyword. For best results, use specific and concise language. Can also be an array of strings for exact phrase matching."
                         },
@@ -360,7 +358,7 @@ impl ToolDefinition for WebSearch {
                             "description": "Filters search results to a specific time range. Use this to find recent or timely information. If omitted, no time filter is applied."
                         }
                     },
-                    "required": ["kw"]
+                    "required": ["query"]
             }),
             output_schema: None,
             disabled: false,
@@ -382,8 +380,8 @@ impl ToolDefinition for WebSearch {
             .map(|p| p.to_string());
         let searcher = self.create_searcher(provider)?;
 
-        let kw = Self::extract_keywords(&params)?;
-        if kw.is_empty() {
+        let query = Self::extract_keywords(&params)?;
+        if query.is_empty() {
             return Err(ToolError::FunctionParamError(
                 t!("tools.keyword_must_be_non_empty").to_string(),
             ));
@@ -402,18 +400,18 @@ impl ToolDefinition for WebSearch {
         };
 
         let search_params = json!({
-            "query": kw.clone(),
+            "query": query.clone(),
             "count": number,
             "period": period,
             "page": page,
         });
 
-        let mut results = searcher.search(&search_params).await.map_err(|e| {
+        let results = searcher.search(&search_params).await.map_err(|e| {
             ToolError::Execution(
                 t!(
                     "tools.search.web_search_failed",
                     provider = searcher.to_string(),
-                    keyword = kw.clone(),
+                    keyword = query.clone(),
                     details = e.to_string()
                 )
                 .to_string(),
@@ -423,7 +421,9 @@ impl ToolDefinition for WebSearch {
         #[cfg(debug_assertions)]
         log::debug!("Scrape result count: {}", results.len());
 
-        results = self.scrape_content(results).await?;
+        // The automatic scraping of content has been removed to support the agent workflow.
+        // The AI should decide whether to use the WebFetch tool to get the full content.
+        // results = self.scrape_content(results).await?;
 
         #[cfg(debug_assertions)]
         log::debug!(

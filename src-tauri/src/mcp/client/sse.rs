@@ -230,6 +230,9 @@ impl McpClient for SseClient {
             client_info: Implementation {
                 name: "Chatspeed MCP Client".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                title: Some("Chatspeed".to_string()),
+                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
+                icons: None,
             },
         };
         let client_service_result = client_info

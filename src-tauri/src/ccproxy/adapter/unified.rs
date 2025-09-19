@@ -295,6 +295,8 @@ pub struct UnifiedUsage {
     pub thoughts_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cached_tokens: Option<u64>,
 
     // ollama
     #[serde(skip_serializing_if = "Option::is_none")]

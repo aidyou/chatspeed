@@ -204,8 +204,8 @@ system-reminder {
 
 // overwrite element plus dropdown menu
 .el-dropdown-menu {
-    max-height: 300px;
-    overflow-y: auto;
+    /* max-height: 300px;
+    overflow-y: auto; */
 
     .el-dropdown-menu__item {
         display: flex;
@@ -844,4 +844,8 @@ system-reminder {
  *====================================================*/
 *:focus-visible {
     outline: none !important;
+}
+
+.el-overlay{
+    border-radius: var(--cs-border-radius-md);
 }

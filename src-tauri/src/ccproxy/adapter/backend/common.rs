@@ -109,7 +109,7 @@ pub fn auto_complete_and_process_tool_tag(
         return;
     }
 
-    let end_tag = TOOL_TAG_END; // e.g. "</ccp:tool_use>"
+    let end_tag = TOOL_TAG_END; // e.g. "</cs:tool_use>"
     let mut partial_match_len = 0;
 
     // Iterate from the full tag length down to the minimum required ("</").
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_strips_todo_block() {
-        let input = "start <ccp:todo>\"thought\"</ccp:todo> end";
+        let input = "start <cs:todo>\"thought\"</cs:todo> end";
         let result = run_processor(input);
         assert!(result
             .chunks
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_parses_tool_use_after_todo() {
-        let input = "<ccp:todo>I should call a tool.</ccp:todo><ccp:tool_use><name>test_tool</name><args></args></ccp:tool_use>";
+        let input = "<cs:todo>I should call a tool.</cs:todo><cs:tool_use><name>test_tool</name><args></args></cs:tool_use>";
         let result = run_processor(input);
         assert!(result.chunks.iter().any(
             |c| matches!(c, UnifiedStreamChunk::ToolUseStart{name, ..} if name == "test_tool")
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_ignores_tool_use_inside_todo() {
-        let input = "<ccp:todo>do not run <ccp:tool_use><name>fake_tool</name></ccp:tool_use></ccp:todo><ccp:tool_use><name>real_tool</name><args></args></ccp:tool_use>";
+        let input = "<cs:todo>do not run <cs:tool_use><name>fake_tool</name></cs:tool_use></cs:todo><cs:tool_use><name>real_tool</name><args></args></cs:tool_use>";
         let result = run_processor(input);
         assert!(!result.chunks.iter().any(
             |c| matches!(c, UnifiedStreamChunk::ToolUseStart{name, ..} if name == "fake_tool")
@@ -284,18 +284,18 @@ mod tests {
 
     #[test]
     fn test_handles_incomplete_todo_block() {
-        let input = "text before <ccp:todo>incomplete thought";
+        let input = "text before <cs:todo>incomplete thought";
         let result = run_processor(input);
         assert!(result
             .chunks
             .iter()
             .any(|c| matches!(c, UnifiedStreamChunk::Text{delta} if delta == "text before ")));
-        assert_eq!(result.final_buffer, "<ccp:todo>incomplete thought");
+        assert_eq!(result.final_buffer, "<cs:todo>incomplete thought");
     }
 
     #[test]
     fn test_handles_multiple_mixed_blocks() {
-        let input = "text1<ccp:todo>t1</ccp:todo>text2<ccp:tool_use><name>tool1</name><args></args></ccp:tool_use>text3";
+        let input = "text1<cs:todo>t1</cs:todo>text2<cs:tool_use><name>tool1</name><args></args></cs:tool_use>text3";
         let result = run_processor(input);
 
         let texts: Vec<String> = result

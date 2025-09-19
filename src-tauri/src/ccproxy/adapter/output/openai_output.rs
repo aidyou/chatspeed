@@ -4,7 +4,7 @@ use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::types::openai::{
     CompletionTokensDetails, OpenAIChatCompletionChoice, OpenAIChatCompletionResponse,
-    OpenAIMessageContent, OpenAIUsage, UnifiedChatMessage,
+    OpenAIMessageContent, OpenAIUsage, PromptTokensDetails, UnifiedChatMessage,
 };
 
 use axum::response::{IntoResponse, Response};
@@ -93,11 +93,23 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 prompt_tokens: response.usage.input_tokens,
                 completion_tokens: response.usage.output_tokens,
                 total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+                prompt_tokens_details: response
+                    .usage
+                    .prompt_cached_tokens
+                    .or(response.usage.cache_read_input_tokens)
+                    .or(response.usage.cached_content_tokens)
+                    .map(|t| {
+                        PromptTokensDetails {
+                            cached_tokens: Some(t),
+                            audio_tokens: None,
+                        }
+                    }),
                 completion_tokens_details: response.usage.thoughts_tokens.map(|t| {
                     CompletionTokensDetails {
                         reasoning_tokens: Some(t),
                     }
                 }),
+                ..Default::default()
             }),
         };
 
@@ -306,6 +318,28 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     false
                 };
 
+                let cached_tokens = usage
+                    .prompt_cached_tokens
+                    .or(usage.cache_read_input_tokens)
+                    .or(usage.cached_content_tokens);
+
+                let usage_json = if let Some(cached) = cached_tokens {
+                    json!({
+                        "prompt_tokens": input_tokens,
+                        "completion_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                        "prompt_tokens_details": {
+                            "cached_tokens": cached
+                        }
+                    })
+                } else {
+                    json!({
+                        "prompt_tokens": input_tokens,
+                        "completion_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens
+                    })
+                };
+
                 let data = json!({
                     "id": message_id,
                     "model": model,
@@ -320,11 +354,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                             &stop_reason
                         }
                     }],
-                    "usage": {
-                        "prompt_tokens": input_tokens,
-                        "completion_tokens": output_tokens,
-                        "total_tokens": input_tokens + output_tokens
-                    }
+                    "usage": usage_json
                 });
                 Ok(vec![
                     Event::default().data(data.to_string()),

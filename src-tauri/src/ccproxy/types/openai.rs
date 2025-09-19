@@ -110,13 +110,23 @@ pub struct OpenAIChatCompletionChoice {
     pub logprobs: Option<OpenAILogprobs>, // Log probabilities for the choice
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct OpenAIUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PromptTokensDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_tokens: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -84,7 +84,7 @@ pub async fn test_scrape(
                     DEFAULT_WEB_SEARCH_TOOL,
                     serde_json::json!({
                         "provider": provider,
-                        "kw": query,
+                        "query": query,
                         "page": page,
                         "number": number,
                         "time_period": time_period,

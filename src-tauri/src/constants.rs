@@ -32,9 +32,9 @@ pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";
 pub const CFG_CCPROXY_LOG_PROXY_TO_FILE: &str = "chat_completion_proxy_log_proxy_to_file";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
-pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";
 pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";
 pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
+// pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";
 
 //======================================================
 //  main window shortcuts
@@ -150,18 +150,18 @@ pub fn get_static_var<T: Clone>(var: &Arc<PLRwLock<T>>) -> T {
 }
 
 // When the search results include video or image websites, they are filtered out
-pub static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf::phf_set! {
-    // video websites
-    "v.qq.com", "iqiyi.com", "youku.com", "imgo.tv", "bilibili.com", "xigua.com",
-    "douyin.com", "kuaishou.com", "yspapp.cn", "youtube.com", "vimeo.com",
-    "dailymotion.com", "netflix.com", "primevideo.com", "hulu.com", "disneyplus.com",
-    "tiktok.com", "twitch.tv", "mgtv.com", "le.com", "acfun.cn", "bilibili.tv",
-    // image websites
-    "vcg.com", "dfic.cn", "tuchong.com", "zcool.com.cn",
-    "ui.cn", "gettyimages.com", "shutterstock.com", "istockphoto.com", "stock.adobe.com",
-    "alamy.com", "unsplash.com", "pexels.com", "pixabay.com", "instagram.com",
-    "pinterest.com", "flickr.com", "dribbble.com", "behance.net", "freepik.com",
-    "stockvault.net", "picjumbo.com", "gratisography.com", "lifeofpix.com",
-    "pikwizard.com", "burst.shopify.com", "barnimages.com", "picalls.com",
-    "smugmug.com", "deviantart.com", "artstation.com", "picfair.com", "eyeem.com",
-};
+// pub static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf::phf_set! {
+//     // video websites
+//     "v.qq.com", "iqiyi.com", "youku.com", "imgo.tv", "bilibili.com", "xigua.com",
+//     "douyin.com", "kuaishou.com", "yspapp.cn", "youtube.com", "vimeo.com",
+//     "dailymotion.com", "netflix.com", "primevideo.com", "hulu.com", "disneyplus.com",
+//     "tiktok.com", "twitch.tv", "mgtv.com", "le.com", "acfun.cn", "bilibili.tv",
+//     // image websites
+//     "vcg.com", "dfic.cn", "tuchong.com", "zcool.com.cn",
+//     "ui.cn", "gettyimages.com", "shutterstock.com", "istockphoto.com", "stock.adobe.com",
+//     "alamy.com", "unsplash.com", "pexels.com", "pixabay.com", "instagram.com",
+//     "pinterest.com", "flickr.com", "dribbble.com", "behance.net", "freepik.com",
+//     "stockvault.net", "picjumbo.com", "gratisography.com", "lifeofpix.com",
+//     "pikwizard.com", "burst.shopify.com", "barnimages.com", "picalls.com",
+//     "smugmug.com", "deviantart.com", "artstation.com", "picfair.com", "eyeem.com",
+// };

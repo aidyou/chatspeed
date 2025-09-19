@@ -77,10 +77,13 @@ impl OutputAdapter for ClaudeOutputAdapter {
             usage: Some(ClaudeNativeUsage {
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
-                cache_creation_input_tokens: None, // Add missing field
-                cache_read_input_tokens: None,     // Add missing field
-                cache_creation: None,              // Add missing field
-                server_tool_use: None,             // Add missing field
+                cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+                cache_read_input_tokens: response
+                    .usage
+                    .cache_read_input_tokens
+                    .or(response.usage.prompt_cached_tokens)
+                    .or(response.usage.cached_content_tokens),
+                ..Default::default()
             }),
             error: None,
         };
@@ -187,6 +190,26 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     }
                 };
 
+                let mut usage_data = json!({
+                    "output_tokens": usage.output_tokens,
+                    "input_tokens": input_tokens,
+                });
+
+                if let Some(usage_map) = usage_data.as_object_mut() {
+                    let cached_tokens = usage
+                        .prompt_cached_tokens
+                        .or(usage.cache_read_input_tokens)
+                        .or(usage.cached_content_tokens);
+
+                    if let Some(cached) = cached_tokens {
+                        usage_map.insert("cache_read_input_tokens".to_string(), json!(cached));
+                    }
+
+                    if let Some(cached_tokens) = usage.cache_creation_input_tokens {
+                        usage_map.insert("cache_creation_input_tokens".to_string(), json!(cached_tokens));
+                    }
+                }
+
                 let reason = if stop_reason == "tool_use" || stop_reason == "max_tokens" {
                     stop_reason
                 } else {
@@ -206,10 +229,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
                             "delta": {
                                 "stop_reason": reason
                             },
-                            "usage": {
-                                "output_tokens": usage.output_tokens,
-                                "input_tokens": input_tokens,
-                            }
+                            "usage": usage_data
                         })
                         .to_string(),
                     ),

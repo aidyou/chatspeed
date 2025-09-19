@@ -225,14 +225,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
                 match msg.role {
                     UnifiedRole::Assistant => {
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(ClaudeNativeMessage {
                                 role: "user".to_string(),
-                                content: vec![ClaudeNativeContentBlock::Text { text: results_xml }],
+                                content: vec![ClaudeNativeContentBlock::Text {
+                                    text: tool_results_buffer.join("\n"),
+                                }],
                             });
                             tool_results_buffer.clear();
                         }
@@ -275,7 +272,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                             } = block
                             {
                                 let result_xml = format!(
-                                    "<ccp:tool_result>\n<id>{}</id>\n<result>{}</result>\n</ccp:tool_result>",
+                                    "<cs:tool_result id=\"{}\">{}</cs:tool_result>",
                                     tool_use_id, content
                                 );
                                 tool_results_buffer.push(result_xml);
@@ -284,14 +281,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     }
                     UnifiedRole::User => {
                         if !tool_results_buffer.is_empty() {
-                            let results_xml = format!(
-                                "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                                tool_results_buffer.join("\n"),
-                                crate::ccproxy::types::TOOL_RESULT_REMINDER
-                            );
                             processed_messages.push(ClaudeNativeMessage {
                                 role: "user".to_string(),
-                                content: vec![ClaudeNativeContentBlock::Text { text: results_xml }],
+                                content: vec![ClaudeNativeContentBlock::Text {
+                                    text: tool_results_buffer.join("\n"),
+                                }],
                             });
                             tool_results_buffer.clear();
                         }
@@ -322,14 +316,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
             }
 
             if !tool_results_buffer.is_empty() {
-                let results_xml = format!(
-                    "<ccp:tool_results>\n{}\n</ccp:tool_results>\n{}",
-                    tool_results_buffer.join("\n"),
-                    crate::ccproxy::types::TOOL_RESULT_REMINDER
-                );
                 processed_messages.push(ClaudeNativeMessage {
                     role: "user".to_string(),
-                    content: vec![ClaudeNativeContentBlock::Text { text: results_xml }],
+                    content: vec![ClaudeNativeContentBlock::Text {
+                        text: tool_results_buffer.join("\n"),
+                    }],
                 });
             }
             claude_messages = processed_messages;

@@ -1,8 +1,24 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
-# Release History
+# Chatspeed v1.1.9 Release Notes
 
-## 1.1.8 - 2025-09-13
+**Version 1.1.9 focuses on critical bug fixes and core stability improvements, addressing a series of issues related to tool calling, MCP proxy, and cross-platform compatibility to make your AI interaction experience smoother and more reliable.**
+
+### 🐞 Bug Fixes
+
+-   **Fixed issue where tools become unavailable after MCP proxy restart**: Resolved a critical bug where the client's tool mapping was lost due to an MCP server restart, ensuring tool availability and session continuity after reconnection.
+-   **Fixed multi-turn tool call failures**: Fixed an issue where tool calls failed in consecutive multi-turn conversations because the tool list was not passed correctly.
+-   **Fixed Scraper freeze issue**: Resolved a problem where the built-in web scraper could become unresponsive after a period of use, improving long-term stability.
+-   **Fixed tool call UI click event bug**: Fixed a bug where the click event on the tool call display component in the chat interface was not working.
+-   **Fixed macOS window border issue**: Addressed an issue on the macOS platform where the application window would sometimes display an unexpected border, affecting aesthetics.
+-   **Fixed tool call parameter type issue**: Fixed a bug in the proxy module's compatibility mode where integer types, after being parsed and stored, could be incorrectly converted to floating-point numbers on output.
+
+### ✨ Enhancements
+
+-   **Optimized `ccproxy` module**: Further optimized the tool compatibility mode and calling instructions in `ccproxy`, significantly reducing token consumption while maintaining usability, resulting in a smoother and more cost-effective workflow.
+-   **Dependency Updates**: Upgraded project dependencies, including the core `rmcp` library from v0.5 to v0.6, for better performance and stability.
+
+# Chatspeed v1.1.8 Release Notes
 
 This update focuses on **comprehensive user experience optimizations** and **core feature enhancements**, bringing you a smoother, smarter, and more personalized experience.
 

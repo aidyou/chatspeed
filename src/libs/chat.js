@@ -339,24 +339,24 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
 
   // let refs = ''
-  // format refs [1,2,3](@ref) -> [^1][^2][^3]
+  // format refs [1,2,3](@ref) -> [[1]][[2]][[3]]
   content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
     return numbers
       .split(',')
-      .map(num => `(^${num.trim()})`)
+      .map(num => `[[${num.trim()}]]`)
       .join('')
   })
-  // format refs [^1^] -> [^1]
+  // format refs [^1^] -> [[1]]
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
-    return `(^${number.trim()})`
+    return `[[${number.trim()}]]`
   })
-  // format refs [[1]] -> [^1]
+  // format refs [[1]] -> [[1]] (normalization)
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_2_REGEX, (_match, number) => {
-    return `(^${number.trim()})`
+    return `[[${number.trim()}]]`
   })
-  // format refs [citation:1] -> [^1]
+  // format refs [citation:1] -> [[1]]
   content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
-    return `(^${number.trim()})`
+    return `[[${number.trim()}]]`
   })
 
   // Text like `[1]` needs to be replaced first; otherwise, the subsequent reference parsing will be converted to a code block by mk.
@@ -373,13 +373,13 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   if (Array.isArray(reference) && reference.length > 0) {
     reference.forEach(item => {
       content = content.replace(
-        new RegExp(`\\(\\^${item.id}\\)`, 'g'),
+        new RegExp(`\\[\\[${item.id}\\]\\]`, 'g'),
         `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
       )
     })
   } else {
     //remove all reference blocks
-    content = content.replace(/\\(^\\\d+\\)/g, '')
+    content = content.replace(/\[\[\d+\]\]/g, '')
   }
 
   // Replace placeholders back to original reference text
@@ -476,7 +476,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   // })
 
   if (toolCalls) {
-    content = content.replace('<!--[ToolCalls]-->', createToolCall(toolCalls))
+    content = createToolCallHtml(content,toolCalls)
   }
 
   const renderer = new marked.Renderer()
@@ -574,9 +574,7 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       break
 
     case 'toolCalls':
-      if (!chatState.message.includes('<!--[ToolCalls]-->')) {
-        chatState.message += '\n<!--[ToolCalls]-->\n'
-      }
+      chatState.message += '\n<!--[ToolCalls]-->\n'
       break
 
     case 'toolResults':
@@ -627,21 +625,23 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
   return isDone
 }
 
-const createToolCall = toolCalls => {
-  let tools = ''
+const createToolCallHtml = (
+		content,
+		toolCalls,
+	)=> {
   toolCalls.forEach(call => {
     const functionName = call?.function?.name
     if (functionName) {
-      tools += '<div class="chat-tool-calls">'
+      let tools = '<div class="chat-tool-calls">'
       if (functionName.includes('__MCP__')) {
         const names = functionName.split('__MCP__')
         if (names.length === 2) {
-          tools += `<div class="tool-name">${i18n.global.t('chat.mcpCall')} ${htmlspecialchars(names[0])}::${htmlspecialchars(names[1])}</div>`
+          tools += `<div class="tool-name"><span>${i18n.global.t('chat.mcpCall')} ${htmlspecialchars(names[0])}::${htmlspecialchars(names[1])}</span></div>`
         } else {
-          tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</div>`
+          tools += `<div class="tool-name"><span>${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</span></div>`
         }
       } else {
-        tools += `<div class="tool-name">${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</div>`
+        tools += `<div class="tool-name"><span>${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</span></div>`
       }
       const result =
         typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
@@ -651,14 +651,16 @@ const createToolCall = toolCalls => {
 
       tools += `<div class="tool-codes" style="display:none;">
       <div class="tool-code"><h3>📝 ${i18n.global.t('chat.toolArgs')}</h3>
-         <pre><code language="json">${escapedArguments}</code></pre>
+         <pre><code class="language-json">${escapedArguments}</code></pre>
         </div>
         <div class="tool-code"><h3>🎯 ${i18n.global.t('chat.toolResult')}</h3>
           <code data-result="${encodeURIComponent(result)}" class="tool-results"></code>
         </div>
         </div>
       </div>`
+
+      content = content.replace('<!--[ToolCalls]-->', tools)
     }
   })
-  return tools
+  return content
 }

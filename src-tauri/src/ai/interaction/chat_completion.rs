@@ -350,6 +350,11 @@ pub async fn start_new_chat_interaction(
         "provider_id": provider_id,
         "model": model.clone(),
         "org_metadata": metadata.clone().unwrap_or_default(),
+        "active_tools_for_turn": if let Some(t) = &tools {
+            serde_json::to_value(t).unwrap_or_default()
+        } else {
+            Value::Null
+        },
     });
 
     if let Some(md_val) = metadata.as_mut() {
@@ -722,13 +727,23 @@ async fn global_message_processor_loop(
                                 .and_then(|p| p.get("org_metadata"))
                                 .map(Value::clone);
 
+                            let tools_for_next_turn: Option<Vec<MCPToolDeclaration>> = chat_param
+                                .and_then(|p| p.get("active_tools_for_turn"))
+                                .and_then(|t_val| {
+                                    if t_val.is_array() {
+                                        serde_json::from_value(t_val.clone()).ok()
+                                    } else {
+                                        None
+                                    }
+                                });
+
                             if let Err(e) = start_new_chat_interaction(
                                 cc_chat_state_clone.clone(),
                                 provider_id,
                                 model,
                                 cc_chat_id_clone.clone(),
-                                messages_for_next_ai_turn,
-                                None,
+                                messages_for_next_ai_turn, // Pass the prepared messages
+                                tools_for_next_turn,       // Pass the retrieved tools
                                 org_metadata,
                                 Some(Box::new(internal_cb_for_next_turn)),
                             )

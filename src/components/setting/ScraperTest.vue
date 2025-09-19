@@ -76,12 +76,12 @@
             <el-input v-model="page" type="number" />
           </div>
         </div>
-        <!-- <div class="item">
+        <div class="item">
           <div class="label">Number</div>
           <div class="value">
-            <el-input v-model="number" type="number" />
+            <el-input v-model="number" max="10" type="number" />
           </div>
-        </div> -->
+        </div>
         <div class="item">
           <div class="label">Time Period</div>
           <div class="value">
@@ -150,7 +150,7 @@ const keepImage = ref(false)
 const provider = ref('bing')
 const keyword = ref('tauri framework')
 const page = ref(1)
-const number = ref(10)
+const number = ref(5)
 const timePeriod = ref('')
 const loading = ref(false)
 const result = ref(null)
@@ -158,7 +158,7 @@ const error = ref(null)
 
 const content = computed(() => {
   if (!result.value) return null
-  
+
   try {
     if (typeof result.value === 'object') {
       return result.value.content || ''
@@ -171,7 +171,7 @@ const content = computed(() => {
     console.error('Failed to parse result:', e)
     return ''
   }
-  
+
   return ''
 })
 

@@ -8,8 +8,7 @@
             :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
             placement="bottom"
             :hide-after="0"
-            :enterable="false"
-          >
+            :enterable="false">
             <div class="icon-btn upperLayer" @click="onToggleSidebar">
               <cs name="sidebar" />
             </div>
@@ -337,16 +336,6 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
-                    :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-                    :hide-after="0"
-                    :enterable="false"
-                    placement="top"
-                    v-if="!deepSearchEnabled">
-                    <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
-                      <cs name="connected" class="small" />
-                    </label>
-                  </el-tooltip>
-                  <el-tooltip
                     :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
                     :hide-after="0"
                     :enterable="false"
@@ -354,6 +343,16 @@
                     v-if="mcpServers.length > 0">
                     <label @click="onToggleMcp" :class="{ active: mcpEnabled }">
                       <cs name="mcp" class="small" />
+                    </label>
+                  </el-tooltip>
+                  <el-tooltip
+                    :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top"
+                    v-if="!deepSearchEnabled">
+                    <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
+                      <cs name="connected" class="small" />
                     </label>
                   </el-tooltip>
                   <el-tooltip
@@ -1560,6 +1559,8 @@ const onStopChat = () => {
             'assistant',
             chatState.value.message.trim(),
             {
+              provider: currentModel.value.defaultModel || '',
+              toolCall: chatState.value.toolCall || [],
               reference: chatState.value?.reference || [],
               reasoning: chatState.value?.reasoning || ''
             }

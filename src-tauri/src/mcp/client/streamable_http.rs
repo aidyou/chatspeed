@@ -128,6 +128,7 @@ impl McpClient for StreamableHttpClient {
         let transport_config = StreamableHttpClientTransportConfig {
             uri: Arc::from(url),
             retry_config: Arc::new(retry_config),
+            auth_header: config.bearer_token.clone(),
             ..Default::default()
         };
         let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
@@ -138,6 +139,9 @@ impl McpClient for StreamableHttpClient {
             client_info: Implementation {
                 name: "Chatspeed MCP Client".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                title: Some("Chatspeed".to_string()),
+                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
+                icons: None,
             },
         };
         let client_service_result = client_info
