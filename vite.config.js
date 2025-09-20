@@ -18,6 +18,7 @@ export default defineConfig(async () => ({
       resolvers: [ElementPlusResolver()],
     }),
     Components({
+      dirs: [path.resolve(__dirname, 'src/components')],
       resolvers: [ElementPlusResolver()],
     }),
   ],

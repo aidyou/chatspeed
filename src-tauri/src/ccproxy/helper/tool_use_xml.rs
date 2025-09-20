@@ -58,6 +58,35 @@ use serde_json::{json, Map, Value};
 
 use crate::ccproxy::{adapter::unified::UnifiedContentBlock, helper::get_tool_id};
 
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq)]
+pub enum ParamType {
+    String,
+    Number, // Represents float/double
+    Integer,
+    Boolean,
+    Array,
+    Object,
+    Null,
+}
+
+impl From<&str> for ParamType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "string" => ParamType::String,
+            "float" | "double" | "f32" | "f64" | "number" | "float32" | "float64" => {
+                ParamType::Number
+            }
+            "int" | "i32" | "i64" | "integer" | "long" | "int32" | "int64" | "uint" | "u32"
+            | "u64" | "uint32" | "uint64" | "usize" => ParamType::Integer,
+            "bool" | "boolean" => ParamType::Boolean,
+            "array" | "list" | "vec" => ParamType::Array,
+            "object" | "map" | "dict" | "json" => ParamType::Object,
+            "null" => ParamType::Null,
+            _ => ParamType::String,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ToolUse {
     pub name: String,
@@ -101,7 +130,7 @@ pub struct Arg {
     pub name: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_type: Option<String>,
+    pub data_type: Option<ParamType>,
 
     // Holds the attribute value or the inner HTML content.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,52 +140,43 @@ pub struct Arg {
 impl Arg {
     pub fn get_value(&self) -> Value {
         let raw_value = self.value.as_deref().unwrap_or_default();
-
-        // Use HTML decoding for entities since we're using HTML parser now
         let value = html_escape::decode_html_entities(raw_value).to_string();
 
-        if let Some(data_type) = self.data_type.as_ref() {
-            match data_type.as_str() {
-                "float" | "double" | "f32" | "f64" | "number" | "float32" | "float64" => {
-                    // Trim whitespace as intended for numeric types.
-                    // If parsing fails, fallback to the original (unescaped) string value.
-                    if let Ok(f) = value.trim().parse::<f64>() {
+        if let Some(data_type) = self.data_type {
+            let trimmed_value = value.trim();
+            match data_type {
+                ParamType::Number => {
+                    if let Ok(f) = trimmed_value.parse::<f64>() {
                         return json!(f);
                     }
                 }
-                "int" | "i32" | "i64" | "integer" | "long" | "int32" | "int64" => {
-                    // Try parsing as i64 first for most common case
-                    if let Ok(i) = value.trim().parse::<i64>() {
+                ParamType::Integer => {
+                    if let Ok(i) = trimmed_value.parse::<i64>() {
                         return json!(i);
                     }
-                }
-                "uint" | "u32" | "u64" | "uint32" | "uint64" | "usize" => {
-                    // Handle unsigned integers
-                    if let Ok(u) = value.trim().parse::<u64>() {
+                    if let Ok(u) = trimmed_value.parse::<u64>() {
                         return json!(u);
                     }
                 }
-                "bool" | "boolean" => {
-                    if let Ok(b) = value.trim().parse::<bool>() {
+                ParamType::Boolean => {
+                    if let Ok(b) = trimmed_value.parse::<bool>() {
                         return json!(b);
                     }
                 }
-                "array" | "list" | "vec" => {
-                    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(value.trim()) {
+                ParamType::Array => {
+                    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(trimmed_value) {
                         return json!(arr);
                     }
                 }
-                "object" | "map" | "dict" => {
-                    if let Ok(obj) = serde_json::from_str::<Map<String, Value>>(value.trim()) {
+                ParamType::Object => {
+                    if let Ok(obj) = serde_json::from_str::<Map<String, Value>>(trimmed_value) {
                         return json!(obj);
                     }
                 }
-                "json" => {
-                    if let Ok(json_val) = serde_json::from_str::<Value>(value.trim()) {
-                        return json_val;
-                    }
+                ParamType::Null => return Value::Null,
+                ParamType::String => { // Explicitly handle string type
+                     // No parsing needed, fall through to the default string return
                 }
-                _ => {} // Default to string for unknown types
             }
         }
 
@@ -399,7 +419,7 @@ fn parse_custom_tag_as_simple_arg(
     let content = element.inner_html();
 
     // The data_type is ONLY determined by the explicit `type` attribute.
-    let explicit_type = element.value().attr("type").map(|s| s.to_string());
+    let explicit_type = element.value().attr("type").map(ParamType::from);
 
     let final_name = tag_name.strip_prefix("x-cs-").unwrap_or(tag_name);
 
@@ -418,7 +438,7 @@ fn parse_arg_element(element: &ElementRef) -> Result<Option<Arg>, anyhow::Error>
         .ok_or_else(|| anyhow::anyhow!("arg element missing name attribute"))?
         .to_string();
 
-    let explicit_type = element.value().attr("type").map(|s| s.to_string());
+    let explicit_type = element.value().attr("type").map(ParamType::from);
 
     if let Some(value) = element.value().attr("value").map(|s| s.to_string()) {
         return Ok(Some(Arg {
@@ -614,7 +634,7 @@ mod tests {
             .iter()
             .find(|arg| arg.name == "json_data")
             .unwrap();
-        assert_eq!(json_arg.data_type, Some("array".to_string()));
+        assert_eq!(json_arg.data_type, Some(ParamType::Array));
         let json_value = json_arg.get_value();
         assert!(json_value.is_array());
         assert_eq!(json_value[0]["name"].as_str().unwrap(), "test");
@@ -665,7 +685,7 @@ mod tests {
 
         // Check JSON todo data
         let todo_arg = result.args.iter().find(|arg| arg.name == "todo").unwrap();
-        assert_eq!(todo_arg.data_type, Some("array".to_string()));
+        assert_eq!(todo_arg.data_type, Some(ParamType::Array));
         let todo_value = todo_arg.get_value();
         assert!(
             todo_value.is_array(),
@@ -851,7 +871,7 @@ mod tests {
             .iter()
             .find(|arg| arg.name == "valid_json")
             .unwrap();
-        assert_eq!(valid_json_arg.data_type, Some("object".to_string()));
+        assert_eq!(valid_json_arg.data_type, Some(ParamType::Object));
         let valid_json_value = valid_json_arg.get_value();
         assert!(valid_json_value.is_object());
         assert_eq!(valid_json_value["name"].as_str().unwrap(), "test");
@@ -874,7 +894,7 @@ mod tests {
             .iter()
             .find(|arg| arg.name == "array_json")
             .unwrap();
-        assert_eq!(array_json_arg.data_type, Some("array".to_string()));
+        assert_eq!(array_json_arg.data_type, Some(ParamType::Array));
         let array_json_value = array_json_arg.get_value();
         assert!(array_json_value.is_array());
 
@@ -884,7 +904,7 @@ mod tests {
             .iter()
             .find(|arg| arg.name == "explicit_json")
             .unwrap();
-        assert_eq!(explicit_json_arg.data_type, Some("object".to_string()));
+        assert_eq!(explicit_json_arg.data_type, Some(ParamType::Object));
         let explicit_json_value = explicit_json_arg.get_value();
         assert!(explicit_json_value.is_object());
 

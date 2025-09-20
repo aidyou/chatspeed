@@ -299,6 +299,7 @@ body {
   overflow: hidden;
   background: var(--cs-bg-color);
   border-radius: var(--cs-border-radius-md);
+  box-sizing: border-box;
 
   .titlebar {
     height: var(--cs-titlebar-height);
@@ -315,15 +316,26 @@ body {
     z-index: var(--cs-titlebar-zindex);
   }
 
-  &.windows {
+  /* &.windows {
     border-radius: unset;
     backdrop-filter: unset;
-    border: unset;
 
     &.titlebar,
     .header {
       border-radius: unset;
     }
+  } */
+
+  &.linux,
+  &.windows {
+    // Add margin to create space for the box-shadow to be visible
+    margin: 2px;
+    width: calc(100vw - 4px);
+    height: calc(100vh - 4px);
+
+    // Correct border syntax and apply a subtle shadow
+    border: 0.5px solid var(--cs-border-color);
+    box-shadow: 0 0 5px var(--cs-shadow-color);
   }
 }
 </style>
