@@ -1,0 +1,6 @@
+{
+  "name": "chatspeed",
+  "version": "1.1.8",
+  "builtin-baseline": "29ff5b8131d0c6c8fcb8fbaef35992f0d507cd7c",
+  "dependencies": ["sqlite3", "bzip2"]
+}
