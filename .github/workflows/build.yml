@@ -59,7 +59,7 @@ jobs:
         with:
           path: |
             vcpkg_installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/downloads
+            ${{ env.VCPKG_INSTALLATION_ROOT }}
           key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.target }}-
@@ -93,6 +93,9 @@ jobs:
           echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
           echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
           echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
+
+      - name: Update vcpkg repository
+        run: vcpkg update
 
       - name: Install dependencies (windows)
         shell: pwsh
@@ -217,7 +220,7 @@ jobs:
         with:
           path: |
             vcpkg_installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/downloads
+            ${{ env.VCPKG_INSTALLATION_ROOT }}
           key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.target }}-
@@ -234,7 +237,8 @@ jobs:
       - name: Install dependencies (macOS)
         run: |
           brew list sqlite3 || brew install sqlite3
-          if ! brew list bzip2 &>/dev/null; then
+          if ! brew list bzip2 &>/dev/null;
+            then
             brew install bzip2 || echo "bzip2 installation failed, but may already be available system-wide"
           fi
           echo "SQLITE3_DIR=$(brew --prefix sqlite3)" >> $GITHUB_ENV
@@ -328,7 +332,7 @@ jobs:
         with:
           path: |
             vcpkg_installed
-            ${{ env.VCPKG_INSTALLATION_ROOT }}/downloads
+            ${{ env.VCPKG_INSTALLATION_ROOT }}
           key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.target }}-
