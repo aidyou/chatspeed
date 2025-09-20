@@ -143,24 +143,7 @@ jobs:
           # echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
           # echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
 
-          # Verify installation
-          Write-Host "Verifying installation..."
-          Write-Host "Checking SQLite3 lib directory: $SQLITE3_LIB_DIR"
-
-          if (Test-Path $SQLITE3_LIB_DIR) {
-            Write-Host "SQLite3 lib directory exists, contents:"
-            Get-ChildItem $SQLITE3_LIB_DIR
-          } else {
-            Write-Host "Error: SQLite3 lib directory not found at: $SQLITE3_LIB_DIR"
-            Write-Host "Current directory: $PWD"
-            Write-Host "vcpkg_installed directory contents:"
-            if (Test-Path "vcpkg_installed") {
-              Get-ChildItem "vcpkg_installed" -Recurse
-            } else {
-              Write-Host "vcpkg_installed directory does not exist"
-            }
-            exit 1
-          }
+          # Verification is now handled by the build.rs script, which will panic if paths are not found.
 
       - name: Setup Rust env
         shell: pwsh
