@@ -121,11 +121,6 @@ jobs:
           echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
           echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
 
-      - name: Update vcpkg repository
-        shell: pwsh
-        run: |
-          cd ${{ env.VCPKG_INSTALLATION_ROOT }}
-          git pull
 
       - name: Install dependencies (windows)
         shell: pwsh
