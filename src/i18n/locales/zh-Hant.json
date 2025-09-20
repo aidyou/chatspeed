@@ -343,6 +343,7 @@
       "functionCall": "函式呼叫",
       "imageInput": "圖片輸入",
       "import": "匯入模型",
+      "loadPresetError": "載入預設檔案失敗，請稍後再試",
       "logo": "Logo",
       "logoPlaceholder": "供應商 Logo",
       "maxTokens": "最大 Token 數",

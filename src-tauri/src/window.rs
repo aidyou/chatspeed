@@ -374,7 +374,7 @@ pub async fn create_or_focus_setting_window(
             };
         }
 
-        let mut webview_window_builder = WebviewWindowBuilder::new(
+        let webview_window_builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
             tauri::WebviewUrl::App(format!("/settings/{}", setting_type.unwrap_or("")).into()),
@@ -385,16 +385,17 @@ pub async fn create_or_focus_setting_window(
         .inner_size(width, height)
         .min_inner_size(width, 600.0)
         .max_inner_size(width, max_height)
-        .center();
+        .center()
+        .transparent(true);
 
-        #[cfg(target_os = "windows")]
-        {
-            webview_window_builder = webview_window_builder.transparent(false);
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            webview_window_builder = webview_window_builder.transparent(true);
-        }
+        // #[cfg(target_os = "windows")]
+        // {
+        //     webview_window_builder = webview_window_builder.transparent(false);
+        // }
+        // #[cfg(not(target_os = "windows"))]
+        // {
+        //     webview_window_builder = webview_window_builder.transparent(true);
+        // }
 
         let webview_window = webview_window_builder
             .build()

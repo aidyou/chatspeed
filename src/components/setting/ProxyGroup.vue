@@ -3,7 +3,7 @@
     <div class="card">
       <div class="title">
         <span>{{ $t('settings.proxyGroup.title') }}</span>
-        <el-tooltip :content="$t('settings.proxyGroup.addGroup')" placement="top">
+        <el-tooltip :content="$t('settings.proxyGroup.addGroup')" placement="left">
           <span class="icon" @click="openAddDialog">
             <cs name="add" />
           </span>

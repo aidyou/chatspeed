@@ -345,6 +345,7 @@
       "functionCall": "関数呼び出し",
       "imageInput": "画像入力",
       "import": "モデルをインポート",
+      "loadPresetError": "プリセットファイルの読み込みに失敗しました。しばらくしてからもう一度お試しください",
       "logo": "ロゴ",
       "logoPlaceholder": "サプライヤーのロゴ",
       "maxTokens": "最大トークン数",

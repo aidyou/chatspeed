@@ -345,6 +345,7 @@
       "functionCall": "Funktionsaufruf",
       "imageInput": "Bildeingabe",
       "import": "Modell importieren",
+      "loadPresetError": "Fehler beim Laden der Voreinstellungsdatei, bitte versuchen Sie es später erneut",
       "logo": "Logo",
       "logoPlaceholder": "Anbieter-Logo",
       "maxTokens": "Maximale Anzahl von Tokens",

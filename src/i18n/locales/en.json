@@ -345,6 +345,7 @@
       "functionCall": "Function Call",
       "imageInput": "Image Input",
       "import": "Import Model",
+      "loadPresetError": "Failed to load preset file, please try again later",
       "logo": "Logo",
       "logoPlaceholder": "Vendor Logo",
       "maxTokens": "Max Tokens",

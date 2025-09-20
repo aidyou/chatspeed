@@ -3,7 +3,11 @@
     <!-- 顶部标题和添加按钮 -->
     <div class="title">
       <span>{{ $t('settings.mcp.title') }}</span>
-      <el-tooltip :content="$t('settings.mcp.addServer')" placement="left" :hide-after="0" :enterable="false">
+      <el-tooltip
+        :content="$t('settings.mcp.addServer')"
+        placement="left"
+        :hide-after="0"
+        :enterable="false">
         <span class="icon" @click="showPresetMcpDialog">
           <cs name="add" />
         </span>
@@ -17,10 +21,13 @@
           <div class="item">
             <div class="server-left">
               <div class="expand-btn" @click="toggleServerToolsExpansion(server)">
-                <cs :class="server.status" :name="mcpStore.getOrInitServerUiState(server.id).expanded &&
-                  server.status === 'running'
-                  ? 'caret-down'
-                  : 'caret-right'
+                <cs
+                  :class="server.status"
+                  :name="
+                    mcpStore.getOrInitServerUiState(server.id).expanded &&
+                    server.status === 'running'
+                      ? 'caret-down'
+                      : 'caret-right'
                   " />
               </div>
               <avatar :text="server.name" :size="32" />
@@ -34,27 +41,49 @@
             </div>
 
             <div class="value">
-              <el-tooltip :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
-                placement="top" :hide-after="0" :enterable="false" transition="none">
-                <el-switch :disabled="mcpStore.getOrInitServerUiState(server.id).loading"
-                  :model-value="!server.disabled" :loading="mcpStore.getOrInitServerUiState(server.id).loading"
+              <el-tooltip
+                :content="$t('settings.mcp.' + (server.disabled ? 'enable' : 'disable') + 'Server')"
+                placement="top"
+                :hide-after="0"
+                :enterable="false"
+                transition="none">
+                <el-switch
+                  :disabled="mcpStore.getOrInitServerUiState(server.id).loading"
+                  :model-value="!server.disabled"
+                  :loading="mcpStore.getOrInitServerUiState(server.id).loading"
                   @update:model-value="toggleServerStatus(server)" />
               </el-tooltip>
 
-              <el-tooltip :content="$t('settings.mcp.restart')" placement="top" :hide-after="0" :enterable="false"
-                transition="none" :disabled="server.disabled">
-                <span class="icon" :class="{ disabled: server.disabled }" @click="restartMcpServer(server)">
+              <el-tooltip
+                :content="$t('settings.mcp.restart')"
+                placement="top"
+                :hide-after="0"
+                :enterable="false"
+                transition="none"
+                :disabled="server.disabled">
+                <span
+                  class="icon"
+                  :class="{ disabled: server.disabled }"
+                  @click="restartMcpServer(server)">
                   <cs name="restart" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
 
-              <el-tooltip :content="$t('settings.mcp.editServer')" placement="top" :hide-after="0" :enterable="false"
+              <el-tooltip
+                :content="$t('settings.mcp.editServer')"
+                placement="top"
+                :hide-after="0"
+                :enterable="false"
                 transition="none">
                 <span class="icon" @click="openEditDialog(server)">
                   <cs name="edit" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
-              <el-tooltip :content="$t('settings.mcp.deleteServer')" placement="top" :hide-after="0" :enterable="false"
+              <el-tooltip
+                :content="$t('settings.mcp.deleteServer')"
+                placement="top"
+                :hide-after="0"
+                :enterable="false"
                 transition="none">
                 <span class="icon" @click="handleDeleteServerConfirmation(server)">
                   <cs name="trash" size="16px" color="secondary" />
@@ -64,28 +93,36 @@
           </div>
 
           <!-- expandable tools list -->
-          <div v-if="
-            mcpStore.getOrInitServerUiState(server.id).expanded && server.status === 'running'
-          " class="tools-list">
+          <div
+            v-if="
+              mcpStore.getOrInitServerUiState(server.id).expanded && server.status === 'running'
+            "
+            class="tools-list">
             <div v-if="mcpStore.getOrInitServerUiState(server.id).loading" class="tool-loading">
               {{ $t('common.loading') }}...
             </div>
             <ul v-if="mcpStore.serverTools[server.id] && mcpStore.serverTools[server.id].length">
-              <li v-for="tool in mcpStore.serverTools[server.id] || []" :key="tool.name" class="tool-item">
+              <li
+                v-for="tool in mcpStore.serverTools[server.id] || []"
+                :key="tool.name"
+                class="tool-item">
                 <div class="tool-info">
                   <div class="tool-name">{{ tool.name }}</div>
                   <div class="tool-description">{{ tool.description }}</div>
                 </div>
                 <div class="tool-actions">
-                  <el-switch size="small" :model-value="!(server?.config?.disabled_tools || []).includes(tool.name)"
+                  <el-switch
+                    size="small"
+                    :model-value="!(server?.config?.disabled_tools || []).includes(tool.name)"
                     @update:model-value="toggleDisableTool(server.id, tool)" />
                 </div>
               </li>
             </ul>
-            <div v-else-if="
-              !mcpStore.getOrInitServerUiState(server.id).loading &&
-              mcpStore.serverTools[server.id]
-            ">
+            <div
+              v-else-if="
+                !mcpStore.getOrInitServerUiState(server.id).loading &&
+                mcpStore.serverTools[server.id]
+              ">
               {{ $t('settings.mcp.noTools') }}
             </div>
           </div>
@@ -105,29 +142,43 @@
     </div>
 
     <!-- 添加/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" width="600px" align-center @closed="resetForm" class="model-edit-dialog"
-      :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog
+      v-model="dialogVisible"
+      width="600px"
+      align-center
+      @closed="resetForm"
+      class="model-edit-dialog"
+      :show-close="false"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false">
       <div class="form-container">
         <el-tabs v-model="activeTabName">
           <!-- Ensure activeTabName is used here if defined in script -->
           <el-tab-pane :label="$t('settings.mcp.form.tabForm')" name="formEditor">
-            <el-form :model="currentServerForm" label-width="150px" ref="serverFormRef" style="padding-top: 20px">
-              <el-form-item :label="$t('settings.mcp.form.name')" prop="name" :rules="[
-                { required: true, message: $t('settings.mcp.validation.nameRequired') },
-                {
-                  validator: (rule, value, callback) => {
-                    const regex = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
-                    if (!value || regex.test(value)) {
-                      callback()
-                    } else {
-                      callback(
-                        new Error(t('settings.mcp.validation.invalidName', { name: value }))
-                      )
-                    }
-                  },
-                  trigger: 'blur'
-                }
-              ]">
+            <el-form
+              :model="currentServerForm"
+              label-width="150px"
+              ref="serverFormRef"
+              style="padding-top: 20px">
+              <el-form-item
+                :label="$t('settings.mcp.form.name')"
+                prop="name"
+                :rules="[
+                  { required: true, message: $t('settings.mcp.validation.nameRequired') },
+                  {
+                    validator: (rule, value, callback) => {
+                      const regex = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
+                      if (!value || regex.test(value)) {
+                        callback()
+                      } else {
+                        callback(
+                          new Error(t('settings.mcp.validation.invalidName', { name: value }))
+                        )
+                      }
+                    },
+                    trigger: 'blur'
+                  }
+                ]">
                 <el-input v-model="currentServerForm.name" />
               </el-form-item>
               <el-form-item :label="$t('settings.mcp.form.description')" prop="description">
@@ -137,7 +188,9 @@
                 <el-switch v-model="currentServerForm.disabled" />
               </el-form-item>
 
-              <el-form-item :label="$t('settings.mcp.form.type')" prop="config.type"
+              <el-form-item
+                :label="$t('settings.mcp.form.type')"
+                prop="config.type"
                 :rules="[{ required: true, message: $t('settings.mcp.validation.typeRequired') }]">
                 <el-radio-group v-model="currentServerForm.config.type">
                   <el-radio value="stdio">Stdio</el-radio>
@@ -147,39 +200,58 @@
               </el-form-item>
 
               <template v-if="currentServerForm.config.type === 'stdio'">
-                <el-form-item :label="$t('settings.mcp.form.command')" prop="config.command" :rules="[
-                  {
-                    required: true,
-                    message: $t('settings.mcp.validation.commandRequired')
-                  }
-                ]">
+                <el-form-item
+                  :label="$t('settings.mcp.form.command')"
+                  prop="config.command"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.commandRequired')
+                    }
+                  ]">
                   <el-input v-model="currentServerForm.config.command" />
                 </el-form-item>
-                <el-form-item :label="$t('settings.mcp.form.args')" prop="config.argsString" :rules="[
-                  {
-                    required: true,
-                    message: $t('settings.mcp.validation.argsRequired')
-                  }
-                ]">
-                  <el-input v-model="currentServerForm.config.argsString" type="textarea" :rows="1"
-                    :autosize="{ minRows: 1, maxRows: 3 }" :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
+                <el-form-item
+                  :label="$t('settings.mcp.form.args')"
+                  prop="config.argsString"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.argsRequired')
+                    }
+                  ]">
+                  <el-input
+                    v-model="currentServerForm.config.argsString"
+                    type="textarea"
+                    :rows="1"
+                    :autosize="{ minRows: 1, maxRows: 3 }"
+                    :placeholder="$t('settings.mcp.form.argsPlaceholder')" />
                 </el-form-item>
                 <el-form-item :label="$t('settings.mcp.form.env')" prop="config.envString">
-                  <el-input v-model="currentServerForm.config.envString" type="textarea" :rows="2"
-                    :autosize="{ minRows: 1, maxRows: 5 }" :placeholder="$t('settings.mcp.form.envPlaceholder')" />
+                  <el-input
+                    v-model="currentServerForm.config.envString"
+                    type="textarea"
+                    :rows="2"
+                    :autosize="{ minRows: 1, maxRows: 5 }"
+                    :placeholder="$t('settings.mcp.form.envPlaceholder')" />
                 </el-form-item>
               </template>
 
               <template v-if="currentServerForm.config.type !== 'stdio'">
-                <el-form-item :label="$t('settings.mcp.form.url')" prop="config.url" :rules="[
-                  {
-                    required: true,
-                    message: $t('settings.mcp.validation.urlRequired')
-                  }
-                ]">
+                <el-form-item
+                  :label="$t('settings.mcp.form.url')"
+                  prop="config.url"
+                  :rules="[
+                    {
+                      required: true,
+                      message: $t('settings.mcp.validation.urlRequired')
+                    }
+                  ]">
                   <el-input v-model="currentServerForm.config.url" />
                 </el-form-item>
-                <el-form-item :label="$t('settings.mcp.form.bearerToken')" prop="config.bearer_token">
+                <el-form-item
+                  :label="$t('settings.mcp.form.bearerToken')"
+                  prop="config.bearer_token">
                   <el-input v-model="currentServerForm.config.bearer_token" />
                 </el-form-item>
                 <el-form-item :label="$t('settings.general.proxyServer')" prop="config.proxy">
@@ -187,7 +259,9 @@
                 </el-form-item>
               </template>
               <el-form-item :label="$t('settings.mcp.form.timeout')" prop="config.timeout">
-                <el-input v-model="currentServerForm.config.timeout" type="number"
+                <el-input
+                  v-model="currentServerForm.config.timeout"
+                  type="number"
                   :placeholder="$t('settings.mcp.form.timeoutPlaceholder')" />
               </el-form-item>
             </el-form>
@@ -209,16 +283,28 @@
     </el-dialog>
 
     <!-- Preset MCPs Dialog -->
-    <el-dialog v-model="presetMcpsVisible" :title="$t('settings.mcp.presetTitle')" width="600px" align-center
+    <el-dialog
+      v-model="presetMcpsVisible"
+      :title="$t('settings.mcp.presetTitle')"
+      width="600px"
+      align-center
       class="preset-mcps-dialog">
       <div class="preset-mcps-container">
         <div class="search-bar">
           <el-row :gutter="10">
             <el-col :span="16">
-              <el-input v-model="presetSearchQuery" :placeholder="$t('common.search')" clearable class="search-input" />
+              <el-input
+                v-model="presetSearchQuery"
+                :placeholder="$t('common.search')"
+                clearable
+                class="search-input" />
             </el-col>
             <el-col :span="8">
-              <el-button type="primary" plain @click="handleManualAddFromPresetDialog" style="width: 100%">
+              <el-button
+                type="primary"
+                plain
+                @click="handleManualAddFromPresetDialog"
+                style="width: 100%">
                 <cs name="add" /> {{ $t('settings.mcp.addManually') }}
               </el-button>
             </el-col>
@@ -226,7 +312,11 @@
         </div>
 
         <div class="preset-mcps-list" v-loading="loadingPresets">
-          <el-card v-for="preset in filteredPresetMcps" :key="preset.name" class="preset-mcp-card" shadow="hover">
+          <el-card
+            v-for="preset in filteredPresetMcps"
+            :key="preset.name"
+            class="preset-mcp-card"
+            shadow="hover">
             <div class="mcp-item">
               <avatar :text="preset.name" :size="40" class="mcp-logo" />
               <div class="mcp-details">
@@ -234,16 +324,23 @@
                 <p>{{ preset.description }}</p>
               </div>
               <el-space direction="vertical">
-                <el-button type="success" @click="importPresetMcp(preset)" :disabled="isPresetAdded(preset.name)">
+                <el-button
+                  type="success"
+                  @click="importPresetMcp(preset)"
+                  :disabled="isPresetAdded(preset.name)">
                   {{
                     isPresetAdded(preset.name)
                       ? $t('settings.mcp.added')
                       : $t('settings.mcp.addFromPreset')
                   }}
                 </el-button>
-                <el-button size="small" round @click="openUrl(preset.website)" v-if="preset.website">{{
-                  $t('common.detail')
-                  }}</el-button>
+                <el-button
+                  size="small"
+                  round
+                  @click="openUrl(preset.website)"
+                  v-if="preset.website"
+                  >{{ $t('common.detail') }}</el-button
+                >
               </el-space>
             </div>
           </el-card>
@@ -382,7 +479,7 @@ watch(jsonConfigString, newJson => {
           }
         }
       }
-    } catch (e) { }
+    } catch (e) {}
   }
 })
 

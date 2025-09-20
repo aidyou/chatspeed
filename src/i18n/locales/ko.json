@@ -345,6 +345,7 @@
       "functionCall": "함수 호출",
       "imageInput": "이미지 입력",
       "import": "모델 가져오기",
+      "loadPresetError": "프리셋 파일 로드 실패, 나중에 다시 시도해주세요",
       "logo": "로고",
       "logoPlaceholder": "공급업체 로고",
       "maxTokens": "최대 토큰 수",

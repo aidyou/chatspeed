@@ -345,6 +345,7 @@
       "functionCall": "Appel de fonction",
       "imageInput": "Entrée d'image",
       "import": "Importer un modèle",
+      "loadPresetError": "Échec du chargement du fichier prédéfini, veuillez réessayer plus tard",
       "logo": "Logo",
       "logoPlaceholder": "Logo du fournisseur",
       "maxTokens": "Nombre maximal de tokens",

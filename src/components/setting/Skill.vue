@@ -2,20 +2,27 @@
   <div class="card">
     <div class="title">
       <span>{{ t('settings.type.skill') }}</span>
-      <el-tooltip :content="$t('settings.skill.add')" placement="top">
+      <el-tooltip :content="$t('settings.skill.add')" placement="left">
         <span class="icon" @click="showPresetSkills()">
           <cs name="add" />
         </span>
       </el-tooltip>
     </div>
-    <Sortable v-if="skills.length > 0" class="list" item-key="id" :list="skills" :options="{
-      animation: 150,
-      ghostClass: 'ghost',
-      dragClass: 'drag',
-      draggable: '.draggable',
-      forceFallback: true,
-      bubbleScroll: true
-    }" @update="onSortUpdate" @end="onDragEnd">
+    <Sortable
+      v-if="skills.length > 0"
+      class="list"
+      item-key="id"
+      :list="skills"
+      :options="{
+        animation: 150,
+        ghostClass: 'ghost',
+        dragClass: 'drag',
+        draggable: '.draggable',
+        forceFallback: true,
+        bubbleScroll: true
+      }"
+      @update="onSortUpdate"
+      @end="onDragEnd">
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
@@ -26,19 +33,31 @@
 
           <!-- manage icons -->
           <div class="value">
-            <el-tooltip :content="$t('settings.skill.edit')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.skill.edit')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="editSkill(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.skill.copy')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.skill.copy')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="copySkill(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.skill.delete')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.skill.delete')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="deleteSkill(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
@@ -56,8 +75,13 @@
   </div>
 
   <!-- add/edit skill dialog -->
-  <el-dialog v-model="skillDialogVisible" width="560px" class="skill-edit-dialog" :show-close="false"
-    :close-on-click-modal="false" :close-on-press-escape="false">
+  <el-dialog
+    v-model="skillDialogVisible"
+    width="560px"
+    class="skill-edit-dialog"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
     <el-form :model="skillForm" :rules="skillRules" ref="formRef">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="t('settings.skill.basicInfo')" name="basic">
@@ -65,12 +89,21 @@
             <el-input v-model="skillForm.name" />
           </el-form-item>
           <el-form-item :label="$t('settings.skill.icon')" prop="icon">
-            <el-select v-model="skillForm.icon" :placeholder="$t('settings.skill.selectIcon')" filterable remote
-              :remote-method="iconFilter" :loading="loading">
+            <el-select
+              v-model="skillForm.icon"
+              :placeholder="$t('settings.skill.selectIcon')"
+              filterable
+              remote
+              :remote-method="iconFilter"
+              :loading="loading">
               <template #prefix>
                 <cs v-if="skillForm.icon" :name="skillForm.icon" color="primary" size="18px" />
               </template>
-              <el-option v-for="icon in filteredSkillIcons" :key="icon.value" :label="icon.label" :value="icon.value">
+              <el-option
+                v-for="icon in filteredSkillIcons"
+                :key="icon.value"
+                :label="icon.label"
+                :value="icon.value">
                 <cs :name="icon.value" color="primary" size="20px" class="option-icon" />
                 <span> {{ icon.label }}</span>
               </el-option>
@@ -88,7 +121,11 @@
           </el-form-item>
           <el-form-item :label="$t('settings.skill.selectType')" prop="type">
             <el-select v-model="skillForm.type" :placeholder="$t('settings.skill.selectType')">
-              <el-option v-for="item in skillDropdown" :key="item.value" :label="item.label" :value="item.value" />
+              <el-option
+                v-for="item in skillDropdown"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.skill.toolsEnabled')" prop="disabled">
@@ -101,11 +138,16 @@
 
         <el-tab-pane :label="t('settings.skill.promptInfo')" name="prompt">
           <el-form-item prop="prompt">
-            <el-input v-model="skillForm.prompt" type="textarea" :rows="13" :placeholder="$t('settings.skill.promptPlaceholder', {
-              from: '{fromLang}',
-              to: '{toLang}',
-              content: '{content}'
-            })
+            <el-input
+              v-model="skillForm.prompt"
+              type="textarea"
+              :rows="13"
+              :placeholder="
+                $t('settings.skill.promptPlaceholder', {
+                  from: '{fromLang}',
+                  to: '{toLang}',
+                  content: '{content}'
+                })
               " />
           </el-form-item>
           <el-form-item :label="$t('settings.skill.useSystemRole')" prop="useSystemRole">
@@ -123,8 +165,13 @@
   </el-dialog>
 
   <!-- preset skills -->
-  <el-dialog v-model="presetSkillsVisible" width="560px" class="preset-skills-dialog"
-    :title="$t('settings.skill.presetSkills')" :show-close="true" :close-on-click-modal="true"
+  <el-dialog
+    v-model="presetSkillsVisible"
+    width="560px"
+    class="preset-skills-dialog"
+    :title="$t('settings.skill.presetSkills')"
+    :show-close="true"
+    :close-on-click-modal="true"
     :close-on-press-escape="true">
     <div class="preset-skills-list">
       <div class="preset-skill-item manual-add" @click="manualAdd">
@@ -136,7 +183,11 @@
           <div class="preset-skill-desc">{{ $t('settings.skill.manualAddDesc') }}</div>
         </div>
       </div>
-      <div v-for="item in presetSkills" :key="item.name" class="preset-skill-item" @click="importSkill(item)">
+      <div
+        v-for="item in presetSkills"
+        :key="item.name"
+        class="preset-skill-item"
+        @click="importSkill(item)">
         <div class="preset-skill-icon">
           <cs :name="item.icon" size="32px" />
         </div>

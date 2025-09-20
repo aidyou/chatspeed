@@ -316,23 +316,8 @@ body {
     z-index: var(--cs-titlebar-zindex);
   }
 
-  /* &.windows {
-    border-radius: unset;
-    backdrop-filter: unset;
-
-    &.titlebar,
-    .header {
-      border-radius: unset;
-    }
-  } */
-
   &.linux,
   &.windows {
-    // Add margin to create space for the box-shadow to be visible
-    margin: 2px;
-    width: calc(100vw - 4px);
-    height: calc(100vh - 4px);
-
     // Correct border syntax and apply a subtle shadow
     border: 0.5px solid var(--cs-border-color);
     box-shadow: 0 0 5px var(--cs-shadow-color);

@@ -464,8 +464,6 @@
       "modelListUrl": "",
       "keyApplyUrl": "https://platform.moonshot.cn/console/api-keys"
     },
-
-    {},
     {
       "protocol": "openai",
       "name": "Minimax",

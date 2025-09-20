@@ -345,6 +345,7 @@
       "functionCall": "函数调用",
       "imageInput": "图片输入",
       "import": "导入模型",
+      "loadPresetError": "加载预设文件失败，请稍后再试",
       "logo": "Logo",
       "logoPlaceholder": "供应商Logo",
       "maxTokens": "最大Token数",
