@@ -130,31 +130,15 @@ jobs:
           # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
 
           # echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
-      - name: Install Node
+
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        shell: pwsh
-        run: |
-          $cacheDir = yarn config get cacheFolder
-          if ([string]::IsNullOrEmpty($cacheDir)) {
-            $cacheDir = "$env:LOCALAPPDATA\Yarn\Cache\v6"
-          }
-          echo "dir=$cacheDir" >> $env:GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable
@@ -245,25 +229,14 @@ jobs:
           echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include -I$BZIP2_PREFIX/include" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$BZIP2_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: Install Node
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable
@@ -365,25 +338,14 @@ jobs:
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           fi
 
-      - name: Install Node
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
-
-      - name: Yarn Cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
 
       - name: Yarn install
         run: yarn install --immutable

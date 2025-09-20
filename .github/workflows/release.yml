@@ -156,11 +156,12 @@ jobs:
           # Set vcpkg integration environment variables
           # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
           # echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
-      - name: Install Node
+
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: yarn
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
@@ -236,11 +237,11 @@ jobs:
           echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include -I$BZIP2_PREFIX/include" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$BZIP2_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: Install Node
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: yarn
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
@@ -319,11 +320,11 @@ jobs:
             libsqlite3-dev \
             rpm
 
-      - name: Install Node
+      - name: Install Node and Cache Yarn Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: yarn
+          cache: 'yarn'
 
       - name: Enable Corepack
         run: corepack enable
