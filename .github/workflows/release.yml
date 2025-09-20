@@ -84,7 +84,9 @@ jobs:
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          path: |
+            vcpkg_installed
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/downloads
           key: ${{ runner.os }}-vcpkg-${{ matrix.target }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.target }}-
@@ -102,8 +104,8 @@ jobs:
         shell: pwsh
         run: |
           # Set vcpkg root directory
-          $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
-          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          # $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
+          # echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
 
           # Set target architecture variables
           if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
@@ -114,8 +116,8 @@ jobs:
             echo "CARGO_CFG_TARGET_ARCH=aarch64" >> $env:GITHUB_ENV
           }
 
-          # Set common vcpkg variables
-          echo "VCPKG_INSTALLED_DIR=$VCPKG_ROOT/installed" >> $env:GITHUB_ENV
+          # Set common vcpkg variables for manifest mode
+          echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
           echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
           echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
 
@@ -129,17 +131,17 @@ jobs:
             $TRIPLET = "arm64-windows-static"
           }
 
-          # Set library directory variables
-          $SQLITE3_LIB_DIR = "$env:VCPKG_ROOT/installed/$TRIPLET/lib"
-          $SQLITE3_INCLUDE_DIR = "$env:VCPKG_ROOT/installed/$TRIPLET/include"
+          # Use manifest mode - vcpkg install without package names
+          Write-Host "Installing dependencies using manifest mode for triplet: $TRIPLET"
+          vcpkg install
 
-          echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
-          echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
+          # Set library directory variables (using project vcpkg_installed)
+          # $SQLITE3_LIB_DIR = "vcpkg_installed/$TRIPLET/lib"
+          # $SQLITE3_INCLUDE_DIR = "vcpkg_installed/$TRIPLET/include"
 
-          # Install dependencies
-          Write-Host "Installing dependencies for triplet: $TRIPLET"
-          vcpkg install "sqlite3:$TRIPLET"
-          vcpkg install "bzip2:$TRIPLET"
+          # echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
+          # echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
+          # echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
 
           # Verify installation
           Write-Host "Verifying installation..."
@@ -150,9 +152,13 @@ jobs:
             Get-ChildItem $SQLITE3_LIB_DIR
           } else {
             Write-Host "Error: SQLite3 lib directory not found at: $SQLITE3_LIB_DIR"
-            Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
-            Write-Host "Installed directory contents:"
-            Get-ChildItem "$env:VCPKG_ROOT/installed"
+            Write-Host "Current directory: $PWD"
+            Write-Host "vcpkg_installed directory contents:"
+            if (Test-Path "vcpkg_installed") {
+              Get-ChildItem "vcpkg_installed" -Recurse
+            } else {
+              Write-Host "vcpkg_installed directory does not exist"
+            }
             exit 1
           }
 
@@ -164,9 +170,8 @@ jobs:
           echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
 
           # Set vcpkg integration environment variables
-          echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
-          echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
-
+          # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
+          # echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
       - name: Install Node
         uses: actions/setup-node@v4
         with:

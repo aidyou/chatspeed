@@ -2,6 +2,11 @@
 fn main() {
     use std::env;
 
+    // Force the vcpkg crate to ignore the system-wide VCPKG_ROOT environment variable
+    // and use the path we provide programmatically. This is crucial because the build
+    // script might set a conflicting VCPKG_ROOT.
+    env::remove_var("VCPKG_ROOT");
+
     // Detect target architecture
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
     let is_arm64 = target_arch == "aarch64";
@@ -24,43 +29,47 @@ fn main() {
     // .\vcpkg install bzip2:x64-windows-static
     println!("cargo:warning=Build script is running on Windows");
 
-    // Use vcpkg to find dependencies
-    let mut config = vcpkg::Config::new();
-
     // Set correct triplet based on architecture
     let triplet = if is_arm64 {
         "arm64-windows-static"
     } else {
         "x64-windows-static"
     };
-
     println!("cargo:warning=Using vcpkg triplet: {}", triplet);
-    config.target_triplet(triplet);
 
-    // Set vcpkg search path
-    if let Ok(vcpkg_root) = env::var("VCPKG_ROOT") {
-        use std::path::PathBuf;
-        config.vcpkg_root(PathBuf::from(vcpkg_root));
+    // --- Manual linking for vcpkg dependencies ---
+    // This bypasses the `vcpkg` crate's find_package logic, which was failing,
+    // and instead tells rustc directly where to find the libraries.
+    use std::path::PathBuf;
+
+    let vcpkg_locations = vec![
+        PathBuf::from("../vcpkg_installed"),
+        PathBuf::from("vcpkg_installed"),
+    ];
+
+    let mut vcpkg_found = false;
+    for path in vcpkg_locations {
+        if path.exists() {
+            let absolute_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let lib_path = absolute_path.join(triplet).join("lib");
+
+            if lib_path.exists() {
+                println!("cargo:warning=Found vcpkg artifact directory at: {}", absolute_path.display());
+                println!("cargo:warning=Adding library search path: {}", lib_path.display());
+                println!("cargo:rustc-link-search=native={}", lib_path.display());
+                vcpkg_found = true;
+                break;
+            }
+        }
     }
 
-    // Find and link dependencies
-    config.find_package("sqlite3").unwrap_or_else(|_| {
-        panic!(
-            "Failed to find sqlite3 via vcpkg. Please ensure sqlite3:{} is installed.",
-            triplet
-        )
-    });
+    if !vcpkg_found {
+        panic!("Could not find a local vcpkg artifact directory ('vcpkg_installed'). Please ensure it exists and contains the required libraries for the '{}' triplet.", triplet);
+    }
 
-    let bzip2 = config.find_package("bzip2").unwrap_or_else(|_| {
-        panic!(
-            "Failed to find bzip2 via vcpkg. Please ensure bzip2:{} is installed.",
-            triplet
-        )
-    });
-    println!(
-        "cargo:rustc-link-search=native={}",
-        bzip2.link_paths[0].display()
-    );
+    // Link dependencies directly
+    println!("cargo:rustc-link-lib=static=sqlite3");
+    println!("cargo:rustc-link-lib=static=bz2");
 
     // Set platform architecture for MSVC
     if cfg!(target_env = "msvc") {

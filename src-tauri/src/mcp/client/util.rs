@@ -1,8 +1,7 @@
-use std::{env, path::PathBuf, sync::Arc};
-use tokio::process::Command as TokioCommand;
-
 use rmcp::model::ListToolsResult;
 use serde_json::{json, Value};
+use std::{env, path::PathBuf, sync::Arc};
+use tokio::process::Command as TokioCommand;
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 
@@ -56,6 +55,12 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
         let mut cmd = TokioCommand::new("sh");
         cmd.arg("-c").arg(&cmd_to_exec);
 
+        // Ensure no window is created on Windows (if cross-compiling)
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
         match cmd.output().await {
             Ok(output) => {
                 log::debug!(
@@ -107,6 +112,12 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
         log::debug!("Step 1 (Windows): Executing where {}", command_name);
         let mut cmd = TokioCommand::new("where");
         cmd.arg(command_name);
+
+        // Hide the command window on Windows
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
 
         match cmd.output().await {
             Ok(output) => {
@@ -232,6 +243,12 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
             );
             let mut command = TokioCommand::new(shell);
             command.arg("-l").arg("-c").arg(&command_to_run_in_shell);
+
+            // Ensure no window is created on Windows (if cross-compiling)
+            #[cfg(windows)]
+            {
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
 
             match command.output().await {
                 Ok(output) => {

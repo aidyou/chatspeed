@@ -6,7 +6,7 @@
         <template #left>
           <el-tooltip
             :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
-            placement="bottom"
+            placement="right"
             :hide-after="0"
             :enterable="false">
             <div class="icon-btn upperLayer" @click="onToggleSidebar">

@@ -68,24 +68,46 @@ if (Test-Path $sdkRegPath) {
     exit 1
 }
 
+# Detect target architecture
+$targetArch = $env:PROCESSOR_ARCHITECTURE
+if ($targetArch -eq "ARM64") {
+    $vcpkgTriplet = "arm64-windows-static"
+    $buildArch = "arm64"
+} else {
+    $vcpkgTriplet = "x64-windows-static"
+    $buildArch = "x64"
+}
+
+Write-Host "Detected architecture: $targetArch, using triplet: $vcpkgTriplet"
+
+# Set vcpkg environment for manifest mode
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$vcpkgInstalledDir = Join-Path $projectRoot "vcpkg_installed"
+
+if (Test-Path $vcpkgInstalledDir) {
+    Write-Host "Found project vcpkg_installed directory: $vcpkgInstalledDir"
+    [Environment]::SetEnvironmentVariable('VCPKG_INSTALLED_DIR', $vcpkgInstalledDir, 'Process')
+    $env:VCPKG_INSTALLED_DIR = $vcpkgInstalledDir
+}
+
 # Set VCPKG_ROOT based on user directory installation first
 $userVcpkgPath = Join-Path $env:USERPROFILE "vcpkg"
 if (Test-Path $userVcpkgPath) {
     # Use .NET Framework method to set environment variable, ensuring to overwrite existing value
     [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', $userVcpkgPath, [System.EnvironmentVariableTarget]::User)
     $env:VCPKG_ROOT = $userVcpkgPath
-    # Set default triplet for static linking
-    [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', 'x64-windows-static', [System.EnvironmentVariableTarget]::User)
-    $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+    # Set default triplet for static linking based on architecture
+    [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', $vcpkgTriplet, [System.EnvironmentVariableTarget]::User)
+    $env:VCPKG_DEFAULT_TRIPLET = $vcpkgTriplet
 } else {
     # Try Visual Studio installation
     $vcpkgPath = Join-Path $env:VSINSTALLDIR "VC\vcpkg"
     if (Test-Path $vcpkgPath) {
         [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', $vcpkgPath, [System.EnvironmentVariableTarget]::User)
         $env:VCPKG_ROOT = $vcpkgPath
-        # Set default triplet for static linking
-        [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', 'x64-windows-static', [System.EnvironmentVariableTarget]::User)
-        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+        # Set default triplet for static linking based on architecture
+        [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', $vcpkgTriplet, [System.EnvironmentVariableTarget]::User)
+        $env:VCPKG_DEFAULT_TRIPLET = $vcpkgTriplet
     } else {
         # Try other common locations
         $commonVcpkgPaths = @(
@@ -98,9 +120,9 @@ if (Test-Path $userVcpkgPath) {
             if (Test-Path $path) {
                 [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', $path, [System.EnvironmentVariableTarget]::User)
                 $env:VCPKG_ROOT = $path
-                # Set default triplet for static linking
-                [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', 'x64-windows-static', [System.EnvironmentVariableTarget]::User)
-                $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+                # Set default triplet for static linking based on architecture
+                [System.Environment]::SetEnvironmentVariable('VCPKG_DEFAULT_TRIPLET', $vcpkgTriplet, [System.EnvironmentVariableTarget]::User)
+                $env:VCPKG_DEFAULT_TRIPLET = $vcpkgTriplet
                 $foundVcpkg = $true
                 break
             }
@@ -134,37 +156,38 @@ $env:INCLUDE = $includePaths -join ";"
 
 # Set library paths
 $libPaths = @(
-    "$VsPath\lib\x64",
-    "$SdkPath\Lib\$env:WindowsSdkVersion\um\x64",
-    "$SdkPath\Lib\$env:WindowsSdkVersion\ucrt\x64"
+    "$VsPath\lib\$buildArch",
+    "$SdkPath\Lib\$env:WindowsSdkVersion\um\$buildArch",
+    "$SdkPath\Lib\$env:WindowsSdkVersion\ucrt\$buildArch"
 )
 [Environment]::SetEnvironmentVariable('LIB', ($libPaths -join ";"), 'Process')
 $env:LIB = $libPaths -join ";"
 
 # Set LIBPATH for .NET Framework
 $libPaths = @(
-    "$VsPath\lib\x64",
-    "$VsPath\atlmfc\lib\x64"
+    "$VsPath\lib\$buildArch",
+    "$VsPath\atlmfc\lib\$buildArch"
 )
 [Environment]::SetEnvironmentVariable('LIBPATH', ($libPaths -join ";"), 'Process')
 $env:LIBPATH = $libPaths -join ";"
 
 # Set tool paths
+$hostArch = if ($buildArch -eq "arm64") { "HostX64" } else { "HostX64" }
 $toolPaths = @(
-    "$VsPath\bin\HostX64\x64",
-    "$SdkPath\bin\$env:WindowsSdkVersion\x64",
+    "$VsPath\bin\$hostArch\$buildArch",
+    "$SdkPath\bin\$env:WindowsSdkVersion\$buildArch",
     $env:Path
 )
 [Environment]::SetEnvironmentVariable('Path', ($toolPaths -join ";"), 'Process')
 $env:Path = $toolPaths -join ";"
 
 # Set additional VS environment variables
-[Environment]::SetEnvironmentVariable('Platform', "x64", 'Process')
-$env:Platform = "x64"
+[Environment]::SetEnvironmentVariable('Platform', $buildArch, 'Process')
+$env:Platform = $buildArch
 [Environment]::SetEnvironmentVariable('VSCMD_ARG_HOST_ARCH', "x64", 'Process')
 $env:VSCMD_ARG_HOST_ARCH = "x64"
-[Environment]::SetEnvironmentVariable('VSCMD_ARG_TGT_ARCH', "x64", 'Process')
-$env:VSCMD_ARG_TGT_ARCH = "x64"
+[Environment]::SetEnvironmentVariable('VSCMD_ARG_TGT_ARCH', $buildArch, 'Process')
+$env:VSCMD_ARG_TGT_ARCH = $buildArch
 [Environment]::SetEnvironmentVariable('PreferredToolArchitecture', "x64", 'Process')
 $env:PreferredToolArchitecture = "x64"
 
@@ -188,8 +211,8 @@ $env:LIB -split ";" | ForEach-Object {
 
 # Test for kernel32.lib
 $kernel32Paths = @(
-    "$SdkPath\Lib\$env:WindowsSdkVersion\um\x64\kernel32.lib",
-    "$VsPath\lib\x64\kernel32.lib"
+    "$SdkPath\Lib\$env:WindowsSdkVersion\um\$buildArch\kernel32.lib",
+    "$VsPath\lib\$buildArch\kernel32.lib"
 )
 
 Write-Host "`nChecking for kernel32.lib:"
