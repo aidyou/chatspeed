@@ -27,7 +27,7 @@ Chatspeed's power is driven by its core proxy engine, [CCProxy](https://docs.cha
 
 ## 📚 Learn More
 
-**We highly recommend starting with our [Official Documentation Website](https://docs.chatspeed.aidyou.ai/en/) for the best reading and learning experience.**
+**We highly recommend starting with our [Official Documentation Website](https://docs.chatspeed.aidyou.ai/) for the best reading and learning experience.**
 
 <details>
 <summary>Or, click here to expand the detailed documentation index</summary>
