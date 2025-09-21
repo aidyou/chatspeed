@@ -1,93 +1,66 @@
-English | [简体中文](./README.zh-CN.md)
-
-![claude code](assets/images/claude.gif)
+[简体中文](./README.zh-CN.md) | English
 
 # ChatSpeed
 
-**ChatSpeed lets you use `Claude Code` or `Gemini CLI` for free!**
+**Forged in Rust, this open-source, high-performance AI assistant is your powerful programming companion and smart desktop hub.**
 
-Its core `ccproxy` module supports arbitrary protocol conversion between OpenAI, Gemini, Claude, Ollama, and more. This means you can seamlessly integrate any free or cost-effective model into development environments like `Claude Code`.
+![Claude Code Integration Demo](assets/images/claude.gif)
 
-Additionally, `ccproxy`'s MCP proxy feature aggregates all MCP tools installed on ChatSpeed and serves them through a single, unified endpoint.
+## 🌟 What can Chatspeed do?
 
-**AI Proxy Diagram**
+- **💼 Multi-functional Desktop Assistant**: You can use it for translation, creating mind maps, flowcharts, daily conversations, etc., quickly summoned with the shortcut ALT+Z.
+- **🔌 Connect Any Dev Tool**: Beyond just [Claude Code](https://docs.chatspeed.aidyou.ai/en/ccproxy/claude-code.md), you can also connect models to almost any major AI development tool, including [Gemini CLI](https://docs.chatspeed.aidyou.ai/en/ccproxy/gemini.md), [Cline](https://docs.chatspeed.aidyou.ai/en/ccproxy/cline.md), [Roo Code](https://docs.chatspeed.aidyou.ai/en/ccproxy/roo-code.md), and [Zed](https://docs.chatspeed.aidyou.ai/en/ccproxy/zed.md).
+- **💰 Use Claude Code for Free**: As a best practice, we provide a detailed tutorial on how to [use Claude Code for free](https://docs.chatspeed.aidyou.ai/en/posts/claude-code-free/).
+- **🚀 MCP Hub**: Chatspeed's MCP proxy can provide its own `WebSearch` and `WebFetch` tools, along with any `MCP` tools you've installed, to external clients via the `SSE` protocol. Learn how to [centrally manage MCP](https://docs.chatspeed.aidyou.ai/en/mcp/).
 
-```mermaid
-graph LR
-    subgraph "Any AI Model"
-        A[Qwen3-Code]
-        B[Kimi-K2]
-        C[GLM4.5]
-        D[Gemini]
-    end
+## 🚀 Core Engine: `CCProxy`
 
-    subgraph "Your Development Environment"
-        E[Claude Code]
-    end
+Chatspeed's power is driven by its core proxy engine, [CCProxy](https://docs.chatspeed.aidyou.ai/en/ccproxy/). It's a universal adapter built with Rust, focused on:
 
-    F(Chatspeed ccproxy)
+1. **Protocol Conversion**: Seamlessly convert between major protocols like OpenAI-compatible, Claude, Gemini, and Ollama.
+2. **Capability Expansion**: Expands the capabilities of models that do not natively support tool calling through a tool compatibility mode.
+3. **Reducing User Burden**: The tool compatibility mode frees users from worrying about whether a model supports native tool calling, significantly lowering the barrier to entry and mental load.
+4. **Security Isolation**: CCProxy's keys effectively isolate clients from direct access to AI provider keys, enhancing key security.
+5. **Group Management**: Supports a proxy grouping feature to restrict client access to specific model groups.
+6. **Load Balancing**: Effectively mitigates model rate-limiting issues by globally rotating through all configured provider keys.
+7. **Simplified Workflow**: Say goodbye to repeatedly configuring tools in different IDEs with a unified MCP entry point.
 
-    A --> F
-    B --> F
-    C --> F
-    D --> F
-    F --> E
-```
+## 📚 Learn More
 
-**MCP Proxy Diagram**
+**We highly recommend starting with our [Official Documentation Website](https://docs.chatspeed.aidyou.ai/en/) for the best reading and learning experience.**
 
-```mermaid
-graph TD
-    subgraph "Available Toolsets"
-        A[Tavily Tools]
-        B[Puppeteer Tools]
-        C[...]
-    end
+<details>
+<summary>Or, click here to expand the detailed documentation index</summary>
 
-    P(Chatspeed ccproxy)
+- [Chatspeed](https://docs.chatspeed.aidyou.ai/)
+- [Features Overview](https://docs.chatspeed.aidyou.ai/en/guide/features/overview.html)
+- [Guide](https://docs.chatspeed.aidyou.ai/en/guide/)
+  - [Quick Start](https://docs.chatspeed.aidyou.ai/en/guide/quickStart.html)
+  - [Installation Guide](https://docs.chatspeed.aidyou.ai/en/guide/installation.html)
+  - [Development Guide](https://docs.chatspeed.aidyou.ai/en/guide/development.html)
+- [CCProxy Introduction](https://docs.chatspeed.aidyou.ai/en/ccproxy/)
+  - [CCProxy Tool Compatibility Mode Explained](https://docs.chatspeed.aidyou.ai/en/posts/experience-sharing/why-compat-mode.html)
+  - [CCProxy Configuration](https://docs.chatspeed.aidyou.ai/en/ccproxy/configuration.html)
+  - [Connecting to Claude Code](https://docs.chatspeed.aidyou.ai/en/ccproxy/claude-code.html)
+  - [Connecting to Gemini CLI](https://docs.chatspeed.aidyou.ai/en/ccproxy/gemini.html)
+  - [Connecting to Cline](https://docs.chatspeed.aidyou.ai/en/ccproxy/cline.html)
+  - [Connecting to Roo Code](https://docs.chatspeed.aidyou.ai/en/ccproxy/roo-code.html)
+  - [Connecting to Zed](https://docs.chatspeed.aidyou.ai/en/ccproxy/zed.html)
+  - [How to Access the CCProxy API](https://docs.chatspeed.aidyou.ai/en/api/)
+- [MCP Hub](https://docs.chatspeed.aidyou.ai/en/mcp/)
+  - [Connecting to Claude Code](https://docs.chatspeed.aidyou.ai/en/mcp/#claude-code)
+  - [Connecting to Gemini CLI](https://docs.chatspeed.aidyou.ai/en/mcp/#gemini-cli)
+  - [Connecting to VS Code](https://docs.chatspeed.aidyou.ai/en/mcp/#vs-code)
+  - [Connecting to Cursor](https://docs.chatspeed.aidyou.ai/en/mcp/#cursor)
+  - [Connecting to Trae CN](https://docs.chatspeed.aidyou.ai/en/mcp/#trae-cn)
+  - [Connecting to Windsurf](https://docs.chatspeed.aidyou.ai/en/mcp/#windsurf)
+  - [Connecting to Cline](https://docs.chatspeed.aidyou.ai/en/mcp/#cline)
+  - [Connecting to Roo Code](https://docs.chatspeed.aidyou.ai/en/mcp/#roo-code)
+- [Prompt Library — Enhancing Code Agents with Prompts](https://docs.chatspeed.aidyou.ai/en/prompt/)
+  - [CCProxy Common Prompts](https://docs.chatspeed.aidyou.ai/en/prompt/common.html)
+  - [Claude Code Enhancement Prompts (Native Tool Call)](https://docs.chatspeed.aidyou.ai/en/prompt/claude-code-prompt-enhance-native-tool-call.html)
+  - [Claude Code Enhancement Prompts (Tool Compatibility Mode)](https://docs.chatspeed.aidyou.ai/en/prompt/claude-code-prompt-enhance.html)
+- [Blog](https://docs.chatspeed.aidyou.ai/en/posts/)
+  - [How to Use Claude Code for Free](https://docs.chatspeed.aidyou.ai/en/posts/claude-code-free/post-1.html)
 
-    subgraph "Exposed via Unified SSE Proxy"
-        D[tavily-search]
-        E[tavily-extract]
-        F[puppeteer-navigate]
-        G[...]
-    end
-
-    A -- "Managed by" --> P
-    B -- "Managed by" --> P
-    C -- "Managed by" --> P
-
-    P -- "Exposes" --> D
-    P -- "Exposes" --> E
-    P -- "Exposes" --> F
-    P -- "Exposes" --> G
-```
-
-The core mission is to democratize advanced AI integration, making it accessible, cost-effective, and efficient for developers worldwide.
-
-## Core Advantages
-
-- **Ultimate Cost Reduction**: Integrate any free or cost-effective models (e.g., Kimi, Qwen, GLM) into `Claude Code` or `Gemini CLI` and reduce development costs by over 80%.
-- **Configure Once, Use Everywhere**: The unique unified `MCP` proxy eliminates the hassle of repeatedly configuring tools in multiple IDEs like VS Code, Cursor, and Zed.
-- **Universal Protocol Conversion**: Seamlessly convert between major protocols like OpenAI, Claude, Gemini, and Ollama, and enable a "compatibility mode" for older models without native tool-calling capabilities.
-- **Highly Flexible & Customizable**: Achieve optimal performance for various AI programming scenarios through advanced features like proxy grouping, dynamic routing, and prompt engineering.
-
-## Documentation
-
-**For detailed information, please visit our documentation website: [https://docs.chatspeed.aidyou.ai/](https://docs.chatspeed.aidyou.ai/)**
-
-Our documentation includes:
-
-- **[User Guide](https://docs.chatspeed.aidyou.ai/en/guide/)**: Installation, quick start, and feature overview.
-- **[ccproxy Module](https://docs.chatspeed.aidyou.ai/en/ccproxy/)**: Learn how to use Claude Code at low cost or even for free.
-- **[MCP Proxy](https://docs.chatspeed.aidyou.ai/en/mcp/)**: How to use the MCP proxy to centrally manage your commonly used MCP tools.
-- **[API Reference](https://docs.chatspeed.aidyou.ai/en/api/)**: Complete API documentation.
-- **[Development Guide](https://docs.chatspeed.aidyou.ai/en/guide/development.html)**: Instructions for setting up a development environment and building the project.
-
-## Core Features
-
-ChatSpeed offers a comprehensive suite of features to streamline your AI workflows, including AI agents, MCP proxy, multi-model support, an advanced chat interface, and more. For a full list of features, please see our [Features Overview](https://docs.chatspeed.aidyou.ai/en/guide/features/overview.html) in the documentation.
-
-## Contributing
-
-ChatSpeed is an open-source project under the MIT license. All code is available on [GitHub](https://github.com/aidyou/chatspeed). We welcome contributions from the community to help expand the AI agent ecosystem.
+</details>

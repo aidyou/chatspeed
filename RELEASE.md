@@ -21,6 +21,8 @@
 -   **Optimized `ccproxy` module**: Further optimized the tool compatibility mode and calling instructions in `ccproxy`, significantly reducing token consumption while maintaining usability, resulting in a smoother and more cost-effective workflow.
 -   **Dependency Updates**: Upgraded project dependencies, including the core `rmcp` library from v0.5 to v0.6, for better performance and stability.
 
+---
+
 # Chatspeed v1.1.8 Release Notes
 
 This update focuses on **comprehensive user experience optimizations** and **core feature enhancements**, bringing you a smoother, smarter, and more personalized experience.

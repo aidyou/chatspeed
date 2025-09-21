@@ -1,95 +1,66 @@
 [English](./README.md) | 简体中文
 
-![claude code](assets/images/claude.gif)
-
 # ChatSpeed
 
-**ChatSpeed: Any Claude Code, Any Gemini CLI.**
+**由 Rust 精心打造，一款开源、高性能的 AI 助手，是您强大的编程伴侣与智能桌面中枢。**
 
-**ChatSpeed 让你免费用上 `Claude Code` 或 `Gemini CLI`！**
+![Claude Code 接入演示](assets/images/claude.gif)
 
-它的核心模块 `ccproxy` 支持在 OpenAI、Gemini、Claude、Ollama 等协议间任意转换，这意味着你能将任何免费或高性价比的模型无缝接入到 `Claude Code` 等开发环境中。
+## 🌟 Chatspeed 能做啥？
 
-同时，`ccproxy` 的 MCP 代理功能，会将安装在 ChatSpeed 上的所有 MCP 工具聚合成一个统一的入口，对外提供 `MCP` 工具。
+- **💼 多功能桌面助手**：你可以用它翻译、制作脑图、制作流程图、日常对话等，通过快捷键 ALT+Z 快速呼叫
+- **🔌 连接任何开发工具**：不仅是 [Claude Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/claude-code.md)，你还可以将模型接入 [Gemini CLI](https://docs.chatspeed.aidyou.ai/zh/ccproxy/gemini.md)、[Cline](https://docs.chatspeed.aidyou.ai/zh/ccproxy/cline.md)、[Roo Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/roo-code.md)、[Zed](https://docs.chatspeed.aidyou.ai/zh/ccproxy/zed.md) 等几乎所有主流 AI 开发工具。
+- **💰 免费使用 Claude Code**：作为最佳实践，我们提供了详细的[免费使用 Claude Code](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/)教程。
+- **🚀 MCP Hub**：Chatspeed 的 MCP 代理可以将自身的`WebSearch`和`WebFetch`工具连同您安装的 `MCP` 工具通过 `SSE` 协议提供给外部其他客户端使用，了解如何[集中管理 MCP](https://docs.chatspeed.aidyou.ai/zh/mcp/)
 
-**AI代理示意图**
+## 🚀 核心引擎: `CCProxy`
 
-```mermaid
-graph LR
-    subgraph "Any AI Model"
-        A[Qwen3-Code]
-        B[Kimi-K2]
-        C[GLM4.5]
-        D[Gemini]
-    end
+Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspeed.aidyou.ai/zh/ccproxy/) 驱动。它是一个用 Rust 实现的万能适配器，专注于：
 
-    subgraph "Your Development Environment"
-        E[Claude Code]
-    end
+1. **协议转换**：无缝转换 OpenAI 兼容协议、Claude、Gemini、Ollama 等主流协议。
+2. **能力拓展**：通过工具兼容模式，为不支持原生工具调用功能的模型拓展了能力。
+3. **减轻用户负担**：工具兼容模式让用户无需关心模型是否支持原生工具调用，显著降低了使用门槛和心智负担。
+4. **安全隔离**：CCProxy 的密钥可以有效隔离客户端对AI密钥的直接访问，提升密钥安全性。
+5. **分组管理**：支持代理分组功能，将客户端访问权限限制在指定模型分组内。
+6. **负载均衡**：通过全局轮询所有供应商配置的密钥，有效缓解模型调用频率限制。
+7. **简化工作流**：通过统一的 MCP 入口，告别在不同 IDE 中重复配置工具的烦恼。
 
-    F(Chatspeed ccproxy)
+## 📚 了解更多
 
-    A --> F
-    B --> F
-    C --> F
-    D --> F
-    F --> E
-```
+**我们强烈建议您从 [官方文档网站](https://docs.chatspeed.aidyou.ai/zh/) 开始，以获得最佳的阅读和学习体验。**
 
-**MCP代理示意图**
+<details>
+<summary>或者，点击此处展开详细的文档索引</summary>
 
-```mermaid
-graph TD
-    subgraph "可用的 MCP 工具集 (Toolsets)"
-        A[Tavily Tools]
-        B[Puppeteer Tools]
-        C[...]
-    end
+- [Chatspeed](https://docs.chatspeed.aidyou.ai/zh/)
+- [功能概览](https://docs.chatspeed.aidyou.ai/zh/guide/features/overview.html)
+- [指南](https://docs.chatspeed.aidyou.ai/zh/guide/)
+  - [快速开始](https://docs.chatspeed.aidyou.ai/zh/guide/quickStart.html)
+  - [安装指南](https://docs.chatspeed.aidyou.ai/zh/guide/installation.html)
+  - [开发指南](https://docs.chatspeed.aidyou.ai/zh/guide/development.html)
+- [CCProxy 简介](https://docs.chatspeed.aidyou.ai/zh/ccproxy/)
+  - [CCProxy 工具兼容模式介绍](https://docs.chatspeed.aidyou.ai/zh/posts/experience-sharing/why-compat-mode.html)
+  - [CCProxy 配置](https://docs.chatspeed.aidyou.ai/zh/ccproxy/configuration.html)
+  - [接入 Claude Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/claude-code.html)
+  - [接入 Gemini CLI](https://docs.chatspeed.aidyou.ai/zh/ccproxy/gemini.html)
+  - [接入 Cline](https://docs.chatspeed.aidyou.ai/zh/ccproxy/cline.html)
+  - [接入 Roo Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/roo-code.html)
+  - [接入 Zed](https://docs.chatspeed.aidyou.ai/zh/ccproxy/zed.html)
+  - [如何访问 CCProxy 的 API](https://docs.chatspeed.aidyou.ai/zh/api/)
+- [MCP Hub](https://docs.chatspeed.aidyou.ai/zh/mcp/)
+  - [接入 Claude Code](https://docs.chatspeed.aidyou.ai/zh/mcp/#claude-code)
+  - [接入 Gemini CLI](https://docs.chatspeed.aidyou.ai/zh/mcp/#gemini-cli)
+  - [接入 VS Code](https://docs.chatspeed.aidyou.ai/zh/mcp/#vs-code)
+  - [接入 Cursor](https://docs.chatspeed.aidyou.ai/zh/mcp/#cursor)
+  - [接入 Trae CN](https://docs.chatspeed.aidyou.ai/zh/mcp/#trae-cn)
+  - [接入 Windsurf](https://docs.chatspeed.aidyou.ai/zh/mcp/#windsurf)
+  - [接入 Cline](https://docs.chatspeed.aidyou.ai/zh/mcp/#cline)
+  - [接入 Roo Code](https://docs.chatspeed.aidyou.ai/zh/mcp/#roo-code)
+- [提示词库 —— 通过提示词增强 Code Agents](https://docs.chatspeed.aidyou.ai/zh/prompt/)
+  - [CCProxy 通用提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/common.html)
+  - [原生工具下 Claude Code 增强提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/claude-code-prompt-enhance-native-tool-call.html)
+  - [工具兼容模式下的 Claude Code 增强提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/claude-code-prompt-enhance.html)
+- [博客](https://docs.chatspeed.aidyou.ai/zh/posts/)
+  - [如何免费使用 Claude Code](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/post-1.html)
 
-    P(Chatspeed ccproxy)
-
-    subgraph "通过统一 SSE 代理提供给客户端"
-        D[tavily-search]
-        E[tavily-extract]
-        F[puppeteer-navigate]
-        G[...]
-    end
-
-    A -- "接入" --> P
-    B -- "接入" --> P
-    C -- "接入" --> P
-
-    P -- "提供" --> D
-    P -- "提供" --> E
-    P -- "提供" --> F
-    P -- "提供" --> G
-```
-
-我们的核心使命是让先进的 AI 集成大众化，使全球的开发者都能以低成本、高效率的方式使用它。
-
-## 核心优势
-
-- **极致降本**: 将任意免费或高性价比模型（如 Kimi, Qwen, GLM）接入 `Claude Code` 或 `Gemini CLI`，开发成本立省80%以上。
-- **一处配置，处处可用**: 独创的 `MCP` 统一代理，让你告别在 VS Code、Cursor、Zed 等多个 IDE 中重复配置工具的烦恼。
-- **万能协议转换**: 无缝转换 OpenAI、Claude、Gemini、Ollama 等主流协议，并为无工具调用能力的老模型开启“兼容模式”。
-- **高度灵活定制**: 通过代理分组、动态路由、提示词工程等高级功能，为不同场景下的 AI 编程提供最佳性能。
-
-## 文档
-
-**详细信息请访问我们的文档网站: [https://docs.chatspeed.aidyou.ai/](https://docs.chatspeed.aidyou.ai/)**
-
-文档包括:
-
-- **[用户指南](https://docs.chatspeed.aidyou.ai/zh/guide/)**: 安装、快速入门和功能概览。
-- **[ccproxy 模块](https://docs.chatspeed.aidyou.ai/zh/ccproxy/)**: 了解如何低成本甚至免费使用 Claude Code。
-- **[MCP 代理](https://docs.chatspeed.aidyou.ai/zh/mcp/)**: 如何使用MCP 代理集中管理您常用的 MCP 工具。
-- **[API 参考](https://docs.chatspeed.aidyou.ai/zh/api/)**: 完整的 API 文档。
-- **[开发指南](https://docs.chatspeed.aidyou.ai/zh/guide/development.html)**: 有关设置开发环境和构建项目的说明。
-
-## 核心功能
-
-ChatSpeed 提供了一套全面的功能来简化您的 AI 工作流，包括 AI 代理、MCP 代理、多模型支持、高级聊天界面等等。有关功能的完整列表，请参阅我们文档中的[功能概览](https://docs.chatspeed.aidyou.ai/zh/guide/features/overview.html)。
-
-## 欢迎贡献代码
-
-ChatSpeed 是一个遵循 MIT 许可的开源项目。所有代码都托管在 [GitHub](https://github.com/aidyou/chatspeed) 上。我们欢迎社区的贡献，共同扩展 AI 代理生态系统。
+</details>
