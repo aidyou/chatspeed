@@ -227,6 +227,46 @@ if __name__ == \"__main__\":
 </args>
 </cs:tool_use>
 
+### Example 5: Using Hypothetical MultiEdit Tool
+If a client provides a MultiEdit tool with the following definition:
+
+<cs:tool_define>
+<name>MultiEdit</name>
+<desc>This is a tool for making multiple edits to a single file in one operation...</desc>
+<args>
+  <arg name="edits" type="array">Array of edit operations to perform sequentially on the file (required)</arg>
+  <arg name="file_path" type="string">The absolute path to the file to modify (required)</arg>
+</args>
+</cs:tool_define>
+
+**CRITICAL:** Note that `edits` has `type="array"` - you MUST use this type when calling the tool.
+
+<cs:tool_use>
+<name>MultiEdit</name>
+<args>
+<arg name="file_path" type="string">/absolute/path/to/project/src/main.rs</arg>
+<arg name="edits" type="array">[
+  {
+    "old_string": "fn old_function() {\n    println!(\"Old\");\n}",
+    "new_string": "fn new_function() {\n    println!(\"New and improved!\");\n}"
+  },
+  {
+    "old_string": "old_function()",
+    "new_string": "new_function()",
+    "replace_all": true
+  }
+]</arg>
+</args>
+</cs:tool_use>
+
+**Key Points:**
+1. **MUST declare `type="array"`** for the `edits` parameter - this is the most common error
+2. MultiEdit is preferred over multiple Edit calls for the same file
+3. Edits are applied sequentially, so order matters
+4. Use `replace_all: true` when you want to replace all occurrences of a string
+5. All edits must be valid for the operation to succeed
+6. File path must be absolute (starting with /)
+
 ## OPTIONAL PARAMETERS
 Optional arguments (marked `(optional)`) can be:
 1. **Omitted** if not needed.
@@ -259,6 +299,8 @@ Before responding, ask yourself:
 
 <cs:Remember>
 - Your primary job is to leverage these tools effectively to solve user problems, not just to provide information about them.
+- CRITICAL: Tool parameter types must strictly adhere to the tool definition. Always match the exact `type` attribute specified in the tool's `<arg>` definition.
 - IMPORTANT: The only correct way to make a tool call is by using the `<cs:tool_use></cs:tool_use>` tags. No other format is permitted.
 </cs:Remember>
+</cs:tool-use-guide>
 "###;
