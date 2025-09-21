@@ -19,11 +19,12 @@ Chatspeed's power is driven by its core proxy engine, [CCProxy](https://docs.cha
 
 1. **Protocol Conversion**: Seamlessly convert between major protocols like OpenAI-compatible, Claude, Gemini, and Ollama.
 2. **Capability Expansion**: Expands the capabilities of models that do not natively support tool calling through a tool compatibility mode.
-3. **Reducing User Burden**: The tool compatibility mode frees users from worrying about whether a model supports native tool calling, significantly lowering the barrier to entry and mental load.
-4. **Security Isolation**: CCProxy's keys effectively isolate clients from direct access to AI provider keys, enhancing key security.
-5. **Group Management**: Supports a proxy grouping feature to restrict client access to specific model groups.
-6. **Load Balancing**: Effectively mitigates model rate-limiting issues by globally rotating through all configured provider keys.
-7. **Simplified Workflow**: Say goodbye to repeatedly configuring tools in different IDEs with a unified MCP entry point.
+3. **Model Enhancement**: CCProxy's prompt injection feature effectively improves the performance of non-Claude models when connected to Claude Code, transforming them from conversational models into professional code assistants.
+4. **Reducing User Burden**: The tool compatibility mode frees users from worrying about whether a model supports native tool calling, significantly lowering the barrier to entry and mental load.
+5. **Security Isolation**: CCProxy's keys effectively isolate clients from direct access to AI provider keys, enhancing key security.
+6. **Group Management**: Supports a proxy grouping feature to restrict client access to specific model groups.
+7. **Load Balancing**: Effectively mitigates model rate-limiting issues by globally rotating through all configured provider keys.
+8. **Simplified Workflow**: Say goodbye to repeatedly configuring tools in different IDEs with a unified MCP entry point.
 
 ## 📚 Learn More
 
