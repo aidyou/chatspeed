@@ -45,6 +45,7 @@ Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspe
   - [接入 Claude Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/claude-code.html)
   - [接入 Gemini CLI](https://docs.chatspeed.aidyou.ai/zh/ccproxy/gemini.html)
   - [接入 Cline](https://docs.chatspeed.aidyou.ai/zh/ccproxy/cline.html)
+  - [接入 Crush](https://docs.chatspeed.aidyou.ai/zh/ccproxy/crush.html)
   - [接入 Roo Code](https://docs.chatspeed.aidyou.ai/zh/ccproxy/roo-code.html)
   - [接入 Zed](https://docs.chatspeed.aidyou.ai/zh/ccproxy/zed.html)
   - [如何访问 CCProxy 的 API](https://docs.chatspeed.aidyou.ai/zh/api/)

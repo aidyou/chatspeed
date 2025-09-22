@@ -111,6 +111,8 @@
     "download": "ダウンロード",
     "downloadPng": "PNGでダウンロード",
     "downloadSvg": "SVGでダウンロード",
+    "fullscreen": "全画面",
+    "close": "閉じる",
     "loading": "読み込み中…",
     "mindmap": "マインドマップ",
     "newVersionReady": "新しいバージョンの準備ができました。クリックして再起動し、更新してください",
