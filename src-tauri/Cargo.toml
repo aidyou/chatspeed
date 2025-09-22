@@ -1,6 +1,6 @@
 [package]
 name        = "chatspeed"
-version     = "1.1.9"
+version     = "1.1.10"
 description = "Quickly solve problems with the help of AI"
 authors     = ["Ezool Network"]
 edition     = "2021"
