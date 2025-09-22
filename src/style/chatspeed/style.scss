@@ -614,6 +614,64 @@ system-reminder {
     }
 }
 
+/* Window fullscreen container for SVG diagrams */
+.svg-fullscreen-container {
+    position: fixed;
+    top: var(--cs-titlebar-height);
+    left: 0;
+    width: 100vw;
+    height: calc(100vh - var(--cs-titlebar-height));
+    background: var(--cs-bg-color-light);
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--cs-border-radius-md);
+
+    .fullscreen-header {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        padding: var(--cs-space-sm);
+        flex-shrink: 0;
+
+        .fullscreen-title {
+            font-size: var(--cs-font-size);
+            color: var(--cs-text-color-primary);
+            font-weight: bold;
+        }
+
+        .fullscreen-close-btn {
+            cursor: pointer;
+            font-size: var(--cs-font-size-lg) !important;
+            color: var(--cs-text-color-secondary);
+
+            &:hover {
+                color: var(--cs-text-color-primary);
+            }
+        }
+    }
+
+    // Style for the moved SVG element
+    & > svg {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--cs-space);
+        box-sizing: border-box;
+        overflow: auto;
+        border-radius:  0 0 var(--cs-border-radius-md) var(--cs-border-radius-md);
+
+        // Ensure SVG scales properly
+        & > svg {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+        }
+    }
+}
+
 .chat-think,
 .chat-reference {
     display: flex;

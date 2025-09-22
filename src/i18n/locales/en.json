@@ -111,6 +111,8 @@
     "download": "Download",
     "downloadPng": "Download PNG",
     "downloadSvg": "Download SVG",
+    "fullscreen": "Fullscreen",
+    "close": "Close",
     "loading": "Loading...",
     "mindmap": "Mind Map",
     "newVersionReady": "A new version is ready, click to restart and update",

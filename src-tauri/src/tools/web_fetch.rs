@@ -32,7 +32,15 @@ impl ToolDefinition for WebFetch {
 
     /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Extracts and returns the content of a web page from a URL. This tool can process JavaScript-rendered pages, making it suitable for modern websites. Use it to get real-time information, summarize articles, or answer questions based on the content of a specific link provided by the user or found through a search."
+        "Extracts the full content from a single web page URL. Use this tool to understand the content of a specific link.
+
+**Usage Guidelines:**
+-   Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
+-   When using information from this tool, cite the source URL in your answer.
+-   You **must** include a disclaimer in your final response, **translated into the user's language**, based on the following English template: 'Note: This response is based on content retrieved from the provided URL(s), and its accuracy cannot be independently verified.'
+
+**Error & Retry Strategy:**
+-   If this tool fails to retrieve content from a URL (e.g., due to an error or timeout), **do not retry on the same URL**. You should inform the user that you were unable to access the content of the link and ask them to verify it or provide an alternative."
     }
 
     /// Returns the function calling specification in JSON format.

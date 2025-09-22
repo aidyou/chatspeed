@@ -1,4 +1,15 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
+# Chatspeed v1.1.10 Release Notes
+
+This update is dedicated to enhancing the visual experience and AI interaction efficiency. By adding fullscreen display support for SVG charts, we've optimized visual presentation; concurrently, we've streamlined tool compatibility mode prompts, significantly reducing token consumption, and introduced intelligent token estimation, providing you with a smoother, more economical, and transparent AI experience.
+
+### ✨ Efficiency & Experience Improvements
+
+1. Added fullscreen display support for SVG charts, optimizing the visual experience.
+2. Optimized tool compatibility mode prompts, removing irrelevant information to significantly reduce token consumption.
+3. Introduced estimated values for input and output tokens when AI servers do not provide usage data, primarily to enhance user perception.
+
+---
 
 # Chatspeed v1.1.9 Release Notes
 

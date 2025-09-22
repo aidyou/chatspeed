@@ -68,6 +68,23 @@ impl OutputAdapter for OllamaOutputAdapter {
             tool_name: None,
         };
 
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = _sse_status.read() {
+            (status.estimated_input_tokens, status.estimated_output_tokens)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let prompt_eval_count = if response.usage.input_tokens > 0 {
+            response.usage.input_tokens as u32
+        } else {
+            estimated_input_tokens_f64.ceil() as u32
+        };
+        let eval_count = if response.usage.output_tokens > 0 {
+            response.usage.output_tokens as u32
+        } else {
+            estimated_output_tokens_f64.ceil() as u32
+        };
+
         let ollama_response = OllamaChatCompletionResponse {
             model: response.model,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -75,9 +92,9 @@ impl OutputAdapter for OllamaOutputAdapter {
             done: true,
             total_duration: response.usage.total_duration,
             load_duration: response.usage.load_duration,
-            prompt_eval_count: Some(response.usage.input_tokens as u32),
+            prompt_eval_count: Some(prompt_eval_count),
             prompt_eval_duration: response.usage.prompt_eval_duration,
-            eval_count: Some(response.usage.output_tokens as u32),
+            eval_count: Some(eval_count),
             eval_duration: response.usage.eval_duration,
         };
 
@@ -202,13 +219,23 @@ impl OutputAdapter for OllamaOutputAdapter {
             }
 
             UnifiedStreamChunk::MessageStop { usage, .. } => {
-                let output = if let Ok(status) = sse_status.read() {
-                    (status.text_delta_count
-                        + status.tool_delta_count
-                        + status.thinking_delta_count) as u64
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+                    (status.estimated_input_tokens, status.estimated_output_tokens)
                 } else {
-                    1
+                    (0.0, 0.0)
                 };
+
+                let prompt_eval_count = if usage.input_tokens > 0 {
+                    usage.input_tokens as u32
+                } else {
+                    estimated_input_tokens_f64.ceil() as u32
+                };
+                let eval_count = if usage.output_tokens > 0 {
+                    usage.output_tokens as u32
+                } else {
+                    estimated_output_tokens_f64.ceil() as u32
+                };
+
                 Some(OllamaStreamResponse {
                     model: model_id,
                     created_at: chrono::Utc::now().to_rfc3339(),
@@ -220,9 +247,9 @@ impl OutputAdapter for OllamaOutputAdapter {
                     done: true,
                     total_duration: Some(usage.total_duration.unwrap_or(0)),
                     load_duration: Some(usage.load_duration.unwrap_or(0)),
-                    prompt_eval_count: Some(usage.input_tokens.max(1) as u32),
+                    prompt_eval_count: Some(prompt_eval_count),
                     prompt_eval_duration: Some(usage.prompt_eval_duration.unwrap_or(0)),
-                    eval_count: Some(usage.output_tokens.max(output) as u32),
+                    eval_count: Some(eval_count),
                     eval_duration: Some(usage.eval_duration.unwrap_or(0)),
                 })
             }

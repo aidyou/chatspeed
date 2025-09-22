@@ -1022,12 +1022,14 @@ mod tests {
             <args>
                 <param type="string">param value</param>
                 <input type="number">123.5</input>
+                <arg name="new_line" type="string">New
+line</arg>
             </args>
         </cs:tool_use>"###;
 
         let result = parse_tool_use(xml_input).unwrap();
         assert_eq!(result.name, "test_void_elements");
-        assert_eq!(result.args.len(), 2);
+        assert_eq!(result.args.len(), 3);
 
         let param_arg = result.args.iter().find(|arg| arg.name == "param").unwrap();
         assert_eq!(
@@ -1041,6 +1043,16 @@ mod tests {
             input_arg.get_value(),
             json!(123.5),
             "Parser should correctly extract content from <input> tag"
+        );
+        let new_line_arg = result
+            .args
+            .iter()
+            .find(|arg| arg.name == "new_line")
+            .unwrap();
+        assert_eq!(
+            new_line_arg.get_value(),
+            json!("New\nline"),
+            "Parser should correctly extract content from <arg> tag"
         );
     }
 

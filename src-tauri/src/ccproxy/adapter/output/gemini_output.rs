@@ -65,10 +65,27 @@ impl OutputAdapter for GeminiOutputAdapter {
             response.id
         };
 
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+            (status.estimated_input_tokens, status.estimated_output_tokens)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let input_tokens = if response.usage.input_tokens > 0 {
+            response.usage.input_tokens
+        } else {
+            estimated_input_tokens_f64.ceil() as u64
+        };
+        let output_tokens = if response.usage.output_tokens > 0 {
+            response.usage.output_tokens
+        } else {
+            estimated_output_tokens_f64.ceil() as u64
+        };
+
         let usage = GeminiUsageMetadata {
-            prompt_token_count: response.usage.input_tokens,
-            candidates_token_count: Some(response.usage.output_tokens),
-            total_token_count: response.usage.input_tokens + response.usage.output_tokens,
+            prompt_token_count: input_tokens,
+            candidates_token_count: Some(output_tokens),
+            total_token_count: input_tokens + output_tokens,
             tool_use_prompt_token_count: None, // Add missing field
             thoughts_token_count: None,        // Add missing field
             cached_content_token_count: None,  // Add missing field
@@ -207,6 +224,23 @@ impl OutputAdapter for GeminiOutputAdapter {
                     }
                 }
 
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+                    (status.estimated_input_tokens, status.estimated_output_tokens)
+                } else {
+                    (0.0, 0.0)
+                };
+
+                let input_tokens = if usage.input_tokens > 0 {
+                    usage.input_tokens
+                } else {
+                    estimated_input_tokens_f64.ceil() as u64
+                };
+                let output_tokens = if usage.output_tokens > 0 {
+                    usage.output_tokens
+                } else {
+                    estimated_output_tokens_f64.ceil() as u64
+                };
+
                 // Build the complete response in one go
                 let end_event = serde_json::json!({
                     "candidates": [{
@@ -217,9 +251,9 @@ impl OutputAdapter for GeminiOutputAdapter {
                         "finishReason": stop_reason
                     }],
                     "usageMetadata": {
-                        "promptTokenCount": usage.input_tokens,
-                        "candidatesTokenCount": usage.output_tokens,
-                        "totalTokenCount": usage.input_tokens + usage.output_tokens
+                        "promptTokenCount": input_tokens,
+                        "candidatesTokenCount": output_tokens,
+                        "totalTokenCount": input_tokens + output_tokens
                     }
                 });
 

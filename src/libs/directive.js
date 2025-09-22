@@ -269,6 +269,67 @@ function resolveCssVariables(svg) {
 }
 
 /**
+ * Displays an SVG in a fullscreen container that covers the entire window
+ * @param {HTMLElement} container - The container element containing the SVG
+ */
+function showSvgInWindowFullscreen(container) {
+  const svg = container.querySelector('svg')
+  if (!svg) return
+
+  // Check if fullscreen container already exists
+  const existingFullscreen = document.getElementById('svg-fullscreen-container')
+  if (existingFullscreen) {
+    // Remove existing fullscreen container and restore SVG to original position
+    const originalContainer = existingFullscreen._originalContainer
+    const fullscreenSvg = existingFullscreen.querySelector('svg')
+    if (fullscreenSvg && originalContainer) {
+      // Move SVG back to original container
+      originalContainer.appendChild(fullscreenSvg)
+    }
+    document.body.removeChild(existingFullscreen)
+    return
+  }
+
+  // Store original parent for later restoration
+  const originalParent = svg.parentNode
+  const originalNextSibling = svg.nextSibling
+
+  // Create fullscreen container
+  const fullscreenContainer = document.createElement('div')
+  fullscreenContainer.id = 'svg-fullscreen-container'
+  fullscreenContainer.classList.add('svg-fullscreen-container')
+  fullscreenContainer._originalContainer = originalParent
+
+  // Create header with title and close button
+  const header = document.createElement('div')
+  header.classList.add('fullscreen-header')
+
+  const closeButton = document.createElement('i')
+  closeButton.classList.add('cs', 'cs-close', 'fullscreen-close-btn')
+  closeButton.title = i18n.global.t('common.close')
+
+  // Add event listener to close button
+  closeButton.addEventListener('click', () => {
+    // Restore SVG to original position
+    if (originalNextSibling) {
+      originalParent.insertBefore(svg, originalNextSibling)
+    } else {
+      originalParent.appendChild(svg)
+    }
+    document.body.removeChild(fullscreenContainer)
+  })
+
+  header.appendChild(closeButton)
+
+  // Move SVG to fullscreen container (instead of cloning)
+  fullscreenContainer.appendChild(header)
+  fullscreenContainer.appendChild(svg)
+
+  // Add to body
+  document.body.appendChild(fullscreenContainer)
+}
+
+/**
  * Creates a download button for SVG diagrams
  * @param {HTMLElement} container - The container element containing the SVG
  * @param {string} type - The type of diagram ('mermaid' or 'markmap')
@@ -348,7 +409,29 @@ function createDownloadButton(container, type) {
   container._diagramCleanup = container._diagramCleanup || []
   container._diagramCleanup.push(cleanup)
 
+  // SVG fullscreen button
+  const fullscreenButton = document.createElement('i')
+  fullscreenButton.classList.add('cs', 'cs-fullscreen-off', 'diagram-fullscreen-btn')
+  fullscreenButton.innerText = i18n.global.t('common.fullscreen')
+
+  // Create the click handler function for fullscreen
+  const handleFullscreen = () => {
+    showSvgInWindowFullscreen(container)
+  }
+
+  // Add the event listener for fullscreen
+  fullscreenButton.addEventListener('click', handleFullscreen)
+
+  // Store cleanup function on the container for fullscreen
+  const fullscreenCleanup = () => {
+    fullscreenButton.removeEventListener('click', handleFullscreen)
+  }
+  container._diagramCleanup = container._diagramCleanup || []
+  container._diagramCleanup.push(fullscreenCleanup)
+
+  // Add buttons to container (fullscreen first, then download)
   btnContainer.appendChild(svgButton)
+  btnContainer.appendChild(fullscreenButton)
   titleBar.appendChild(btnContainer)
   return titleBar
 }

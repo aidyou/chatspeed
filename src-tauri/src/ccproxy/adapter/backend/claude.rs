@@ -20,6 +20,7 @@ use crate::ccproxy::{
         },
     },
     types::ChatProtocol,
+    utils::token_estimator::estimate_tokens,
 };
 
 pub struct ClaudeBackendAdapter;
@@ -161,35 +162,45 @@ impl ClaudeBackendAdapter {
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
-            let buffer = &status.tool_compat_buffer;
+            // Take ownership of the buffer content
+            let current_buffer = std::mem::take(&mut status.tool_compat_buffer);
+
             let tool_start = TOOL_TAG_START;
             let tool_end = TOOL_TAG_END;
 
             let mut partial_tag_len = 0;
 
-            for i in (1..=std::cmp::min(buffer.len(), tool_start.len())).rev() {
-                if buffer.ends_with(&tool_start[..i]) {
+            // Check for a partial start tag at the end of the buffer
+            for i in (1..=std::cmp::min(current_buffer.len(), tool_start.len())).rev() {
+                if current_buffer.ends_with(&tool_start[..i]) {
                     partial_tag_len = i;
                     break;
                 }
             }
 
+            // Also check for a partial end tag if no partial start tag was found
             if partial_tag_len == 0 {
-                for i in (1..=std::cmp::min(buffer.len(), tool_end.len())).rev() {
-                    if buffer.ends_with(&tool_end[..i]) {
+                for i in (1..=std::cmp::min(current_buffer.len(), tool_end.len())).rev() {
+                    if current_buffer.ends_with(&tool_end[..i]) {
                         partial_tag_len = i;
                         break;
                     }
                 }
             }
 
-            let text_to_flush_len = buffer.len() - partial_tag_len;
+            let text_to_flush_len = current_buffer.len() - partial_tag_len;
             if text_to_flush_len > 0 {
-                let text_to_flush = &buffer[..text_to_flush_len];
+                let text_to_flush_string = current_buffer[..text_to_flush_len].to_string();
+                let remaining_buffer_string = current_buffer[text_to_flush_len..].to_string();
+
+                status.estimated_output_tokens += estimate_tokens(&text_to_flush_string);
                 unified_chunks.push(UnifiedStreamChunk::Text {
-                    delta: text_to_flush.to_string(),
+                    delta: text_to_flush_string,
                 });
-                status.tool_compat_buffer = buffer[text_to_flush_len..].to_string();
+                status.tool_compat_buffer = remaining_buffer_string;
+            } else {
+                // If nothing was flushed, put the original buffer content back
+                status.tool_compat_buffer = current_buffer;
             }
         }
     }
@@ -918,6 +929,10 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         Some("text_delta") => {
                                             if let Ok(mut status) = sse_status.write() {
                                                 status.text_delta_count += 1;
+                                                if let Some(text) = &delta.text {
+                                                    status.estimated_output_tokens +=
+                                                        estimate_tokens(text);
+                                                }
                                                 update_message_block(
                                                     &mut status,
                                                     "text".to_string(),
@@ -932,6 +947,8 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             if let Some(text) = delta.text {
                                                 if let Ok(mut status) = sse_status.write() {
                                                     status.thinking_delta_count += 1;
+                                                    status.estimated_output_tokens +=
+                                                        estimate_tokens(&text);
                                                     update_message_block(
                                                         &mut status,
                                                         "thinking".to_string(),
@@ -946,6 +963,10 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             let tool_id = if let Ok(mut status) = sse_status.write()
                                             {
                                                 let id = status.tool_id.clone();
+                                                if let Some(partial_json) = &delta.partial_json {
+                                                    status.estimated_output_tokens +=
+                                                        estimate_tokens(partial_json);
+                                                }
                                                 update_message_block(
                                                     &mut status,
                                                     "tool_use".to_string(),

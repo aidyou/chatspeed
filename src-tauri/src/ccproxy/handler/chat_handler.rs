@@ -498,10 +498,56 @@ pub async fn handle_chat_completion(
         ChatProtocol::Ollama => OutputAdapterEnum::Ollama(OllamaOutputAdapter),
     };
 
+    // Estimate input tokens
+    let mut full_prompt_text = String::new();
+
+    // Add system prompt
+    if let Some(system_prompt) = &unified_request.system_prompt {
+        full_prompt_text.push_str(system_prompt);
+        full_prompt_text.push_str("\n");
+    }
+
+    // Add message content
+    for message in &unified_request.messages {
+        for content_block in &message.content {
+            if let crate::ccproxy::adapter::unified::UnifiedContentBlock::Text { text } =
+                content_block
+            {
+                full_prompt_text.push_str(text);
+                full_prompt_text.push_str("\n");
+            }
+        }
+    }
+
+    // Add tool definitions if in native tool mode
+    if !unified_request.tool_compat_mode {
+        if let Some(tools) = &unified_request.tools {
+            for tool in tools {
+                full_prompt_text.push_str(&tool.name);
+                full_prompt_text.push_str("\n");
+                if let Some(description) = &tool.description {
+                    full_prompt_text.push_str(description);
+                    full_prompt_text.push_str("\n");
+                }
+                full_prompt_text.push_str(&tool.input_schema.to_string());
+                full_prompt_text.push_str("\n");
+            }
+        }
+    }
+    // Add combined_prompt (which includes tool definitions in compat mode, or other enhancements)
+    else if let Some(combined_prompt) = &unified_request.combined_prompt {
+        full_prompt_text.push_str(combined_prompt);
+        full_prompt_text.push_str("\n");
+    }
+
+    let estimated_input_tokens =
+        crate::ccproxy::utils::token_estimator::estimate_tokens(&full_prompt_text);
+
     let sse_status = Arc::new(RwLock::new(SseStatus::new(
         get_msg_id(),
         proxy_alias.clone(),
         tool_compat_mode,
+        estimated_input_tokens,
     )));
 
     if is_streaming_request {

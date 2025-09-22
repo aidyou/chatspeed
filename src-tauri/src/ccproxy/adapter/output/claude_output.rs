@@ -66,6 +66,23 @@ impl OutputAdapter for ClaudeOutputAdapter {
             response.id.clone()
         };
 
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+            (status.estimated_input_tokens, status.estimated_output_tokens)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let input_tokens = if response.usage.input_tokens > 0 {
+            response.usage.input_tokens
+        } else {
+            estimated_input_tokens_f64.ceil() as u64
+        };
+        let output_tokens = if response.usage.output_tokens > 0 {
+            response.usage.output_tokens
+        } else {
+            estimated_output_tokens_f64.ceil() as u64
+        };
+
         let claude_response = ClaudeNativeResponse {
             id: response_id,
             response_type: "message".to_string(),
@@ -75,8 +92,8 @@ impl OutputAdapter for ClaudeOutputAdapter {
             stop_reason: response.stop_reason,
             stop_sequence: None, // Add missing field
             usage: Some(ClaudeNativeUsage {
-                input_tokens: response.usage.input_tokens,
-                output_tokens: response.usage.output_tokens,
+                input_tokens,
+                output_tokens,
                 cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
                 cache_read_input_tokens: response
                     .usage
@@ -97,8 +114,13 @@ impl OutputAdapter for ClaudeOutputAdapter {
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
         match chunk {
-            UnifiedStreamChunk::MessageStart { id, model, usage } => {
-                Ok(vec![gen_message_start_event(id, model, usage.input_tokens)])
+            UnifiedStreamChunk::MessageStart { id, model, usage: _ } => {
+                let estimated_input_tokens = if let Ok(status) = sse_status.read() {
+                    status.estimated_input_tokens
+                } else {
+                    0.0
+                };
+                Ok(vec![gen_message_start_event(id, model, estimated_input_tokens)])
             }
             UnifiedStreamChunk::Thinking { delta } => {
                 let message_index = if let Ok(status) = sse_status.read() {
@@ -178,20 +200,25 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     0
                 };
 
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+                    (status.estimated_input_tokens, status.estimated_output_tokens)
+                } else {
+                    (0.0, 0.0)
+                };
+
                 let input_tokens = if usage.input_tokens > 0 {
                     usage.input_tokens
                 } else {
-                    if let Ok(status) = sse_status.read() {
-                        (status.text_delta_count
-                            + status.thinking_delta_count
-                            + status.tool_delta_count) as u64
-                    } else {
-                        0
-                    }
+                    estimated_input_tokens_f64.ceil() as u64
+                };
+                let output_tokens = if usage.output_tokens > 0 {
+                    usage.output_tokens
+                } else {
+                    estimated_output_tokens_f64.ceil() as u64
                 };
 
                 let mut usage_data = json!({
-                    "output_tokens": usage.output_tokens,
+                    "output_tokens": output_tokens,
                     "input_tokens": input_tokens,
                 });
 
@@ -294,7 +321,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
     }
 }
 
-fn gen_message_start_event(id: String, model: String, input_token: u64) -> Event {
+fn gen_message_start_event(id: String, model: String, input_token: f64) -> Event {
     Event::default().event("message_start").data(
         json!({
             "type": "message_start",
@@ -307,7 +334,7 @@ fn gen_message_start_event(id: String, model: String, input_token: u64) -> Event
                 "stop_reason": null,
                 "stop_sequence": null,
                 "usage": {
-                    "input_tokens": input_token,
+                    "input_tokens": input_token.ceil() as u64,
                     "output_tokens": 0
                 }
             }

@@ -19,6 +19,7 @@ use crate::ccproxy::{
         },
     },
     types::ChatProtocol,
+    utils::token_estimator::estimate_tokens,
 };
 
 use super::{BackendAdapter, BackendResponse};
@@ -727,6 +728,7 @@ impl OllamaBackendAdapter {
                     })
                 }
                 status.thinking_delta_count += 1;
+                status.estimated_output_tokens += estimate_tokens(&content);
                 update_message_block(&mut status, "thinking".to_string());
             } else {
                 log::warn!(
@@ -782,8 +784,9 @@ impl OllamaBackendAdapter {
         let args = &tc.function.arguments;
         if !args.is_null() {
             let mut tool_id = String::new();
-            if let Ok(status) = sse_status.read() {
+            if let Ok(mut status) = sse_status.write() {
                 tool_id = status.tool_id.clone();
+                status.estimated_output_tokens += estimate_tokens(&args.to_string());
             };
             // Convert arguments to string
             let args_str = args.to_string();
@@ -928,6 +931,7 @@ impl OllamaBackendAdapter {
     ) {
         if let Ok(mut status) = sse_status.write() {
             if !content.is_empty() {
+                status.estimated_output_tokens += estimate_tokens(content);
                 update_message_block(&mut status, "text".to_string());
             }
 
@@ -974,15 +978,17 @@ impl OllamaBackendAdapter {
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
-            let buffer = &status.tool_compat_buffer;
+            // Take ownership of the buffer content
+            let current_buffer = std::mem::take(&mut status.tool_compat_buffer);
+
             let tool_start = TOOL_TAG_START;
             let tool_end = TOOL_TAG_END;
 
             let mut partial_tag_len = 0;
 
             // Check for a partial start tag at the end of the buffer
-            for i in (1..=std::cmp::min(buffer.len(), tool_start.len())).rev() {
-                if buffer.ends_with(&tool_start[..i]) {
+            for i in (1..=std::cmp::min(current_buffer.len(), tool_start.len())).rev() {
+                if current_buffer.ends_with(&tool_start[..i]) {
                     partial_tag_len = i;
                     break;
                 }
@@ -990,25 +996,31 @@ impl OllamaBackendAdapter {
 
             // Also check for a partial end tag if no partial start tag was found
             if partial_tag_len == 0 {
-                for i in (1..=std::cmp::min(buffer.len(), tool_end.len())).rev() {
-                    if buffer.ends_with(&tool_end[..i]) {
+                for i in (1..=std::cmp::min(current_buffer.len(), tool_end.len())).rev() {
+                    if current_buffer.ends_with(&tool_end[..i]) {
                         partial_tag_len = i;
                         break;
                     }
                 }
             }
 
-            let text_to_flush_len = buffer.len() - partial_tag_len;
+            let text_to_flush_len = current_buffer.len() - partial_tag_len;
             if text_to_flush_len > 0 {
                 // Flush the text part that is definitely not part of a tag, but clean markdown
-                let text_to_flush = &buffer[..text_to_flush_len];
-                if !text_to_flush.is_empty() {
+                let text_to_flush_string = current_buffer[..text_to_flush_len].to_string();
+                let remaining_buffer_string = current_buffer[text_to_flush_len..].to_string();
+
+                if !text_to_flush_string.is_empty() {
+                    status.estimated_output_tokens += estimate_tokens(&text_to_flush_string);
                     unified_chunks.push(UnifiedStreamChunk::Text {
-                        delta: text_to_flush.to_string(),
+                        delta: text_to_flush_string,
                     });
                 }
                 // Update the buffer to only contain the partial tag (or be empty)
-                status.tool_compat_buffer = buffer[text_to_flush_len..].to_string();
+                status.tool_compat_buffer = remaining_buffer_string;
+            } else {
+                // If nothing was flushed, put the original buffer content back
+                status.tool_compat_buffer = current_buffer;
             }
         }
     }

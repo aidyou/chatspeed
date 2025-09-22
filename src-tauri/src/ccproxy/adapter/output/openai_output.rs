@@ -80,6 +80,23 @@ impl OutputAdapter for OpenAIOutputAdapter {
             response.id.clone()
         };
 
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+            (status.estimated_input_tokens, status.estimated_output_tokens)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let input_tokens = if response.usage.input_tokens > 0 {
+            response.usage.input_tokens
+        } else {
+            estimated_input_tokens_f64.ceil() as u64
+        };
+        let output_tokens = if response.usage.output_tokens > 0 {
+            response.usage.output_tokens
+        } else {
+            estimated_output_tokens_f64.ceil() as u64
+        };
+
         let openai_response = OpenAIChatCompletionResponse {
             id: response_id,
             object: "chat.completion".to_string(),
@@ -90,9 +107,9 @@ impl OutputAdapter for OpenAIOutputAdapter {
             model: model,
             choices: vec![choice],
             usage: Some(OpenAIUsage {
-                prompt_tokens: response.usage.input_tokens,
-                completion_tokens: response.usage.output_tokens,
-                total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+                total_tokens: input_tokens + output_tokens,
                 prompt_tokens_details: response
                     .usage
                     .prompt_cached_tokens
@@ -288,21 +305,21 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 } else {
                     String::new()
                 };
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
+                    (status.estimated_input_tokens, status.estimated_output_tokens)
+                } else {
+                    (0.0, 0.0)
+                };
+
                 let input_tokens = if usage.input_tokens > 0 {
                     usage.input_tokens
                 } else {
-                    99
+                    estimated_input_tokens_f64.ceil() as u64
                 };
                 let output_tokens = if usage.output_tokens > 0 {
                     usage.output_tokens
                 } else {
-                    if let Ok(status) = sse_status.read() {
-                        (status.text_delta_count
-                            + status.tool_delta_count
-                            + status.thinking_delta_count) as u64
-                    } else {
-                        99
-                    }
+                    estimated_output_tokens_f64.ceil() as u64
                 };
                 let has_tool = if let Ok(status) = sse_status.read() {
                     if !status.tool_id.is_empty()

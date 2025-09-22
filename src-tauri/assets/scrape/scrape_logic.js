@@ -308,7 +308,7 @@ function sendScrapeResult(data) {
 
         // Check content length after processing
         if (markdown.length < 50) {
-          throw new Error(`Scraped markdown content is too short (${markdown.length} chars).`)
+          throw new Error(`Scraped markdown content is too short (${markdown.length} chars, raw text: ${markdown}).`)
         }
 
         const result = { title, content: markdown, url: window.location.href }

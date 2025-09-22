@@ -9,6 +9,7 @@ mod handler;
 mod helper;
 mod router;
 mod types;
+pub mod utils;
 
 pub use handler::{handle_chat_completion, handle_list_models, handle_ollama_tags};
 pub use helper::{get_tool_id, StreamProcessor};

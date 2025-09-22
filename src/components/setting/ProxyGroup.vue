@@ -3,7 +3,11 @@
     <div class="card">
       <div class="title">
         <span>{{ $t('settings.proxyGroup.title') }}</span>
-        <el-tooltip :content="$t('settings.proxyGroup.addGroup')" placement="left">
+        <el-tooltip
+          placement="left"
+          :content="$t('settings.proxyGroup.addGroup')"
+          :hide-after="0"
+          :enterable="false">
           <span class="icon" @click="openAddDialog">
             <cs name="add" />
           </span>
@@ -22,12 +26,20 @@
             </div>
 
             <div class="value">
-              <el-tooltip :content="$t('settings.proxyGroup.editGroup')" placement="top">
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.editGroup')"
+                :hide-after="0"
+                :enterable="false">
                 <span class="icon" @click="openEditDialog(group)">
                   <cs name="edit" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
-              <el-tooltip :content="$t('settings.proxyGroup.deleteGroup')" placement="top">
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.deleteGroup')"
+                :hide-after="0"
+                :enterable="false">
                 <span class="icon" @click="handleDeleteGroup(group.id)">
                   <cs name="trash" size="16px" color="secondary" />
                 </span>

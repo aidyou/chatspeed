@@ -325,7 +325,20 @@ impl ToolDefinition for WebSearch {
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "Performs a web search returns a list of results with titles, URLs, and snippets. The `snippets` in search results typically provide only limited summary information. To obtain complete and detailed content, select the most relevant links from the search results and use the `WebFetch` tool to retrieve full page content. If fetching from one page fails, try other relevant links from the search results."
+        "Performs a web search to find information. This is the primary tool for answering questions about current events or topics beyond your knowledge cutoff.
+
+**Workflow:**
+1.  **Search:** Use this tool to get a list of results (with titles, URLs, and snippets).
+2.  **Fetch:** Analyze the snippets to identify the most relevant URLs, then use the `WebFetch` tool to get the full page content for a deep understanding. DO NOT base answers on snippets alone.
+
+**Usage Guidelines:**
+-  **Prioritize Sources:** When analyzing search results, give preference to authoritative sources like official websites, well-known news outlets, and academic institutions.
+-  For time-sensitive queries (e.g., 'recent', 'latest'), use the `time_period` parameter.
+-  When citing search results, use the format `[[id]]`.
+
+**Error & Retry Strategy:**
+-  **On Timeout:** If a search request times out, you may retry the exact same query up to 2 times.
+-  **On No Results:** If a search returns no results, you **must** adjust your strategy. Do not simply repeat the same query. Instead, modify your keywords (make them broader or use different terms) or adjust the `time_period`. You should make up to 3 such modification attempts before concluding the information is unavailable."
     }
 
     /// Returns the function calling spec.

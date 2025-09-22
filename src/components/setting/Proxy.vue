@@ -7,7 +7,11 @@
           <!-- card title -->
           <div class="title">
             <span>{{ $t('settings.proxy.title') }}</span>
-            <el-tooltip :content="$t('settings.proxy.addProxy')" placement="left">
+            <el-tooltip
+              placement="left"
+              :content="$t('settings.proxy.addProxy')"
+              :enterable="false"
+              :hide-after="0">
               <span class="icon" @click="openAddDialog">
                 <cs name="add" />
               </span>
@@ -81,7 +85,11 @@
         <div class="card">
           <div class="title">
             <span>{{ $t('settings.proxy.proxyKey.title') }}</span>
-            <el-tooltip :content="$t('settings.proxy.proxyKey.addKey')" placement="left">
+            <el-tooltip
+              :content="$t('settings.proxy.proxyKey.addKey')"
+              placement="left"
+              :enterable="false"
+              :hide-after="0">
               <span class="icon" @click="openAddKeyDialog">
                 <cs name="add" />
               </span>

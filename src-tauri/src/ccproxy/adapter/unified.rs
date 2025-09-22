@@ -371,6 +371,9 @@ pub struct SseStatus {
     pub tool_id: String,
     pub message_index: u32,
     pub current_content_block: String,
+    // For token estimation
+    pub estimated_input_tokens: f64,
+    pub estimated_output_tokens: f64,
     // For tool compatibility mode
     pub tool_compat_mode: bool,
     pub tool_compat_buffer: String,
@@ -399,6 +402,8 @@ impl Default for SseStatus {
             tool_id: String::new(),
             message_index: 0,
             current_content_block: String::new(),
+            estimated_input_tokens: 0.0,
+            estimated_output_tokens: 0.0,
             tool_compat_mode: false,
             tool_compat_buffer: String::new(),
             in_tool_call_block: false,
@@ -414,11 +419,17 @@ impl Default for SseStatus {
 }
 
 impl SseStatus {
-    pub fn new(message_id: String, model_id: String, tool_compat_mode: bool) -> Self {
+    pub fn new(
+        message_id: String,
+        model_id: String,
+        tool_compat_mode: bool,
+        estimated_input_tokens: f64,
+    ) -> Self {
         Self {
             message_id,
             model_id,
             tool_compat_mode,
+            estimated_input_tokens,
             tool_compat_last_flush_time: std::time::Instant::now(),
             ..Default::default()
         }

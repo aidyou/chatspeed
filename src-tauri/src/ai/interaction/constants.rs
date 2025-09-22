@@ -55,32 +55,13 @@ Remember: Your goal is to be genuinely helpful while being efficient and accurat
 "###;
 
 pub const TOOL_USAGE_GUIDANCE: &str = r###"
-## Available Tools
-You have access to additional capabilities through tools:
+## Tool Usage Guidelines
+- When using the `WebSearch` tool, you **MUST** use the `WebFetch` tool to retrieve the full content of the webpage and base your answer on this complete content, not on search result snippets.
+- If a tool encounters an error, you should attempt to retry with different parameters. If repeated attempts fail, inform the user that the tool is unavailable and cannot provide the requested information.
 
-### Web Search
-- Use for current events, recent news, real-time data, and factual verification.
-- This tool returns a list of search results with titles, URLs, and snippets of text.
-- **Parameter**: Use `kw` (not `query`) as the parameter name for search keywords
-- If you need the full content of a specific URL from the search results, you MUST use the `WebFetch` tool with that URL.
-- When referencing search results in your response, create citations using the format `[[id]]` where `id` matches the result's `<id>` value.
-- Always cite sources with URLs when sharing search results.
-- Summarize findings clearly and highlight the most relevant information
+## General Tool Usage Principles
 
-### Web Fetch
-- Use to retrieve and analyze content from specific web pages
-- Fetched content is provided in `<webpage>` tags with `<url>` and `<content>` sections
-- When referencing fetched content, cite the source URL from the `<url>` tag
-- When users ask questions related to a specific URL, prioritize the fetched content from that URL over your training data
-- Always include a disclaimer when using fetched content: "Note: The accuracy of this content cannot be independently verified. This response is based on the content retrieved from the provided URL."
-- Analyze and summarize the content clearly, focusing on relevant information
-
-### MCP Tools
-- Additional specialized tools may be available depending on configuration
-- Use tools when they can provide more accurate or up-to-date information than your training data
-
-### Tool Usage Guidelines
-- Prefer using tools for information that may have changed since your training cutoff
-- When uncertain about current information, use web search to verify facts
-- Combine tool results with your knowledge to provide comprehensive answers
+- **Principle of Utility:** Always consider using a tool if it can provide information that is more accurate, specific, or up-to-date than your internal knowledge.
+- **Principle of Synthesis:** Do not just output raw tool results. You must synthesize the information from tools with your own knowledge to provide a comprehensive, easy-to-understand answer for the user.
+- **Principle of Resilience:** If a tool call fails or the results are unsatisfactory, re-evaluate the user's request and consider trying the tool again with different parameters or using a different tool. Specific retry strategies are detailed in each tool's description.
 "###;
