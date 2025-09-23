@@ -415,8 +415,10 @@ fn parse_custom_tag_as_simple_arg(
     element: &ElementRef,
     tag_name: &str,
 ) -> Result<Option<Arg>, anyhow::Error> {
-    // Per user request, get the full inner content, including HTML tags and all whitespace.
-    let content = element.inner_html();
+    // Get the raw text content, not inner_html
+    let content = element.text().collect::<Vec<_>>().join("");
+    // Escape the content to ensure XML validity
+    let escaped_content = escape_xml_content(&content);
 
     // The data_type is ONLY determined by the explicit `type` attribute.
     let explicit_type = element.value().attr("type").map(ParamType::from);
@@ -426,7 +428,7 @@ fn parse_custom_tag_as_simple_arg(
     Ok(Some(Arg {
         name: final_name.to_string(),
         data_type: explicit_type,
-        value: Some(content),
+        value: Some(escaped_content), // Store escaped content
     }))
 }
 
@@ -441,20 +443,23 @@ fn parse_arg_element(element: &ElementRef) -> Result<Option<Arg>, anyhow::Error>
     let explicit_type = element.value().attr("type").map(ParamType::from);
 
     if let Some(value) = element.value().attr("value").map(|s| s.to_string()) {
+        // If 'value' attribute exists, it's already a string, just escape it
+        let escaped_value = escape_xml_content(&value);
         return Ok(Some(Arg {
             name,
             data_type: explicit_type,
-            value: Some(value),
+            value: Some(escaped_value),
         }));
     }
 
-    // No 'value' attribute, so use inner_html to preserve nested tags and all whitespace.
-    let content = element.inner_html();
+    // No 'value' attribute, so use raw text content and escape it
+    let content = element.text().collect::<Vec<_>>().join("");
+    let escaped_content = escape_xml_content(&content);
 
     Ok(Some(Arg {
         name,
         data_type: explicit_type,
-        value: Some(content),
+        value: Some(escaped_content), // Store escaped content
     }))
 }
 
@@ -604,7 +609,7 @@ mod tests {
                 <arg name="traditional_arg">traditional_value</arg>
                 <custom_param>custom_value</custom_param>
                 <json_data type="array">[{"name": "test", "value": 42}]</json_data>
-                <html_content><div>This is HTML content</div></html_content>
+                <html_content>&lt;div&gt;This is HTML content&lt;/div&gt;</html_content>
             </args>
         </cs:tool_use>"#;
 
@@ -717,14 +722,14 @@ mod tests {
             <name>HTMLWithArgTags</name>
             <args>
                 <arg name="html_content">
-                    <html>
-                        <head><title>Test Page</title></head>
-                        <body>
-                            <p>Some content</p>
-                            <arg>This should be treated as HTML content, not a parameter</arg>
-                            <div>More content</div>
-                        </body>
-                    </html>
+                    &lt;html&gt;
+                        &lt;head&gt;&lt;title&gt;Test Page&lt;/title&gt;&lt;/head&gt;
+                        &lt;body&gt;
+                            &lt;p&gt;Some content&lt;/p&gt;
+                            &lt;arg&gt;This should be treated as HTML content, not a parameter&lt;/arg&gt;
+                            &lt;div&gt;More content&lt;/div&gt;
+                        &lt;/body&gt;
+                    &lt;/html&gt;
                 </arg>
                 <arg name="regular_param">regular_value</arg>
             </args>
@@ -801,21 +806,21 @@ mod tests {
             <name>complex_tool</name>
             <args>
                 <complex_data>
-                    <level1>
-                        <level2>
-                            <level3>Deep nested content</level3>
-                        </level2>
-                    </level1>
-                    <another_section>
-                        <item>Item 1</item>
-                        <item>Item 2</item>
-                    </another_section>
-                </complex_data>
-                <arg name="test-arg">
-                    <arg name="test-arg1">Item 1</arg>
-                    <arg name="test-arg2">Item 2</arg>
-                </arg>
-            </args>
+                    &lt;level1&gt;
+                        &lt;level2&gt;
+                            &lt;level3&gt;Deep nested content&lt;/level3&gt;
+                        &lt;/level2&gt;
+                    &lt;/level1&gt;
+                    &lt;another_section&gt;
+                        &lt;item&gt;Item 1&lt;/item&gt;
+                        &lt;item&gt;Item 2&lt;/item&gt;
+                    &lt;/another_section&gt;
+                </complex_data>;
+                <arg name="test-arg">;
+                    &lt;arg name="test-arg1"&gt;Item 1&lt;/arg&gt;
+                    &lt;arg name="test-arg2"&gt;Item 2&lt;/arg&gt;
+                </arg>;
+            </args>;
         </ccp:tool_use>"#;
 
         let result = parse_tool_use(xml_input).unwrap();
@@ -928,7 +933,7 @@ mod tests {
                 <arg name="traditional2" type="int">42</arg>
                 <custom2 type="object">{"test_key": "data"}</custom2>
                 <arg name="traditional3">text content</arg>
-                <html_like><p>HTML content</p></html_like>
+                <html_like>&lt;p&gt;HTML content&lt;/p&gt;</html_like>
             </args>
         </ccp:tool_use>"#;
 
@@ -1137,5 +1142,70 @@ line</arg>
         assert!(xml.contains(r#"<arg name="string_param" type="string">hello</arg>"#));
         assert!(xml.contains(r#"<arg name="bool_param" type="boolean">true</arg>"#));
         assert!(xml.contains(r#"<arg name="array_param" type="array">[1,2,3]</arg>"#));
+    }
+
+    #[test]
+    fn test_complex_double_escaping_for_multiedit() {
+        // 测试复杂的双重转义逻辑，用于 MultiEdit 工具的 HTML 内容
+        let xml_input = r#"<cs:tool_use>
+            <name>MultiEdit</name>
+            <args>
+                <arg name="file_path" type="string">/path/to/index.html</arg>
+                <arg name="edits" type="array">[{"old_string":"&lt;p id=\"greeting\"&gt;Say \"Hello\" to Q&amp;A&lt;/p&gt;","new_string":"&lt;div class=\"message\"&gt;Say \"Hello\" to Questions &amp; Answers&lt;/div&gt;"}]</arg>
+            </args>
+        </cs:tool_use>"#;
+
+        let result = parse_tool_use(xml_input).unwrap();
+        assert_eq!(result.name, "MultiEdit");
+        assert_eq!(result.args.len(), 2);
+
+        // 检查 edits 数组参数
+        let edits_arg = result.args.iter().find(|arg| arg.name == "edits").unwrap();
+        assert_eq!(edits_arg.data_type, Some(ParamType::Array));
+
+        let edits_value = edits_arg.get_value();
+        assert!(edits_value.is_array());
+        assert_eq!(edits_value.as_array().unwrap().len(), 1);
+
+        let edit_obj = &edits_value[0];
+        assert!(edit_obj.is_object());
+
+        let edit_map = edit_obj.as_object().unwrap();
+        assert!(edit_map.contains_key("old_string"));
+        assert!(edit_map.contains_key("new_string"));
+
+        // 验证双重转义后的内容
+        let old_string = edit_map["old_string"].as_str().unwrap();
+        let new_string = edit_map["new_string"].as_str().unwrap();
+
+        // 正确的结果应该是 XML 转义被解析器还原后的内容
+        assert_eq!(old_string, "<p id=\"greeting\">Say \"Hello\" to Q&A</p>");
+        assert_eq!(
+            new_string,
+            "<div class=\"message\">Say \"Hello\" to Questions & Answers</div>"
+        );
+
+        // 验证 XML 解析器正确还原了转义字符
+        assert!(old_string.contains("Q&A"), "&amp; should be unescaped to &");
+        assert!(old_string.contains("<p"), "&lt; should be unescaped to <");
+        assert!(old_string.contains("</p>"), "&gt; should be unescaped to >");
+        assert!(
+            old_string.contains("\"greeting\""),
+            "JSON quotes should be preserved"
+        );
+
+        assert!(
+            new_string.contains("Questions & Answers"),
+            "&amp; should be unescaped to &"
+        );
+        assert!(new_string.contains("<div"), "&lt; should be unescaped to <");
+        assert!(
+            new_string.contains("</div>"),
+            "&gt; should be unescaped to >"
+        );
+        assert!(
+            new_string.contains("\"message\""),
+            "JSON quotes should be preserved"
+        );
     }
 }

@@ -1,4 +1,21 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
+
+# Chatspeed v1.1.11 Release Notes
+
+This update focuses on optimizing the stability and accuracy of AI tool calls. By improving system prompts and parsing logic, we've made it more reliable for the AI to use tools to answer user questions.
+
+### ✨ Enhancements
+
+- Optimized chat system prompts to enable the AI to better utilize tools for answering user questions.
+- Improved the usage guidelines for tool compatibility mode, providing clearer examples to help the AI better understand and adhere to tool XML specifications.
+- Enhanced the stability of the `WebFetch` tool by preventing it from downloading un-parseable files (like PDF, ZIP), improving the reliability of web scraping.
+
+### 🐞 Bug Fixes
+
+- Fixed a bug in tool compatibility mode where the tool call parser would incorrectly interpret code like `Result<String, String>` as HTML, causing tool call failures.
+
+---
+
 # Chatspeed v1.1.10 Release Notes
 
 This update is dedicated to enhancing the visual experience and AI interaction efficiency. By adding fullscreen display support for SVG charts, we've optimized visual presentation; concurrently, we've streamlined tool compatibility mode prompts, significantly reducing token consumption, and introduced intelligent token estimation, providing you with a smoother, more economical, and transparent AI experience.

@@ -12,6 +12,12 @@ use crate::{
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
 };
 
+const RESTRICTED_EXTENSIONS: &[&str] = &[
+    ".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx", ".mp3", ".mp4", ".avi", ".mov",
+    ".wmv", ".flv", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".iso", ".exe", ".dmg", ".apk",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp",
+];
+
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
 pub struct WebFetch {
     app_handle: AppHandle<tauri::Wry>,
@@ -35,12 +41,13 @@ impl ToolDefinition for WebFetch {
         "Extracts the full content from a single web page URL. Use this tool to understand the content of a specific link.
 
 **Usage Guidelines:**
--   Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
--   When using information from this tool, cite the source URL in your answer.
--   You **must** include a disclaimer in your final response, **translated into the user's language**, based on the following English template: 'Note: This response is based on content retrieved from the provided URL(s), and its accuracy cannot be independently verified.'
+-  Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
+-  When using information from this tool, cite the source URL in your answer.
+-  You MUST include a disclaimer in your final response. This disclaimer **MUST be translated into the user's language**. Use the following English template as a basis: 'Note: This response is based on content retrieved from the webpage, and its accuracy cannot be independently verified.' For example, if the user's language is Chinese, the disclaimer should be: '注意：此回复基于从提供的网页内容，其准确性无法独立验证。'
 
-**Error & Retry Strategy:**
--   If this tool fails to retrieve content from a URL (e.g., due to an error or timeout), **do not retry on the same URL**. You should inform the user that you were unable to access the content of the link and ask them to verify it or provide an alternative."
+**Limitations:**
+-  Avoid using this tool on multimedia files (typically URLs ending in .pdf, .ppt, .docx, .xlsx, .mp3, .mp4, etc.) as they cannot be processed - focus on HTML pages and text-based content instead
+"
     }
 
     /// Returns the function calling specification in JSON format.
@@ -94,6 +101,17 @@ impl ToolDefinition for WebFetch {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(ToolError::FunctionParamError(
                 t!("tools.url_invalid", url = url).to_string(),
+            ));
+        }
+
+        let url_lower = url.to_lowercase();
+
+        if RESTRICTED_EXTENSIONS
+            .iter()
+            .any(|ext| url_lower.ends_with(ext))
+        {
+            return Err(ToolError::FunctionParamError(
+                format!("This tool cannot process multimedia files. URL ends with a restricted extension: {}. Focus on HTML pages and text-based content.", url)
             ));
         }
 

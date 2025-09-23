@@ -334,7 +334,6 @@ impl ToolDefinition for WebSearch {
 **Usage Guidelines:**
 -  **Prioritize Sources:** When analyzing search results, give preference to authoritative sources like official websites, well-known news outlets, and academic institutions.
 -  For time-sensitive queries (e.g., 'recent', 'latest'), use the `time_period` parameter.
--  When citing search results, use the format `[[id]]`.
 
 **Error & Retry Strategy:**
 -  **On Timeout:** If a search request times out, you may retry the exact same query up to 2 times.
