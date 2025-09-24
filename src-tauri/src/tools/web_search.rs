@@ -11,7 +11,7 @@ use crate::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
         SerperSearch, TavilySearch,
     },
-    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
 };
 use tauri::{AppHandle, Manager, Wry};
 
@@ -318,6 +318,10 @@ impl WebSearch {
 
 #[async_trait]
 impl ToolDefinition for WebSearch {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Web
+    }
+
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "WebSearch"

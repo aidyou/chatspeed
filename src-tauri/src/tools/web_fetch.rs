@@ -9,7 +9,7 @@ use crate::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
-    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolDefinition},
+    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
 };
 
 const RESTRICTED_EXTENSIONS: &[&str] = &[
@@ -31,6 +31,10 @@ impl WebFetch {
 
 #[async_trait]
 impl ToolDefinition for WebFetch {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Web
+    }
+
     /// Returns the name of the function.
     fn name(&self) -> &str {
         "WebFetch"

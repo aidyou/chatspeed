@@ -16,11 +16,7 @@ use crate::{
     ai::{
         chat::openai::OpenAIChat,
         error::AiError,
-        interaction::constants::{TOKENS, TOKENS_COMPLETION, TOKENS_PROMPT, TOKENS_TOTAL},
-        traits::chat::{
-            ChatCompletionResult, MCPToolDeclaration, MessageType, ModelDetails,
-            ToolCallDeclaration, Usage,
-        },
+        traits::chat::{MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration},
         traits::{
             chat::FinishReason,
             chat::{AiChatTrait, ChatResponse},
@@ -991,146 +987,146 @@ async fn global_message_processor_loop(
     log::info!("Global message processor loop stopped.");
 }
 
-/// Asynchronously sends a chat request to the selected AI chat interface.
-/// It's a blocking version of `complete_chat_async`. The chat response will
-/// be returned after the chat is finished.
-///
-/// # Arguments
-/// * `state` - The chat state containing chat interfaces
-/// * `provider_id` - The provider ID to use
-/// * `model` - The model name to use
-/// * `chat_id` - Unique identifier for this chat session
-/// * `messages` - Vector of chat messages
-/// * `tools` - Optional vector of tools to use
-/// * `metadata` - Optional additional parameters for the chat
-///
-/// # Returns
-/// * `Result<String, String>` - Ok with the chat response, Err with error message
-pub async fn complete_chat_blocking(
-    chat_state: Arc<ChatState>,
-    provider_id: i64,
-    model: String,
-    chat_id: String,
-    messages: Vec<Value>,
-    tools: Option<Vec<MCPToolDeclaration>>,
-    metadata: Option<Value>,
-) -> Result<ChatCompletionResult, String> {
-    let (tx, mut rx) = mpsc::channel(100);
+// /// Asynchronously sends a chat request to the selected AI chat interface.
+// /// It's a blocking version of `complete_chat_async`. The chat response will
+// /// be returned after the chat is finished.
+// ///
+// /// # Arguments
+// /// * `state` - The chat state containing chat interfaces
+// /// * `provider_id` - The provider ID to use
+// /// * `model` - The model name to use
+// /// * `chat_id` - Unique identifier for this chat session
+// /// * `messages` - Vector of chat messages
+// /// * `tools` - Optional vector of tools to use
+// /// * `metadata` - Optional additional parameters for the chat
+// ///
+// /// # Returns
+// /// * `Result<String, String>` - Ok with the chat response, Err with error message
+// pub async fn complete_chat_blocking(
+//     chat_state: Arc<ChatState>,
+//     provider_id: i64,
+//     model: String,
+//     chat_id: String,
+//     messages: Vec<Value>,
+//     tools: Option<Vec<MCPToolDeclaration>>,
+//     metadata: Option<Value>,
+// ) -> Result<ChatCompletionResult, String> {
+//     let (tx, mut rx) = mpsc::channel(100);
 
-    let callback = move |chunk: Arc<ChatResponse>| {
-        if let Err(e) = tx.blocking_send(chunk) {
-            log::error!("Failed to send chat response through channel: {}", e);
-        }
-    };
+//     let callback = move |chunk: Arc<ChatResponse>| {
+//         if let Err(e) = tx.blocking_send(chunk) {
+//             log::error!("Failed to send chat response through channel: {}", e);
+//         }
+//     };
 
-    start_new_chat_interaction(
-        chat_state,
-        provider_id,
-        model,
-        chat_id.clone(),
-        messages,
-        tools,
-        metadata.clone(),
-        Some(Box::new(callback)),
-    )
-    .await?;
+//     start_new_chat_interaction(
+//         chat_state,
+//         provider_id,
+//         model,
+//         chat_id.clone(),
+//         messages,
+//         tools,
+//         metadata.clone(),
+//         Some(Box::new(callback)),
+//     )
+//     .await?;
 
-    let mut content = String::new();
-    let mut reasoning = String::new();
-    let mut reference = Vec::new();
-    let mut usage = None;
-    let mut final_metadata_from_stream = metadata;
-    let mut tools = Vec::new();
-    let mut finish_reason = Option::<FinishReason>::None;
+//     let mut content = String::new();
+//     let mut reasoning = String::new();
+//     let mut reference = Vec::new();
+//     let mut usage = None;
+//     let mut final_metadata_from_stream = metadata;
+//     let mut tools = Vec::new();
+//     let mut finish_reason = Option::<FinishReason>::None;
 
-    while let Some(chunk) = rx.recv().await {
-        finish_reason = chunk.finish_reason.clone();
-        if chunk.chat_id == chat_id {
-            if let Some(md) = &chunk.metadata {
-                final_metadata_from_stream = Some(md.clone());
-            }
-            match chunk.r#type {
-                MessageType::Text => content.push_str(&chunk.chunk),
-                MessageType::Reasoning | MessageType::Think => reasoning.push_str(&chunk.chunk),
-                MessageType::Reference => {
-                    if let Ok(parsed_chunk) =
-                        serde_json::from_str::<Vec<SearchResult>>(&chunk.chunk)
-                    {
-                        reference.extend(parsed_chunk);
-                    } else {
-                        let err_details = format!(
-                            "Failed to deserialize SearchResult from chunk: {}",
-                            chunk.chunk
-                        );
-                        log::error!("{}", err_details);
-                        return Err(AiError::DeserializationFailed {
-                            context: "SearchResult".to_string(),
-                            details: err_details,
-                        }
-                        .to_string());
-                    }
-                }
-                MessageType::Error => {
-                    return Err(AiError::UpstreamChatError {
-                        message: chunk.chunk.clone(),
-                    }
-                    .to_string())
-                }
-                MessageType::Finished => {
-                    let md_to_use = chunk
-                        .metadata
-                        .as_ref()
-                        .or(final_metadata_from_stream.as_ref());
-                    if let Some(current_metadata) = md_to_use {
-                        if let Some(tokens_val) = current_metadata.get(TOKENS) {
-                            if let Some(tokens_obj) = tokens_val.as_object() {
-                                usage = Some(Usage {
-                                    prompt_tokens: tokens_obj
-                                        .get(TOKENS_PROMPT)
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or_default(),
-                                    completion_tokens: tokens_obj
-                                        .get(TOKENS_COMPLETION)
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or_default(),
-                                    total_tokens: tokens_obj
-                                        .get(TOKENS_TOTAL)
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or_default(),
-                                });
-                            }
-                        }
-                    }
-                    break;
-                }
-                MessageType::ToolResults => {
-                    if let Ok(tool_decl_to_execute) =
-                        serde_json::from_str::<ToolCallDeclaration>(&chunk.chunk)
-                    {
-                        tools.push(tool_decl_to_execute);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    content = content.trim().to_string();
-    if content.starts_with("<think>") && content.contains("</think>") {
-        if let Some((r, c)) = content.split_once("</think>") {
-            if reasoning.is_empty() {
-                reasoning = r.trim_start_matches("<think>").trim().to_string();
-            }
-            content = c.trim().to_string();
-        }
-    }
+//     while let Some(chunk) = rx.recv().await {
+//         finish_reason = chunk.finish_reason.clone();
+//         if chunk.chat_id == chat_id {
+//             if let Some(md) = &chunk.metadata {
+//                 final_metadata_from_stream = Some(md.clone());
+//             }
+//             match chunk.r#type {
+//                 MessageType::Text => content.push_str(&chunk.chunk),
+//                 MessageType::Reasoning | MessageType::Think => reasoning.push_str(&chunk.chunk),
+//                 MessageType::Reference => {
+//                     if let Ok(parsed_chunk) =
+//                         serde_json::from_str::<Vec<SearchResult>>(&chunk.chunk)
+//                     {
+//                         reference.extend(parsed_chunk);
+//                     } else {
+//                         let err_details = format!(
+//                             "Failed to deserialize SearchResult from chunk: {}",
+//                             chunk.chunk
+//                         );
+//                         log::error!("{}", err_details);
+//                         return Err(AiError::DeserializationFailed {
+//                             context: "SearchResult".to_string(),
+//                             details: err_details,
+//                         }
+//                         .to_string());
+//                     }
+//                 }
+//                 MessageType::Error => {
+//                     return Err(AiError::UpstreamChatError {
+//                         message: chunk.chunk.clone(),
+//                     }
+//                     .to_string())
+//                 }
+//                 MessageType::Finished => {
+//                     let md_to_use = chunk
+//                         .metadata
+//                         .as_ref()
+//                         .or(final_metadata_from_stream.as_ref());
+//                     if let Some(current_metadata) = md_to_use {
+//                         if let Some(tokens_val) = current_metadata.get(TOKENS) {
+//                             if let Some(tokens_obj) = tokens_val.as_object() {
+//                                 usage = Some(Usage {
+//                                     prompt_tokens: tokens_obj
+//                                         .get(TOKENS_PROMPT)
+//                                         .and_then(|v| v.as_u64())
+//                                         .unwrap_or_default(),
+//                                     completion_tokens: tokens_obj
+//                                         .get(TOKENS_COMPLETION)
+//                                         .and_then(|v| v.as_u64())
+//                                         .unwrap_or_default(),
+//                                     total_tokens: tokens_obj
+//                                         .get(TOKENS_TOTAL)
+//                                         .and_then(|v| v.as_u64())
+//                                         .unwrap_or_default(),
+//                                 });
+//                             }
+//                         }
+//                     }
+//                     break;
+//                 }
+//                 MessageType::ToolResults => {
+//                     if let Ok(tool_decl_to_execute) =
+//                         serde_json::from_str::<ToolCallDeclaration>(&chunk.chunk)
+//                     {
+//                         tools.push(tool_decl_to_execute);
+//                     }
+//                 }
+//                 _ => {}
+//             }
+//         }
+//     }
+//     content = content.trim().to_string();
+//     if content.starts_with("<think>") && content.contains("</think>") {
+//         if let Some((r, c)) = content.split_once("</think>") {
+//             if reasoning.is_empty() {
+//                 reasoning = r.trim_start_matches("<think>").trim().to_string();
+//             }
+//             content = c.trim().to_string();
+//         }
+//     }
 
-    Ok(ChatCompletionResult {
-        chat_id: Some(chat_id),
-        content,
-        reasoning: Some(reasoning),
-        reference: Some(reference),
-        usage,
-        tools: Some(tools),
-        finish_reason,
-    })
-}
+//     Ok(ChatCompletionResult {
+//         chat_id: Some(chat_id),
+//         content,
+//         reasoning: Some(reasoning),
+//         reference: Some(reference),
+//         usage,
+//         tools: Some(tools),
+//         finish_reason,
+//     })
+// }

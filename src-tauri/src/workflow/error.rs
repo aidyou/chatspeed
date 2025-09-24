@@ -53,9 +53,9 @@ pub enum WorkflowError {
     Store(String),
 
     /// Timeout error
-    #[error("{}", t!("workflow.timeout", operation = .0))]
+    // #[error("{}", t!("workflow.timeout", operation = .0))]
     // Parameter name 'operation' might be more generic
-    Timeout(String),
+    // Timeout(String),
 
     /// Validation error
     #[error("{}", t!("workflow.validation", msg = .0))]
@@ -73,7 +73,7 @@ impl WorkflowError {
             // Consider which execution errors are truly retriable.
             // Network-related or transient Execution errors might be.
             // Errors from Function execution might depend on the function.
-            Self::Io(_) | Self::Timeout(_) => true,
+            Self::Io(_) => true,
             Self::Execution(details) => !details.contains("parameter error"), // Example: make parameter errors non-retriable
             _ => false,
         }

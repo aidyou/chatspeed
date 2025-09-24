@@ -6,17 +6,17 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, RwLock};
 
-use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::commands::chat::setup_chat_proxy;
-use crate::constants::CFG_SEARCH_ENGINE;
+// use crate::commands::chat::setup_chat_proxy;
 // use crate::constants::CFG_CHP_SERVER;
-use crate::db::{AiModel, MainStore};
+use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::constants::CFG_SEARCH_ENGINE;
+use crate::db::MainStore;
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, SseClient, StdioClient,
     StreamableHttpClient,
 };
 use crate::tools::error::ToolError;
-use crate::tools::ToolCallResult;
+use crate::tools::{ToolCallResult, ToolCategory};
 
 // use super::tools::SearchDedup;
 // use super::tools::{ChatCompletion, ModelName};
@@ -36,6 +36,8 @@ pub trait ToolDefinition: Send + Sync {
 
     /// Gets the description of the function.
     fn description(&self) -> &str;
+
+    fn category(&self) -> ToolCategory;
 
     /// Returns the function calling specification in JSON format.
     ///
@@ -341,73 +343,73 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<AiModel, ToolError>` - The AI model or an error
-    pub fn get_model(
-        main_store: Arc<std::sync::RwLock<MainStore>>,
-        model_type: &str,
-    ) -> Result<AiModel, ToolError> {
-        let model_name = format!("workflow_{}_model", model_type);
-        // Get the model configured for the workflow
-        let reasoning_model = main_store
-            .read()
-            .map_err(|e| {
-                ToolError::Store(
-                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                )
-            })?
-            .get_config(&model_name, Value::Null);
-        if reasoning_model.is_null() {
-            return Err(ToolError::Config(
-                t!("tools.failed_to_get_model", model_type = model_type).to_string(),
-            ));
-        }
+    // pub fn get_model(
+    //     main_store: Arc<std::sync::RwLock<MainStore>>,
+    //     model_type: &str,
+    // ) -> Result<AiModel, ToolError> {
+    //     let model_name = format!("workflow_{}_model", model_type);
+    //     // Get the model configured for the workflow
+    //     let reasoning_model = main_store
+    //         .read()
+    //         .map_err(|e| {
+    //             ToolError::Store(
+    //                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+    //             )
+    //         })?
+    //         .get_config(&model_name, Value::Null);
+    //     if reasoning_model.is_null() {
+    //         return Err(ToolError::Config(
+    //             t!("tools.failed_to_get_model", model_type = model_type).to_string(),
+    //         ));
+    //     }
 
-        let model_id = reasoning_model["id"].as_i64().unwrap_or_default();
-        if model_id < 1 {
-            return Err(ToolError::Config(
-                t!(
-                    "tools.model_type_not_found",
-                    model_type = model_type,
-                    id = model_id,
-                    error = ""
-                )
-                .to_string(),
-            ));
-        }
+    //     let model_id = reasoning_model["id"].as_i64().unwrap_or_default();
+    //     if model_id < 1 {
+    //         return Err(ToolError::Config(
+    //             t!(
+    //                 "tools.model_type_not_found",
+    //                 model_type = model_type,
+    //                 id = model_id,
+    //                 error = ""
+    //             )
+    //             .to_string(),
+    //         ));
+    //     }
 
-        // Get model detail by id
-        let mut ai_model = main_store
-            .read()
-            .map_err(|e| {
-                ToolError::Store(
-                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                )
-            })?
-            .config
-            .get_ai_model_by_id(model_id)
-            .map_err(|e| {
-                ToolError::Config(
-                    t!(
-                        "tools.model_type_not_found",
-                        model_type = model_type,
-                        id = model_id,
-                        error = e
-                    )
-                    .to_string(),
-                )
-            })
-            .map(|mut m| {
-                match reasoning_model["model"].as_str() {
-                    Some(md) => m.default_model = md.to_string(),
-                    None => {}
-                };
-                m
-            })?;
+    //     // Get model detail by id
+    //     let mut ai_model = main_store
+    //         .read()
+    //         .map_err(|e| {
+    //             ToolError::Store(
+    //                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+    //             )
+    //         })?
+    //         .config
+    //         .get_ai_model_by_id(model_id)
+    //         .map_err(|e| {
+    //             ToolError::Config(
+    //                 t!(
+    //                     "tools.model_type_not_found",
+    //                     model_type = model_type,
+    //                     id = model_id,
+    //                     error = e
+    //                 )
+    //                 .to_string(),
+    //             )
+    //         })
+    //         .map(|mut m| {
+    //             match reasoning_model["model"].as_str() {
+    //                 Some(md) => m.default_model = md.to_string(),
+    //                 None => {}
+    //             };
+    //             m
+    //         })?;
 
-        setup_chat_proxy(main_store.clone(), &mut ai_model.metadata)
-            .map_err(|e| ToolError::Initialization(e.to_string()))?;
+    //     setup_chat_proxy(main_store.clone(), &mut ai_model.metadata)
+    //         .map_err(|e| ToolError::Initialization(e.to_string()))?;
 
-        Ok(ai_model)
-    }
+    //     Ok(ai_model)
+    // }
 
     // =================================================
     // MCP tools

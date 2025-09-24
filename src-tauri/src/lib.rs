@@ -164,8 +164,6 @@ pub async fn run() -> Result<()> {
             stop_chat,
             sync_state,
             detect_language,
-            // deep_search,
-            // stop_deep_search,
             // mcp
             list_mcp_servers,
             add_mcp_server,
@@ -214,17 +212,8 @@ pub async fn run() -> Result<()> {
             get_window_always_on_top,
             quit_window,
             set_mouse_event_state,
-            // toolbar
-            // open_screenshot_permission_settings,
-            // open_text_selection_permission_settings,
-            // check_text_selection_permission,
-            // check_screenshot_permission,
-            // start_text_monitor,
-            // stop_text_monitor,
-
             // workflow
             run_dag_workflow,
-            run_react_workflow,
             // dev tools
             test_scrape,
             // updater
