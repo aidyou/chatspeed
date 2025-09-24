@@ -248,7 +248,7 @@ tools:
   failed_to_get_model: "%{model_type} 모델 가져오기 실패"
   function_already_exists: "함수가 이미 존재합니다: %{name}"
   function_not_found: "워크플로에서 도구 함수를 찾을 수 없습니다: %{name}"
-  keyword_must_be_non_empty: "키워드(kw) 매개변수는 비어 있지 않은 문자열 또는 비어 있지 않은 배열이어야 합니다."
+  keyword_must_be_non_empty: "키워드(query) 매개변수는 비어 있지 않은 문자열 또는 비어 있지 않은 배열이어야 합니다."
   invalid_model_name: "잘못된 모델 이름: %{model_name}"
   max_retries_exceeded: "최대 재시도 횟수 초과: %{item}"
   messages_must_be_array: "메시지 매개변수(messages)는 배열이어야 합니다."

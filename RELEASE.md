@@ -1,5 +1,25 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.12 Release Notes
+
+v1.1.12 is a release focused on core stability and key user experience optimizations. We have fixed underlying issues that could cause application crashes and improved the assistant and application startup workflows to be smoother and more intuitive.
+
+### ✨ Enhancements
+
+- **Optimized Assistant Shortcut Workflow**: The assistant shortcut (default `Alt+Z`) now directly sends text from the clipboard for processing, eliminating the need for an extra confirmation step (like pressing Enter) and significantly improving operational efficiency.
+- **Improved First-Launch Experience**: To provide a more welcoming initial interface, the application now automatically loads the default conversation on first launch instead of displaying a blank page.
+
+### 🐞 Bug Fixes
+
+- **Fixed Assistant Shortcut Double-Trigger Issue**: Resolved a bug where the assistant shortcut could trigger twice in quick succession under certain conditions, causing the same message to be sent to the AI repeatedly.
+- **Fixed Scraper Module Crash**: Addressed a critical issue where improper handling by an event listener in the scraper module could cause the application to panic, enhancing the stability of the web content fetching feature.
+
+### 🔧 Technical Optimizations
+
+- **Optimized Database Initialization Logic**: Removed the hardcoded creation time for the initial default conversation. The timestamp is now dynamically generated when the database is first created, making the logic more robust.
+
+---
+
 # Chatspeed v1.1.11 Release Notes
 
 This update focuses on optimizing the stability and accuracy of AI tool calls. By improving system prompts and parsing logic, we've made it more reliable for the AI to use tools to answer user questions.

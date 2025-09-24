@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "Falha ao obter o modelo %{model_type}"
   function_already_exists: "A função já existe: %{name}"
   function_not_found: "Função de ferramenta não encontrada no fluxo de trabalho: %{name}"
-  keyword_must_be_non_empty: "O parâmetro palavra-chave (kw) deve ser uma string não vazia ou um array não vazio"
+  keyword_must_be_non_empty: "O parâmetro palavra-chave (query) deve ser uma string não vazia ou um array não vazio"
   invalid_model_name: "Nome de modelo inválido: %{model_name}"
   max_retries_exceeded: "Número máximo de tentativas excedido: %{item}"
   messages_must_be_array: "O parâmetro de mensagens deve ser um array"

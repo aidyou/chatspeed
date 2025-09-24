@@ -135,6 +135,7 @@ The Process (Double Escaping):
 For `type="array"` or `type="object"`, the value MUST be a single, valid JSON string.
 1. JSON Escaping: Within this JSON string, you MUST follow standard JSON escaping rules (e.g., use `\"` for quotes, `\n` for newlines).
 2. XML Escaping: After creating the JSON string, you MUST ALSO apply XML escaping (see 3.1) to the entire string. This means `&` → `&amp;`, `<` → `&lt;`, and `>` → `&gt;`.
+In short, this means escaping the characters `>`, `<`, `&`, `\n`, and `"` within the string.
 
 Example of the *final* `old_string` value after both JSON and XML escaping: `"&lt;p id=\"hi\"&gt;Say \"Hello\" to Q&amp;A&lt;/p&gt;"`
 

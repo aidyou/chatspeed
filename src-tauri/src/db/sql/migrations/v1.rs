@@ -201,7 +201,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
     ),
     (
         "add_init_conversation",
-        r#"INSERT OR IGNORE INTO `conversations` (`id`,`title`,`created_at`,`is_favorite`) VALUES (1,'New Conversation 1','2025-08-13 05:11:25',0)"#,
+        r#"INSERT OR IGNORE INTO `conversations` (`id`,`title`,`is_favorite`) VALUES (1,'New Conversation 1',0)"#,
     ),
 ];
 

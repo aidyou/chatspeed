@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "获取 %{model_type} 模型失败"
   function_already_exists: "函数已存在: %{name}"
   function_not_found: "工作流中未找到工具函数: %{name}"
-  keyword_must_be_non_empty: "关键词(kw)参数必须是非空字符串或非空数组"
+  keyword_must_be_non_empty: "关键词(query)参数必须是非空字符串或非空数组"
   invalid_model_name: "无效的模型名称: %{model_name}"
   max_retries_exceeded: "超过最大重试次数: %{item}"
   messages_must_be_array: "消息参数(messages)必须是一个数组"

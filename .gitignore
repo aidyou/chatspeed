@@ -64,4 +64,4 @@ src-tauri/src/plugins
 .crush
 
 test/
-work/
+#work/

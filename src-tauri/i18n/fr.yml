@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "Échec de l'obtention du modèle %{model_type}"
   function_already_exists: "La fonction existe déjà : %{name}"
   function_not_found: "Fonction d'outil non trouvée dans le flux de travail : %{name}"
-  keyword_must_be_non_empty: "Le paramètre de mot-clé (kw) doit être une chaîne non vide ou un tableau non vide"
+  keyword_must_be_non_empty: "Le paramètre de mot-clé (query) doit être une chaîne non vide ou un tableau non vide"
   invalid_model_name: "Nom de modèle non valide : %{model_name}"
   max_retries_exceeded: "Nombre maximal de tentatives dépassé : %{item}"
   messages_must_be_array: "Le paramètre de messages doit être un tableau"

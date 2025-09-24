@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "Abrufen des %{model_type}-Modells fehlgeschlagen"
   function_already_exists: "Funktion existiert bereits: %{name}"
   function_not_found: "Werkzeugfunktion im Workflow nicht gefunden: %{name}"
-  keyword_must_be_non_empty: "Keyword(kw)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein"
+  keyword_must_be_non_empty: "Keyword(query)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein"
   invalid_model_name: "Ungültiger Modellname: %{model_name}"
   max_retries_exceeded: "Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}"
   messages_must_be_array: "Nachrichtenparameter (messages) muss ein Array sein"

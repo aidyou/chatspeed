@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "Не удалось получить модель %{model_type}"
   function_already_exists: "Функция уже существует: %{name}"
   function_not_found: "Инструментальная функция не найдена в рабочем процессе: %{name}"
-  keyword_must_be_non_empty: "Параметр ключевое слово (kw) должен быть непустой строкой или непустым массивом"
+  keyword_must_be_non_empty: "Параметр ключевое слово (query) должен быть непустой строкой или непустым массивом"
   invalid_model_name: "Недопустимое имя модели: %{model_name}"
   max_retries_exceeded: "Превышено максимальное количество попыток для: %{item}"
   messages_must_be_array: "Параметр сообщения (messages) должен быть массивом"

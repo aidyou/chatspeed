@@ -117,7 +117,11 @@ impl ScraperPool {
     /// Returns a webview resource to the pool for future reuse.
     /// The permit parameter is crucial - it will be automatically released when this method ends,
     /// which decrements the semaphore count and allows new requests to acquire resources.
-    async fn release(&self, mut resource: WebViewResource, _permit: tokio::sync::OwnedSemaphorePermit) {
+    async fn release(
+        &self,
+        mut resource: WebViewResource,
+        _permit: tokio::sync::OwnedSemaphorePermit,
+    ) {
         // Clear old listeners before releasing back to the pool
         for listener_id in resource.listeners.drain(..) {
             resource.webview.unlisten(listener_id);
@@ -148,7 +152,7 @@ impl ScraperPool {
                     window.clearInterval(i);
                 }
             "#;
-            
+
             if let Err(e) = resource.webview.eval(cleanup_script) {
                 log::warn!("Failed to run cleanup script: {}", e);
             }
@@ -156,10 +160,10 @@ impl ScraperPool {
 
         resource.last_used = Instant::now();
         let mut pool = self.pool.lock().await;
-        
+
         // Only clear page if we're not reusing the webview
         let should_clear_page = pool.len() >= MAX_POOL_SIZE / 2;
-        
+
         if should_clear_page && !debug_mode {
             if let Ok(blank_url) = url::Url::parse("about:blank") {
                 if let Err(e) = resource.webview.navigate(blank_url) {
@@ -167,7 +171,7 @@ impl ScraperPool {
                 }
             }
         }
-        
+
         // Limit pool size to prevent memory accumulation
         if pool.len() >= MAX_POOL_SIZE / 2 {
             log::debug!("Pool size limit reached, closing webview instead of reusing");

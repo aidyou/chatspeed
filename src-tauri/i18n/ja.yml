@@ -248,7 +248,7 @@ tools:
   failed_to_get_model: "%{model_type} モデルの取得に失敗しました"
   function_already_exists: "関数は既に存在します: %{name}"
   function_not_found: "ワークフローにツール関数が見つかりません: %{name}"
-  keyword_must_be_non_empty: "キーワード(kw)パラメータは空でない文字列または空でない配列である必要があります"
+  keyword_must_be_non_empty: "キーワード(query)パラメータは空でない文字列または空でない配列である必要があります"
   invalid_model_name: "無効なモデル名: %{model_name}"
   max_retries_exceeded: "最大リトライ回数を超えました: %{item}"
   messages_must_be_array: "メッセージパラメータ(messages)は配列である必要があります"

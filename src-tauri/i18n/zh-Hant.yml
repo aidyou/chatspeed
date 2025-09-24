@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "獲取 %{model_type} 模型失敗"
   function_already_exists: "函數已存在: %{name}"
   function_not_found: "工作流程中未找到工具函數: %{name}"
-  keyword_must_be_non_empty: "關鍵詞(kw)參數必須是非空字串或非空陣列"
+  keyword_must_be_non_empty: "關鍵詞(query)參數必須是非空字串或非空陣列"
   invalid_model_name: "無效的模型名稱: %{model_name}"
   max_retries_exceeded: "超過最大重試次數: %{item}"
   messages_must_be_array: "訊息參數(messages)必須是一個陣列"

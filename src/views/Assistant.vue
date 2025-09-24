@@ -2,25 +2,46 @@
   <div class="assistant-page" @click="selectGroupVisible = false">
     <header class="header">
       <div class="input-container">
-        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
-          :autosize="{ minRows: 3, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
-          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
+        <el-input
+          class="input upperLayer"
+          ref="inputRef"
+          v-model="inputMessage"
+          type="textarea"
+          :disabled="!canChat"
+          :autosize="{ minRows: 3, maxRows: 5 }"
+          :placeholder="$t('assistant.chatPlaceholder')"
+          @input="onInput"
+          @keydown.enter="onKeyEnter"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd" />
 
         <div class="icons upperLayer" v-if="canChat">
           <!-- model selector -->
-          <ModelSelector v-model="currentModelProvider" position="top" :useProviderAvatar="true" :triggerSize="14"
-            @model-select="onModelSelect" @sub-model-select="onSubModelSelect"
+          <ModelSelector
+            v-model="currentModelProvider"
+            position="top"
+            :useProviderAvatar="true"
+            :triggerSize="14"
+            @model-select="onModelSelect"
+            @sub-model-select="onSubModelSelect"
             @selection-complete="onSelectionComplete" />
 
           <!-- netowrk switch -->
-          <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)" :hide-after="0"
-            :enterable="false" placement="top">
+          <el-tooltip
+            :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+            :hide-after="0"
+            :enterable="false"
+            placement="top">
             <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" />
           </el-tooltip>
 
           <!-- MCP switch -->
-          <el-tooltip :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)" :hide-after="0"
-            :enterable="false" placement="top" v-if="mcpServers.length > 0">
+          <el-tooltip
+            :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
+            v-if="mcpServers.length > 0">
             <cs name="mcp" @click="onToggleMcp" :class="{ active: mcpEnabled }" />
           </el-tooltip>
         </div>
@@ -39,7 +60,10 @@
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                @click="fromLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -60,7 +84,10 @@
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 {{ lang.icon }} {{ lang.name }}
               </el-dropdown-item>
@@ -79,7 +106,10 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" :enterable="false"
+        <el-tooltip
+          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
+          :hide-after="0"
+          :enterable="false"
           placement="bottom">
           <cs name="pin" />
         </el-tooltip>
@@ -114,10 +144,19 @@
     <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
-        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0" :enterable="false"
-          :disabled="!skill.metadata.description" transition="none">
-          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
+        <el-tooltip
+          v-for="(skill, index) in skills"
+          :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description"
+          placement="top"
+          :hide-after="0"
+          :enterable="false"
+          :disabled="!skill.metadata.description"
+          transition="none">
+          <div
+            class="skill-item-compact"
+            :class="{ active: skillIndex === index }"
+            @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -135,7 +174,9 @@
               <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
               <div class="content" ref="chatMessagesRef">
                 <div class="chat-reference" v-if="chatState.reference.length > 0">
-                  <div class="chat-reference-title" :class="{ expanded: showReference }"
+                  <div
+                    class="chat-reference-title"
+                    :class="{ expanded: showReference }"
                     @click="showReference = !showReference">
                     <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
                   </div>
@@ -146,23 +187,45 @@
                   </ul>
                 </div>
                 <div class="chat-think" v-if="chatState.reasoning != ''">
-                  <div class="chat-think-title" :class="{ expanded: showThink }" @click="showThink = !showThink">
+                  <div
+                    class="chat-think-title"
+                    :class="{ expanded: showThink }"
+                    @click="showThink = !showThink">
                     <span>{{
                       $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
                     }}</span>
                   </div>
-                  <div v-show="showThink" class="think-content" v-highlight v-link v-table v-katex
+                  <div
+                    v-show="showThink"
+                    class="think-content"
+                    v-highlight
+                    v-link
+                    v-table
+                    v-katex
                     v-html="parseMarkdown(chatState.reasoning)"></div>
                 </div>
-                <ChatToolCalls v-if="chatState.toolCall.length > 0" :tool-calls="chatState.toolCall" />
-                <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think v-mermaid />
+                <ChatToolCalls
+                  v-if="chatState.toolCall.length > 0"
+                  :tool-calls="chatState.toolCall" />
+                <div
+                  v-html="currentAssistantMessageHtml"
+                  v-highlight
+                  v-link
+                  v-table
+                  v-katex
+                  v-think
+                  v-mermaid />
               </div>
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
-            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
+          <div
+            class="skill-item"
+            v-for="(skill, index) in skills"
+            :key="skill.id"
+            :class="{ active: skillIndex === index }"
+            @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -174,23 +237,36 @@
     <footer class="footer" v-if="!isChatting && currentAssistantMessage">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" :enterable="false" placement="top"
+          <el-tooltip
+            :content="$t('chat.quoteMessage')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
             transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" :enterable="false" placement="top"
-            transition="none" v-if="userMessage">
+          <el-tooltip
+            :content="$t('chat.resendMessage')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
+            transition="none"
+            v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" :enterable="false" placement="top"
-            transition="none" v-if="userMessage">
+          <el-tooltip
+            :content="$t('chat.goToChat')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
+            transition="none"
+            v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
           <cs name="copy" @click="onCopyMessage()" class="icon-copy" />
         </div>
       </div>
     </footer>
-
   </div>
 </template>
 
@@ -205,7 +281,12 @@ import SkillItem from '@/components/chat/SkillItem.vue'
 import ChatToolCalls from '@/components/chat/ToolCall.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 
-import { buildUserMessage, chatPreProcess, parseMarkdown, handleChatMessage as handleChatMessageCommon } from '@/libs/chat'
+import {
+  buildUserMessage,
+  chatPreProcess,
+  parseMarkdown,
+  handleChatMessage as handleChatMessageCommon
+} from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import { csStorageKey } from '@/config/config'
@@ -270,35 +351,42 @@ let unlistenPasteResponse = ref(null)
 // Do not remove this, it's useful when user does not set default model at assistant dialog
 const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
 
-watch(() => chatErrorMessage.value, (nv) => {
-  if (nv && userMessage.value) {
-    inputMessage.value = userMessage.value
+watch(
+  () => chatErrorMessage.value,
+  nv => {
+    if (nv && userMessage.value) {
+      inputMessage.value = userMessage.value
+    }
   }
-});
+)
 
 // Watch for changes in modelStore.providers to keep currentModelProvider in sync
-watch(() => modelStore.providers, (newProviders) => {
-  const currentId = currentModelProvider.value?.id;
-  if (currentId) {
-    const updatedProvider = newProviders.find(p => p.id === currentId);
-    if (updatedProvider) {
-      // If the provider still exists, update the local ref with the latest data from the store.
-      // This ensures that the `models` array within the provider is also updated.
-      currentModelProvider.value = { ...updatedProvider };
-    } else {
-      // The selected provider was deleted. Fallback to default.
-      const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog);
-      let model = modelStore.getModelProviderById(mid);
-      if (!model && newProviders.length > 0) {
-        model = modelStore.defaultModelProvider;
+watch(
+  () => modelStore.providers,
+  newProviders => {
+    const currentId = currentModelProvider.value?.id
+    if (currentId) {
+      const updatedProvider = newProviders.find(p => p.id === currentId)
+      if (updatedProvider) {
+        // If the provider still exists, update the local ref with the latest data from the store.
+        // This ensures that the `models` array within the provider is also updated.
+        currentModelProvider.value = { ...updatedProvider }
+      } else {
+        // The selected provider was deleted. Fallback to default.
+        const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
+        let model = modelStore.getModelProviderById(mid)
+        if (!model && newProviders.length > 0) {
+          model = modelStore.defaultModelProvider
+        }
+        currentModelProvider.value = model ? { ...model } : {}
       }
-      currentModelProvider.value = model ? { ...model } : {};
+    } else if (newProviders.length > 0) {
+      // No provider was selected, but now there are providers. Select default.
+      currentModelProvider.value = { ...modelStore.defaultModelProvider }
     }
-  } else if (newProviders.length > 0) {
-    // No provider was selected, but now there are providers. Select default.
-    currentModelProvider.value = { ...modelStore.defaultModelProvider };
-  }
-}, { deep: true });
+  },
+  { deep: true }
+)
 
 const canChat = computed(() => modelStore.getAvailableProviders.length > 0)
 
@@ -339,10 +427,10 @@ const mcpServers = computed(() => mcpStore.servers)
 const currentAssistantMessageHtml = computed(() =>
   currentAssistantMessage.value
     ? parseMarkdown(
-      currentAssistantMessage.value +
-      (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
-      chatState.value?.reference || []
-    )
+        currentAssistantMessage.value +
+          (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
+        chatState.value?.reference || []
+      )
     : isChatting.value
       ? '<div class="cs cs-loading cs-spin"></div>'
       : ''
@@ -432,19 +520,17 @@ onMounted(async () => {
   })
 
   unlistenPasteResponse.value = await listen('assistant-window-paste', async event => {
+    if (isChatting.value) {
+      return
+    }
     // we don't want to process messages from other windows
     if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
     }
     if (event.payload?.content) {
       inputMessage.value = event.payload.content
-
       await nextTick()
-      const textarea = inputRef.value?.$el?.querySelector('textarea')
-      if (textarea) {
-        textarea.scrollTop = textarea.scrollHeight
-        textarea.focus()
-      }
+      dispatchChatCompletion()
     }
   })
 
@@ -518,12 +604,7 @@ const dispatchChatCompletion = async () => {
   let quotedMessage = buildUserMessage(inputMessage.value, quoteMessage.value)
   quoteMessage.value = ''
 
-  const messages = await chatPreProcess(
-    quotedMessage,
-    [],
-    currentSkill.value,
-    metadata
-  )
+  const messages = await chatPreProcess(quotedMessage, [], currentSkill.value, metadata)
   if (isEmpty(messages)) {
     console.log('chat messages is empty')
     return
@@ -812,9 +893,10 @@ const onInput = () => {
  */
 const onKeyEnter = event => {
   // Determine send behavior based on user setting
-  const shouldSend = settingStore.settings.sendMessageKey === 'Enter'
-    ? !event.shiftKey  // Enter to send, Shift+Enter for line break
-    : event.shiftKey   // Shift+Enter to send, Enter for line break
+  const shouldSend =
+    settingStore.settings.sendMessageKey === 'Enter'
+      ? !event.shiftKey // Enter to send, Shift+Enter for line break
+      : event.shiftKey // Shift+Enter to send, Enter for line break
 
   if (shouldSend && !composing.value && !compositionJustEnded.value) {
     event.preventDefault()
@@ -935,7 +1017,7 @@ const onAddModel = () => {
         }
       }
 
-      .input>.el-textarea__inner {
+      .input > .el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
         border-radius: var(--cs-border-radius-lg);
@@ -1161,7 +1243,6 @@ const onAddModel = () => {
     }
   }
 }
-
 
 .pin-btn {
   cursor: pointer;

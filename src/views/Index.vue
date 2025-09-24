@@ -1359,6 +1359,11 @@ onMounted(async () => {
       if (chatStore.currentConversationId > 0) {
         messageReady.value = false
         chatStore.loadMessages(chatStore.currentConversationId, settingStore.windowLabel)
+      } else if (chatStore.conversations.length > 0) {
+        // If no current conversation is set (e.g., first launch),
+        // select the latest conversation available.
+        const latestConversation = chatStore.conversations[0]
+        selectConversation(latestConversation.id)
       }
     })
     .catch(error => {

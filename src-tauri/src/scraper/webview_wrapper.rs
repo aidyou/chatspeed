@@ -168,7 +168,11 @@ impl WebviewScraper {
             if page_load_result.is_err() {
                 // Mark as completed to prevent further processing
                 is_completed.store(true, Ordering::SeqCst);
-                log::warn!("Page load timed out for URL: {} after {:?}", url, page_load_timeout);
+                log::warn!(
+                    "Page load timed out for URL: {} after {:?}",
+                    url,
+                    page_load_timeout
+                );
                 return Err(anyhow!("Page load timed out for URL: {}", url));
             }
 
@@ -177,7 +181,11 @@ impl WebviewScraper {
             if dom_content_result.is_err() {
                 // Mark as completed to prevent further processing
                 is_completed.store(true, Ordering::SeqCst);
-                log::warn!("DOMContentLoaded timed out for URL: {} after {:?}", url, page_timeout);
+                log::warn!(
+                    "DOMContentLoaded timed out for URL: {} after {:?}",
+                    url,
+                    page_timeout
+                );
                 return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
             }
 
@@ -188,16 +196,28 @@ impl WebviewScraper {
             // Add retry mechanism for script injection
             let mut injection_attempts = 0;
             const MAX_INJECTION_ATTEMPTS: i32 = 3;
-            
+
             while injection_attempts < MAX_INJECTION_ATTEMPTS {
-                match self.inject_and_run_script(&webview, config.as_ref().cloned(), generic_content_rule.clone()) {
+                match self.inject_and_run_script(
+                    &webview,
+                    config.as_ref().cloned(),
+                    generic_content_rule.clone(),
+                ) {
                     Ok(_) => break,
                     Err(e) => {
                         injection_attempts += 1;
-                        log::warn!("Script injection attempt {} failed: {}", injection_attempts, e);
+                        log::warn!(
+                            "Script injection attempt {} failed: {}",
+                            injection_attempts,
+                            e
+                        );
                         if injection_attempts >= MAX_INJECTION_ATTEMPTS {
                             is_completed.store(true, Ordering::SeqCst);
-                            return Err(anyhow!("Script injection failed after {} attempts: {}", MAX_INJECTION_ATTEMPTS, e));
+                            return Err(anyhow!(
+                                "Script injection failed after {} attempts: {}",
+                                MAX_INJECTION_ATTEMPTS,
+                                e
+                            ));
                         }
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
@@ -212,15 +232,19 @@ impl WebviewScraper {
                 Ok(Ok(res)) => {
                     log::debug!("Scraping succeeded for URL: {}", url);
                     res
-                },
+                }
                 Ok(Err(e)) => {
                     log::error!("Scrape result channel error: {:?}", e);
                     Err(anyhow!("Scrape result channel error: {:?}", e))
-                },
+                }
                 Err(_) => {
-                    log::warn!("Scraping timed out for URL: {} after {:?}", url, page_timeout);
+                    log::warn!(
+                        "Scraping timed out for URL: {} after {:?}",
+                        url,
+                        page_timeout
+                    );
                     Err(anyhow!("Scraping timed out for URL: {}", url))
-                },
+                }
             }
         }
         .await;
@@ -367,7 +391,10 @@ impl WebviewScraper {
             }
 
             let args_string = browser_args.join(" ");
-            log::debug!("Applying browser arguments for scraper webview: {}", args_string);
+            log::debug!(
+                "Applying browser arguments for scraper webview: {}",
+                args_string
+            );
             webview_builder = webview_builder.additional_browser_args(&args_string);
         }
 

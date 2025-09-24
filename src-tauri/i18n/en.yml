@@ -236,7 +236,7 @@ tools:
   failed_to_get_model: "Failed to get %{model_type} model"
   function_already_exists: "Function already exists: %{name}"
   function_not_found: "Tool function not found in workflow: %{name}"
-  keyword_must_be_non_empty: "Keyword (kw) parameter must be non-empty string or non-empty array"
+  keyword_must_be_non_empty: "Keyword (query) parameter must be non-empty string or non-empty array"
   invalid_model_name: "Invalid model name: %{model_name}"
   max_retries_exceeded: "Maximum retry count exceeded: %{item}"
   messages_must_be_array: "Messages parameter must be an array"
