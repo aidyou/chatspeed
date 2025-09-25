@@ -80,11 +80,15 @@ impl OutputAdapter for OpenAIOutputAdapter {
             response.id.clone()
         };
 
-        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-            (status.estimated_input_tokens, status.estimated_output_tokens)
-        } else {
-            (0.0, 0.0)
-        };
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+            if let Ok(status) = sse_status.read() {
+                (
+                    status.estimated_input_tokens,
+                    status.estimated_output_tokens,
+                )
+            } else {
+                (0.0, 0.0)
+            };
 
         let input_tokens = if response.usage.input_tokens > 0 {
             response.usage.input_tokens
@@ -115,11 +119,9 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     .prompt_cached_tokens
                     .or(response.usage.cache_read_input_tokens)
                     .or(response.usage.cached_content_tokens)
-                    .map(|t| {
-                        PromptTokensDetails {
-                            cached_tokens: Some(t),
-                            audio_tokens: None,
-                        }
+                    .map(|t| PromptTokensDetails {
+                        cached_tokens: Some(t),
+                        audio_tokens: None,
                     }),
                 completion_tokens_details: response.usage.thoughts_tokens.map(|t| {
                     CompletionTokensDetails {
@@ -164,6 +166,32 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         },
                       }
                     ]
+                });
+                Ok(vec![Event::default().data(data.to_string())])
+            }
+            UnifiedStreamChunk::Reference { delta } => {
+                let message_id = if let Ok(status) = sse_status.read() {
+                    status.message_id.clone()
+                } else {
+                    get_msg_id()
+                };
+                let model = if let Ok(status) = sse_status.read() {
+                    status.model_id.clone()
+                } else {
+                    String::new()
+                };
+                let data = json!({
+                    "id": message_id,
+                    "model": model,
+                    "object":"chat.completion.chunk",
+                    "created": chrono::Utc::now().timestamp(),
+                    "choices": [{
+                        "index":0,
+                        "delta": {
+                            "type":"reference",
+                            "content": delta,
+                        },
+                    }]
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
@@ -305,11 +333,15 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 } else {
                     String::new()
                 };
-                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-                    (status.estimated_input_tokens, status.estimated_output_tokens)
-                } else {
-                    (0.0, 0.0)
-                };
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+                    if let Ok(status) = sse_status.read() {
+                        (
+                            status.estimated_input_tokens,
+                            status.estimated_output_tokens,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
 
                 let input_tokens = if usage.input_tokens > 0 {
                     usage.input_tokens

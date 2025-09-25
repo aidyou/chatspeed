@@ -13,11 +13,19 @@ pub struct UnifiedChatMessage {
     pub tool_calls: Option<Vec<UnifiedToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>, // Used by "tool" role messages in requests
+
+    // Added for custom reasoning content
+    // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
+    // However, OpenAI's request/non-stream response tool_calls don't have an index.
+    // So, `UnifiedToolCall` will handle the `index` for streaming.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>, // Added for custom reasoning content
-                                           // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
-                                           // However, OpenAI's request/non-stream response tool_calls don't have an index.
-                                           // So, `UnifiedToolCall` will handle the `index` for streaming.
+    pub reasoning_content: Option<String>,
+
+    // An extended reference content to store additional information, e.g., citations, sources, etc.
+    // It's only for output messages.
+    // DO NOT delete this field
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// Represents the content of an OpenAI message, which can be simple text or a list of parts for multimodal.

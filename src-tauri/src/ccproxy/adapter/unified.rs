@@ -276,6 +276,12 @@ pub enum UnifiedStreamChunk {
     Error {
         message: String,
     },
+
+    // Internal extension field for transmitting search reference information
+    // Do not delete!
+    Reference {
+        delta: String,
+    },
 }
 
 /// Token usage statistics for the completion.

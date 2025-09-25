@@ -218,6 +218,8 @@ pub struct OpenAIStreamDelta {
     pub msg_type: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default)]
+    pub reference: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

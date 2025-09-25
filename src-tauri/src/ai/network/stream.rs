@@ -112,7 +112,13 @@ impl StreamParser {
                                         .collect::<Vec<ToolCallDeclaration>>()
                                 });
 
-                                let chunk_content: Option<String> = delta.content.clone();
+                                let chunk_content = delta
+                                    .reference
+                                    .as_ref()
+                                    .filter(|r| !r.is_empty())
+                                    .or(delta.content.as_ref())
+                                    .cloned();
+
                                 let mut chunk_msg_type: Option<MessageType> = None;
 
                                 // Check for role from the delta

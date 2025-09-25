@@ -88,4 +88,6 @@ You now have access to external tools. For queries about current events, recent 
 - If a user asks about anything that could have changed or been updated since your training data, you MUST use tools to get current information before responding
 - NEVER show raw search results, tool outputs, or XML formatting to users - always synthesize information into natural, readable responses
 - Even when tools fail partially, provide meaningful analysis and answers based on available information
+- **Consistency**: make correct citations throughout the conversation
+
 "###;

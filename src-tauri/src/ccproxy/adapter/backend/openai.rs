@@ -218,9 +218,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             tool_result_messages.push(UnifiedChatMessage {
                                 role: Some("tool".to_string()),
                                 content: Some(OpenAIMessageContent::Text(content.clone())),
-                                tool_calls: None,
                                 tool_call_id: Some(tool_use_id.clone()),
-                                reasoning_content: None,
+                                ..Default::default()
                             });
                         }
                         _ => {} // Ignore Thinking blocks
@@ -258,8 +257,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         } else {
                             Some(primary_tool_calls)
                         },
-                        tool_call_id: None,
-                        reasoning_content: None,
+                        ..Default::default()
                     });
                 }
 
@@ -727,6 +725,14 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         );
                     }
 
+                    if let Some(content) = &delta.reference {
+                        self.process_reference_content(
+                            content.clone(),
+                            &sse_status,
+                            &mut unified_chunks,
+                        );
+                    }
+
                     if let Some(content) = &delta.content {
                         let has_text = self.content_has_text(content);
 
@@ -875,6 +881,42 @@ impl OpenAIBackendAdapter {
             }
         }
         unified_chunks.push(UnifiedStreamChunk::Thinking { delta: content });
+    }
+
+    fn process_reference_content(
+        &self,
+        content: String,
+        sse_status: &Arc<RwLock<SseStatus>>,
+        unified_chunks: &mut Vec<UnifiedStreamChunk>,
+    ) {
+        if content.is_empty() {
+            return;
+        }
+
+        // Scope the lock to avoid holding it too long
+        {
+            if let Ok(mut status) = sse_status.write() {
+                // Send the thinking start flag
+                if status.text_delta_count == 0 {
+                    log::debug!("adapt_stream_chunk: sending thinking start block");
+                    unified_chunks.push(UnifiedStreamChunk::ContentBlockStart {
+                        index: 0,
+                        block: json!({
+                            "type":"thinking",
+                            "thinking":"",
+                        }),
+                    })
+                }
+                status.text_delta_count += 1;
+                status.estimated_output_tokens += estimate_tokens(&content);
+                update_message_block(&mut status, "reference".to_string());
+            } else {
+                log::warn!(
+                    "adapt_stream_chunk: failed to acquire write lock for reasoning_content"
+                );
+            }
+        }
+        unified_chunks.push(UnifiedStreamChunk::Reference { delta: content });
     }
 
     fn process_tool_use(
