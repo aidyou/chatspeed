@@ -63,6 +63,8 @@ Chatspeed's power is driven by its core proxy engine, [CCProxy](https://docs.cha
   - [Claude Code Enhancement Prompts (Native Tool Call)](https://docs.chatspeed.aidyou.ai/prompt/claude-code-prompt-enhance-native-tool-call.html)
   - [Claude Code Enhancement Prompts (Tool Compatibility Mode)](https://docs.chatspeed.aidyou.ai/prompt/claude-code-prompt-enhance.html)
 - [Blog](https://docs.chatspeed.aidyou.ai/posts/)
-  - [How to Use Claude Code for Free](https://docs.chatspeed.aidyou.ai/posts/claude-code-free/post-1.html)
+  - [Using Claude Code for Free - Integrating ModelScope's qwen3-coder](https://docs.chatspeed.aidyou.ai/posts/claude-code-free/qwen3-coder.html)
+  - [Free Claude Code Usage - Integrating Nvidia deepseek-v3.1](https://docs.chatspeed.aidyou.ai/posts/claude-code-free/deepseek-v3.1.html)
+  - [Free Claude Code - Integrating grok-4-fast](https://docs.chatspeed.aidyou.ai/posts/claude-code-free/grok-4-fast.html)
 
 </details>

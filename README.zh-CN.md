@@ -63,6 +63,8 @@ Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspe
   - [原生工具下 Claude Code 增强提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/claude-code-prompt-enhance-native-tool-call.html)
   - [工具兼容模式下的 Claude Code 增强提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/claude-code-prompt-enhance.html)
 - [博客](https://docs.chatspeed.aidyou.ai/zh/posts/)
-  - [如何免费使用 Claude Code](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/post-1.html)
+  - [免费使用 Claude Code：集成魔塔 qwen3-coder](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/qwen3-coder.html)
+  - [免费使用 Claude Code：集成 Nvidia deepseek-v3.1](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/deepseek-v3.1.html)
+  - [免费使用 Claude Code：集成 grok-4-fast](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/grok-4-fast.html)
 
 </details>
