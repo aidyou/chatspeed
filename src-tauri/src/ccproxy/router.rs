@@ -525,8 +525,17 @@ pub async fn routes(
 
     log_registered_routes();
 
-    // 4. Combine all routers into the final application router.
-    let mcp_router = crate::mcp::server::create_mcp_router(shared_state.chat_state.clone());
+    // 4. Build and combine MCP routers
+    let new_mcp_router = {
+        let sse_router =
+            crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
+        let http_service = crate::mcp::server::create_http_service(shared_state.chat_state.clone());
+        Router::new()
+            .nest_service("/sse", sse_router)
+            .nest_service("/http", http_service)
+    };
+    let legacy_sse_router =
+        crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
 
     Router::new()
         .merge(unauthenticated_router)
@@ -569,7 +578,9 @@ pub async fn routes(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
             ollama_grouped_compat_chat.layer(ollama_auth_middleware),
         )
-        .fallback_service(mcp_router)
+        // MCP Routes
+        .nest("/mcp", new_mcp_router)
+        .nest_service("/sse", legacy_sse_router) // Use nest_service to handle different state types
         .with_state(shared_state)
 }
 
@@ -616,6 +627,8 @@ fn log_registered_routes() {
     log::info!("  - Grouped + Compat:  /{{group_name}}/compat_mode/{{path}}");
     log::info!("-------------------------------------");
     log::info!("[MCP]");
-    log::info!("  - MCP Proxy: /sse");
+    log::warn!("  - MCP SSE Proxy: /sse <- deprecated");
+    log::info!("  - MCP SSE Proxy: /mcp/sse ");
+    log::info!("  - MCP Http Streamable Proxy: /mcp/http");
     log::info!("-------------------------------------");
 }

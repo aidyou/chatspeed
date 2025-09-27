@@ -306,9 +306,51 @@ pub trait McpClient: Send + Sync + McpClientInternal {
         }
     }
 
-    /// Calls a specific tool with given arguments.
-    /// This is a default implementation.
+    /// Calls a specific tool with given arguments, with automatic reconnection and retry logic.
     async fn call(&self, tool_name: &str, args: Value) -> McpClientResult<Value> {
+        let result = self.try_call(tool_name, args.clone()).await;
+
+        match result {
+            Ok(val) => Ok(val),
+            Err(e) => {
+                let error_string = e.to_string();
+                // Check for errors indicating a stale connection that might be fixed by reconnecting.
+                if error_string.contains("410") // HTTP 410 Gone
+                    || error_string.contains("channel closed") // Internal rmcp/tonic error
+                    || error_string.contains("Connection refused") // TCP error
+                    || error_string.contains("transport error")
+                // Generic reqwest/http error
+                {
+                    log::warn!(
+                        "MCP call to '{}' failed with connection error: {}. Attempting to reconnect and retry.",
+                        self.name().await,
+                        error_string
+                    );
+
+                    // Stop the client, ignoring errors as it's likely already dead.
+                    if let Err(stop_err) = self.stop().await {
+                        log::warn!("Error during stop before reconnect: {}", stop_err);
+                    }
+
+                    // Start a new connection. If this fails, propagate the error.
+                    self.start().await?;
+
+                    log::info!(
+                        "Successfully reconnected to MCP server '{}'. Retrying call.",
+                        self.name().await
+                    );
+
+                    // Retry the call once.
+                    self.try_call(tool_name, args).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Internal method to perform a single tool call attempt without retry logic.
+    async fn try_call(&self, tool_name: &str, args: Value) -> McpClientResult<Value> {
         let client_arc = self.client();
         let guard = client_arc.read().await; // Use read lock
         if let Some(service_instance) = guard.as_ref() {

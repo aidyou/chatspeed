@@ -6,4 +6,5 @@
 mod handler;
 mod standalone;
 
-pub use standalone::create_mcp_router;
+pub use standalone::{create_http_service, create_sse_router};
+
