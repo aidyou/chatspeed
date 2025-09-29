@@ -58,6 +58,7 @@ Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspe
   - [接入 Windsurf](https://docs.chatspeed.aidyou.ai/zh/mcp/#windsurf)
   - [接入 Cline](https://docs.chatspeed.aidyou.ai/zh/mcp/#cline)
   - [接入 Roo Code](https://docs.chatspeed.aidyou.ai/zh/mcp/#roo-code)
+  - [接入 Crush](https://docs.chatspeed.aidyou.ai/zh/mcp/#crush)
 - [提示词库 —— 通过提示词增强 Code Agents](https://docs.chatspeed.aidyou.ai/zh/prompt/)
   - [CCProxy 通用提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/common.html)
   - [原生工具下 Claude Code 增强提示词](https://docs.chatspeed.aidyou.ai/zh/prompt/claude-code-prompt-enhance-native-tool-call.html)
@@ -66,5 +67,6 @@ Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspe
   - [免费使用 Claude Code：集成魔塔 qwen3-coder](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/qwen3-coder.html)
   - [免费使用 Claude Code：集成 Nvidia deepseek-v3.1](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/deepseek-v3.1.html)
   - [免费使用 Claude Code：集成 grok-4-fast](https://docs.chatspeed.aidyou.ai/zh/posts/claude-code-free/grok-4-fast.html)
+  - [CCProxy 工具兼容模式 - 让任何AI模型都具备工具调用能力](https://docs.chatspeed.aidyou.ai/zh/posts/experience-sharing/why-compat-mode.html)
 
 </details>
