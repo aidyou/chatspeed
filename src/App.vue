@@ -280,10 +280,6 @@ const handleDragStart = e => {
 
 const handleDragEnd = e => {
   windowStore.setMouseEventState(false)
-  // Fix rounded corners on macOS after dragging
-  if (windowStore.os === 'macos') {
-    windowStore.fixRoundedCorners()
-  }
 }
 </script>
 

@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod backup;
 pub mod chat;
 pub mod config;
@@ -10,6 +11,7 @@ mod proxy_group;
 mod sql;
 mod types;
 
+pub use agent::Agent;
 pub use backup::{BackupConfig, DbBackup};
 pub use error::StoreError;
 pub use main_store::MainStore;

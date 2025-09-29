@@ -243,6 +243,14 @@ impl ToolManager {
             .ok_or_else(|| ToolError::FunctionNotFound(name.to_string()))
     }
 
+    pub async fn get_native_tools(&self) -> Vec<Arc<dyn ToolDefinition>> {
+        self.tools.read().await.values().cloned().collect()
+    }
+
+    pub async fn get_all_mcp_tools(&self) -> HashMap<String, Vec<MCPToolDeclaration>> {
+        self.mcp_tools.read().await.clone()
+    }
+
     /// Call a native tool by its name.
     ///
     /// # Arguments

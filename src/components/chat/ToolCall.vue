@@ -2,23 +2,24 @@
   <div class="chat-tool-calls" v-for="(call, index) in toolParsed" :key="index">
     <div
       class="tool-name"
-      :class="{ expanded: showToolCalls }"
-      @click="showToolCalls = !showToolCalls">
+      :class="{ expanded: expandedState[index], [toolStatus(call.result)]: true }"
+      @click="expandedState[index] = !expandedState[index]">
       <template v-if="call.function?.mcpName">
-        <span
-          >{{ i18n.global.t('chat.mcpCall') }} {{ call.function.mcpName }}::{{
-            call.function.name
-          }}</span
-        >
+        <span>{{
+          toolName(
+            call.function.mcpName + '::' + call.function.name,
+            args(call?.function?.arguments)
+          )
+        }}</span>
       </template>
       <template v-else>
-        <span>{{ i18n.global.t('chat.toolCall') }} {{ call.function.name }}</span>
+        <span>{{ toolName(call.function.name, args(call?.function?.arguments)) }}</span>
       </template>
     </div>
-    <div class="tool-codes" v-show="showToolCalls">
+    <div class="tool-codes" v-show="expandedState[index]">
       <div class="tool-code">
         <h3>📝 {{ i18n.global.t('chat.toolArgs') }}</h3>
-        <pre><code class="language-json" disable-titlebar>{{ call.function.arguments }}</code></pre>
+        <pre><code class="language-json" disable-titlebar>{{ call?.function?.arguments }}</code></pre>
       </div>
       <div class="tool-code">
         <h3>🎯 {{ i18n.global.t('chat.toolResult') }}</h3>
@@ -31,6 +32,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import i18n from '@/i18n/index.js'
+import { toolName } from '@/libs/chat.js'
 
 const props = defineProps({
   toolCalls: {
@@ -39,7 +41,7 @@ const props = defineProps({
   }
 })
 
-const showToolCalls = ref(false)
+const expandedState = ref({})
 
 const toolParsed = computed(() => {
   if (!props.toolCalls || !props.toolCalls.length) {
@@ -68,4 +70,27 @@ const toolParsed = computed(() => {
     return call
   })
 })
+const toolStatus = result => {
+  if (!result) {
+    return 'calling'
+  } else {
+    try {
+      const parsedResult = typeof result === 'string' ? JSON.parse(result) : result
+      return parsedResult?.error ? 'error' : 'success'
+    } catch {
+      return typeof result === 'string' && result.startsWith('Error: ') ? 'error' : 'success'
+    }
+  }
+}
+
+const args = argString => {
+  if (!argString) {
+    return []
+  }
+  try {
+    return JSON.parse(argString)
+  } catch {
+    return argString
+  }
+}
 </script>

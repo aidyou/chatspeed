@@ -7,6 +7,7 @@ use std::sync::Arc;
 // The main window info
 pub const CFG_WINDOW_POSITION: &str = "window_position";
 pub const CFG_WINDOW_SIZE: &str = "window_size";
+pub const CFG_ASSISTANT_WINDOW_SIZE: &str = "assistant_window_size";
 
 pub const TRAY_ID: &str = "Chatspeed";
 

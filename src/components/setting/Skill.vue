@@ -263,7 +263,6 @@ const skillForm = ref({ ...defaultFormData })
 
 // Validation rules for the skill form
 const skillRules = {
-  // icon: [{ required: true, message: t('settings.skill.iconRequired') }],
   name: [{ required: true, message: t('settings.skill.nameRequired') }],
   prompt: [{ required: true, message: t('settings.skill.promptRequired') }]
 }

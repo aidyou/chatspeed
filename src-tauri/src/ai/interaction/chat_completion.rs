@@ -650,6 +650,23 @@ async fn global_message_processor_loop(
                                     }
                                 }
 
+                                // Send a Finished event with ToolCalls reason to signal the end of the tool call round
+                                let finish_round_chunk = ChatResponse::new_with_arc(
+                                    chat_id.clone(),
+                                    String::new(), // No content needed for this signal
+                                    MessageType::Finished,
+                                    response_chunk.metadata.clone(),
+                                    Some(FinishReason::ToolCalls),
+                                );
+
+                                if let Some(tx) =
+                                    chat_state_arc.channels.get_sender(&window_label).await
+                                {
+                                    if let Err(e_send) = tx.try_send(finish_round_chunk) {
+                                        log::error!("Failed to send ToolCalls-Finished signal to window '{}' (chat_id {}) channel: {}", window_label, chat_id, e_send);
+                                    }
+                                }
+
                                 messages_for_next_ai_turn = session_messages.clone();
                                 should_remove_pending_state = true;
                                 log::info!(
@@ -693,14 +710,14 @@ async fn global_message_processor_loop(
                         let cc_chat_state_clone = chat_state_arc.clone();
                         let cc_chat_id_clone = chat_id.clone();
                         let cc_metadata_clone = response_chunk.metadata.clone();
-                        #[cfg(debug_assertions)]
-                        {
-                            log::debug!(
-                                "metadata for next round: {}",
-                                serde_json::to_string_pretty(&cc_metadata_clone)
-                                    .unwrap_or_default()
-                            );
-                        }
+                        // #[cfg(debug_assertions)]
+                        // {
+                        //     log::debug!(
+                        //         "metadata for next round: {}",
+                        //         serde_json::to_string_pretty(&cc_metadata_clone)
+                        //             .unwrap_or_default()
+                        //     );
+                        // }
 
                         tokio::spawn(async move {
                             let chat_param =

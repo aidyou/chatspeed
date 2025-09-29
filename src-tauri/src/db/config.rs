@@ -500,8 +500,17 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn set_window_size(&mut self, size: WindowSize) -> Result<(), StoreError> {
-        self.set_config(crate::constants::CFG_WINDOW_SIZE, &serde_json::json!(size))?;
+    pub fn set_window_size(
+        &mut self,
+        size: WindowSize,
+        window_label: &str,
+    ) -> Result<(), StoreError> {
+        let key = if window_label == "main" {
+            crate::constants::CFG_WINDOW_SIZE
+        } else {
+            crate::constants::CFG_ASSISTANT_WINDOW_SIZE
+        };
+        self.set_config(key, &serde_json::json!(size))?;
         Ok(())
     }
 

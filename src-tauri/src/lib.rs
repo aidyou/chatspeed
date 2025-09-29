@@ -214,6 +214,12 @@ pub async fn run() -> Result<()> {
             set_mouse_event_state,
             // workflow
             run_dag_workflow,
+            add_agent,
+            update_agent,
+            delete_agent,
+            get_agent,
+            get_all_agents,
+            get_available_tools,
             // dev tools
             test_scrape,
             // updater
@@ -323,9 +329,10 @@ pub async fn run() -> Result<()> {
                 if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                if window.label() == "main" {
+                let window_label = window.label();
+                if window_label == "main" || window_label == "assistant" {
                     let config_state = window.state::<Arc<RwLock<MainStore>>>();
-                    let window_size = get_saved_window_size(config_state.inner().clone()).unwrap_or_default();
+                    let window_size = get_saved_window_size(config_state.inner().clone(),window_label).unwrap_or_default();
                     if (window_size.width != size.width as f64
                         || window_size.height != size.height as f64)
                         && (size.width > 0 && size.height > 0)
@@ -339,7 +346,7 @@ pub async fn run() -> Result<()> {
                             if let Err(e) = store.set_window_size(WindowSize {
                                 width: logical_size.width,
                                 height: logical_size.height,
-                            }) {
+                            }, window_label) {
                                 error!("Failed to set window size: {}", e);
                             }
                         }
@@ -525,6 +532,10 @@ pub async fn run() -> Result<()> {
                 restore_window_config(&main_window, main_store.clone());
             }
 
+            if let Some(assistant_window) = app.get_webview_window("assistant") {
+                restore_window_config(&assistant_window, main_store.clone());
+            }
+
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             // Start the HTTP server using Tauri's asynchronous runtime
@@ -596,9 +607,17 @@ pub async fn run() -> Result<()> {
 ///
 /// # Returns
 /// A tuple containing the saved window width and height.
-fn get_saved_window_size(config_store: Arc<RwLock<MainStore>>) -> Option<WindowSize> {
+fn get_saved_window_size(
+    config_store: Arc<RwLock<MainStore>>,
+    window_label: &str,
+) -> Option<WindowSize> {
     if let Ok(c) = config_store.read() {
-        c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
+        let key = if window_label == "main" {
+            CFG_WINDOW_SIZE
+        } else {
+            CFG_ASSISTANT_WINDOW_SIZE
+        };
+        c.get_config(key, Some(WindowSize::default()))
     } else {
         None
     }

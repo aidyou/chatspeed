@@ -1,12 +1,10 @@
+import i18n from '@/i18n';
+import { invoke } from '@tauri-apps/api/core';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import i18n from '@/i18n'
 
-import { invoke } from '@tauri-apps/api/core'
-// import { getCurrentWindow } from '@tauri-apps/api/window'
-import { isEmpty } from '@/libs/util'
-import { csStorageKey } from '@/config/config'
-import { csGetStorage, csSetStorage } from '@/libs/util'
+import { csStorageKey } from '@/config/config';
+import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
 
 let isConversationLoading = false
 

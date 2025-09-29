@@ -7,6 +7,7 @@ use tauri::{
     AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent, Wry,
 };
+use url::ParseError;
 
 #[cfg(debug_assertions)]
 use serde_json::Value;
@@ -53,24 +54,49 @@ impl WebviewScraper {
         url: &str,
         config: Option<FullConfig>,
         generic_content_rule: Option<GenericContentRule>,
-    ) -> Result<(String, Vec<EventId>)> {
+    ) -> (Result<String>, Vec<EventId>) {
         let (tx_page_load, rx_page_load) = tokio::sync::oneshot::channel::<()>();
+        let tx_page_load = Arc::new(Mutex::new(Some(tx_page_load)));
+
         let (tx_dom_content_loaded, rx_dom_content_loaded) = tokio::sync::oneshot::channel::<()>();
+        let tx_dom_content_loaded = Arc::new(Mutex::new(Some(tx_dom_content_loaded)));
+
         let (tx_scrape_result, rx_scrape_result) =
             tokio::sync::oneshot::channel::<Result<String>>();
-
         let scrape_result_sender = Arc::new(Mutex::new(Some(tx_scrape_result)));
 
         let window_label = webview.label();
-        // --- Attach listeners directly ---
-        let page_loaded_id = webview.once(format!("page_loaded_{}", window_label), move |_event| {
-            let _ = tx_page_load.send(());
+
+        // CRITICAL: Use `listen` instead of `once` for page lifecycle events.
+        //
+        // Why? The `webview.once` handler will panic if the underlying web event (e.g., 'load')
+        // fires more than once during a single navigation attempt. This can happen with
+        // HTTP redirects or complex client-side routing. The panic message is
+        // "attempted to call handler more than once".
+        //
+        // To solve this, we use a regular `listen` and manually ensure idempotency.
+        // The `oneshot::Sender` is wrapped in an `Arc<Mutex<Option<...>>>`. The first time
+        // the event fires, we `take()` the sender from the Option, use it, and leave `None`
+        // in its place. Any subsequent fires of the same event will find `None` and do nothing,
+        // preventing the panic while still achieving a "run once" behavior for the scrape operation.
+        let tx_page_load_clone = tx_page_load.clone();
+        let page_loaded_id = webview.listen(format!("page_loaded_{}", window_label), move |_event| {
+            if let Ok(mut guard) = tx_page_load_clone.lock() {
+                if let Some(tx) = guard.take() {
+                    let _ = tx.send(());
+                }
+            }
         });
 
-        let dom_content_loaded_id = webview.once(
+        let tx_dom_content_loaded_clone = tx_dom_content_loaded.clone();
+        let dom_content_loaded_id = webview.listen(
             format!("DOMContentLoaded_ready_{}", window_label),
             move |_event| {
-                let _ = tx_dom_content_loaded.send(());
+                if let Ok(mut guard) = tx_dom_content_loaded_clone.lock() {
+                    if let Some(tx) = guard.take() {
+                        let _ = tx.send(());
+                    }
+                }
             },
         );
 
@@ -157,9 +183,23 @@ impl WebviewScraper {
             .map(|cfg| Duration::from_millis(cfg.config.page_timeout))
             .unwrap_or(self.timeout);
 
-        webview
-            .navigate(url.parse()?)
-            .map_err(|e| anyhow!(e.to_string()))?;
+        let navigate_result = url
+            .parse()
+            .map_err(|e: ParseError| anyhow!(e.to_string()))
+            .and_then(|parsed_url| {
+                webview
+                    .navigate(parsed_url)
+                    .map_err(|e| anyhow!(e.to_string()))
+            });
+
+        if let Err(e) = navigate_result {
+            let listeners = vec![
+                page_loaded_id,
+                dom_content_loaded_id,
+                scrape_result_listener_id,
+            ];
+            return (Err(e), listeners);
+        }
 
         let result = async {
             // Use shorter timeout for page load to fail fast on problematic pages
@@ -255,7 +295,7 @@ impl WebviewScraper {
             scrape_result_listener_id,
         ];
 
-        Ok((result?, listeners))
+        (result, listeners)
     }
 
     /// Injects and runs the script for scraping.
@@ -271,6 +311,7 @@ impl WebviewScraper {
         );
         let utility_js = include_str!("../../assets/scrape/utility.min.js");
         let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
+        let readability_js = include_str!("../../assets/scrape/readability.min.js");
         let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.min.js");
 
         let config_json_str =
@@ -285,6 +326,7 @@ impl WebviewScraper {
                     console.debug('Starting script injection...');
                     {utility_js}
                     {turndown_js}
+                    {readability_js}
                     {scrape_logic_js}
                     console.debug('end script injection');
                     window.performScrape({config_json_str}, {generic_content_rule_json_str});

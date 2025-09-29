@@ -6,9 +6,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::mcp::server::handler::McpProxyHandler;
 use axum::Router;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
-};
+use crate::mcp::server::persistent_session::PersistentSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
@@ -41,11 +40,20 @@ pub fn create_sse_router(
 /// Creates a service for the MCP proxy server using Streamable HTTP transport.
 pub fn create_http_service(
     chat_state: Arc<ChatState>,
-) -> StreamableHttpService<McpProxyHandler> {
-    log::info!("Creating MCP Streamable HTTP service component.");
+) -> StreamableHttpService<McpProxyHandler, PersistentSessionManager<McpProxyHandler>> {
+    log::info!("Creating MCP Streamable HTTP service component with persistent sessions.");
+
+    // Create the service factory closure. It must be `Clone` to be passed to multiple places.
+    let service_factory = move || Ok(McpProxyHandler::new(chat_state.clone()));
+
+    // The session manager needs an Arc'd version of the factory.
+    let session_manager = PersistentSessionManager::new(Arc::new(service_factory.clone()))
+        .expect("Failed to initialize persistent session manager. Check permissions for the store directory.");
+
+    // The streamable service itself takes the un-Arc'd closure.
     StreamableHttpService::new(
-        move || Ok(McpProxyHandler::new(chat_state.clone())),
-        LocalSessionManager::default().into(),
+        service_factory,
+        Arc::new(session_manager),
         StreamableHttpServerConfig::default(),
     )
 }

@@ -106,14 +106,14 @@
 
             <!-- message list -->
             <div
-              v-for="(message, index) in messagesForShow"
+              v-for="(message, index) in processedMessages"
               :key="index"
               :id="'message-' + message.id"
               class="message"
               :class="message.role"
               @mouseenter="hoveredMessageIndex = index"
               @mouseleave="hoveredMessageIndex = null">
-              <div class="avatar">
+              <div class="avatar" v-if="message.display.showAvatar">
                 <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
                 <logo
                   v-else
@@ -127,14 +127,6 @@
                 </span>
               </div>
               <div class="content-container">
-                <!-- <div
-                  class="content"
-                  v-html="parseMarkdown(message.content)"
-                  v-highlight
-                  v-link
-                  v-katex
-                  v-mermaid
-                  v-think /> -->
                 <div class="content" v-if="message.role === 'user'">
                   <pre class="simple-text">{{ message.content }}</pre>
                 </div>
@@ -144,7 +136,7 @@
                   :reasoning="message.metadata?.reasoning || ''"
                   :toolCalls="message.metadata?.toolCall || []"
                   v-else />
-                <div class="metadata">
+                <div class="metadata" v-if="message.display.showMetadata">
                   <div class="buttons">
                     <el-tooltip
                       :content="$t('chat.resendMessage')"
@@ -311,27 +303,12 @@
                     {{ $t('settings.model.add') }}
                   </label>
 
-                  <!-- <el-tooltip
-                    :content="
-                      $t(`chat.${!deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled'}`)
-                    "
-                    :hide-after="0"
-                    placement="top">
-                    <label @click="onDeepSearchEnabled" :class="{ active: deepSearchEnabled }">
-                      <cs name="skill-deep-search" class="small" />
-                      {{ $t('chat.deepsearch') }}
-                    </label>
-                  </el-tooltip> -->
                   <el-tooltip
                     :content="$t('chat.useSkills')"
                     :hide-after="0"
                     :enterable="false"
-                    placement="top"
-                    v-if="!deepSearchEnabled">
-                    <label
-                      @click="onToggleSkillSelector"
-                      :class="{ active: isSkillListVisible }"
-                      v-if="!deepSearchEnabled">
+                    placement="top">
+                    <label @click="onToggleSkillSelector" :class="{ active: isSkillListVisible }">
                       <cs class="small" name="tool" />
                     </label>
                   </el-tooltip>
@@ -349,8 +326,7 @@
                     :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
                     :hide-after="0"
                     :enterable="false"
-                    placement="top"
-                    v-if="!deepSearchEnabled">
+                    placement="top">
                     <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
                       <cs name="connected" class="small" />
                     </label>
@@ -359,8 +335,7 @@
                     :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
                     :hide-after="0"
                     :enterable="false"
-                    placement="top"
-                    v-if="!deepSearchEnabled">
+                    placement="top">
                     <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
                       <cs name="clear-context" class="small" />
                     </label>
@@ -558,9 +533,9 @@ const isChatting = ref(false)
 const currentAssistantMessage = ref('')
 const lastChatId = ref('')
 const titleChatId = ref('')
-const getDefaultChatState = () => ({
+const getDefaultChatState = reference => ({
   message: '',
-  reference: [],
+  reference: reference ? [...reference] : [],
   reasoning: '',
   isReasoning: false,
   log: [],
@@ -574,9 +549,6 @@ const chatState = ref(getDefaultChatState())
 // network connection and deep search
 // When enabled, it will automatically crawl the URLs in user queries
 const networkEnabled = ref(csGetStorage(csStorageKey.networkEnabled, true))
-// When deep search is enabled, the AI will automatically plan the user's questions
-// and break them down into executable steps for research.
-const deepSearchEnabled = ref(csGetStorage(csStorageKey.deepSearchEnabled, false))
 
 // MCP enabled state
 const mcpEnabled = ref(csGetStorage(csStorageKey.mcpEnabled, true))
@@ -828,6 +800,37 @@ const conversationsForShow = computed(() => {
   return groupConversationsByDate(filteredConversations)
 })
 
+const processedMessages = computed(() => {
+  if (!messagesForShow.value) return []
+
+  return messagesForShow.value.map((message, index, allMessages) => {
+    const processed = { ...message, display: { showAvatar: true, showMetadata: true } }
+
+    if (message.role === 'user') {
+      return processed
+    }
+
+    // Logic for assistant messages
+    const prevMessage = allMessages[index - 1]
+    const nextMessage = allMessages[index + 1]
+
+    const prevChatId = prevMessage?.metadata?.chatId
+    const currentChatId = message.metadata?.chatId
+
+    // Show avatar only if it's the first message of a new assistant turn (chatId changes or previous is user)
+    processed.display.showAvatar =
+      !prevMessage || prevMessage.role === 'user' || prevChatId !== currentChatId
+
+    const nextChatId = nextMessage?.metadata?.chatId
+
+    // Show metadata only if it's the last message of an assistant turn (chatId is about to change or next is user)
+    processed.display.showMetadata =
+      !nextMessage || nextMessage.role === 'user' || nextChatId !== currentChatId
+
+    return processed
+  })
+})
+
 /**
  * Load messages with pagination
  */
@@ -912,6 +915,68 @@ const selectConversation = id => {
 }
 
 /**
+ * Build history messages for sending to the AI.
+ * It collects the last N rounds of conversation from the end, respecting a total byte size limit.
+ * A "round" consists of one user message and all subsequent assistant messages.
+ * @param {Array} allMessages - The entire list of messages from chatStore.
+ * @param {number} roundsToKeep - The maximum number of conversation rounds to include.
+ * @param {number|null} messageIdToExclude - The ID of a message to exclude (e.g., when resending).
+ * @returns {Array} - The constructed history messages.
+ */
+const buildHistoryForSending = (allMessages, roundsToKeep, messageIdToExclude = null) => {
+  const MAX_HISTORY_BYTES = 120 * 1024 // 120KB limit for history context
+
+  if (roundsToKeep <= 0) {
+    return []
+  }
+
+  const messagesToProcess = messageIdToExclude
+    ? allMessages.filter(m => m.id !== messageIdToExclude)
+    : allMessages
+
+  const history = []
+  let roundsCollected = 0
+  let currentBytes = 0
+  let currentRoundBuffer = []
+
+  for (let i = messagesToProcess.length - 1; i >= 0; i--) {
+    const currentMessage = messagesToProcess[i]
+
+    // Stop if a context clear marker is found
+    if (currentMessage.metadata?.contextCleared) {
+      break
+    }
+
+    currentRoundBuffer.unshift(currentMessage)
+
+    if (currentMessage.role === 'user') {
+      // A user message marks the completion of a round (when iterating backwards).
+      const roundBytes = currentRoundBuffer.reduce((acc, msg) => {
+        // Use TextEncoder for accurate byte length calculation
+        return acc + new TextEncoder().encode(JSON.stringify(msg)).length
+      }, 0)
+
+      // Stop if adding this round would exceed the size limit, but always allow at least one round.
+      if (currentBytes + roundBytes > MAX_HISTORY_BYTES && history.length > 0) {
+        break
+      }
+
+      // Add the collected round to the main history.
+      history.unshift(...currentRoundBuffer)
+      currentBytes += roundBytes
+      currentRoundBuffer = [] // Reset buffer for the next round.
+      roundsCollected++
+
+      if (roundsCollected >= roundsToKeep) {
+        break // Stop after collecting the desired number of rounds.
+      }
+    }
+  }
+  console.log(history)
+  return history
+}
+
+/**
  * Dispatch chat completion event to the backend
  */
 const dispatchChatCompletion = async (messageId = null) => {
@@ -943,13 +1008,11 @@ const dispatchChatCompletion = async (messageId = null) => {
 
   let historyMessages = []
   if (settingStore.settings.historyMessages > 0 && !disableContext.value) {
-    historyMessages = chatStore.messages.slice(-1 * (settingStore.settings.historyMessages * 2 + 1))
-    if (
-      historyMessages.length > 0 &&
-      historyMessages[historyMessages.length - 1].id === messageId
-    ) {
-      historyMessages.pop()
-    }
+    historyMessages = buildHistoryForSending(
+      chatStore.messages,
+      settingStore.settings.historyMessages,
+      messageId // This is the ID of the message being resent, or null
+    )
   }
   const messages = await chatPreProcess(userMessage, historyMessages, selectedSkill.value, {})
   if (messages.length < 1) {
@@ -960,12 +1023,19 @@ const dispatchChatCompletion = async (messageId = null) => {
 
   resetScrollBehavior() // reset scroll behavior
 
+  const lastId = Uuid()
   chatStore
-    .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
+    .addChatMessage(
+      chatStore.currentConversationId,
+      'user',
+      userMessage,
+      { chatId: lastId },
+      messageId
+    )
     .then(async () => {
       resetChat()
       isChatting.value = true
-      lastChatId.value = Uuid()
+      lastChatId.value = lastId
 
       // Scroll to bottom immediately
       nextTick(() => {
@@ -1022,69 +1092,6 @@ const newChat = () => {
       scrollToBottomIfNeeded()
     })
   })
-}
-
-/**
- * Execute deep search
- * @param {string} messageId
- */
-const deepSearch = (messageId = null) => {
-  // TODO: Implement deep search functionality
-  return
-  if (!deepSearchEnabled.value) {
-    return
-  }
-  let userMessage = messageId
-    ? chatStore.messages.find(m => m.id === messageId)?.content?.trim() || ''
-    : inputMessage.value.trim()
-  if (!userMessage) {
-    console.error('no user message to send')
-    return
-  }
-  resetScrollBehavior() // reset scroll behavior
-
-  chatStore
-    .addChatMessage(chatStore.currentConversationId, 'user', userMessage, null, messageId)
-    .then(async () => {
-      resetChat()
-      isChatting.value = true
-      lastChatId.value = Uuid()
-
-      // Scroll to bottom immediately
-      nextTick(() => {
-        scrollToBottom()
-      })
-      try {
-        await invoke('deep_search', {
-          chatId: lastChatId.value,
-          question: userMessage,
-          metadata: {
-            windowLabel: settingStore.windowLabel,
-            model: currentModel.value.defaultModel
-          }
-        })
-      } catch (error) {
-        chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
-        console.error('error on sendMessage:', error)
-        isChatting.value = false
-      }
-    })
-    .catch(error => {
-      chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
-      console.error('error on addChatMessage:', error)
-    })
-}
-
-/**
- * Automatically send message or deep search based on settings
- * @param {int} messageId
- */
-const sendMessageAuto = (messageId = null) => {
-  if (deepSearchEnabled.value) {
-    deepSearch(messageId)
-  } else {
-    dispatchChatCompletion(messageId)
-  }
 }
 
 /**
@@ -1211,7 +1218,7 @@ const handleTitleGenerated = payload => {
  */
 const handleChatMessage = async payload => {
   // Use the common handler for shared logic
-  const isDone = handleChatMessageCommon(
+  handleChatMessageCommon(
     payload,
     chatState,
     {
@@ -1221,8 +1228,11 @@ const handleChatMessage = async payload => {
     },
     async (payload, chatStateValue) => {
       // Custom completion handler for Index.vue
-      lastChatId.value = ''
-      if (chatStateValue.message.trim().length > 0) {
+      if (payload.finishReason !== 'toolCalls') {
+        lastChatId.value = ''
+      }
+
+      if (chatStateValue.message.trim().length > 0 || chatStateValue.toolCall.length > 0) {
         // Save the current scroll position and height for subsequent restoration
         const scrollInfo = {
           top: chatMessagesRef.value.scrollTop,
@@ -1241,7 +1251,7 @@ const handleChatMessage = async payload => {
         const originalToolCall = chatStateValue.toolCall || []
 
         // Reset the state in advance (core optimization point)
-        chatState.value = getDefaultChatState()
+        chatState.value = getDefaultChatState([...originalReference])
         currentAssistantMessage.value = ''
 
         try {
@@ -1255,9 +1265,10 @@ const handleChatMessage = async payload => {
               completion: payload?.metadata?.tokens?.completion || 0,
               tokensPerSecond: payload?.metadata?.tokens?.tokensPerSecond || 0,
               provider: payload?.metadata?.model || currentModel.value.defaultModel || '',
-              reference: originalReference,
+              reference: payload.finishReason !== 'toolCalls' ? originalReference : [],
               reasoning: originalReasoning,
-              toolCall: originalToolCall
+              toolCall: originalToolCall,
+              chatId: payload.chatId || ''
             }
           )
 
@@ -1550,12 +1561,8 @@ const onOpenSettingWindow = type => {
  * Stop chat
  */
 const onStopChat = () => {
-  const cmd = deepSearchEnabled.value ? 'stop_deep_search' : 'stop_chat'
-  const param = { chatId: lastChatId.value }
-  if (!deepSearchEnabled.value) {
-    param.apiProtocol = currentModel.value.apiProtocol
-  }
-  invoke(cmd, param)
+  const param = { chatId: lastChatId.value, apiProtocol: currentModel.value.apiProtocol }
+  invoke('stop_chat', param)
     .then(() => {
       if (chatState.value.message.trim()) {
         chatStore
@@ -1597,7 +1604,7 @@ const onStopChat = () => {
  * @param {Number} id message id
  */
 const onResendMessage = id => {
-  sendMessageAuto(id)
+  dispatchChatCompletion(id)
 }
 
 /**
@@ -1678,18 +1685,6 @@ const onToggleNetwork = () => {
 const onToggleMcp = () => {
   mcpEnabled.value = !mcpEnabled.value && mcpServers.value.length > 0
   csSetStorage(csStorageKey.mcpEnabled, mcpEnabled.value)
-}
-
-/**
- * Toggle the deep search enabled state
- */
-const onDeepSearchEnabled = () => {
-  deepSearchEnabled.value = !deepSearchEnabled.value
-  csSetStorage(csStorageKey.deepSearchEnabled, deepSearchEnabled.value)
-
-  if (deepSearchEnabled.value) {
-    replyMessage.value = ''
-  }
 }
 
 /**
@@ -1774,7 +1769,7 @@ const onKeyEnter = event => {
 
   if (shouldSend && !composing.value && !compositionJustEnded.value) {
     event.preventDefault()
-    sendMessageAuto()
+    dispatchChatCompletion()
   }
 }
 

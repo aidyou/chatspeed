@@ -10,6 +10,7 @@ use super::config_loader::ConfigLoader;
 use super::pool::ScraperPool;
 use crate::libs::util;
 use crate::scraper::types::{ContentOptions, GenericContentRule, ScrapeRequest};
+use crate::scraper::url_helper::{decode_bing_url, get_meta_refresh_url};
 use crate::search::SearchResult;
 
 /// The primary entry point for the scraper module.
@@ -91,21 +92,31 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
 
             log::debug!("Search url: {}", &url);
 
-            scraper_pool
-                .scrape(&url, Some(config), None)
-                .await
-                .map(|result_str| {
-                    if let Ok(results) = serde_json::from_str::<Vec<SearchResult>>(&result_str) {
-                        let limited_results = if results.len() > number {
-                            &results[..number]
-                        } else {
-                            &results[..]
-                        };
-                        serde_json::to_string(limited_results).unwrap_or_default()
-                    } else {
-                        result_str
+            let result_str = scraper_pool.scrape(&url, Some(config), None).await?;
+
+            if let Ok(mut results) = serde_json::from_str::<Vec<SearchResult>>(&result_str) {
+                if results.len() > number {
+                    results.truncate(number);
+                }
+
+                if url.contains(".bing.") {
+                    results.iter_mut().for_each(|r| {
+                        if let Some(decoded_url) = decode_bing_url(&r.url) {
+                            r.url = decoded_url;
+                        }
+                    });
+                } else if url.contains("so.com") || url.contains("sogou.com") {
+                    for r in results.iter_mut() {
+                        if let Some(decoded_url) = get_meta_refresh_url(&r.url).await {
+                            r.url = decoded_url;
+                        }
                     }
-                })
+                }
+
+                Ok(serde_json::to_string(&results).unwrap_or_default())
+            } else {
+                Ok(result_str)
+            }
         }
         ScrapeRequest::Content(ContentOptions {
             url,

@@ -1,9 +1,9 @@
-import { defineStore } from 'pinia';
-import { ref, reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { defineStore } from 'pinia';
+import { reactive, ref } from 'vue';
 
-import { sendSyncState } from '@/libs/sync.js'
+import { sendSyncState } from '@/libs/sync.js';
 
 /**
  * @typedef {Object} McpServerConfigEnv
@@ -393,7 +393,7 @@ export const useMcpStore = defineStore('mcp', () => {
     switch (event) {
       case 'add': {
         // Add new server if it doesn't exist
-        if (data && data.id && !servers.value.some(s => s.id === data.id)) {
+        if (data?.id && !servers.value.some(s => s.id === data.id)) {
           // Ensure config and disabled_tools are correctly formatted before adding
           const newServerData = {
             ...data,
@@ -409,13 +409,13 @@ export const useMcpStore = defineStore('mcp', () => {
       }
       case 'update': {
         // Update existing server by merging data
-        if (data && data.id) {
+        if (data?.id) {
           const index = servers.value.findIndex(s => s.id === data.id);
           if (index !== -1) {
             const currentServer = servers.value[index];
             // Destructure data to separate status. Status is managed by updateServerStatus
             // and should not be overwritten by general update events unless specifically intended.
-            const { status: incomingStatus, ...otherDataFromEvent } = data;
+            const { ...otherDataFromEvent } = data;
 
             const updatedServer = {
               ...currentServer,        // Preserve currentServer properties, including its up-to-date status
@@ -438,7 +438,7 @@ export const useMcpStore = defineStore('mcp', () => {
       }
       case 'delete': {
         // Remove server by ID
-        if (data && data.id) {
+        if (data?.id) {
           servers.value = servers.value.filter(s => s.id !== data.id);
           // Clean up associated states
           delete serverTools.value[data.id];
@@ -449,7 +449,7 @@ export const useMcpStore = defineStore('mcp', () => {
       }
       case 'toggleToolStatus': {
         // Update only disabled_tools for a server
-        if (data && data.id && Array.isArray(data.disabled_tools)) {
+        if (data?.id && Array.isArray(data.disabled_tools)) {
           const index = servers.value.findIndex(s => s.id === data.id);
           if (index !== -1) {
             const currentServer = servers.value[index];

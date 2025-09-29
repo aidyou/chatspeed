@@ -3,37 +3,26 @@ use rusqlite::Connection;
 
 /// Version 2 migration SQL statements
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
-    // (
-    //     PLUGINS_TABLE,
-    //     "CREATE TABLE IF NOT EXISTS plugins (
-    //         uuid TEXT PRIMARY KEY,
-    //         name TEXT NOT NULL,
-    //         description TEXT,
-    //         author TEXT NOT NULL,
-    //         version TEXT NOT NULL,
-    //         runtime_type TEXT NOT NULL,
-    //         input_schema TEXT,
-    //         output_schema TEXT,
-    //         icon TEXT,
-    //         readme TEXT,
-    //         checksum TEXT NOT NULL,
-    //         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    //         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    //     )",
-    // ),
-    // (
-    //     PLUGIN_FILES_TABLE,
-    //     "CREATE TABLE IF NOT EXISTS plugin_files (
-    //         uuid TEXT PRIMARY KEY,
-    //         plugin_id TEXT NOT NULL REFERENCES plugins(uuid) ON DELETE CASCADE,
-    //         filename TEXT NOT NULL,
-    //         content TEXT NOT NULL,
-    //         is_entry BOOLEAN NOT NULL DEFAULT 0,
-    //         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    //         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    //         UNIQUE(plugin_id, filename)
-    //     )",
-    // ),
+    // Agents table for ReAct agent configuration
+    (
+        "agents",
+        "CREATE TABLE IF NOT EXISTS agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            system_prompt TEXT NOT NULL,
+            agent_type TEXT NOT NULL DEFAULT 'autonomous', -- 'autonomous' or 'planning'
+            planning_prompt TEXT,            -- Prompt for the planning phase
+            available_tools TEXT,      -- JSON array of available tool IDs
+            auto_approve TEXT,         -- JSON array of tools that can be executed without user confirmation
+            plan_model TEXT,           -- Model for planning phase
+            act_model TEXT,            -- Model for action phase
+            vision_model TEXT,         -- Vision model (reserved)
+            max_contexts INTEGER DEFAULT 128000,  -- Maximum context length (in tokens)
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
 ];
 
 /// Applies version 2 database migration

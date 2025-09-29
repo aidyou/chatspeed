@@ -130,7 +130,9 @@ function buildHistoryMessages(historyMessages) {
 
       if (message.role === 'assistant') {
         // Handle assistant messages with potential tool calls
-        const cleanContent = message.content.replace(/<think>[\s\S]*?<\/think>/g, '')
+        const cleanContent = message.content
+          .replace(/<think>[\s\S]*?<\/think>/, '') // remove first reasonning content
+          .replace(/<!--\[ToolCalls\]-->/g, '')
         const toolCalls = message.metadata?.toolCall
 
         if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
@@ -338,6 +340,10 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   // remove reminder
   content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
 
+  // 移除 ai 生成的不规范引用 [[1]](http://domain.com) -> [[1]]
+  content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {
+    return id
+  })
   // let refs = ''
   // format refs [1,2,3](@ref) -> [[1]][[2]][[3]]
   content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
@@ -476,7 +482,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   // })
 
   if (toolCalls) {
-    content = createToolCallHtml(content,toolCalls)
+    content = createToolCallHtml(content, toolCalls)
   }
 
   const renderer = new marked.Renderer()
@@ -532,7 +538,6 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       return false
     case 'reference':
       if (payload?.chunk) {
-        console.log('reference', payload?.chunk)
         try {
           if (typeof payload?.chunk === 'string') {
             const parsedChunk = JSON.parse(payload?.chunk || '[]')
@@ -546,6 +551,9 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
               chatState.reference.push(...payload.chunk)
             }
           }
+          chatState.reference.forEach((r,id) => {
+            r.id = id+1
+          })
         } catch (e) {
           console.error('error on parse reference:', e)
           console.log('chunk', payload?.chunk)
@@ -616,7 +624,10 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
 
   // Handle completion
   if (isDone) {
-    refs.isChatting.value = false
+    // If the finish reason is tool_calls, the chat is not really over.
+    if (payload?.finishReason !== 'toolCalls') {
+      refs.isChatting.value = false
+    }
     if (onComplete && typeof onComplete === 'function') {
       onComplete(payload, chatState)
     }
@@ -625,23 +636,37 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
   return isDone
 }
 
-const createToolCallHtml = (
-		content,
-		toolCalls,
-	)=> {
+const createToolCallHtml = (content, toolCalls) => {
   toolCalls.forEach(call => {
     const functionName = call?.function?.name
     if (functionName) {
+      let status = ''
+      if (!call.result) {
+        status = 'calling'
+      } else {
+        let parsedResult
+        try {
+          parsedResult = typeof call.result === 'string' ? JSON.parse(call.result) : call.result
+          status = parsedResult?.error ? 'error' : 'success'
+        } catch {
+          status =
+            typeof call.result === 'string' && call.result.startsWith('Error: ')
+              ? 'error'
+              : 'success'
+        }
+      }
+
       let tools = '<div class="chat-tool-calls">'
+      const args = call.function.arguments ? JSON.parse(call.function.arguments) : []
       if (functionName.includes('__MCP__')) {
         const names = functionName.split('__MCP__')
         if (names.length === 2) {
-          tools += `<div class="tool-name"><span>${i18n.global.t('chat.mcpCall')} ${htmlspecialchars(names[0])}::${htmlspecialchars(names[1])}</span></div>`
+          tools += `<div class="tool-name ${status}"><span>${toolName(`${names[0]}::${names[1]}`, args)}</span></div>`
         } else {
-          tools += `<div class="tool-name"><span>${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</span></div>`
+          tools += `<div class="tool-name ${status}"><span>${toolName(functionName, args)}</span></div>`
         }
       } else {
-        tools += `<div class="tool-name"><span>${i18n.global.t('chat.toolCall')} ${htmlspecialchars(functionName)}</span></div>`
+        tools += `<div class="tool-name ${status}"><span>${toolName(functionName, args)}</span></div>`
       }
       const result =
         typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
@@ -663,4 +688,21 @@ const createToolCallHtml = (
     }
   })
   return content
+}
+
+export const toolName = (functionName, args) => {
+  switch (functionName) {
+    case 'WebSearch':
+      return (
+        'WebSearch("' +
+        args?.query?.replace(/"/g, '\\&quot;') +
+        '"' +
+        (args.number ? `, ${args.number}` : '') +
+        ')'
+      )
+    case 'WebFetch':
+      return `WebFetch(${args.url ?? 'URL missing'})`
+    default:
+      return `${htmlspecialchars(functionName)}(${JSON.stringify(args)})`
+  }
 }

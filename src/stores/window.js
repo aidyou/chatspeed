@@ -142,27 +142,6 @@ export const useWindowStore = defineStore('window', () => {
     invoke('set_mouse_event_state', { state, windowLabel })
   }
 
-  /**
-   * Fix rounded corner visual artifacts on macOS
-   * 修复 macOS 上的圆角视觉伪影
-   * @param {string} targetWindowLabel - The label of the window to fix (optional, defaults to current window)
-   * @returns {Promise<void>}
-   */
-  const fixRoundedCorners = async (targetWindowLabel = null) => {
-    if (os.value !== 'macos') {
-      return // Only needed on macOS
-    }
-    
-    try {
-      await invoke('fix_window_rounded_corners', { 
-        windowLabel: targetWindowLabel || windowLabel 
-      })
-      console.log('Fixed rounded corners for window:', targetWindowLabel || windowLabel)
-    } catch (error) {
-      console.error('Failed to fix rounded corners:', error)
-    }
-  }
-
   initOs()
 
   return {
@@ -177,7 +156,6 @@ export const useWindowStore = defineStore('window', () => {
     mainWindowAlwaysOnTop,
     initMainWindowAlwaysOnTop,
     toggleMainWindowAlwaysOnTop,
-    setMouseEventState,
-    fixRoundedCorners
+    setMouseEventState
   }
 })

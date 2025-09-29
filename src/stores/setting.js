@@ -22,7 +22,7 @@ const defaultSettings = {
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
   // chat settings
-  historyMessages: 1,
+  historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },
   sendMessageKey: 'Enter',
   // shortcut settings
@@ -139,7 +139,7 @@ export const useSettingStore = defineStore('setting', () => {
           await invoke('update_shortcut', { key: dbKey, value })
         } catch (error) {
           console.error('Failed to update shortcut:', error)
-          return reject(i18n.global.t('setting.general.updateShortcutFailed', { error }))
+          return reject(i18n.global.t('settings.general.updateShortcutFailed', { error }))
         }
       }
 

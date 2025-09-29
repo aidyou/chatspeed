@@ -195,6 +195,6 @@ If a tool call fails, check for these common errors before retrying:
 - CRITICAL: Format argument values correctly.
   - For `type="string"`, the content is literal, but you MUST escape XML characters (`<` → `&lt;`, `>` → `&gt;`, `&` → `&amp;`).
   - For `type="array"` or `type="object"`, the content is a JSON string, which requires its own escaping (`\"`, `\n`), and then the whole string must ALSO be XML-escaped.
-- IMPORTANT: The ONLY correct way to make a tool call is by using the `<cs:tool_use></cs:tool_use>` tags.
+- CRITICAL: The ONLY correct way to call a tool is with a complete `<cs:tool_use></cs:tool_use>` block. Ensure the closing tag `</cs:tool_use>` is always present at the very end. Incomplete tags will cause a failure.
 </cs:Remember>
 </cs:tool-use-guide>"###;

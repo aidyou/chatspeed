@@ -1,5 +1,35 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.13 Release Notes
+
+This update focuses on improving the stability and feature expansion of the MCP proxy, while optimizing assistant features and content extraction capabilities. Regarding the MCP proxy server, we have introduced the Streamable HTTP protocol to solve session loss issues caused by network disconnections and computer hibernation. For the scraper module, we have fixed critical stability issues and adopted Readability to improve content area recognition accuracy, reducing unnecessary token consumption from junk information.
+
+### ✨ Enhancements
+
+- **Added openai reference information extension field**: Added an extension field for reference information to the OpenAI-compatible interface, providing richer reference data.
+- **Optimized assistant quick send information feature**: Optimized the experience of quickly sending information with the assistant (default shortcut `ALT+Z`) to improve operational efficiency.
+- **Added Streamable HTTP proxy server protocol**: Added the Streamable HTTP proxy server protocol with endpoint `/mcp/http`, providing a more flexible connection method.
+- **Implemented Streamable HTTP Session Persistence and Automatic Recovery**: By introducing an advanced session management mechanism, we have achieved disk persistence and automatic recovery for Streamable HTTP sessions. This completely resolves the MCP service session ID loss issue (manifesting as 410 or 401 errors) caused by network disconnections, computer hibernation, or proxy server restarts, significantly enhancing connection stability and user experience.
+- **Optimized scraper module content extraction**: Optimized the scraper module content extraction algorithm. The current version can accurately identify content areas when extracting web content, with a hit rate improved to 90% ~ 95%.
+- **Refactored AI conversation mechanism**: Refactored the AI conversation mechanism, making the interface better able to display the tool calling process; optimized system prompts to make AI better able to use tools to complete daily conversation tasks.
+- **Updated documentation links**: Updated the blog link and English documentation link in README to ensure users can access the latest documentation resources.
+
+### 🔧 Technical Optimizations
+
+- **Cleaned up invalid i18n**: Cleaned up a large amount of invalid internationalization resources, reducing application size and improving performance.
+- **Assistant window size adjustment**: Adjusted the assistant window size and implemented automatic restoration based on user size adjustments, enhancing user experience.
+- **Archived Rust-implemented ReAct module**: Based on workflow module adjustments, archived the original Rust-implemented ReAct module to prepare for the new workflow architecture.
+- **Adopted Readability to improve content recognition accuracy**: The scraper module adopted the Readability algorithm to improve content area recognition accuracy, reducing unnecessary token consumption from junk information.
+
+### 🐞 Bug Fixes
+
+- **Fixed scraper module event listener crash issue**: Fixed the issue where scraper module event listeners could cause the scraper module to crash, significantly improving scraper functionality stability.
+- **Removed unused imports and dependencies**: Cleaned up unused imports and dependencies in the project, optimizing project structure and build efficiency.
+
+---
+
+[Here starts the original content from the file]
+
 # Chatspeed v1.1.12 Release Notes
 
 v1.1.12 is a release focused on core stability and key user experience optimizations. We have fixed underlying issues that could cause application crashes and improved the assistant and application startup workflows to be smoother and more intuitive.
@@ -117,7 +147,7 @@ v1.1.6 is a hotfix release that addresses front-end display issues and updates d
 
 # Chatspeed v1.1.5 Release Notes
 
-v1.1.5 is a hotfix release that incorporates all features planned for prior versions and resolves the build-breaking lifetime issue.
+v1.1.15 is a hotfix release that incorporates all features planned for prior versions and resolves the build-breaking lifetime issue.
 
 ## ✨ Enhancements & New Features
 

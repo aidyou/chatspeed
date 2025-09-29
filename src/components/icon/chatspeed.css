@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-agent:before {
+  content: "\e69b";
+}
+
 .cs-enter-square:before {
   content: "\e65a";
 }

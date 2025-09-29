@@ -37,8 +37,8 @@ impl ToolCallResult {
     }
     pub fn error(error: String) -> Self {
         Self {
-            content: Some(format!("Error: {}", error).to_string()),
-            structured_content: Some(json!({"error": error})),
+            content: Some(json!({"error": error}).to_string()),
+            structured_content: None,
             is_error: Some(true),
         }
     }

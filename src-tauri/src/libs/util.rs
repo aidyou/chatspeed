@@ -1,5 +1,5 @@
 use serde_json::Value;
-use url::form_urlencoded::byte_serialize;
+use url::form_urlencoded::{byte_serialize, parse};
 
 /// Formats a JSON string
 ///
@@ -61,5 +61,24 @@ pub fn urlencodes(s: &Value) -> String {
             .collect::<Vec<_>>()
             .join("&"),
         Value::Null => "".to_string(),
+    }
+}
+
+/// URL decode a string
+///
+/// # Arguments
+/// * `s` - The string to decode
+///
+/// # Returns
+/// * `Result<String, String>` - The decoded string or error
+pub fn urldecode(s: &str) -> Result<String, String> {
+    let decoded: String = parse(s.as_bytes())
+        .map(|(key, value)| [key, value].concat())
+        .collect();
+
+    if decoded.is_empty() && !s.is_empty() {
+        Err("Failed to decode URL".to_string())
+    } else {
+        Ok(decoded)
     }
 }

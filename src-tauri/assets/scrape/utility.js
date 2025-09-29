@@ -37,12 +37,17 @@ const logger = {
 }
 
 const formatText = txt => {
-  return txt == null
-    ? txt
-    : txt
-        .toString()
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
+  if (txt == null) return txt
+
+  return (
+    txt
+      .toString()
+      // Clean all trailing whitespace (spaces, tabs, etc.)
+      .replace(/[ \t\v\r]+\n/g, '\n')
+      // Collapse multiple consecutive blank lines
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  )
 }
 
 const baseCleanForMarkdown = el => {

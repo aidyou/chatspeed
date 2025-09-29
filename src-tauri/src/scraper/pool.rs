@@ -199,14 +199,15 @@ impl ScraperPool {
     ) -> Result<String> {
         let (mut resource, permit) = self.get().await?;
 
-        let scrape_result = self
+        let (scrape_result, listeners) = self
             .scraper
             .scrape(&resource.webview, url, config, generic_content_rule)
             .await;
 
+        resource.listeners = listeners; // Always assign listeners
+
         match scrape_result {
-            Ok((result, listeners)) => {
-                resource.listeners = listeners;
+            Ok(result) => {
                 self.release(resource, permit).await;
                 Ok(result)
             }

@@ -109,6 +109,15 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     )
     .map_err(|e| e.to_string())?;
 
+    // let agent_window_menu_item = tauri::menu::MenuItem::with_id(
+    //     app,
+    //     "agent",
+    //     &rust_i18n::t!("tray.agent"),
+    //     true,
+    //     None::<&str>,
+    // )
+    // .map_err(|e| e.to_string())?;
+
     let about_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
         "about",
@@ -137,6 +146,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         .item(&skill_window_menu_item)
         .item(&mcp_window_menu_item)
         .item(&proxy_window_menu_item)
+        // .item(&agent_window_menu_item)
         .separator()
         .item(&about_window_menu_item)
         .item(&quit_item)
@@ -211,7 +221,7 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
                 log::error!("Failed to open note window: {}", e);
             }
         }
-        "settings" | "mcp" | "model" | "proxy" | "skill" | "about" => {
+        "settings" | "agent" | "mcp" | "model" | "proxy" | "skill" | "about" => {
             let setting_type = if menu_id.as_str() == "settings" {
                 "general"
             } else {

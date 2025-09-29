@@ -48,7 +48,7 @@
       </div>
 
       <div class="transaction" v-if="isTranslation">
-        <el-dropdown trigger="click">
+        <el-dropdown trigger="click" class="transaction-dropdown">
           <span class="el-dropdown-link">
             {{
               fromLang ? languageDict[fromLang] || 'english' : $t('chat.transaction.autoDetection')
@@ -64,19 +64,16 @@
                 v-for="lang in availableLanguages"
                 :key="lang.code"
                 @click="fromLang = lang.code">
-                {{ lang.icon }} {{ lang.name }}
+                <span>{{ lang.icon }} {{ lang.name }}</span>
+                <cs name="check" class="active" v-if="lang.code === fromLang" />
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
         <span class="separator">→</span>
-        <el-dropdown trigger="click">
+        <el-dropdown trigger="click" class="transaction-dropdown">
           <span class="el-dropdown-link">
-            {{
-              toLang
-                ? availableLanguages[toLang] || 'chinese'
-                : $t('chat.transaction.autoDetection')
-            }}
+            {{ displayToLang }}
             <cs class="caret-right" />
           </span>
           <template #dropdown>
@@ -89,7 +86,8 @@
                 :key="lang.code"
                 :checked="toLang === lang.code"
                 @click="toLang = lang.code">
-                {{ lang.icon }} {{ lang.name }}
+                <span>{{ lang.icon }} {{ lang.name }}</span>
+                <cs name="check" class="active" v-if="lang.code === toLang" />
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -345,6 +343,14 @@ const availableLanguages = getAvailableLanguages()
 const fromLang = ref('')
 const toLang = ref('')
 
+const displayToLang = computed(() => {
+  if (!toLang.value) {
+    return t('chat.transaction.autoDetection')
+  }
+  const lang = availableLanguages.find(l => l.code === toLang.value)
+  return lang ? lang.name : t('chat.transaction.autoDetection')
+})
+
 let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 
@@ -520,17 +526,21 @@ onMounted(async () => {
   })
 
   unlistenPasteResponse.value = await listen('assistant-window-paste', async event => {
-    if (isChatting.value) {
-      return
-    }
     // we don't want to process messages from other windows
     if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
     }
     if (event.payload?.content) {
+      if (isChatting.value) {
+        return
+      }
       inputMessage.value = event.payload.content
-      await nextTick()
-      dispatchChatCompletion()
+
+      if (isTranslation.value) {
+        setTimeout(() => {
+          dispatchChatCompletion()
+        }, 300)
+      }
     }
   })
 
@@ -660,13 +670,23 @@ const handleChatMessage = async payload => {
     },
     async (payload, chatStateValue) => {
       // Custom completion handler for Assistant.vue
-      payloadMetadata.value = {
-        tokens: payload?.metadata?.tokens?.total || 0,
-        prompt: payload?.metadata?.tokens?.prompt || 0,
-        completion: payload?.metadata?.tokens?.completion || 0,
-        provider: currentModelProvider.value.defaultModel || '',
-        reference: chatStateValue?.reference || [],
-        reasoning: chatStateValue?.reasoning || ''
+
+      // If this is the end of a tool call round, clear the message
+      // to prepare for the final answer, but keep the tool call data.
+      if (payload.finishReason === 'toolCalls') {
+        chatState.value.message = ''
+        currentAssistantMessage.value = ''
+      } else {
+        // This is the final end of the entire turn.
+        payloadMetadata.value = {
+          tokens: payload?.metadata?.tokens?.total || 0,
+          prompt: payload?.metadata?.tokens?.prompt || 0,
+          completion: payload?.metadata?.tokens?.completion || 0,
+          provider: currentModelProvider.value.defaultModel || '',
+          reference: chatStateValue?.reference || [],
+          reasoning: chatStateValue?.reasoning || '',
+          toolCall: chatStateValue?.toolCall || []
+        }
       }
       nextTick(scrollToBottomIfNeeded)
     }
@@ -1270,5 +1290,18 @@ const onAddModel = () => {
       transform: rotate(0deg);
     }
   }
+}
+
+.el-dropdown__popper.el-popper {
+  .el-dropdown-menu .el-dropdown-menu__item {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: var(--cs-space-sm);
+  }
+}
+
+.el-dropdown__popper .el-dropdown__list {
+  max-height: 300px;
 }
 </style>

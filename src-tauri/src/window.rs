@@ -535,22 +535,39 @@ pub fn restore_window_config(
     window: &WebviewWindow,
     main_store: Arc<std::sync::RwLock<MainStore>>,
 ) {
+    let window_label = window.label();
+
     let mut current_window_size = window.outer_size().unwrap_or_else(|e| {
         warn!(
             "Failed to get initial window outer size for '{}': {}. Using default 800x600.",
             window.label(),
             e
         );
-        PhysicalSize::new(800, 600) // Default size if current size cannot be obtained
+        if window_label == "main" {
+            PhysicalSize::new(800, 600) // Default size if current size cannot be obtained
+        } else {
+            PhysicalSize::new(500, 600)
+        }
     });
 
     if let Ok(c) = main_store.read() {
         // restore window size
-        // Since a Some(default) is provided, get_config should always return Some.
-        // .unwrap() is safe here assuming get_config honors the default on missing/error.
-        let saved_size = c
-            .get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
-            .unwrap_or_default();
+        // For the main window, use the existing CFG_WINDOW_SIZE
+        // For the assistant window, use the new CFG_ASSISTANT_WINDOW_SIZE
+        let saved_size = if window_label == "main" {
+            c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
+                .unwrap_or_default()
+        } else if window_label == "assistant" {
+            c.get_config(
+                crate::constants::CFG_ASSISTANT_WINDOW_SIZE,
+                Some(WindowSize::default()),
+            )
+            .unwrap_or_default()
+        } else {
+            // For other windows, use the default size
+            WindowSize::default()
+        };
+
         if saved_size.width > 0.0 && saved_size.height > 0.0 {
             let new_logical_size = LogicalSize::new(saved_size.width, saved_size.height);
             if let Err(e) = window.set_size(tauri::Size::Logical(new_logical_size)) {
@@ -572,6 +589,11 @@ pub fn restore_window_config(
             } else {
                 warn!("Failed to get scale factor, position check might be less accurate.");
             }
+        }
+
+        // Restore the main window position only
+        if window_label != "main" {
+            return;
         }
 
         // restore window position

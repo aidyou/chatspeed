@@ -457,16 +457,9 @@ impl ToolDefinition for WebSearch {
             })
             .collect::<Vec<_>>();
         let result_string = if results_with_id.is_empty() {
-            "<cs:search-results><!--Not Results--></cs:search-results><system-reminder>No web search results. Suggestions: check your spelling, try different keywords, adjust the time range, or use more general terms.</system-reminder>".to_string()
+            "[/*Not Results*/]\n<system-reminder>No web search results. Suggestions: check your spelling, try different keywords, adjust the time range, or use more general terms.</system-reminder>".to_string()
         } else {
-            format!(
-                "<cs:search-results>{}</cs:search-results>",
-                results_with_id
-                    .iter()
-                    .map(|sr| sr.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
+            serde_json::to_string(&results_with_id).unwrap_or_default()
         };
 
         Ok(ToolCallResult::success(
