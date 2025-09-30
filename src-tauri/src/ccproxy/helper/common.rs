@@ -261,7 +261,13 @@ impl ModelResolver {
 
         proxy_config
             .get(group)
-            .and_then(|group_config| group_config.get(proxy_alias))
+            .and_then(|group_config| {
+                // Find the first key that matches the proxy_alias using wildmatch
+                group_config
+                    .iter()
+                    .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+                    .map(|(_, value)| value)
+            })
             .cloned()
             .ok_or_else(|| {
                 log::debug!(
@@ -269,7 +275,7 @@ impl ModelResolver {
                     serde_json::to_string_pretty(&proxy_config).unwrap_or_default()
                 );
                 log::warn!(
-                    "Proxy alias '{}' not found in group '{}'.",
+                    "Proxy alias '{}' not found in group '{}' with wildcard matching.",
                     proxy_alias,
                     group
                 );
@@ -475,4 +481,79 @@ pub fn get_tool_id() -> String {
 
 pub fn get_msg_id() -> String {
     format!("msg_{}", &uuid::Uuid::new_v4().to_string()[..8])
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+
+    #[test]
+    fn test_wildmatch_logic() {
+        let mut group_config = IndexMap::new();
+        // Insert rules from most specific to most general
+        group_config.insert("claude-3-opus-20240229".to_string(), "exact_opus");
+        group_config.insert("claude-3-sonnet*".to_string(), "suffix_sonnet");
+        group_config.insert("*-haiku-20240307".to_string(), "prefix_haiku");
+        group_config.insert("gemini-*-pro".to_string(), "infix_gemini");
+        group_config.insert("qwen-v1.?-chat".to_string(), "single_char_qwen");
+        group_config.insert("*".to_string(), "wildcard_catch_all");
+
+        // Test exact match (should be found first)
+        let proxy_alias = "claude-3-opus-20240229";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("exact_opus"));
+
+        // Test suffix match
+        let proxy_alias = "claude-3-sonnet-20240229";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("suffix_sonnet"));
+
+        // Test prefix match
+        let proxy_alias = "claude-3-haiku-20240307";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("prefix_haiku"));
+
+        // Test infix match
+        let proxy_alias = "gemini-1.5-pro";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("infix_gemini"));
+
+        // Test single character (?) match
+        let proxy_alias = "qwen-v1.5-chat";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("single_char_qwen"));
+
+        // Test catch-all (*)
+        let proxy_alias = "some-other-model-that-does-not-match-others";
+        let result = group_config
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, Some("wildcard_catch_all"));
+
+        // Test no match (when no catch-all is present)
+        let mut group_config_no_catch_all = IndexMap::new();
+        group_config_no_catch_all.insert("claude-3-opus-20240229".to_string(), "exact_opus");
+        let proxy_alias = "gpt-4-turbo";
+        let result = group_config_no_catch_all
+            .iter()
+            .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+            .map(|(_, value)| *value);
+        assert_eq!(result, None);
+    }
 }

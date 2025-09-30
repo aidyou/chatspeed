@@ -1,5 +1,22 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.14 Release Notes
+
+This update primarily introduces **proxy alias wildcard support**, significantly enhancing the flexibility and convenience of model configuration. You can now use wildcards like `*` and `?` to define proxy aliases, adapting to changes in model names without frequent configuration modifications. Additionally, we have optimized the search scraper's filtering mechanism, fixed a bug where some tool calls in the chat interface could not be expanded, and optimized the model configuration process.
+
+### ✨ Enhancements
+- Optimized the search scraper to automatically filter multimedia websites and files, providing more precise results as requested. The `WebSearch` tool's default number of results has also been adjusted to 5, with a maximum of 30, offering more flexible search control.
+- Added proxy alias wildcard support, now allowing `*` for multiple characters and `?` for single characters.
+
+### 🔧 Technical Optimizations
+- Adjusted API documentation to adapt to the new MCP proxy.
+- Optimized the model configuration process by changing the import button from invisible to disabled when adjusting model settings, improving user experience.
+
+### 🐞 Bug Fixes
+- Fixed a bug where some tool calls in the chat interface could not be expanded.
+
+---
+
 # Chatspeed v1.1.13 Release Notes
 
 This update focuses on improving the stability and feature expansion of the MCP proxy, while optimizing assistant features and content extraction capabilities. Regarding the MCP proxy server, we have introduced the Streamable HTTP protocol to solve session loss issues caused by network disconnections and computer hibernation. For the scraper module, we have fixed critical stability issues and adopted Readability to improve content area recognition accuracy, reducing unnecessary token consumption from junk information.

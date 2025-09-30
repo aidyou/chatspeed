@@ -897,11 +897,19 @@ const genTableData = () => {
   return [
     {
       type: 'MCP',
+      protocol: 'Streamable HTTP',
+      group: '',
+      compat: 'false',
+      apiUrl: '/mcp/http',
+      note: 'Recommended'
+    },
+    {
+      type: 'MCP',
       protocol: 'SSE',
       group: '',
       compat: 'false',
-      apiUrl: '/sse',
-      note: ''
+      apiUrl: '/mcp/sse',
+      note: 'Not Recommended'
     },
     {
       type: 'Chat',

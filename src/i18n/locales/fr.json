@@ -111,6 +111,7 @@
     "save": "Enregistrer",
     "search": "Rechercher",
     "unpin": "Désépingler",
+    "updateButtonText": "Mettre à jour",
     "uploadFailed": "Échec du téléchargement du fichier"
   },
   "menu": {

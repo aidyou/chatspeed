@@ -23,20 +23,20 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady"
+          :content="t('common.newVersionReady')">
+          <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
+            <cs name="restart" />
+            {{ t('common.updateButtonText') }}
+          </div>
+        </el-tooltip>
       </div>
 
       <!-- right button area -->
       <div class="right">
         <slot name="right"></slot>
-
-        <el-tooltip
-          placement="bottom"
-          v-if="updateStore.isUpdateReady"
-          :content="t('common.newVersionReady')">
-          <div class="menu icon-btn upperLayer restart">
-            <cs name="restart" @click="updateStore.restartApp" />
-          </div>
-        </el-tooltip>
 
         <!-- menu show control -->
         <el-dropdown @command="handleCommand" trigger="click" v-if="showMenuButton">
@@ -369,6 +369,8 @@ init()
     &.restart {
       /* background-color: var(--cs-success-color); */
       /* border-radius: var(--cs-border-radius); */
+      font-size: var(--cs-font-size);
+      color: var(--cs-success-color);
       .cs {
         color: var(--cs-success-color);
       }

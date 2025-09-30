@@ -216,7 +216,7 @@
                 round
                 @click="onProviderModelImportShow()"
                 :loading="isLoadingProviderModels"
-                v-if="isLoadingProviderModels || Object.keys(providerModelToShow).length > 0">
+                :disabled="isLoadingProviderModels && Object.keys(providerModelToShow).length < 1">
                 <cs name="import" />{{ $t('settings.model.import') }}
               </el-button>
               <el-button type="success" round @click="onModelConfig()">

@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr as _, sync::Arc};
+use url::Url;
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
-    constants::CFG_SEARCH_ENGINE,
+    constants::{CFG_SEARCH_ENGINE, RESTRICTED_EXTENSIONS, VIDEO_AND_IMAGE_DOMAINS},
     db::MainStore,
+    scraper::url_helper::{decode_bing_url, get_meta_refresh_url},
     search::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
         SerperSearch, TavilySearch,
@@ -37,7 +39,10 @@ impl WebSearch {
         Arc::new(Self { app_handle })
     }
 
-    fn create_searcher(&self, provider: Option<String>) -> Result<SearchFactory, ToolError> {
+    fn create_searcher(
+        &self,
+        provider: Option<String>,
+    ) -> Result<(SearchFactory, SearchProviderName), ToolError> {
         let main_store = self
             .app_handle
             .state::<Arc<std::sync::RwLock<MainStore>>>()
@@ -64,7 +69,7 @@ impl WebSearch {
         let provider_name = SearchProviderName::from_str(&search_engine)
             .map_err(|e| ToolError::Initialization(e))?;
 
-        let searcher = match provider_name {
+        let searcher = match provider_name.clone() {
             SearchProviderName::Google => {
                 let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
                 SearchFactory::Google(
@@ -95,7 +100,7 @@ impl WebSearch {
                 provider: p,
             }),
         };
-        Ok(searcher)
+        Ok((searcher, provider_name))
     }
 
     /// Get and check authentication for the search engine.
@@ -363,10 +368,10 @@ impl ToolDefinition for WebSearch {
                         },
                         "number": {
                             "type": "integer",
-                            "default": 10,
+                            "default": 5,
                             "minimum": 1,
-                            "maximum": 10,
-                            "description": "Number of results to return, between 1 and 10. For more results, use the 'page' parameter."
+                            "maximum": 30,
+                            "description": "Number of results to return, between 1 and 30. For more results, use the 'page' parameter."
                         },
                         "time_period": {
                             "type": "string",
@@ -389,22 +394,13 @@ impl ToolDefinition for WebSearch {
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
     async fn call(&self, params: Value) -> NativeToolResult {
-        // Optional provider for testing, usually not shown in `input_schema`
-        let provider = params
+        // 1. Extract parameters
+        let provider_param = params
             .get("provider")
-            .map(|p| p.as_str().unwrap())
-            .map(|p| p.to_string());
-        let searcher = self.create_searcher(provider)?;
-
+            .and_then(|p| p.as_str())
+            .map(String::from);
         let query = Self::extract_keywords(&params)?;
-        if query.is_empty() {
-            return Err(ToolError::FunctionParamError(
-                t!("tools.keyword_must_be_non_empty").to_string(),
-            ));
-        }
-
-        let number = params["number"].as_i64().unwrap_or(5).min(10).max(1);
-        let page = params["page"].as_i64().unwrap_or(1).max(1);
+        let desired_count = params["number"].as_u64().unwrap_or(5).min(30).max(1) as usize;
         let time_period = params["time_period"].as_str().unwrap_or("");
 
         let period = match time_period {
@@ -415,39 +411,84 @@ impl ToolDefinition for WebSearch {
             _ => None,
         };
 
-        let search_params = json!({
-            "query": query.clone(),
-            "count": number,
-            "period": period,
-            "page": page,
-        });
+        // 2. Setup for pagination loop
+        let (searcher, search_provider_name) = self.create_searcher(provider_param)?;
+        let mut final_results: Vec<crate::search::SearchResult> = Vec::with_capacity(desired_count);
+        let mut current_page = 1;
+        const MAX_PAGES_TO_FETCH: u64 = 3; // Limit to prevent excessive requests
+        const PAGE_SIZE: u64 = 10; // Most engines default to 10
 
-        let results = searcher.search(&search_params).await.map_err(|e| {
-            ToolError::Execution(
-                t!(
-                    "tools.search.web_search_failed",
-                    provider = searcher.to_string(),
-                    keyword = query.clone(),
-                    details = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
+        // 3. Pagination-Pipeline Loop
+        while final_results.len() < desired_count && current_page <= MAX_PAGES_TO_FETCH {
+            let search_params = json!({
+                "query": query.clone(),
+                "count": PAGE_SIZE,
+                "period": period,
+                "page": current_page,
+            });
 
-        #[cfg(debug_assertions)]
-        log::debug!("Scrape result count: {}", results.len());
+            let raw_results = match searcher.search(&search_params).await {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("Failed to fetch search page {}: {}", current_page, e);
+                    break; // Stop if searching fails
+                }
+            };
 
-        // The automatic scraping of content has been removed to support the agent workflow.
-        // The AI should decide whether to use the WebFetch tool to get the full content.
-        // results = self.scrape_content(results).await?;
+            if raw_results.is_empty() {
+                break; // No more results from the search engine
+            }
 
-        #[cfg(debug_assertions)]
-        log::debug!(
-            "Scrape result count after content scraped: {}",
-            results.len()
-        );
+            for mut result in raw_results {
+                // a. Resolve URL
+                let resolved_url = if search_provider_name == SearchProviderName::Bing {
+                    decode_bing_url(&result.url).unwrap_or(result.url.clone())
+                } else if search_provider_name == SearchProviderName::So
+                    || search_provider_name == SearchProviderName::Sogou
+                {
+                    get_meta_refresh_url(&result.url)
+                        .await
+                        .unwrap_or(result.url.clone())
+                } else {
+                    result.url.clone()
+                };
+                result.url = resolved_url;
 
-        let results_with_id = results
+                // b. Filter
+                let Ok(parsed_url) = Url::parse(&result.url) else {
+                    continue;
+                };
+
+                // Domain filter
+                let host = parsed_url.host_str().unwrap_or_default();
+                let parts: Vec<&str> = host.split('.').collect();
+                if (0..parts.len().saturating_sub(1)).any(|i| {
+                    let domain_to_check = parts[i..].join(".");
+                    VIDEO_AND_IMAGE_DOMAINS.contains(domain_to_check.as_str())
+                }) {
+                    continue;
+                }
+
+                // Extension filter
+                let path = parsed_url.path();
+                if RESTRICTED_EXTENSIONS
+                    .iter()
+                    .any(|ext| path.to_lowercase().ends_with(ext))
+                {
+                    continue;
+                }
+
+                // c. Add to final list
+                final_results.push(result);
+                if final_results.len() >= desired_count {
+                    break; // We have enough results
+                }
+            }
+            current_page += 1;
+        }
+
+        // 4. Final processing
+        let results_with_id = final_results
             .iter()
             .enumerate()
             .map(|(index, r)| {
@@ -456,8 +497,9 @@ impl ToolDefinition for WebSearch {
                 sr
             })
             .collect::<Vec<_>>();
+
         let result_string = if results_with_id.is_empty() {
-            "[/*Not Results*/]\n<system-reminder>No web search results. Suggestions: check your spelling, try different keywords, adjust the time range, or use more general terms.</system-reminder>".to_string()
+            "[]".to_string()
         } else {
             serde_json::to_string(&results_with_id).unwrap_or_default()
         };

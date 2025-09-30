@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use std::{
     collections::HashMap,
     fmt::{self, Display},
@@ -19,7 +20,7 @@ pub struct BackendModelTarget {
 
 /// Configuration for chat completion proxy.
 /// Maps a proxy alias (String key) to a list of backend model targets.
-pub type ChatCompletionProxyConfig = HashMap<String, HashMap<String, Vec<BackendModelTarget>>>;
+pub type ChatCompletionProxyConfig = HashMap<String, IndexMap<String, Vec<BackendModelTarget>>>;
 
 /// Represents an access key for the chat completion proxy.
 #[derive(Serialize, Deserialize, Debug, Clone)]

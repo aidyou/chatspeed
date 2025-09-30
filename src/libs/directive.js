@@ -918,6 +918,10 @@ const DIRECTIVE_CONFIG = {
       mounted: el => {
         bindToolCallEvents(el)
       },
+      updated: el => {
+        removeToolCallEvents(el)
+        bindToolCallEvents(el)
+      },
       unmounted: el => {
         removeToolCallEvents(el)
       }

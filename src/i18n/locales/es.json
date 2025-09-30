@@ -111,6 +111,7 @@
     "save": "Guardar",
     "search": "Buscar",
     "unpin": "Desfijar",
+    "updateButtonText": "Actualizar",
     "uploadFailed": "Error al subir el archivo"
   },
   "menu": {

@@ -111,6 +111,7 @@
     "save": "保存",
     "search": "検索",
     "unpin": "ピン留め解除",
+    "updateButtonText": "更新",
     "uploadFailed": "ファイルのアップロードに失敗しました"
   },
   "menu": {

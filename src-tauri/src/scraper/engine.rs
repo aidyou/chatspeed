@@ -94,29 +94,7 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
 
             let result_str = scraper_pool.scrape(&url, Some(config), None).await?;
 
-            if let Ok(mut results) = serde_json::from_str::<Vec<SearchResult>>(&result_str) {
-                if results.len() > number {
-                    results.truncate(number);
-                }
-
-                if url.contains(".bing.") {
-                    results.iter_mut().for_each(|r| {
-                        if let Some(decoded_url) = decode_bing_url(&r.url) {
-                            r.url = decoded_url;
-                        }
-                    });
-                } else if url.contains("so.com") || url.contains("sogou.com") {
-                    for r in results.iter_mut() {
-                        if let Some(decoded_url) = get_meta_refresh_url(&r.url).await {
-                            r.url = decoded_url;
-                        }
-                    }
-                }
-
-                Ok(serde_json::to_string(&results).unwrap_or_default())
-            } else {
-                Ok(result_str)
-            }
+            Ok(result_str)
         }
         ScrapeRequest::Content(ContentOptions {
             url,

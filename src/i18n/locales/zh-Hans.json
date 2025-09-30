@@ -111,6 +111,7 @@
     "save": "保存",
     "search": "搜索",
     "unpin": "取消置顶",
+    "updateButtonText": "更新",
     "uploadFailed": "文件上传失败"
   },
   "menu": {

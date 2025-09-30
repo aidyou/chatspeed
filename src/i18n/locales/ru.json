@@ -111,6 +111,7 @@
     "save": "Сохранить",
     "search": "Поиск",
     "unpin": "Открепить",
+    "updateButtonText": "Обновить",
     "uploadFailed": "Ошибка при загрузке файла"
   },
   "menu": {

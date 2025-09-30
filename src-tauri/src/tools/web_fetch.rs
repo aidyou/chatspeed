@@ -5,18 +5,13 @@ use tauri::AppHandle;
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
+    constants::RESTRICTED_EXTENSIONS,
     scraper::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
 };
-
-const RESTRICTED_EXTENSIONS: &[&str] = &[
-    ".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx", ".mp3", ".mp4", ".avi", ".mov",
-    ".wmv", ".flv", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".iso", ".exe", ".dmg", ".apk",
-    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp",
-];
 
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
 pub struct WebFetch {

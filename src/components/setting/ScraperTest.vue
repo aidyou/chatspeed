@@ -79,7 +79,7 @@
         <div class="item">
           <div class="label">Number</div>
           <div class="value">
-            <el-input v-model="number" max="10" type="number" />
+            <el-input v-model="number" max="30" type="number" />
           </div>
         </div>
         <div class="item">
