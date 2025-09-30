@@ -1,27 +1,27 @@
 {
-  "version": "1.1.13",
+  "version": "1.1.14",
   "notes": "",
-  "pub_date": "2025-09-29T11:10:29.684Z",
+  "pub_date": "2025-09-30T09:19:16.226Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0hKdllsUHNMS2xPZ2RLTHNiVG81VmM2blFMSmc5T0I2MlVGRUREMEYvdHE0OE9vSnhza0hPNzRaVkt2Unh3QzBpQ0hIaU5qMHJXSHIxK3JVbkNSaGdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MTQzNTU4CWZpbGU6Q2hhdHNwZWVkLmFwcC50YXIuZ3oKaW9KS2NEay9WOExJWkpveE9paUx3clBGR0huc3ZvN3dpU0ZWQzlwY3VlaTladU9Uck52VUt0SnVvVGlvVGExUHptT2hGdFEvb09xSGttdkZaTVczRGc9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0xsWm95aXNJdzN0dWV5eDYzUUowQkFHb0VhQUxDeXcrS08yblJiQ3A5MEk1bXUvM2hnaHFEZm9xSGx5U0xoVmMzTmsrZTJETWZHRU1xeDVkYUYrVmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MjIzNjMwCWZpbGU6Q2hhdHNwZWVkLmFwcC50YXIuZ3oKZEViVmVVRGJqRWQ4ZDFTbnM5STJGUmhyR2VSRnB2azRqbFF2dUZpMVlNN2RXU056QnQyZHAxaEZYSG5veDYvVU9ucE1BSjVJSG4ydEdNemM5V3RkREE9PQo=",
       "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_aarch64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN05pVzRIVWhQdzZDRWNqay9nc3VIQnpWcGdWZkxMaHh5eUw5SFZORk5GYkd1ZUtLQmM2ZWdlc3Q5MmhrenFNK0tHNmw4KzdramJqOHpzdjM3N2c3QmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MTQzODUxCWZpbGU6Q2hhdHNwZWVkXzEuMS4xM19hbWQ2NC5BcHBJbWFnZQozTS91a2VyNG84eXlCWFhPWTBYZUtpZ21CTW5ZbWVkMFdDUGFLWENHakFTUDhQdm5QSS9DZE5qTWxnZHdGZURXb2lSU2g1bW5kaW1SZ3RPbEtDYVlEZz09Cg==",
-      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.13_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0RJVGdvbWhOelY5OEJlaXFRR3ozYUg2M2xUSTNSVmRjSi9SNWFZaDRlSHQ2UWE2YTNrS1JGUi9QclBmY1p5NG1qR2NxTUFiNUI2MXk0ZVcxWW1veFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MjIzNzIyCWZpbGU6Q2hhdHNwZWVkXzEuMS4xNF9hbWQ2NC5BcHBJbWFnZQp4Ym1xZmo5Z2MycUFhWjBRRmlPam9aRnRmNjgxTUpXcGlTbmNwem1kZG1MUXJHOVJQQkM5NDZWVEY5L0VJUmNWYUF2YnJWUlJXWVc4YloyLzhBeTZBUT09Cg==",
+      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.14_amd64.AppImage"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0c4V29zWCtjRDIvL1FTdUUwbkZ3d2M1UlMrejdzZ1NHYkpXY3VHZlExaEpCS3dsQkJyRDR0Qkw3eXVDM29SZS9GRk1EV1h1cTJlaHVlS1pYdWprSXdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MTQzOTY0CWZpbGU6Q2hhdHNwZWVkLmFwcC50YXIuZ3oKWW4zRk13OVV4ZlE5RS9GQ2JNMnhMdnM2bkdEMkx6Q2tiUjRRbmFmVExrU0ljc1N5QUhEMnl6a21OWms2SU5JbXdXbUt3OFdmWFdmS0dkcTRZVnVBQ3c9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0FLeUluS2JyejJxOGZnR2wrVTR3cWJzRkRUZFpiQ1A2V1Q4L2pOUTlobjJ2TTFzSktKVXhId2xXYzFoTjJJWElRSXQwZUUyK21ObUJGdmdmMmZYdlFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MjIzNzU3CWZpbGU6Q2hhdHNwZWVkLmFwcC50YXIuZ3oKUytwTG5Pa1pLRFBnOUhaK2lMVkh1M3BERm1ZM0JwNzNubXhYVGNkWTEyMnZuNnh4VXdGcFFEUXl6aXB5MWo5ZVpxSHdHRlFlUkRwTEdIaExoSU5yRHc9PQo=",
       "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_x64.app.tar.gz"
     },
-    "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0hPdmdSRDNWWnh3L3paYmtnbWthbk8xK1RCS3JybzlMcmkxWXEzSWtWLy94TXhTL25zZXRVWFNFS2tUWDdoNkhJWjkxc3NRbjRUdlNucDgzTzdPZFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MTQ0MTQ1CWZpbGU6Q2hhdHNwZWVkXzEuMS4xM194NjQtc2V0dXAuZXhlCjd1NXp2UzRjbDZ6NzRRKzZRaEdhaEZyVDhJZkRiSFZ2RG0rVWoxbnlQYm5pTWxRNFJzdmFiRDV1bXVhQytOak5TdWltWHFsMkpYaS9EVktyWFRrYkN3PT0K",
-      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.13_x64-setup.exe"
-    },
     "windows-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN1BaTFdsdlBTMWpJUEEwZFVqcUJqVEt0TzBZWkZtdmtTOGlSREJUeUNland4Y2xtOCtHdGR5MWs2TUwwR3U0eDdBeDlhMXZidlJzZFIvdWRBdUJzc2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MTQ0MjI3CWZpbGU6Q2hhdHNwZWVkXzEuMS4xM19hcm02NC1zZXR1cC5leGUKWDc3YnFYRGo0eUJ4dFJwaCtBcGxYc05rdkt0T2NqRVUzY3hjU2ZiWkdLUUh6S21Xd0FobTlGZWNKSi9McnRlWEdnTVg1dk9rWVExMUdoOFFKOHJRQXc9PQo=",
-      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.13_arm64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0h4a3d2dEVEQnB3UmdTcS92QUx5akx1RFJwRGRVcm9QM3B3bUxNdGZPNG1kRmlUdDkyd0xZenU5QUlSenpNaERsMTcvMTZ2WnBBUUZOaXRzM0VKV0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MjIzOTI4CWZpbGU6Q2hhdHNwZWVkXzEuMS4xNF9hcm02NC1zZXR1cC5leGUKZlYvT2RXQXRxZEdqTzdhUFRmQjhrVUxzQUxRV0Fvb3FvN3pIUy9nZ0tWWXB5MkJxWTFZL1c0V2h6eHlHZzgyKzZrNVBxcFJpNFZzU2JWR3FYY3pLQkE9PQo=",
+      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.14_arm64-setup.exe"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaVpsekhyWXFFN0xUVzNTUkQwZFptWmFSOWs1N25WM2haZWVkV1dwcFQ1dk55ZThsMmJySnBpaGxNWk1IVFZ3QWxTaERMdEJjWUZDQVlqUWtsc3NsdUY3UDNDNm93Snd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzU5MjIzOTU0CWZpbGU6Q2hhdHNwZWVkXzEuMS4xNF94NjQtc2V0dXAuZXhlCmxOTGZEVTJFY2gwWU9xamN1S1lDWFZrb2UvT0I4V0xjZ3V4WGV2dkU3NythcWI3UzM3VzdwR2NyWnFQd2FVYno2SUloUXlNRWNwdGZKZURyWk1SMkRnPT0K",
+      "url": "https://github.com/aidyou/chatspeed/releases/latest/download/Chatspeed_1.1.14_x64-setup.exe"
     }
   }
 }
