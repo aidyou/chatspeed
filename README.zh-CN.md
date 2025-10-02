@@ -26,6 +26,39 @@ Chatspeed 的强大能力由其核心代理引擎 [CCProxy](https://docs.chatspe
 7. **负载均衡**：通过全局轮询所有供应商配置的密钥，有效缓解模型调用频率限制。
 8. **简化工作流**：通过统一的 MCP 入口，告别在不同 IDE 中重复配置工具的烦恼。
 
+## 安装
+
+### Windows
+
+1. 从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.exe` 安装程序。
+2. 运行安装程序并按照屏幕上的提示操作。
+3. 您可能会看到 Windows SmartScreen 警告。请点击“更多信息”，然后点击“仍要运行”以继续。
+
+### MacOS
+
+从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.dmg` 文件，对于苹果芯片请选择`_aarch64.dmg`后缀的文件，对于 Intel 芯片请选择`_x86.dmg`后缀的文件。
+
+**重要提示：** 在较新版本的 MacOS 上，Gatekeeper 安全机制可能会阻止应用运行，并提示文件“**已损坏**”。这是因为应用尚未经过苹果公证。
+
+请使用以下终端命令来解决此问题：
+
+1. 将 `.app` 文件从挂载的 `.dmg` 镜像中拖拽到您的“应用程序”文件夹。
+2. 打开“终端”应用 (Terminal)。
+3. 执行以下命令 (可能需要输入您的系统密码):
+
+   ```sh
+   sudo xattr -cr /Applications/Chatspeed.app
+   ```
+
+4. 命令执行成功后，您就可以正常打开应用了。
+
+### Linux
+
+1. 从 [Releases 页面](https://github.com/aidyou/chatspeed/releases/latest)下载 `.AppImage`、`.deb` 或 `.rpm` 文件。
+2. 对于 `.AppImage` 文件，请先为其添加可执行权限 (`chmod +x Chatspeed*.AppImage`)，然后直接运行。
+3. 对于 `.deb` 文件，请使用您的包管理器进行安装，或通过命令 `sudo dpkg -i Chatspeed*.deb` 进行安装。
+4. 对于 `.rpm` 文件，请使用您的包管理器进行安装，或通过命令 `sudo rpm -ivh Chatspeed*.rpm` 进行安装。
+
 ## 📚 了解更多
 
 **我们强烈建议您从 [官方文档网站](https://docs.chatspeed.aidyou.ai/zh/) 开始，以获得最佳的阅读和学习体验。**
