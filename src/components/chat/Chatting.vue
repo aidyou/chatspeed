@@ -1,14 +1,5 @@
 <template>
-  <div class="content">
-    <div class="chat-log" v-if="log.length > 0" ref="chatLogRef">
-      <template v-for="(item, idx) in log" :key="idx">
-        <div class="item" v-if="item.trim() != ''">{{ item }}</div>
-      </template>
-    </div>
-    <div class="chat-plan" v-if="plan.length > 0">
-      <div class="item" v-for="(item, idx) in plan" :key="idx">{{ item }}</div>
-    </div>
-
+  <div class="content" ref="contentRef">
     <div class="chat-reference" v-if="reference.length > 0">
       <div
         class="chat-reference-title"
@@ -30,25 +21,49 @@
         @click="showThink = !showThink">
         <span>{{ $t(`chat.${isReasoning ? 'reasoning' : 'reasoningProcess'}`) }}</span>
       </div>
-      <div
-        v-if="showThink"
-        class="think-content"
-        v-highlight
-        v-link
-        v-table
-        v-katex
-        v-html="parseMarkdown(reasoning)"></div>
+      <div v-if="showThink" class="think-content">
+        <!-- Wrapper for each block, contains directives -->
+        <div
+          v-for="(think, index) in finalThoughts"
+          :key="`thought-${index}`"
+          v-think
+          v-highlight
+          v-link
+          v-table
+          v-katex>
+          <div v-html="parseMarkdown(think, [], [])"></div>
+        </div>
+      </div>
     </div>
-    <!-- <ChatToolCalls v-if="toolParsed.length > 0" :tool-calls="toolCalls" /> -->
-    <div v-html="currentAssistantMessageHtml" v-highlight v-link v-table v-katex v-think />
+
+    <div
+      v-for="(content, index) in finalContents"
+      :key="`content-${index}`"
+      v-highlight
+      v-katex
+      v-link
+      v-mermaid
+      v-table
+      v-think
+      v-tools>
+      <div v-html="parseMarkdown(content, [], [])"></div>
+    </div>
+    <span class="cs cs-spin-linear" v-if="isChatting">☯</span>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
+import { parseMarkdown, htmlspecialchars, toolName } from '@/libs/chat'
+import { MarkdownStreamParser } from '@/libs/markdown-stream-parser.js'
+import i18n from '@/i18n/index.js'
+import { watch } from 'vue'
 
-import { parseMarkdown } from '@/libs/chat'
-// import ChatToolCalls from './ToolCall.vue'
+const contentRef = ref(null)
+
+defineExpose({
+  contentRef
+})
 
 const props = defineProps({
   content: {
@@ -71,13 +86,9 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  log: {
-    type: Array,
-    default: () => []
-  },
-  plan: {
-    type: Array,
-    default: () => []
+  isChatting: {
+    type: Boolean,
+    default: false
   },
   toolCalls: {
     type: Array,
@@ -87,39 +98,97 @@ const props = defineProps({
 
 const showReference = ref(false)
 const showThink = ref(true)
-const chatLogRef = ref(null)
+
+const contentParser = new MarkdownStreamParser()
+const thoughtParser = new MarkdownStreamParser()
+
+const contentBlocks = computed(() => {
+  return props.content ? contentParser.process(props.content).map(b => b.content) : []
+})
+const thoughtBlocks = computed(() => {
+  return props.reasoning ? thoughtParser.process(props.reasoning).map(b => b.content) : []
+})
+
+const finalContents = computed(() =>
+  createFinalBlocks(contentBlocks.value, props.toolCalls, props.reference)
+)
+const finalThoughts = computed(() =>
+  createFinalBlocks(thoughtBlocks.value, props.toolCalls, props.reference)
+)
 
 watch(
-  props.log,
+  () => props.toolCalls,
   () => {
-    if (chatLogRef.value) {
-      const shouldScroll =
-        chatLogRef.value.scrollHeight > chatLogRef.value.clientHeight &&
-        chatLogRef.value.scrollTop + chatLogRef.value.clientHeight >=
-          chatLogRef.value.scrollHeight - 50
+    contentParser.reset()
+    thoughtParser.reset()
+  }
+)
 
-      if (shouldScroll) {
-        requestAnimationFrame(() => {
-          chatLogRef.value.scrollTop = chatLogRef.value.scrollHeight
-        })
-      }
+const createSingleToolCallHtml = call => {
+  const functionName = call?.function?.name
+  if (!functionName) return ''
+
+  let status = 'calling'
+  if (call.result) {
+    try {
+      const parsedResult = typeof call.result === 'string' ? JSON.parse(call.result) : call.result
+      status = parsedResult?.error ? 'error' : 'success'
+    } catch {
+      status =
+        typeof call.result === 'string' && call.result.startsWith('Error: ') ? 'error' : 'success'
     }
-  },
-  { deep: true }
-)
+  }
 
-const cicleIndex = ref(0)
-const currentAssistantMessageHtml = computed(() =>
-  props.content
-    ? parseMarkdown(
-        props.content + ' <span class="cs cs-spin-linear">☯</span>',
-        props.reference,
-        props.toolCalls
-      )
-    : '<div class="cs cs-loading cs-spin"></div>'
-)
+  const args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
 
-const toolParsed = computed(() => {
-  return props.toolCalls && props.toolCalls.length > 0 ? props.toolCalls : []
-})
+  let toolDisplayName = ''
+  if (functionName.includes('__MCP__')) {
+    const names = functionName.split('__MCP__')
+    toolDisplayName = toolName(names.length === 2 ? `${names[0]}::${names[1]}` : functionName, args)
+  } else {
+    toolDisplayName = toolName(functionName, args)
+  }
+
+  const result =
+    typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
+  const escapedArguments = htmlspecialchars(call.function.arguments || '')
+
+  return `<div class="chat-tool-calls">
+    <div class="tool-name ${status}"><span>${toolDisplayName}</span></div>
+    <div class="tool-codes" style="display:none;">
+      <div class="tool-code"><h3>📝 ${i18n.global.t('chat.toolArgs')}</h3>
+         <pre><code class="language-json">${escapedArguments}</code></pre>
+      </div>
+      <div class="tool-code"><h3>🎯 ${i18n.global.t('chat.toolResult')}</h3>
+        <code data-result="${encodeURIComponent(result)}" class="tool-results"></code>
+      </div>
+    </div>
+  </div>`
+}
+
+const createFinalBlocks = (blocks, toolCalls, references) => {
+  let toolCallIdx = 0
+  const allToolCalls = toolCalls || []
+  const allReferences = references || []
+
+  return blocks.map(blockContent => {
+    let newContent = blockContent
+
+    while (newContent.includes('<!--[ToolCalls]-->') && toolCallIdx < allToolCalls.length) {
+      const toolHtml = createSingleToolCallHtml(allToolCalls[toolCallIdx])
+      newContent = newContent.replace('<!--[ToolCalls]-->', toolHtml)
+      toolCallIdx++
+    }
+
+    if (allReferences.length > 0) {
+      allReferences.forEach(item => {
+        const refRegex = new RegExp(`\[\[${item.id}\]\]`, 'g')
+        const refLink = `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
+        newContent = newContent.replace(refRegex, refLink)
+      })
+    }
+
+    return newContent
+  })
+}
 </script>

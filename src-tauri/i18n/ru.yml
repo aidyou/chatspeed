@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "Ошибка запроса API к сервису %{provider}: %{details}"
     deserialization_failed: "Ошибка десериализации '%{context}': %{details}"
     invalid_input: "Недопустимый ввод: %{details}"
     response_parse_failed: "Не удалось разобрать ответ от %{provider}: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "Ошибка сериализации вызова инструмента: %{details}"
     upstream_chat_error: "Ошибка вышестоящего чат-сервиса: %{message}"
   api_key_is_require_for_list_models: "Для получения списка моделей требуется ключ API. Настройте действительный ключ API в настройках."
-  chat_completion_failed_after_retries: "Завершение чата не удалось после %{retries} попыток"
   chat_not_found: "Указанная сессия чата не найдена"
   empty_chat_id: "ID чата не может быть пустым"
   empty_messages: "Список сообщений не может быть пустым"
@@ -28,21 +26,15 @@ chat:
   failed_to_convert_language_code: "Не удалось преобразовать код языка: %{error}"
   failed_to_create_file: "Не удалось создать файл: %{error}"
   failed_to_detect_language: "Не удалось определить язык"
-  failed_to_find_user_message_content: "Не удалось найти содержимое сообщения пользователя"
   failed_to_get_available_languages: "Не удалось получить список доступных языков: %{error}"
   failed_to_write_file: "Не удалось записать в файл: %{error}"
-  invalid_search_model: "Недопустимая модель поиска: %{model_name}"
   note_already_exists: "Эта заметка уже существует, нет необходимости добавлять ее снова"
-  search_analysing: "Анализ данных..."
-  search_fetching: "Получение данных..."
   search_not_found: "Указанная сессия поиска не найдена"
-  search_results: "Всего найдено %{count} результатов"
-  searching: "Поиск информации..."
-  user_message_with_references: "[Справочные материалы]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nОтвечая на вопросы пользователя, в первую очередь используйте свои собственные знания. Если вопрос выходит за рамки ваших знаний или требует самой свежей информации, вы можете обратиться к информации в тегах `<ref></ref>`. При цитировании этих материалов, пожалуйста, отмечайте соответствующие предложения с помощью [^id]. Не просто повторяйте содержание справочных материалов, а давайте ответы на основе всестороннего анализа.\n\n[Вопрос пользователя]\n %{content}"
 
 db:
   ai_model_not_found_by_id: "Модель ИИ с ID %{id} не найдена"
   ai_skill_not_found_by_id: "Навык ИИ с ID %{id} не найден"
+  agent_name_exists: "Имя агента '%{name}' уже существует"
   already_exists: "Данные уже существуют: %{error}"
   backup_busy_locked: "База данных занята или заблокирована другим процессом, после нескольких попыток доступ не удалось получить, повторите попытку позже или перезапустите приложение"
   backup_copy_incomplete: "Копирование базы данных не завершено"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Не удалось сериализовать схему вывода плагина в JSON: %{error}"
   plugin_not_found_by_uuid: "Плагин с UUID %{uuid} не найден"
   tauri_error: "Ошибка Tauri: %{error}"
-  unknown_database_version: "Неизвестная версия базы данных: %{version}"
 
 http:
   client_build_failed: "Не удалось создать HTTP-клиент: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "Не удалось создать окно WebView: %{error}"
   failed_to_emit_event: "Не удалось отправить событие: %{error}"
   failed_to_find_window_with_label: "Не удалось найти окно с меткой: %{label}"
+  failed_to_get_current_monitor: "Не удалось получить текущий монитор: %{error}"
+  failed_to_get_window_size: "Не удалось получить размер окна: %{error}"
   failed_to_initialize_logger: "Не удалось инициализировать регистратор"
   failed_to_navigate_to_url: "Не удалось перейти по URL: %{url}, ошибка: %{error}"
   failed_to_retrieve_log_directory: "Не удалось получить каталог журналов приложения"
   failed_to_set_window_always_on_top: "Не удалось установить окно поверх всех окон: %{error}"
   failed_to_set_window_focus: "Не удалось установить фокус окна: %{error}"
+  failed_to_set_window_position: "Не удалось установить положение окна: %{error}"
   failed_to_show_window: "Не удалось показать окно: %{error}"
   failed_to_start_up_application: "Не удалось запустить приложение"
+  invalid_direction: "Неверное направление, в настоящее время поддерживаются только: left->лево, right->право"
   window_not_ready: "Окно еще не готово"
   shortcut:
     failed_to_unregister_old: "Не удалось отменить регистрацию старого сочетания клавиш: %{error}"
@@ -169,8 +164,8 @@ mcp:
   config:
     name_must_be_non_empty: "Имя конфигурации MCP не может быть пустым, введите допустимое имя конфигурации"
     sse_url_must_be_non_empty: "URL-адрес SSE конфигурации MCP не может быть пустым"
-    stdio_args_must_be_non_empty: "«Параметры запуска» конфигурации MCP не могут быть пустыми"
-    stdio_command_must_be_non_empty: "«Команда запуска» конфигурации MCP не может быть пустой"
+    stdio_args_must_be_non_empty: "Параметры запуска конфигурации MCP не могут быть пустыми"
+    stdio_command_must_be_non_empty: "Команда запуска конфигурации MCP не может быть пустой"
   client:
     config_error_for_server: "Ошибка конфигурации сервера MCP '%{server_name}': %{error}"
     config_mismatch: "Несоответствие конфигурации MCP, создаваемый клиент MCP %{client}, тип конфигурации: %{protocol_type}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "Не удалось запустить транспорт SSE (URL: %{url}), причина: %{error}"
     sse_url_cant_be_empty: "Параметр URL клиента SSE не может быть пустым"
     stdio_args_cant_be_empty: "Параметр args клиента stdio не может быть пустым"
-    stdio_command_cant_be_empty: "Параметр command «Команда запуска» клиента stdio не может быть пустым"
+    stdio_command_cant_be_empty: "Параметр command Команда запуска клиента stdio не может быть пустым"
     stdio_command_not_found_no_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}). Убедитесь, что команда установлена и находится в переменной окружения PATH вашей системы.'
     stdio_command_not_found_with_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}).'
     stdio_npx_not_found_help: "Обычно это означает, что Node.js установлен неправильно или команда 'npx' отсутствует в переменной окружения PATH вашей системы. Проверьте установку Node.js."
@@ -201,8 +196,6 @@ network:
   client_build_error: "Не удалось создать HTTP-клиент: %{error}"
   header_error: "Не удалось создать заголовок запроса: %{error}"
   proxy_error: "Не удалось настроить прокси: %{error}"
-  request_failed_with_status: "Запрос не удался (%{status}): %{message}"
-  request_failed_with_type: "Запрос не удался (Код состояния: %{status}) - %{error_type}: %{message}"
   request_failed: "Запрос не удался: %{error}"
   response_read_error: "Не удалось прочитать ответ: %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "Файл не существует: %{file_path}"
 
 tools:
-  execution_failed: "Ошибка вызова инструмента, имя инструмента: %{name}, ошибка: %{error}"
   failed_to_get_model: "Не удалось получить модель %{model_type}"
   function_already_exists: "Функция уже существует: %{name}"
   function_not_found: "Инструментальная функция не найдена в рабочем процессе: %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "ID поисковой системы Google не может быть пустым"
     serper_api_key_empty: "Ключ API Serper не может быть пустым"
     tavily_api_key_empty: "Ключ API Tavily не может быть пустым"
-    web_search_failed: "Ошибка веб-поиска (Поставщик: %{provider}, Ключевое слово: %{keyword}): %{details}"
 
 tray:
   about: "О программе"
+  agent: "Агент"
   assistant: "Ассистент"
   chat: "Чат"
   mcp: "MCP"

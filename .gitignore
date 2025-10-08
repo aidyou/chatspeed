@@ -26,6 +26,7 @@ vcpkg_installed
 *.njsproj
 *.sln
 *.sw?
+/*.d.ts
 
 # element-plus forward scss
 style/element/*.css

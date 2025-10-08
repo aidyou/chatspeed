@@ -24,6 +24,114 @@ pub fn generate_tool_prompt(tools: &Vec<crate::ccproxy::adapter::unified::Unifie
     TOOL_COMPAT_MODE_PROMPT.replace("{TOOLS_LIST}", &tools_xml)
 }
 
+pub fn preprocess_unified_request(
+    unified_request: &mut crate::ccproxy::adapter::unified::UnifiedRequest,
+) {
+    log::debug!(
+        "preprocess_unified_request: Starting with {} messages",
+        unified_request.messages.len()
+    );
+    // 1. Merge consecutive messages with the same role.
+    if !unified_request.messages.is_empty() {
+        let mut merged_messages: Vec<crate::ccproxy::adapter::unified::UnifiedMessage> = Vec::new();
+        let mut message_iter = unified_request.messages.iter().cloned();
+        if let Some(mut last_message) = message_iter.next() {
+            for message in message_iter {
+                if message.role == last_message.role {
+                    last_message.content.extend(message.content);
+                } else {
+                    merged_messages.push(last_message);
+                    last_message = message;
+                }
+            }
+            merged_messages.push(last_message);
+        }
+        unified_request.messages = merged_messages;
+    }
+
+    // 2. Inject dummy responses for any unmatched tool calls and ensure pairing.
+    let mut corrected_messages: Vec<crate::ccproxy::adapter::unified::UnifiedMessage> = Vec::new();
+    let mut pending_tool_calls: Vec<String> = Vec::new(); // Stores tool_use_ids from assistant's ToolUse
+
+    for msg in &unified_request.messages {
+        let is_tool_response_message = msg.role
+            == crate::ccproxy::adapter::unified::UnifiedRole::Tool
+            || (msg.role == crate::ccproxy::adapter::unified::UnifiedRole::User
+                && msg.content.iter().any(|b| {
+                    matches!(
+                        b,
+                        crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult { .. }
+                    )
+                }));
+
+        if !pending_tool_calls.is_empty() && !is_tool_response_message {
+            // If there are pending tool calls and the current message is not a tool response,
+            // inject dummy responses for all pending tool calls.
+            for tool_id in pending_tool_calls.drain(..) {
+                corrected_messages.push(crate::ccproxy::adapter::unified::UnifiedMessage {
+                    role: crate::ccproxy::adapter::unified::UnifiedRole::Tool,
+                    content: vec![
+                        crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult {
+                            tool_use_id: tool_id,
+                            content: crate::ccproxy::types::TOOL_CALL_EMPTY_REMAIN.to_string(),
+                            is_error: true,
+                        },
+                    ],
+                    reasoning_content: None,
+                });
+            }
+        }
+
+        corrected_messages.push(msg.clone());
+
+        // Update pending_tool_calls based on the current message's content
+        for block in &msg.content {
+            match block {
+                crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolUse { id, .. } => {
+                    if msg.role == crate::ccproxy::adapter::unified::UnifiedRole::Assistant {
+                        pending_tool_calls.push(id.clone());
+                    }
+                }
+                crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult {
+                    tool_use_id,
+                    ..
+                } => {
+                    // Remove this tool_use_id from pending list if it exists
+                    pending_tool_calls.retain(|id| id != tool_use_id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // After iterating through all messages, inject dummy responses for any remaining pending tool calls
+    if !pending_tool_calls.is_empty() {
+        log::warn!(
+            "preprocess_unified_request: Found {} unmatched tool calls, injecting dummy responses: {:?}",
+            pending_tool_calls.len(), pending_tool_calls
+        );
+
+        for tool_id in pending_tool_calls.drain(..) {
+            corrected_messages.push(crate::ccproxy::adapter::unified::UnifiedMessage {
+                role: crate::ccproxy::adapter::unified::UnifiedRole::Tool,
+                content: vec![
+                    crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult {
+                        tool_use_id: tool_id,
+                        content: crate::ccproxy::types::TOOL_CALL_EMPTY_REMAIN.to_string(),
+                        is_error: true,
+                    },
+                ],
+                reasoning_content: None,
+            });
+        }
+    }
+    unified_request.messages = corrected_messages;
+    log::debug!(
+        "preprocess_unified_request: Completed processing, final message count: {}",
+        unified_request.messages.len()
+    );
+}
+
 /// Process tool calls found in the buffer
 pub fn process_tool_calls_in_buffer(
     status: &mut std::sync::RwLockWriteGuard<SseStatus>,

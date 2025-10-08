@@ -203,6 +203,7 @@ pub async fn run() -> Result<()> {
             get_env,
             // fs
             image_preview,
+
             // window
             open_setting_window,
             open_note_window,
@@ -212,6 +213,8 @@ pub async fn run() -> Result<()> {
             get_window_always_on_top,
             quit_window,
             set_mouse_event_state,
+            move_window_to_screen_edge,
+
             // workflow
             run_dag_workflow,
             add_agent,
@@ -220,6 +223,13 @@ pub async fn run() -> Result<()> {
             get_agent,
             get_all_agents,
             get_available_tools,
+            workflow_chat_completion,
+            create_workflow,
+            add_workflow_message,
+            update_workflow_status,
+            get_workflow_snapshot,
+            list_workflows,
+
             // dev tools
             test_scrape,
             // updater
@@ -522,6 +532,9 @@ pub async fn run() -> Result<()> {
                     });
             });
             app.manage(chat_state.clone());
+
+            // Listen for the frontend to be ready before starting a workflow chat
+            crate::workflow::helper::listen_for_workflow_ready(app.handle());
 
             // Initialize the scraper pool and manage it
             let scraper_pool = ScraperPool::new(app.handle().clone());

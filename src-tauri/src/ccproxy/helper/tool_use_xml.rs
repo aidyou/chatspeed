@@ -143,10 +143,9 @@ impl Arg {
         let value = html_escape::decode_html_entities(raw_value).to_string();
 
         if let Some(data_type) = self.data_type {
-            let trimmed_value = value.trim();
             match data_type {
                 ParamType::Number => {
-                    if let Ok(f) = trimmed_value.parse::<f64>() {
+                    if let Ok(f) = value.parse::<f64>() {
                         // Handle AI output compatibility: sometimes AI outputs floating-point numbers
                         // for integer values (e.g., 5.0 instead of 5). For Number type both are valid,
                         // but for Integer type 5.0 is incorrect. To maximize compatibility and minimize
@@ -158,32 +157,30 @@ impl Arg {
                     }
                 }
                 ParamType::Integer => {
-                    if let Ok(i) = trimmed_value.parse::<i64>() {
+                    if let Ok(i) = value.parse::<i64>() {
                         return json!(i);
                     }
-                    if let Ok(u) = trimmed_value.parse::<u64>() {
+                    if let Ok(u) = value.parse::<u64>() {
                         return json!(u);
                     }
                 }
                 ParamType::Boolean => {
-                    if let Ok(b) = trimmed_value.parse::<bool>() {
+                    if let Ok(b) = value.parse::<bool>() {
                         return json!(b);
                     }
                 }
                 ParamType::Array => {
-                    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(trimmed_value) {
+                    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&value) {
                         return json!(arr);
                     }
                 }
                 ParamType::Object => {
-                    if let Ok(obj) = serde_json::from_str::<Map<String, Value>>(trimmed_value) {
+                    if let Ok(obj) = serde_json::from_str::<Map<String, Value>>(&value) {
                         return json!(obj);
                     }
                 }
                 ParamType::Null => return Value::Null,
-                ParamType::String => { // Explicitly handle string type
-                     // No parsing needed, fall through to the default string return
-                }
+                ParamType::String => {}
             }
         }
 
@@ -422,20 +419,16 @@ fn parse_custom_tag_as_simple_arg(
     element: &ElementRef,
     tag_name: &str,
 ) -> Result<Option<Arg>, anyhow::Error> {
-    // Get the raw text content, not inner_html
     let content = element.text().collect::<Vec<_>>().join("");
-    // Escape the content to ensure XML validity
-    let escaped_content = escape_xml_content(&content);
-
-    // The data_type is ONLY determined by the explicit `type` attribute.
     let explicit_type = element.value().attr("type").map(ParamType::from);
+    let processed_content = preprocess_xml_content(content, explicit_type);
 
     let final_name = tag_name.strip_prefix("x-cs-").unwrap_or(tag_name);
 
     Ok(Some(Arg {
         name: final_name.to_string(),
         data_type: explicit_type,
-        value: Some(escaped_content), // Store escaped content
+        value: processed_content, // Store preprocessed content
     }))
 }
 
@@ -450,24 +443,48 @@ fn parse_arg_element(element: &ElementRef) -> Result<Option<Arg>, anyhow::Error>
     let explicit_type = element.value().attr("type").map(ParamType::from);
 
     if let Some(value) = element.value().attr("value").map(|s| s.to_string()) {
-        // If 'value' attribute exists, it's already a string, just escape it
-        let escaped_value = escape_xml_content(&value);
+        let processed_value = preprocess_xml_content(value, explicit_type);
         return Ok(Some(Arg {
             name,
             data_type: explicit_type,
-            value: Some(escaped_value),
+            value: processed_value,
         }));
     }
 
-    // No 'value' attribute, so use raw text content and escape it
     let content = element.text().collect::<Vec<_>>().join("");
-    let escaped_content = escape_xml_content(&content);
+    let processed_content = preprocess_xml_content(content, explicit_type);
 
     Ok(Some(Arg {
         name,
         data_type: explicit_type,
-        value: Some(escaped_content), // Store escaped content
+        value: processed_content, // Store preprocessed content
     }))
+}
+
+/// Preprocesses content based on its type for XML parsing.
+/// This includes trimming whitespace and escaping XML special characters.
+fn preprocess_xml_content(content: String, data_type: Option<ParamType>) -> Option<String> {
+    if let Some(dt) = data_type {
+        match dt {
+            // For string-like types that can contain special characters.
+            ParamType::String | ParamType::Array | ParamType::Object => {
+                // For JSON, trim whitespace before escaping.
+                let processed = if dt == ParamType::String {
+                    content
+                } else {
+                    content.trim().to_string()
+                };
+                Some(escape_xml_content(&processed))
+            }
+            // For simple types, just trim. No escaping needed.
+            ParamType::Number | ParamType::Boolean | ParamType::Integer | ParamType::Null => {
+                Some(content.trim().to_string())
+            }
+        }
+    } else {
+        // If type is unknown, assume it might be a string that needs escaping.
+        Some(escape_xml_content(&content))
+    }
 }
 
 /// Escape XML content to prevent parsing issues

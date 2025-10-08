@@ -1,7 +1,6 @@
-use rusqlite::Connection;
-
-use crate::db::sql::schema::*;
-use crate::db::StoreError;
+use crate::db::sql::schema::{
+    AI_MODEL_TABLE, AI_SKILL_TABLE, CONFIG_TABLE, CONVERSATIONS_TABLE, MESSAGES_TABLE,
+};
 
 /// Initial database schema creation SQL statements
 pub const INIT_SQL: &[(&str, &str)] = &[
@@ -204,21 +203,3 @@ pub const INIT_SQL: &[(&str, &str)] = &[
         r#"INSERT OR IGNORE INTO `conversations` (`id`,`title`,`is_favorite`) VALUES (1,'New Conversation 1',0)"#,
     ),
 ];
-
-/// Executes initial database schema creation
-pub fn run_migration(conn: &mut Connection) -> Result<(), StoreError> {
-    // start transaction
-    let tx = conn.transaction()?;
-
-    for (_name, sql) in INIT_SQL {
-        tx.execute(sql, [])?;
-    }
-
-    // insert database version
-    tx.execute("INSERT OR REPLACE INTO db_version (version) VALUES (1)", [])?;
-
-    // commit transaction
-    tx.commit()?;
-
-    Ok(())
-}

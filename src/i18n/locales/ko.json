@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "AI에게 질문하기",
     "askDescription": "안녕하세요! 무엇을 도와드릴까요?",
-    "chatPlaceholder": "질문, 번역, 글쓰기, 코딩 등... ↑↓ 키로 스킬 선택\nAI의 메시지에 답장하려면 Alt+Q, 메시지 복사는 Alt+C",
+    "chatPlaceholder": "질문, 번역, 글쓰기, 코딩 등... ALT+↑↓ 키로 스킬 선택\nAI의 메시지에 답장하려면 Alt+Q, 메시지 복사는 Alt+C",
     "haveNoModel": "아직 모델이 추가되지 않았습니다. 설정에서 추가해주세요."
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "이 메시지를 삭제하시겠습니까?",
     "collapseSidebar": "사이드바 접기 (Cmd/Ctrl+B)",
     "expandSidebar": "사이드바 펼치기 (Cmd/Ctrl+B)",
-    "contextCleared": "대화 내용이 초기화되었습니다.",
     "conversation": "대화",
     "conversationNotFound": "대화가 존재하지 않거나 삭제되었습니다.",
     "conversationTitle": "대화 주제",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "현재 대화 ID 가져오기 실패: {error}",
     "errorOnGoToChat": "채팅 창으로 이동 실패: {error}",
     "errorOnLoadMessages": "메시지 로드 실패: {error}",
+    "errorOnMoveWindow": "윈도우 이동 실패: {error}",
     "errorOnSaveMessage": "대화 정보 저장 실패: {error}",
     "errorOnSendMessage": "채팅 메시지 전송 실패: {error}",
     "errorOnStopChat": "채팅 중단 실패: {error}",
@@ -39,6 +39,7 @@
     "haveNoModel": "아직 모델이 추가되지 않았습니다. 상단 메뉴의 \"모델 추가+\" 버튼을 클릭하여 추가해주세요.",
     "inputMessagePlaceholder": "{at} 입력으로 스킬 호출",
     "messageCopied": "메시지가 복사되었습니다.",
+    "messageNotFound": "메시지가 존재하지 않거나 삭제되었습니다.",
     "newConversaction": "새 대화 (Cmd/Ctrl + N)",
     "mindmapError": "마인드맵 렌더링 실패",
     "networkDisabled": "인터넷 연결 끄기",
@@ -116,6 +117,7 @@
   },
   "menu": {
     "about": "정보",
+    "agent": "에이전트",
     "assistant": "데스크톱 도우미",
     "mcp": "MCP",
     "model": "AI 엔진",
@@ -132,9 +134,11 @@
   "settings": {
     "agent": {
       "actModel": "행동 모델",
+      "agentType": "에이전트 유형",
       "add": "에이전트 추가",
       "addSuccess": "에이전트가 성공적으로 추가되었습니다!",
       "autoApprove": "자동 승인 도구",
+      "autonomousMode": "자율 모드",
       "availableTools": "사용 가능한 도구",
       "basicInfo": "기본 정보",
       "copy": "에이전트 복사",
@@ -146,7 +150,6 @@
       "description": "설명",
       "edit": "에이전트 편집",
       "fetchFailed": "에이전트 가져오기 실패",
-      "fetchToolsFailed": "사용 가능한 도구 목록 가져오기 실패",
       "maxContexts": "최대 컨텍스트 길이",
       "models": "모델",
       "name": "에이전트 이름",
@@ -154,11 +157,15 @@
       "noAgents": "에이전트를 찾을 수 없음",
       "notFound": "에이전트를 찾을 수 없음",
       "planModel": "계획 모델",
+      "planningMode": "계획 모드",
+      "planningPrompt": "계획 프롬프트",
+      "reorderFailed": "에이전트 재정렬 실패: {error}",
       "saveFailed": "에이전트 저장 실패: {error}",
       "selectActModel": "행동 모델 선택",
       "selectAutoApproveTools": "자동 승인 도구 선택",
       "selectAvailableTools": "사용 가능한 도구 선택",
       "selectPlanModel": "계획 모델 선택",
+      "selectProvider": "제공자 선택",
       "selectVisionModel": "비전 모델 선택",
       "systemPrompt": "시스템 프롬프트",
       "systemPromptRequired": "시스템 프롬프트를 입력하십시오",
@@ -513,6 +520,8 @@
         "disabled": "비활성화됨",
         "maxContext": "최대 컨텍스트 길이",
         "maxContextPlaceholder": "각 모델의 릴리스 정보 또는 인터페이스 정보를 참조하십시오. 값 0은 설정되지 않습니다.",
+        "modelInjectionCondition": "모델 주입 조건",
+        "modelInjectionConditionPlaceholder": "모델 ID가 일치할 때만 주입, 제한 없이 공백으로 두면 *로 여러 문자를, ?로 단일 문자를 일치시킬 수 있음",
         "name": "그룹 이름",
         "namePlaceholder": "그룹 이름을 입력하십시오.",
         "promptInjection": "프롬프트 주입",
@@ -597,6 +606,7 @@
       "model": "AI 엔진",
       "proxy": "프록시",
       "privacy": "개인 정보 보호",
+      "scraperTest": "스크래퍼 테스트",
       "skill": "스킬"
     }
   }

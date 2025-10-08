@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use tauri::{command, AppHandle, State};
 
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::db::{Agent, MainStore};
+use crate::ai::interaction::chat_completion::PendingWorkflow;
+use crate::db::{Agent, MainStore, Workflow, WorkflowMessage, WorkflowSnapshot};
 use crate::libs::tsid::TsidGenerator;
 use crate::tools::MCP_TOOL_NAME_SPLIT;
 use crate::workflow::dag::WorkflowEngine;
@@ -62,41 +64,6 @@ pub async fn get_available_tools(
     Ok(frontend_tools)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AgentPayload {
-    pub id: Option<String>,
-    pub name: String,
-    pub description: Option<String>,
-    pub system_prompt: String,
-    pub agent_type: String,
-    pub planning_prompt: Option<String>,
-    pub available_tools: Option<String>,
-    pub auto_approve: Option<String>,
-    pub plan_model: Option<String>,
-    pub act_model: Option<String>,
-    pub vision_model: Option<String>,
-    pub max_contexts: Option<i32>,
-}
-
-impl From<AgentPayload> for Agent {
-    fn from(payload: AgentPayload) -> Self {
-        Agent::new(
-            payload.id.unwrap_or_default(),
-            payload.name,
-            payload.description,
-            payload.system_prompt,
-            payload.agent_type,
-            payload.planning_prompt,
-            payload.available_tools,
-            payload.auto_approve,
-            payload.plan_model,
-            payload.act_model,
-            payload.vision_model,
-            payload.max_contexts,
-        )
-    }
-}
-
 #[command]
 pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> Result<(), String> {
     let engine = WorkflowEngine::new(app_handle)
@@ -119,7 +86,7 @@ pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> R
 #[command]
 pub async fn add_agent(
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent_payload: AgentPayload,
+    agent_payload: super::types::workflow::AgentPayload,
 ) -> Result<String, String> {
     let new_id = TSID_GENERATOR.generate().map_err(|e| e.to_string())?;
     let agent = Agent::new(
@@ -144,7 +111,7 @@ pub async fn add_agent(
 #[command]
 pub async fn update_agent(
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent_payload: AgentPayload,
+    agent_payload: super::types::workflow::AgentPayload,
 ) -> Result<(), String> {
     let agent: Agent = agent_payload.into();
     let store = main_store.read().map_err(|e| e.to_string())?;
@@ -178,4 +145,98 @@ pub async fn get_all_agents(
 ) -> Result<Vec<Agent>, String> {
     let store = main_store.read().map_err(|e| e.to_string())?;
     store.get_all_agents().map_err(|e| e.to_string())
+}
+
+/// Executes a chat completion for the workflow engine, acting as a proxy.
+/// It forwards tool calls from the LLM back to the frontend for execution.
+#[command]
+pub async fn workflow_chat_completion(
+    app_handle: AppHandle,
+    chat_state: State<'_, Arc<ChatState>>,
+    payload: super::types::workflow::WorkflowChatPayload,
+) -> Result<String, String> {
+    let stream_id = TSID_GENERATOR.generate().map_err(|e| e.to_string())?;
+
+    // Create the pending workflow context
+    let pending_workflow = PendingWorkflow {
+        app_handle,
+        payload,
+    };
+
+    // Store it in the dashmap, keyed by the stream_id
+    // It will be handled at @src-tauri/src/workflow/helper.rs
+    chat_state
+        .pending_workflow_chat_completions
+        .insert(stream_id.clone(), pending_workflow);
+
+    // Return the stream_id to the frontend
+    Ok(stream_id)
+}
+
+// =================================================
+//  Workflow Database Commands
+// =================================================
+
+#[command]
+pub async fn create_workflow(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    user_query: String,
+    agent_id: String,
+) -> Result<Workflow, String> {
+    let id = TSID_GENERATOR.generate()?;
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store
+        .create_workflow(&id, &user_query, &agent_id)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn add_workflow_message(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    role: String,
+    message: String,
+    metadata: Option<Value>,
+) -> Result<WorkflowMessage, String> {
+    let msg = WorkflowMessage {
+        id: None,
+        session_id,
+        role,
+        message,
+        metadata,
+        created_at: None,
+    };
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store.add_workflow_message(&msg).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn update_workflow_status(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_id: String,
+    status: String,
+) -> Result<(), String> {
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_status(&workflow_id, &status)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_workflow_snapshot(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_id: String,
+) -> Result<WorkflowSnapshot, String> {
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store
+        .get_workflow_snapshot(&workflow_id)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn list_workflows(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+) -> Result<Vec<Workflow>, String> {
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store.list_workflows().map_err(|e| e.to_string())
 }

@@ -121,6 +121,14 @@
                   value="user" />
               </el-select>
             </el-form-item>
+            <el-form-item :label="$t('settings.proxyGroup.form.modelInjectionCondition')" prop="metadata.model_injection_condition">
+              <el-input
+                v-model="currentGroup.metadata.modelInjectionCondition"
+                type="textarea"
+                :rows="2"
+                :autosize="{ minRows: 2, maxRows: 5 }"
+                :placeholder="$t('settings.proxyGroup.form.modelInjectionConditionPlaceholder')" />
+            </el-form-item>
             <el-form-item :label="$t('settings.proxyGroup.form.promptText')" prop="prompt_text">
               <el-input
                 v-model="currentGroup.promptText"
@@ -216,7 +224,7 @@ const initialGroupState = () => ({
   promptText: '',
   toolFilter: '',
   temperature: 1.0,
-  metadata: { maxContext: 0, promptInjectionPosition: 'system' },
+  metadata: { maxContext: 0, promptInjectionPosition: 'system', modelInjectionCondition: '' },
   disabled: false
 })
 
@@ -236,7 +244,11 @@ const openEditDialog = group => {
   isEditing.value = true
   currentGroup.value = { ...group }
   if (!currentGroup.value.metadata) {
-    currentGroup.value.metadata = { maxContext: 0 }
+    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '' }
+  }
+  // 确保在编辑现有分组时包含modelInjectionCondition字段
+  if (!currentGroup.value.metadata.modelInjectionCondition) {
+    currentGroup.value.metadata.modelInjectionCondition = ''
   }
   console.log(currentGroup.value)
   dialogVisible.value = true

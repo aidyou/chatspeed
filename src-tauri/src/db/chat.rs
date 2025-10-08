@@ -19,7 +19,10 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
     pub fn get_conversation_by_id(&self, id: i64) -> Result<Conversation, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let conversation = conn
             .query_row(
                 "SELECT id, title, created_at, is_favorite FROM conversations WHERE id = ?",
@@ -54,7 +57,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn get_all_conversations(&self) -> Result<Vec<Conversation>, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, title, created_at, is_favorite FROM conversations order by id desc",
         )?;
@@ -88,7 +94,10 @@ impl MainStore {
         &self,
         conversation_id: i64,
     ) -> Result<Vec<Message>, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, role, content, timestamp, metadata
              FROM messages WHERE conversation_id = ? order by id asc",
@@ -140,7 +149,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn add_conversation(&self, title: String) -> Result<i64, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute(
             "INSERT INTO conversations (title,is_favorite, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
             [title],
@@ -165,7 +177,10 @@ impl MainStore {
         title: Option<String>,
         is_favorite: Option<bool>,
     ) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         if let Some(title) = title {
             conn.execute(
                 "UPDATE conversations SET title = ? WHERE id = ?",
@@ -193,7 +208,10 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_conversation(&self, id: i64) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         conn.execute("DELETE FROM conversations WHERE id = ?", params![id])?;
         Ok(())
     }
@@ -222,7 +240,10 @@ impl MainStore {
         content: String,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -241,20 +262,33 @@ impl MainStore {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Deletes a message from the database.
+    /// Deletes messages from the database.
     ///
-    /// Removes the record with the specified ID from the `messages` table.
+    /// Removes the records with the specified IDs from the `messages` table.
     ///
     /// # Arguments
     ///
-    /// * `id` - The ID of the message to be deleted.
+    /// * `id` - The IDs of the messages to be deleted.
     ///
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn delete_message(&self, id: i64) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
-        conn.execute("DELETE FROM messages WHERE id = ?", [id])?;
+    pub fn delete_message(&self, id: Vec<i64>) -> Result<(), StoreError> {
+        if id.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+
+        // Create placeholders for the IN clause (?, ?, ? ...)
+        let placeholders: Vec<String> = id.iter().map(|_| "?".to_string()).collect();
+        let placeholder_str = placeholders.join(",");
+
+        let sql = format!("DELETE FROM messages WHERE id IN ({})", placeholder_str);
+        conn.execute(&sql, rusqlite::params_from_iter(id))?;
         Ok(())
     }
 
@@ -273,7 +307,10 @@ impl MainStore {
         id: i64,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
-        let conn = self.conn.lock().map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()

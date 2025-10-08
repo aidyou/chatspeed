@@ -10,16 +10,13 @@ use std::{default::Default, fmt::Display, sync::Arc};
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MessageType {
-    ToolCalls, // Assistant tool selection
     Error,
     Finished,
-    Log,
-    Plan,
     Reasoning,
     Reference,
-    Step,
     Text,
     Think,
+    ToolCalls, // Assistant tool selection
     ToolResults,
 }
 
@@ -42,41 +39,30 @@ impl<'de> Deserialize<'de> for MessageType {
     }
 }
 
-impl From<MessageType> for &str {
-    fn from(value: MessageType) -> Self {
-        match value {
-            MessageType::ToolCalls => "tool_calls",
+impl Display for MessageType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
             MessageType::Error => "error",
             MessageType::Finished => "finished",
-            MessageType::Log => "log",
-            MessageType::Plan => "plan",
             MessageType::Reasoning | MessageType::Think => "reasoning",
             MessageType::Reference => "reference",
-            MessageType::Step => "step",
             MessageType::Text => "text",
+            MessageType::ToolCalls => "tool_calls",
             MessageType::ToolResults => "tool_results",
-        }
-    }
-}
-
-impl From<MessageType> for String {
-    fn from(value: MessageType) -> Self {
-        value.into()
+        };
+        write!(f, "{}", s)
     }
 }
 
 impl MessageType {
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
-            "tool_calls" => Some(MessageType::ToolCalls),
             "error" => Some(MessageType::Error),
             "finished" => Some(MessageType::Finished),
-            "log" => Some(MessageType::Log),
-            "plan" => Some(MessageType::Plan),
             "reasoning" | "think" | "thinking" => Some(MessageType::Reasoning),
             "reference" => Some(MessageType::Reference),
-            "step" => Some(MessageType::Step),
             "text" => Some(MessageType::Text),
+            "tool_calls" => Some(MessageType::ToolCalls),
             "tool_results" => Some(MessageType::ToolResults),
             _ => {
                 warn!(
@@ -201,6 +187,7 @@ pub struct ToolCallDeclaration {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MCPToolDeclaration {
     pub name: String,
     pub description: String,

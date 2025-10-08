@@ -1,5 +1,31 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.15 Release Notes
+
+v1.1.15 focuses on enhancing the user experience of tool calls and system stability, while optimizing the protocol conversion capabilities of the ccproxy module.
+
+### ✨ Enhancements
+1. Optimized the tool call display interface, where multiple tool calls within the same conversation turn are now displayed as a single session
+2. Optimized message deletion, where deleting a message will remove all tool call information for the same conversation turn at once
+3. Optimized the conversation entry point, where all conversation errors are now notified to the frontend
+4. Optimized error messages, returning status codes for HTTP request-related errors to facilitate frontend adaptation based on the situation
+5. Optimized Markdown parsing in conversations, using a streaming parsing mechanism which greatly improves parsing efficiency and user experience
+6. Added `ALT + ←/→` hotkeys to the main window for quickly moving the window to the bottom-left and bottom-right corners
+
+### 🔧 Technical Optimizations
+7. Optimized the conversation history in the ccproxy module, preprocessing conversation records and tool call records before protocol conversion to make them as suitable as possible for various protocols
+8. Optimized the ccproxy module, now supporting `*` and `?` wildcards by defining model injection conditions
+9. Optimized database upgrade logic for better version update management in the future
+
+### 🐞 Bug Fixes
+10. Fixed tool call interruption issues caused by non-standard end flag sending in some models (e.g., gtp-oss), improving system compatibility
+11. Fixed an issue in the ccproxy module where tool structures were incorrect during complex scenarios when converting from gemini protocol to claude protocol
+
+### 🕰 In Progress
+Part of the ReAct logic has been completed, and development of this workflow module will continue
+
+---
+
 # Chatspeed v1.1.14 Release Notes
 
 This update primarily introduces **proxy alias wildcard support**, significantly enhancing the flexibility and convenience of model configuration. You can now use wildcards like `*` and `?` to define proxy aliases, adapting to changes in model names without frequent configuration modifications. Additionally, we have optimized the search scraper's filtering mechanism, fixed a bug where some tool calls in the chat interface could not be expanded, and optimized the model configuration process.

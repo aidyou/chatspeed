@@ -5,7 +5,7 @@ export const askUserTool: ToolDefinition = {
   name: 'AskUser',
   description:
     'When you need more information from the user to proceed, use this tool to ask a question. The user will provide an answer.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       question: {

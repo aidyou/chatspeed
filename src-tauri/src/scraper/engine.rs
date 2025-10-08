@@ -10,8 +10,6 @@ use super::config_loader::ConfigLoader;
 use super::pool::ScraperPool;
 use crate::libs::util;
 use crate::scraper::types::{ContentOptions, GenericContentRule, ScrapeRequest};
-use crate::scraper::url_helper::{decode_bing_url, get_meta_refresh_url};
-use crate::search::SearchResult;
 
 /// The primary entry point for the scraper module.
 ///

@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "Demander à l'IA",
     "askDescription": "Bonjour ! Que puis-je faire pour vous ?",
-    "chatPlaceholder": "Posez des questions, traduisez, écrivez, programmez, etc. Utilisez ↑↓ pour sélectionner une compétence.\nPour répondre au message de l'IA, appuyez sur Alt+Q, Alt+C pour copier le message.",
+    "chatPlaceholder": "Posez des questions, traduisez, écrivez, programmez, etc. Utilisez ALT+↑↓ pour sélectionner une compétence.\nPour répondre au message de l'IA, appuyez sur Alt+Q, Alt+C pour copier le message.",
     "haveNoModel": "Vous n'avez ajouté aucun modèle. Veuillez en ajouter un depuis les paramètres."
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "Êtes-vous sûr de vouloir supprimer ce message ?",
     "collapseSidebar": "Réduire la barre latérale (Cmd/Ctrl+B)",
     "expandSidebar": "Déployer la barre latérale (Cmd/Ctrl+B)",
-    "contextCleared": "Contexte effacé",
     "conversation": "Conversation",
     "conversationNotFound": "Conversation introuvable ou supprimée",
     "conversationTitle": "Titre de la conversation",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "Échec de la récupération de l'ID de la conversation actuelle : {error}",
     "errorOnGoToChat": "Échec du passage à la conversation : {error}",
     "errorOnLoadMessages": "Échec du chargement des messages : {error}",
+    "errorOnMoveWindow": "Échec du déplacement de la fenêtre : {error}",
     "errorOnSaveMessage": "Échec de l'enregistrement des informations de la conversation : {error}",
     "errorOnSendMessage": "Échec de l'envoi du message : {error}",
     "errorOnStopChat": "Échec de l'arrêt de la conversation : {error}",
@@ -41,6 +41,7 @@
     "mcpDisabled": "Désactiver les outils MCP",
     "mcpEnabled": "Activer les outils MCP",
     "messageCopied": "Message copié",
+    "messageNotFound": "Message introuvable ou supprimé",
     "mindmapError": "Échec du rendu de la carte mentale",
     "networkDisabled": "Réseau désactivé",
     "networkEnabled": "Réseau activé : récupération automatique du contenu des liens ou recherche d'informations pertinentes.",
@@ -117,6 +118,7 @@
   "menu": {
     "about": "À propos",
     "assistant": "Assistant de bureau",
+    "agent": "Agent",
     "mcp": "MCP",
     "model": "Moteur d'IA",
     "note": "Note",
@@ -132,9 +134,11 @@
   "settings": {
     "agent": {
       "actModel": "Modèle d'action",
+      "agentType": "Type d'agent",
       "add": "Ajouter un agent",
       "addSuccess": "Agent ajouté avec succès !",
       "autoApprove": "Outils à approbation automatique",
+      "autonomousMode": "Mode autonome",
       "availableTools": "Outils disponibles",
       "basicInfo": "Informations de base",
       "copy": "Copier l'agent",
@@ -146,7 +150,6 @@
       "description": "Description",
       "edit": "Modifier l'agent",
       "fetchFailed": "Échec de la récupération de l'agent",
-      "fetchToolsFailed": "Échec de la récupération des outils disponibles",
       "maxContexts": "Longueur maximale du contexte",
       "models": "Modèles",
       "name": "Nom de l'agent",
@@ -154,11 +157,15 @@
       "noAgents": "Aucun agent trouvé",
       "notFound": "Agent non trouvé",
       "planModel": "Modèle de planification",
+      "planningMode": "Mode de planification",
+      "planningPrompt": "Invite de planification",
+      "reorderFailed": "Échec de la réorganisation de l'agent : {error}",
       "saveFailed": "Échec de l'enregistrement de l'agent : {error}",
       "selectActModel": "Sélectionner le modèle d'action",
       "selectAutoApproveTools": "Sélectionner les outils à approbation automatique",
       "selectAvailableTools": "Sélectionner les outils disponibles",
       "selectPlanModel": "Sélectionner le modèle de planification",
+      "selectProvider": "Sélectionner le fournisseur",
       "selectVisionModel": "Sélectionner le modèle de vision",
       "systemPrompt": "Invite système",
       "systemPromptRequired": "Veuillez saisir l'invite système",
@@ -513,6 +520,8 @@
         "disabled": "Désactivé",
         "maxContext": "Longueur maximale du contexte",
         "maxContextPlaceholder": "Veuillez vous référer aux informations de publication ou aux informations d'interface de chaque modèle, une valeur de 0 ne sera pas définie",
+        "modelInjectionCondition": "Condition d'injection du modèle",
+        "modelInjectionConditionPlaceholder": "Injecter uniquement lorsque l'ID du modèle correspond, laisser vide pour aucune limite, utiliser * pour faire correspondre plusieurs caractères, ? pour un seul caractère",
         "name": "Nom du groupe",
         "namePlaceholder": "Veuillez entrer un nom de groupe",
         "promptInjection": "Injection de prompt",
@@ -597,7 +606,8 @@
       "model": "Moteur d'IA",
       "proxy": "Proxy",
       "privacy": "Confidentialité",
-      "skill": "Compétence"
+      "skill": "Compétence",
+      "scraperTest": "Test du scraper"
     }
   }
 }

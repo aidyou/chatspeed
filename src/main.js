@@ -6,7 +6,7 @@ import router from './router'
 import i18n from './i18n'
 
 import '@/components/icon/chatspeed.css'
-import cs from '@/components/icon/Index.vue'
+import cs from '@/components/icon/Icon.vue'
 import logo from '@/components/icon/Logo.vue'
 import avatar from '@/components/common/Avatar.vue'
 
@@ -23,4 +23,3 @@ app.component('avatar', avatar)
 
 registerDirective(app)
 app.mount("#app");
-

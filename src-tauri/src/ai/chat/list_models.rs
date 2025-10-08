@@ -122,11 +122,17 @@ pub async fn openai_list_models(
         .await
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "OpenAI".to_string(),
+            status_code: "0".to_string(), // Network/Request failure, not an HTTP error
             details: e,
         })?;
 
     if response.is_error || response.content.is_empty() {
+        let status_code = response
+            .raw_response
+            .map(|r| r.status().to_string())
+            .unwrap_or("500".to_string());
         return Err(AiError::ApiRequestFailed {
+            status_code,
             provider: "OpenAI".to_string(),
             details: response.content,
         });
@@ -227,13 +233,20 @@ pub async fn claude_list_models(
             let err = AiError::ApiRequestFailed {
                 provider: "Claude".to_string(),
                 details: network_err.to_string(),
+                status_code: "0".to_string(),
             };
             log::error!("Claude list_models API request failed: {}", err);
             err
         })?;
 
     if response.is_error || response.content.is_empty() {
+        let status_code = response
+            .raw_response
+            .map(|r| r.status().to_string())
+            .unwrap_or("500".to_string());
+
         let err = AiError::ApiRequestFailed {
+            status_code,
             provider: "Claude".to_string(),
             details: response.content,
         };
@@ -319,11 +332,18 @@ pub async fn gemini_list_models(
         .await
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "Gemini".to_string(),
-            details: e.to_string(), // Changed from e to e.to_string()
+            details: e.to_string(),
+            status_code: "0".to_string(),
         })?;
 
     if response.is_error || response.content.is_empty() {
+        let status_code = response
+            .raw_response
+            .map(|r| r.status().to_string())
+            .unwrap_or("500".to_string());
+
         return Err(AiError::ApiRequestFailed {
+            status_code,
             provider: "Gemini".to_string(),
             details: response.content,
         });

@@ -102,15 +102,27 @@
             </div>
             <div v-else-if="chatStore.messages.length === 0 && !isChatting" class="empty-message">
               <logo :name="currentModel?.logo || 'ai-common'" class="logo" size="40" />
+              <ul>
+                <li><strong>cmd/ctrl + n</strong> New Chat</li>
+                <li><strong>cmd/ctrl + b</strong> Toggle Sidebar</li>
+                <li><strong>alt + →</strong> Move To Right Button</li>
+                <li><strong>alt + ←</strong> Move To Left Button</li>
+              </ul>
             </div>
 
             <!-- message list -->
             <div
+              class="message"
               v-for="(message, index) in processedMessages"
               :key="index"
+              :class="[
+                message.role,
+                {
+                  'message-group-start': message.display.isFirstInGroup,
+                  'message-group-end': message.display.isLastInGroup
+                }
+              ]"
               :id="'message-' + message.id"
-              class="message"
-              :class="message.role"
               @mouseenter="hoveredMessageIndex = index"
               @mouseleave="hoveredMessageIndex = null">
               <div class="avatar" v-if="message.display.showAvatar">
@@ -206,15 +218,14 @@
                     </div>
                   </div>
                 </div>
-
-                <div v-if="message?.metadata?.contextCleared" class="context-cleared">
-                  <label>{{ $t('chat.contextCleared') }}</label>
-                </div>
               </div>
             </div>
 
             <!-- chatting message -->
-            <div v-if="isChatting" class="message assistant" :class="{ loading: isChatting }">
+            <div
+              v-if="isChatting"
+              class="message assistant message-group-start message-group-end"
+              :class="{ loading: isChatting }">
               <div class="avatar">
                 <logo
                   :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
@@ -224,13 +235,13 @@
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
                 <chatting
-                  :content="currentAssistantMessage"
+                  :key="lastChatId"
+                  :content="chatState.lastMessageChunk"
                   :reference="chatState.reference"
-                  :reasoning="chatState.reasoning"
-                  :log="chatState.log"
-                  :plan="chatState.plan"
+                  :reasoning="chatState.lastReasoningChunk"
                   :toolCalls="chatState.toolCall || []"
-                  :is-reasoning="chatState.isReasoning" />
+                  :is-reasoning="chatState.isReasoning"
+                  :is-chatting="isChatting" />
               </div>
             </div>
 
@@ -239,9 +250,9 @@
               <div class="avatar">
                 <cs name="error" />
               </div>
-              <div class="content-container">
-                <div class="content">{{ chatErrorMessage }}</div>
-              </div>
+              <pre class="content-container">
+                <code class="content">{{ chatErrorMessage }}</code>
+              </pre>
             </div>
             <div style="height: var(--cs-space)" v-if="selectedSkill || replyMessage" />
           </div>
@@ -530,16 +541,15 @@ const replyMessage = ref('')
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const isChatting = ref(false)
-const currentAssistantMessage = ref('')
 const lastChatId = ref('')
 const titleChatId = ref('')
 const getDefaultChatState = reference => ({
   message: '',
+  lastMessageChunk: '',
   reference: reference ? [...reference] : [],
   reasoning: '',
+  lastReasoningChunk: '',
   isReasoning: false,
-  log: [],
-  plan: [],
   model: '',
   toolCall: []
 })
@@ -628,7 +638,7 @@ const toolsEnabled = computed(() => {
 const mcpServers = computed(() => mcpStore.servers)
 
 // listen AI response, update scroll
-watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
+watch([() => chatState.value.message, () => chatState.value.reasoning], () => {
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
       scrollToBottomIfNeeded()
@@ -804,7 +814,10 @@ const processedMessages = computed(() => {
   if (!messagesForShow.value) return []
 
   return messagesForShow.value.map((message, index, allMessages) => {
-    const processed = { ...message, display: { showAvatar: true, showMetadata: true } }
+    const processed = {
+      ...message,
+      display: { showAvatar: true, showMetadata: true, isFirstInGroup: false, isLastInGroup: false }
+    }
 
     if (message.role === 'user') {
       return processed
@@ -820,12 +833,14 @@ const processedMessages = computed(() => {
     // Show avatar only if it's the first message of a new assistant turn (chatId changes or previous is user)
     processed.display.showAvatar =
       !prevMessage || prevMessage.role === 'user' || prevChatId !== currentChatId
+    processed.display.isFirstInGroup = processed.display.showAvatar
 
     const nextChatId = nextMessage?.metadata?.chatId
 
     // Show metadata only if it's the last message of an assistant turn (chatId is about to change or next is user)
     processed.display.showMetadata =
       !nextMessage || nextMessage.role === 'user' || nextChatId !== currentChatId
+    processed.display.isLastInGroup = processed.display.showMetadata
 
     return processed
   })
@@ -941,11 +956,6 @@ const buildHistoryForSending = (allMessages, roundsToKeep, messageIdToExclude = 
 
   for (let i = messagesToProcess.length - 1; i >= 0; i--) {
     const currentMessage = messagesToProcess[i]
-
-    // Stop if a context clear marker is found
-    if (currentMessage.metadata?.contextCleared) {
-      break
-    }
 
     currentRoundBuffer.unshift(currentMessage)
 
@@ -1102,7 +1112,6 @@ const resetChat = () => {
   chatErrorMessage.value = ''
   replyMessage.value = ''
   inputMessage.value = ''
-  currentAssistantMessage.value = ''
 }
 
 const title = ref('')
@@ -1222,7 +1231,6 @@ const handleChatMessage = async payload => {
     payload,
     chatState,
     {
-      currentAssistantMessage,
       chatErrorMessage,
       isChatting
     },
@@ -1252,7 +1260,6 @@ const handleChatMessage = async payload => {
 
         // Reset the state in advance (core optimization point)
         chatState.value = getDefaultChatState([...originalReference])
-        currentAssistantMessage.value = ''
 
         try {
           await chatStore.addChatMessage(
@@ -1419,7 +1426,6 @@ onMounted(async () => {
         .then(() => {
           genTitleByAi()
 
-          currentAssistantMessage.value = ''
           isChatting.value = false
           nextTick(() => {
             scrollToBottomIfNeeded()
@@ -1439,7 +1445,7 @@ onMounted(async () => {
   cleanupObserver.value = setupObserver()
 
   windowStore.initMainWindowAlwaysOnTop()
-  window.addEventListener('keydown', handleGlobalKeyDown)
+  window.addEventListener('keydown', onGlobalKeyDown)
 })
 
 onBeforeUnmount(() => {
@@ -1456,7 +1462,7 @@ onBeforeUnmount(() => {
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)
 
   cleanupObserver.value?.()
-  window.removeEventListener('keydown', handleGlobalKeyDown)
+  window.removeEventListener('keydown', onGlobalKeyDown)
 })
 
 // =================================================
@@ -1574,7 +1580,8 @@ const onStopChat = () => {
               provider: currentModel.value.defaultModel || '',
               toolCall: chatState.value.toolCall || [],
               reference: chatState.value?.reference || [],
-              reasoning: chatState.value?.reasoning || ''
+              reasoning: chatState.value?.reasoning || '',
+              chatId: lastChatId.value || ''
             }
           )
           .catch(error => {
@@ -1588,7 +1595,6 @@ const onStopChat = () => {
     .finally(() => {
       lastChatId.value = ''
       isChatting.value = false
-      currentAssistantMessage.value = ''
       chatState.value = getDefaultChatState()
 
       nextTick(() => {
@@ -1639,8 +1645,29 @@ const onDeleteMessage = id => {
     confirmButtonText: t('common.confirm'),
     cancelButtonText: t('common.cancel')
   }).then(() => {
+    // find message by id
+    const message = chatStore.messages.find(message => message.id === id)
+    if (!message) {
+      showMessage(t('chat.messageNotFound'), 'error', 3000)
+      return
+    }
+    let ids = [id]
+
+    if (message?.metadata?.chatId) {
+      const chatId = message.metadata.chatId
+      const role = message.role
+      // find all messages with the same chatId in metadata
+      ids = chatStore.messages.reduce((acc, m) => {
+        if (m?.metadata?.chatId === chatId && m.role === role) {
+          acc.push(m.id)
+        }
+        return acc
+      }, [])
+    }
+
+    // delete all messages with the same chatId
     chatStore
-      .deleteMessage(id)
+      .deleteMessage(ids)
       .then(() => {
         scrollToBottomIfNeeded()
       })
@@ -1710,7 +1737,7 @@ const onGlobalClearContext = () => {
   csSetStorage(csStorageKey.disableContext, disableContext.value)
 }
 
-const handleGlobalKeyDown = event => {
+const onGlobalKeyDown = event => {
   // Use OS type from backend. `std::env::consts::OS` returns "macos" for macOS.
   const isMac = osType.value === 'macos'
   const modifierPressed = isMac ? event.metaKey : event.ctrlKey
@@ -1724,6 +1751,20 @@ const handleGlobalKeyDown = event => {
       case 'b':
         event.preventDefault()
         onToggleSidebar()
+        break
+    }
+  }
+
+  // Handle ALT + Arrow keys for window positioning
+  if (event.altKey) {
+    switch (event.key.toLowerCase()) {
+      case 'arrowleft':
+        event.preventDefault()
+        windowStore.moveWindowToScreenEdge('left')
+        break
+      case 'arrowright':
+        event.preventDefault()
+        windowStore.moveWindowToScreenEdge('right')
         break
     }
   }
@@ -2092,6 +2133,41 @@ const onTakeNote = message => {
             flex: unset;
           }
         }
+
+        /* ========== start tool calls group message ============== */
+        &:not(.message-group-end) {
+          margin-bottom: 0;
+        }
+
+        .content-container {
+          .content,
+          .markdown-container {
+            border-radius: var(--cs-border-radius-md);
+          }
+        }
+
+        &:not(.message-group-start) {
+          .content-container {
+            .content,
+            .markdown-container {
+              border-top-left-radius: 0;
+              border-top-right-radius: 0;
+              padding-top: 0;
+            }
+          }
+        }
+
+        &:not(.message-group-end) {
+          .content-container {
+            .content,
+            .markdown-container {
+              border-bottom-left-radius: 0;
+              border-bottom-right-radius: 0;
+              padding-bottom: 0;
+            }
+          }
+        }
+        /* ========== end tool calls group message ============== */
       }
 
       &.error {
@@ -2108,18 +2184,34 @@ const onTakeNote = message => {
         .content {
           color: var(--cs-error-color);
           background-color: var(--cs-error-bg-color);
+          overflow-x: auto;
         }
       }
     }
 
     .empty-message {
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100%;
       width: 100%;
       padding: var(--cs-space-lg);
       box-sizing: border-box;
+
+      ul {
+        li {
+          list-style: none;
+          color: var(--cs-text-color-secondary);
+
+          strong {
+            display: inline-block;
+            width: 120px;
+            margin-right: var(--cs-space);
+            text-align: right;
+          }
+        }
+      }
     }
   }
 

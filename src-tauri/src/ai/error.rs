@@ -1,10 +1,15 @@
 use rust_i18n::t;
+use serde_json::json;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum AiError {
-    #[error("{}", t!("chat.error.api_request_failed", provider = .provider, details = .details))]
-    ApiRequestFailed { provider: String, details: String },
+    #[error("{}", json!({ "code": status_code, "provider": provider, "details": details }).to_string())]
+    ApiRequestFailed {
+        status_code: String,
+        provider: String,
+        details: String,
+    },
 
     #[error("{0}")]
     InitFailed(String),

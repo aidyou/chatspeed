@@ -291,7 +291,7 @@ system-reminder {
     font-size: var(--cs-font-size);
     color: var(--cs-text-color-primary);
     line-height: 1.8;
-    word-break: break-all;
+    word-break: break-word  ;
 
     &.chatting {
       width: auto;
@@ -736,7 +736,7 @@ system-reminder {
     margin-top: var(--cs-space-sm);
     color: var(--cs-text-color-secondary);
     border-left: 3px solid var(--cs-border-color);
-    word-break: break-all;
+    word-break: break-word;
   }
 
   .chat-reference-list li {
@@ -817,7 +817,7 @@ system-reminder {
   font-size: var(--cs-font-size-sm);
   padding: 0 var(--cs-space-sm);
   margin: var(--cs-space-xs) 0 var(--cs-space);
-  word-break: break-all;
+  word-break: break-word;
   max-height: 400px;
   overflow-y: auto;
 

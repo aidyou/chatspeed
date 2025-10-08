@@ -52,9 +52,36 @@ impl ModelResolver {
         let group_name = proxy_group.unwrap_or("default");
         let group_config = Self::get_proxy_group(main_store_arc.clone(), group_name);
 
-        let prompt_injection = group_config
+        let should_enable_injection = group_config
             .as_ref()
-            .map_or("off".to_string(), |g| g.prompt_injection.clone());
+            .map(|g| {
+                g.metadata
+                    .as_ref()
+                    .and_then(|m| m.get("modelInjectionCondition"))
+                    .and_then(|v| v.as_str())
+                    .map(|v| {
+                        if v.trim().is_empty() {
+                            true
+                        } else {
+                            v.lines()
+                                .map(|line| line.trim())
+                                .filter(|line| !line.is_empty())
+                                .any(|pattern| {
+                                    wildmatch::WildMatch::new(pattern).matches(&proxy_alias)
+                                })
+                        }
+                    })
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+
+        let prompt_injection = if should_enable_injection {
+            group_config
+                .as_ref()
+                .map_or("off".to_string(), |g| g.prompt_injection.clone())
+        } else {
+            "off".to_string()
+        };
 
         #[cfg(debug_assertions)]
         {
@@ -65,15 +92,20 @@ impl ModelResolver {
             );
         }
 
-        let prompt_text = group_config
-            .as_ref()
-            .map(|g| {
-                format!(
-                    "<cs:behavioral-guidelines>{}</cs:behavioral-guidelines>",
-                    g.prompt_text.clone()
-                )
-            })
-            .unwrap_or_default();
+        let prompt_text = if should_enable_injection {
+            group_config
+                .as_ref()
+                .map(|g| {
+                    format!(
+                        "<cs:behavioral-guidelines>{}</cs:behavioral-guidelines>",
+                        g.prompt_text.clone()
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         let prompt_injection_position = group_config
             .as_ref()
             .map(|g| {
@@ -108,7 +140,7 @@ impl ModelResolver {
                 base_url: ai_model_detail.base_url,
                 model: backend_target.model.clone(),
                 api_key: ai_model_detail.api_key.clone(),
-                metadata: ai_model_detail.metadata.clone(),
+                model_metadata: ai_model_detail.metadata.clone(),
                 prompt_injection_position: Some(prompt_injection_position),
                 prompt_injection: prompt_injection,
                 prompt_text: prompt_text,
@@ -162,7 +194,7 @@ impl ModelResolver {
             base_url: ai_model_details.base_url,
             model: global_key.model_name,
             api_key: global_key.key,
-            metadata: ai_model_details.metadata.clone(),
+            model_metadata: ai_model_details.metadata.clone(),
             prompt_injection,
             prompt_injection_position: Some(prompt_injection_position),
             prompt_text,
@@ -339,7 +371,7 @@ impl ModelResolver {
             base_url: ai_model_detail.base_url,
             model: model_id,
             api_key: selected_api_key,
-            metadata: ai_model_detail.metadata.clone(),
+            model_metadata: ai_model_detail.metadata.clone(),
             prompt_injection: "off".to_string(),
             prompt_injection_position: Some("system".to_string()),
             prompt_text: "".to_string(),

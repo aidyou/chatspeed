@@ -217,6 +217,8 @@ impl BackendAdapter for ClaudeBackendAdapter {
         model: &str,
         log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
+
         // Validate tool call sequence before processing
         self.validate_tool_call_sequence(&unified_request.messages)?;
 
@@ -365,6 +367,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                 id: id.clone(),
                                 name: name.clone(),
                                 input: input.clone(),
+                                cache_control: None,
                             });
                         }
                         UnifiedContentBlock::ToolResult {
@@ -376,6 +379,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                 tool_use_id: tool_use_id.clone(),
                                 content: content.clone(),
                                 is_error: Some(*is_error),
+                                cache_control: None,
                             });
                         }
                         UnifiedContentBlock::Thinking { thinking } => {
@@ -609,9 +613,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
                         ClaudeNativeContentBlock::Text { text } => {
                             content_blocks.push(UnifiedContentBlock::Text { text })
                         }
-                        ClaudeNativeContentBlock::ToolUse { id, name, input } => {
-                            content_blocks.push(UnifiedContentBlock::ToolUse { id, name, input })
-                        }
+                        ClaudeNativeContentBlock::ToolUse {
+                            id,
+                            name,
+                            input,
+                            cache_control: _,
+                        } => content_blocks.push(UnifiedContentBlock::ToolUse { id, name, input }),
                         _ => {}
                     }
                 }
@@ -623,13 +630,17 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     ClaudeNativeContentBlock::Text { text } => {
                         content_blocks.push(UnifiedContentBlock::Text { text })
                     }
-                    ClaudeNativeContentBlock::ToolUse { id, name, input } => {
-                        content_blocks.push(UnifiedContentBlock::ToolUse { id, name, input })
-                    }
+                    ClaudeNativeContentBlock::ToolUse {
+                        id,
+                        name,
+                        input,
+                        cache_control: _,
+                    } => content_blocks.push(UnifiedContentBlock::ToolUse { id, name, input }),
                     ClaudeNativeContentBlock::ToolResult {
                         tool_use_id,
                         content,
                         is_error,
+                        cache_control: _,
                     } => content_blocks.push(UnifiedContentBlock::ToolResult {
                         tool_use_id,
                         content,

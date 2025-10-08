@@ -377,6 +377,12 @@ impl ToolDefinition for WebSearch {
                             "type": "string",
                             "enum": ["day", "week", "month", "year"],
                             "description": "Filters search results to a specific time range. Use this to find recent or timely information. If omitted, no time filter is applied."
+                        },
+                        "response_format": {
+                            "type": "string",
+                            "enum": ["json", "xml"],
+                            "default": "json",
+                            "description": "The format of the response data. Defaults to 'json'."
                         }
                     },
                     "required": ["query"]
@@ -402,6 +408,7 @@ impl ToolDefinition for WebSearch {
         let query = Self::extract_keywords(&params)?;
         let desired_count = params["number"].as_u64().unwrap_or(5).min(30).max(1) as usize;
         let time_period = params["time_period"].as_str().unwrap_or("");
+        let response_format = params["response_format"].as_str().unwrap_or("json");
 
         let period = match time_period {
             "day" => Some(crate::search::SearchPeriod::Day),
@@ -499,9 +506,22 @@ impl ToolDefinition for WebSearch {
             .collect::<Vec<_>>();
 
         let result_string = if results_with_id.is_empty() {
-            "[]".to_string()
+            match response_format {
+                "xml" => "<search-results></search-results>".to_string(),
+                _ => "[]".to_string(), // default to JSON
+            }
         } else {
-            serde_json::to_string(&results_with_id).unwrap_or_default()
+            match response_format {
+                "xml" => {
+                    let xml_items: Vec<String> =
+                        results_with_id.iter().map(|r| r.to_string()).collect();
+                    format!(
+                        "<search-results>\n{}\n</search-results>",
+                        xml_items.join("\n")
+                    )
+                }
+                _ => serde_json::to_string(&results_with_id).unwrap_or_default(), // default to JSON
+            }
         };
 
         Ok(ToolCallResult::success(

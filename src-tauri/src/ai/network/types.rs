@@ -1,6 +1,6 @@
 use reqwest::Response;
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fmt;
 
 /// Represents different types of proxy configurations
@@ -80,6 +80,24 @@ pub struct ApiResponse {
     pub raw_response: Option<Response>,
 }
 
+#[derive(Serialize)]
+pub struct ResponseError {
+    status_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_type: Option<String>,
+    message: String,
+}
+
+impl ResponseError {
+    pub fn new(status_code: Option<u16>, error_type: Option<String>, message: String) -> Self {
+        Self {
+            status_code,
+            error_type,
+            message,
+        }
+    }
+}
+
 impl ApiResponse {
     /// Creates a new successful response
     pub fn success(content: String) -> Self {
@@ -100,9 +118,9 @@ impl ApiResponse {
     }
 
     /// Creates a new error response
-    pub fn error(message: String) -> Self {
+    pub fn error(error: ResponseError) -> Self {
         Self {
-            content: message,
+            content: json!(error).to_string(),
             is_error: true,
             raw_response: None,
         }

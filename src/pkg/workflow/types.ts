@@ -12,9 +12,9 @@ export interface Agent {
   planningPrompt?: string
   availableTools: string[]
   autoApprove: string[]
-  planModel: { id: string; model: string }
-  actModel: { id: string; model: string }
-  visionModel: { id: string; model: string }
+  planModel: { id: number; model: string }
+  actModel: { id: number; model: string }
+  visionModel: { id: number; model: string }
   maxContexts: number
   createdAt: Date
   updatedAt: Date
@@ -57,20 +57,23 @@ export interface TodoItem {
 
 // Message types
 export interface WorkflowMessage {
-  id: number
+  id?: number
   sessionId: string
   role: 'assistant' | 'tool' | 'user' | 'system'
   message: string
   metadata?: Record<string, unknown>
-  createdAt: Date
+  createdAt?: Date
 }
+
+// Type alias for a WorkflowMessage without id and createdAt (useful for message creation)
+export type OmitWorkflowMessage = Omit<WorkflowMessage, 'id' | 'createdAt'>
 
 // Tool system types
 export interface ToolDefinition {
   id: string
   name: string
   description: string
-  parameters: Record<string, unknown> // JSON Schema
+  inputSchema: Record<string, unknown> // JSON Schema
   implementation: 'rust' | 'typescript' | 'browser'
   requiresApproval: boolean
   category?: string
@@ -127,12 +130,66 @@ export interface PlanResponse {
 }
 
 export interface ParsedLLMResponse {
-  thought?: string
   action?: {
-    tool: string
-    parameters: Record<string, unknown>
+    name: string
+    arguments: Record<string, unknown>
   }
-  finalAnswer?: string
+  reasoning?: string
+  content?: string
+}
+
+/**
+ * Defines the handlers for processing the LLM's streaming response.
+ */
+export interface LLMStreamHandlers {
+  onContent?: (chunk: string) => void
+  onReasoning?: (chunk: string) => void
+  onAction?: (action: ParsedLLMResponse['action']) => void
+  onDone?: (finallyContent: ParsedLLMResponse) => void
+  onError?: (error: object) => void
+}
+
+export enum LLMResponseType {
+  Error = 'error',
+  Finished = 'finished',
+  Reasoning = 'reasoning',
+  Text = 'text',
+  ToolCalls = 'toolCalls'
+}
+
+export enum FinishReason {
+  LENGTH = 'length',
+  CONTENT_FILTERED = 'content_filter',
+  TOOL_CALL = 'tool_calls',
+  STOP = 'stop'
+}
+
+// The tool_calls from the LLM's response
+// {
+//  "index": idx,
+//  "id": tcd.id,
+//  "type": "function",
+//  "function": {
+//      "name": tcd.name,
+//      "arguments": arguments_str
+//  }
+// }
+export interface ToolCalls {
+  index?: number
+  id?: string
+  type?: string
+  function?: {
+    name?: string
+    arguments?: object
+  }
+}
+
+export interface ChatResponse {
+  chatId?: string
+  chunk: string
+  type: LLMResponseType
+  metadata?: object
+  finishReason?: FinishReason
 }
 
 // Context management types

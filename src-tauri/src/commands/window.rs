@@ -310,3 +310,82 @@ pub fn set_mouse_event_state(window_label: &str, state: bool) -> Result<(), Stri
     }
     Ok(())
 }
+
+/// Move window to the left or right bottom corner of the current screen
+///
+/// # Arguments
+/// - `app` - The app handle
+/// - `window_label` - The label of the window to move
+/// - `direction` - The direction to move ("left" or "right")
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// // Move window to left bottom corner
+/// await invoke('move_window_to_screen_edge', { windowLabel: 'main', direction: 'left' });
+///
+/// // Move window to right bottom corner
+/// await invoke('move_window_to_screen_edge', { windowLabel: 'main', direction: 'right' });
+/// ```
+#[tauri::command]
+pub fn move_window_to_screen_edge(
+    app: tauri::AppHandle,
+    window_label: &str,
+    direction: &str,
+) -> Result<(), String> {
+    let window = app.get_webview_window(window_label).ok_or_else(|| {
+        t!(
+            "main.failed_to_find_window_with_label",
+            label = window_label
+        )
+        .to_string()
+    })?;
+
+    if let Ok(monitor) = window.current_monitor() {
+        if let Some(monitor) = monitor {
+            let monitor_size = monitor.size();
+            let monitor_position = monitor.position();
+
+            // Get current window outer size (including title bar and borders)
+            let window_size = window.outer_size().map_err(|e| {
+                t!("main.failed_to_get_window_size", error = e.to_string()).to_string()
+            })?;
+
+            // Calculate new x position based on direction
+            let new_x = match direction {
+                "left" => monitor_position.x + 1,
+                "right" => {
+                    monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - 1
+                }
+                _ => return Err(t!("main.invalid_direction", direction = direction).to_string()),
+            };
+
+            // Calculate new y position for bottom alignment
+            // Note: We need to consider taskbar/dock height, so we leave some margin
+            let taskbar_margin = 50; // Leave some space for taskbar/dock
+            let new_y = monitor_position.y + monitor_size.height as i32
+                - window_size.height as i32
+                - taskbar_margin;
+
+            let new_position =
+                tauri::Position::Physical(tauri::PhysicalPosition { x: new_x, y: new_y });
+
+            window.set_position(new_position).map_err(|e| {
+                t!("main.failed_to_set_window_position", error = e.to_string()).to_string()
+            })?;
+
+            log::debug!(
+                "Moved window '{}' to {} bottom corner of screen at x: {}, y: {}",
+                window_label,
+                direction,
+                new_x,
+                new_y
+            );
+        }
+    } else {
+        return Err(t!("main.failed_to_get_current_monitor").to_string());
+    }
+
+    Ok(())
+}

@@ -33,7 +33,12 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     id,
                     name,
                     input,
-                } => ClaudeNativeContentBlock::ToolUse { id, name, input },
+                } => ClaudeNativeContentBlock::ToolUse {
+                    id,
+                    name,
+                    input,
+                    cache_control: None,
+                },
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::ToolResult {
                     tool_use_id,
                     content,
@@ -42,6 +47,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     tool_use_id,
                     content,
                     is_error: Some(is_error),
+                    cache_control: None,
                 },
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::Image {
                     media_type,
@@ -66,11 +72,15 @@ impl OutputAdapter for ClaudeOutputAdapter {
             response.id.clone()
         };
 
-        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-            (status.estimated_input_tokens, status.estimated_output_tokens)
-        } else {
-            (0.0, 0.0)
-        };
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+            if let Ok(status) = sse_status.read() {
+                (
+                    status.estimated_input_tokens,
+                    status.estimated_output_tokens,
+                )
+            } else {
+                (0.0, 0.0)
+            };
 
         let input_tokens = if response.usage.input_tokens > 0 {
             response.usage.input_tokens
@@ -114,13 +124,21 @@ impl OutputAdapter for ClaudeOutputAdapter {
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible> {
         match chunk {
-            UnifiedStreamChunk::MessageStart { id, model, usage: _ } => {
+            UnifiedStreamChunk::MessageStart {
+                id,
+                model,
+                usage: _,
+            } => {
                 let estimated_input_tokens = if let Ok(status) = sse_status.read() {
                     status.estimated_input_tokens
                 } else {
                     0.0
                 };
-                Ok(vec![gen_message_start_event(id, model, estimated_input_tokens)])
+                Ok(vec![gen_message_start_event(
+                    id,
+                    model,
+                    estimated_input_tokens,
+                )])
             }
             UnifiedStreamChunk::Thinking { delta } => {
                 let message_index = if let Ok(status) = sse_status.read() {
@@ -200,11 +218,15 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     0
                 };
 
-                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-                    (status.estimated_input_tokens, status.estimated_output_tokens)
-                } else {
-                    (0.0, 0.0)
-                };
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+                    if let Ok(status) = sse_status.read() {
+                        (
+                            status.estimated_input_tokens,
+                            status.estimated_output_tokens,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
 
                 let input_tokens = if usage.input_tokens > 0 {
                     usage.input_tokens
@@ -233,7 +255,10 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     }
 
                     if let Some(cached_tokens) = usage.cache_creation_input_tokens {
-                        usage_map.insert("cache_creation_input_tokens".to_string(), json!(cached_tokens));
+                        usage_map.insert(
+                            "cache_creation_input_tokens".to_string(),
+                            json!(cached_tokens),
+                        );
                     }
                 }
 

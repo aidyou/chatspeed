@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "API-Anfrage an den Dienst %{provider} fehlgeschlagen: %{details}"
     deserialization_failed: "Deserialisierung von '%{context}' fehlgeschlagen: %{details}"
     invalid_input: "Ungültige Eingabe: %{details}"
     response_parse_failed: "Antwort von %{provider} konnte nicht verarbeitet werden: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "Serialisierung des Werkzeugaufrufs fehlgeschlagen: %{details}"
     upstream_chat_error: "Fehler im Upstream-Chat-Dienst: %{message}"
   api_key_is_require_for_list_models: "Für das Abrufen der Modellliste ist ein API-Schlüssel erforderlich. Bitte konfigurieren Sie einen gültigen API-Schlüssel in den Einstellungen."
-  chat_completion_failed_after_retries: "Chat-Completion nach %{retries} Versuchen fehlgeschlagen"
   chat_not_found: "Angegebene Chat-Sitzung nicht gefunden"
   empty_chat_id: "Chat-ID darf nicht leer sein"
   empty_messages: "Nachrichtenliste darf nicht leer sein"
@@ -28,19 +26,13 @@ chat:
   failed_to_convert_language_code: "Sprachcode konnte nicht konvertiert werden: %{error}"
   failed_to_create_file: "Datei konnte nicht erstellt werden: %{error}"
   failed_to_detect_language: "Sprache konnte nicht erkannt werden"
-  failed_to_find_user_message_content: "Benutzernachricht konnte nicht gefunden werden"
   failed_to_get_available_languages: "Liste der verfügbaren Sprachen konnte nicht abgerufen werden: %{error}"
   failed_to_write_file: "Datei konnte nicht geschrieben werden: %{error}"
-  invalid_search_model: "Ungültiges Suchmodell: %{model_name}"
   note_already_exists: "Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden"
-  search_analysing: "Daten werden analysiert..."
-  search_fetching: "Daten werden abgerufen..."
   search_not_found: "Angegebene Suchsitzung nicht gefunden"
-  search_results: "Insgesamt wurden %{count} Ergebnisse gefunden"
-  searching: "Informationen werden gesucht..."
-  user_message_with_references: "[Referenzmaterialien]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nBitte verwenden Sie bei der Beantwortung von Benutzerfragen vorrangig Ihr eigenes Wissen. Wenn die Frage Ihr Wissen übersteigt oder aktuelle Informationen erfordert, können Sie auf die Informationen in den `<ref></ref>`-Tags zurückgreifen. Wenn Sie diese Informationen zitieren, kennzeichnen Sie dies bitte mit [^id] nach dem entsprechenden Satz. Bitte wiederholen Sie nicht einfach den Inhalt der Referenzmaterialien, sondern geben Sie nach einer umfassenden Analyse eine Antwort.\n\n[Benutzerfrage]\n %{content}"
 
 db:
+  agent_name_exists: "Agentenname '%{name}' ist bereits vorhanden"
   ai_model_not_found_by_id: "KI-Modell mit ID %{id} nicht gefunden"
   ai_skill_not_found_by_id: "KI-Fähigkeit mit ID %{id} nicht gefunden"
   already_exists: "Daten bereits vorhanden: %{error}"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Plugin-Ausgabeschema konnte nicht in JSON serialisiert werden: %{error}"
   plugin_not_found_by_uuid: "Plugin mit UUID %{uuid} nicht gefunden"
   tauri_error: "Tauri-Fehler: %{error}"
-  unknown_database_version: "Unbekannte Datenbankversion: %{version}"
 
 http:
   client_build_failed: "HTTP-Client konnte nicht erstellt werden: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "WebView-Fenster konnte nicht erstellt werden: %{error}"
   failed_to_emit_event: "Ereignis konnte nicht gesendet werden: %{error}"
   failed_to_find_window_with_label: "Fenster mit Label nicht gefunden: %{label}"
+  failed_to_get_current_monitor: "Aktueller Monitor konnte nicht abgerufen werden: %{error}"
+  failed_to_get_window_size: "Fenstergröße konnte nicht abgerufen werden: %{error}"
   failed_to_initialize_logger: "Logger konnte nicht initialisiert werden"
   failed_to_navigate_to_url: "Navigation zur URL fehlgeschlagen: %{url}, Fehler: %{error}"
   failed_to_retrieve_log_directory: "Anwendungsprotokollverzeichnis konnte nicht abgerufen werden"
   failed_to_set_window_always_on_top: "Fenster konnte nicht dauerhaft im Vordergrund gehalten werden: %{error}"
   failed_to_set_window_focus: "Fensterfokus konnte nicht gesetzt werden: %{error}"
+  failed_to_set_window_position: "Fensterposition konnte nicht gesetzt werden: %{error}"
   failed_to_show_window: "Fenster konnte nicht angezeigt werden: %{error}"
   failed_to_start_up_application: "Anwendung konnte nicht gestartet werden"
+  invalid_direction: "Ungültige Richtung, aktuell wird nur unterstützt: left->links, right->rechts"
   window_not_ready: "Fenster ist noch nicht bereit"
   shortcut:
     failed_to_unregister_old: "Abmeldung des alten Tastenkürzels fehlgeschlagen: %{error}"
@@ -169,8 +164,8 @@ mcp:
   config:
     name_must_be_non_empty: "Der MCP-Konfigurationsname darf nicht leer sein. Bitte geben Sie einen gültigen Namen ein."
     sse_url_must_be_non_empty: "Die SSE-URL der MCP-Konfiguration darf nicht leer sein"
-    stdio_args_must_be_non_empty: "„Startparameter“ der MCP-Konfiguration dürfen nicht leer sein"
-    stdio_command_must_be_non_empty: "„Startbefehl“ der MCP-Konfiguration darf nicht leer sein"
+    stdio_args_must_be_non_empty: "Startparameter der MCP-Konfiguration dürfen nicht leer sein"
+    stdio_command_must_be_non_empty: "Startbefehl der MCP-Konfiguration darf nicht leer sein"
   client:
     config_error_for_server: "Konfigurationsfehler für MCP-Server '%{server_name}': %{error}"
     config_mismatch: "MCP-Konfiguration stimmt nicht überein, erstellter MCP-Client %{client}, Konfigurationstyp: %{protocol_type}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "Start des SSE-Transports fehlgeschlagen (URL: %{url}), Grund: %{error}"
     sse_url_cant_be_empty: "URL-Parameter des SSE-Clients darf nicht leer sein"
     stdio_args_cant_be_empty: "Args-Parameter des Stdio-Clients dürfen nicht leer sein"
-    stdio_command_cant_be_empty: "Command-Parameter „Startbefehl“ des Stdio-Clients darf nicht leer sein"
+    stdio_command_cant_be_empty: "Command-Parameter Startbefehl des Stdio-Clients darf nicht leer sein"
     stdio_command_not_found_no_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}). Bitte stellen Sie sicher, dass der Befehl installiert und in der PATH-Umgebungsvariable Ihres Systems vorhanden ist.'
     stdio_command_not_found_with_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}).'
     stdio_npx_not_found_help: "Dies bedeutet normalerweise, dass Node.js nicht korrekt installiert ist oder der Befehl 'npx' nicht in der PATH-Umgebungsvariable Ihres Systems vorhanden ist. Bitte überprüfen Sie Ihre Node.js-Installation."
@@ -201,8 +196,6 @@ network:
   client_build_error: "HTTP-Client konnte nicht erstellt werden: %{error}"
   header_error: "Anfrage-Header konnte nicht erstellt werden: %{error}"
   proxy_error: "Proxy-Konfiguration fehlgeschlagen: %{error}"
-  request_failed_with_status: "Anfrage fehlgeschlagen (%{status}): %{message}"
-  request_failed_with_type: "Anfrage fehlgeschlagen (Statuscode: %{status}) - %{error_type}: %{message}"
   request_failed: "Anfrage fehlgeschlagen: %{error}"
   response_read_error: "Antwort konnte nicht gelesen werden: %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "Datei existiert nicht: %{file_path}"
 
 tools:
-  execution_failed: "Werkzeugaufruf fehlgeschlagen, Werkzeugname: %{name}, Fehler: %{error}"
   failed_to_get_model: "Abrufen des %{model_type}-Modells fehlgeschlagen"
   function_already_exists: "Funktion existiert bereits: %{name}"
   function_not_found: "Werkzeugfunktion im Workflow nicht gefunden: %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "Google Suchmaschinen-ID darf nicht leer sein"
     serper_api_key_empty: "Serper API-Schlüssel darf nicht leer sein"
     tavily_api_key_empty: "Tavily API-Schlüssel darf nicht leer sein"
-    web_search_failed: "Websuche fehlgeschlagen (Anbieter: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:
   about: "Über"
+  agent: "Agent"
   assistant: "Assistent"
   chat: "Chat"
   mcp: "MCP"

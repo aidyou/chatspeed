@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "問AI",
     "askDescription": "你好呀！我能為你做啥？",
-    "chatPlaceholder": "提問、翻譯、寫作、編程等…… 使用↑↓選擇技能\n回覆AI的訊息請按快捷鍵 ALT+Q，ALT+C 複製消息",
+    "chatPlaceholder": "提問、翻譯、寫作、編程等…… 使用 ALT+↑↓ 選擇技能\n回覆AI的訊息請按快捷鍵 ALT+Q，ALT+C 複製消息",
     "haveNoModel": "您尚未新增任何模型，請從設定中心新增"
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "確定要刪除這則訊息嗎？",
     "collapseSidebar": "折疊側邊欄 (Cmd/Ctrl+B)",
     "expandSidebar": "展開側邊欄 (Cmd/Ctrl+B)",
-    "contextCleared": "上下文已清除",
     "conversationNotFound": "對話不存在或已刪除",
     "conversationTitle": "對話主題",
     "conversationTitleUpdated": "對話主題已更新",
@@ -33,6 +32,7 @@
     "errorOnGetCurrentConversationId": "取得當前對話 ID 失敗: {error}",
     "errorOnGoToChat": "跳轉聊天視窗失敗: {error}",
     "errorOnLoadMessages": "載入訊息失敗: {error}",
+    "errorOnMoveWindow": "移動視窗失敗: {error}",
     "errorOnSaveMessage": "儲存您的對話資訊失敗: {error}",
     "errorOnSendMessage": "傳送聊天訊息失敗: {error}",
     "errorOnStopChat": "停止聊天失敗: {error}",
@@ -43,6 +43,7 @@
     "haveNoModel": "您尚未新增任何模型，請點擊標題列的「新增模型+」按鈕新增",
     "inputMessagePlaceholder": "輸入 {at} 可呼叫技能",
     "messageCopied": "訊息已複製",
+    "messageNotFound": "訊息不存在或已被刪除",
     "mindmapError": "思維導圖渲染失敗",
     "networkDisabled": "關閉聯網",
     "networkEnabled": "開啟聯網：自動抓取連結中的內容或搜尋相關資訊",
@@ -116,6 +117,7 @@
   },
   "menu": {
     "about": "關於",
+    "agent": "智能體",
     "assistant": "桌面助手",
     "mcp": "MCP",
     "model": "AI 引擎",
@@ -131,10 +133,12 @@
   },
   "settings": {
     "agent": {
+      "agentType": "智能體類型",
       "actModel": "行動模型",
       "add": "新增智能體",
       "addSuccess": "智能體新增成功！",
       "autoApprove": "自動批准工具",
+      "autonomousMode": "自主模式",
       "availableTools": "可用工具",
       "basicInfo": "基本資訊",
       "copy": "複製智能體",
@@ -146,7 +150,6 @@
       "description": "描述",
       "edit": "編輯智能體",
       "fetchFailed": "取得智能體失敗",
-      "fetchToolsFailed": "取得可用工具清單失敗",
       "maxContexts": "最大上下文長度",
       "models": "模型",
       "name": "智能體名稱",
@@ -154,11 +157,15 @@
       "noAgents": "未找到智能體",
       "notFound": "未找到智能體",
       "planModel": "規劃模型",
+      "planningMode": "規劃模式",
+      "planningPrompt": "規劃提示詞",
+      "reorderFailed": "智能體排序失敗：{error}",
       "saveFailed": "智能體儲存失敗：{error}",
       "selectActModel": "選擇行動模型",
       "selectAutoApproveTools": "選擇自動批准工具",
       "selectAvailableTools": "選擇可用工具",
       "selectPlanModel": "選擇規劃模型",
+      "selectProvider": "選擇提供商",
       "selectVisionModel": "選擇視覺模型",
       "systemPrompt": "系統提示詞",
       "systemPromptRequired": "請輸入系統提示詞",
@@ -513,6 +520,8 @@
         "disabled": "停用",
         "maxContext": "最大上下文長度",
         "maxContextPlaceholder": "請參考各模型的發布資訊或介面資訊，0 值將不設定",
+        "modelInjectionCondition": "模型注入條件",
+        "modelInjectionConditionPlaceholder": "模型 id 匹配時才注入，留空不限，可以使用 * 匹配任意多個字元，用 ? 匹配單個字元",
         "name": "分組名稱",
         "namePlaceholder": "請輸入分組名稱",
         "promptInjection": "提示詞注入",
@@ -597,6 +606,7 @@
       "proxy": "代理",
       "privacy": "隱私",
       "skill": "技能",
+      "scraperTest": "爬蟲測試",
       "agent": "智能體"
     }
   }

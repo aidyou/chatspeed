@@ -334,6 +334,8 @@ impl BackendAdapter for GeminiBackendAdapter {
         _model: &str,
         log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
+
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
         // into the system message. This is a specific adaptation for models that
@@ -476,48 +478,25 @@ impl BackendAdapter for GeminiBackendAdapter {
             gemini_contents = processed_messages;
         } else {
             // Standard processing for non-tool-compatibility mode.
-            let mut current_parts: Vec<GeminiPart> = Vec::new();
-            let mut current_role: Option<UnifiedRole> = None;
-
-            let flush_message = |contents: &mut Vec<GeminiContent>,
-                                 role: &Option<UnifiedRole>,
-                                 parts: &mut Vec<GeminiPart>| {
-                if parts.is_empty() {
-                    return;
-                }
-                let gemini_role = match role {
-                    Some(UnifiedRole::User) => "user".to_string(),
-                    Some(UnifiedRole::Assistant) => "model".to_string(),
-                    Some(UnifiedRole::System) => return, // System prompts are handled separately
-                    Some(UnifiedRole::Tool) => "user".to_string(),
-                    None => return, // Should not happen
-                };
-                contents.push(GeminiContent {
-                    role: Some(gemini_role),
-                    parts: std::mem::take(parts),
-                });
-            };
-
             for msg in &unified_request.messages {
-                if current_role.is_some() && current_role.as_ref() != Some(&msg.role) {
-                    flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                    current_role = None;
-                }
+                let gemini_role = match msg.role {
+                    UnifiedRole::User => "user",
+                    UnifiedRole::Assistant => "model",
+                    UnifiedRole::Tool => "user", // Gemini treats tool responses as from the user
+                    UnifiedRole::System => continue, // System prompt is handled at the top level
+                };
 
-                if current_role.is_none() {
-                    current_role = Some(msg.role.clone());
-                }
-
+                let mut parts: Vec<GeminiPart> = Vec::new();
                 for block in &msg.content {
                     match block {
                         UnifiedContentBlock::Text { text } => {
-                            current_parts.push(GeminiPart {
+                            parts.push(GeminiPart {
                                 text: Some(text.clone()),
                                 ..Default::default()
                             });
                         }
                         UnifiedContentBlock::Image { media_type, data } => {
-                            current_parts.push(GeminiPart {
+                            parts.push(GeminiPart {
                                 inline_data: Some(GeminiInlineData {
                                     mime_type: media_type.clone(),
                                     data: data.clone(),
@@ -526,7 +505,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                             });
                         }
                         UnifiedContentBlock::ToolUse { id: _, name, input } => {
-                            current_parts.push(GeminiPart {
+                            parts.push(GeminiPart {
                                 function_call: Some(GeminiFunctionCall {
                                     name: name.clone(),
                                     args: input.clone(),
@@ -539,27 +518,25 @@ impl BackendAdapter for GeminiBackendAdapter {
                             content,
                             is_error: _,
                         } => {
-                            // A tool result must start a new user message
-                            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                            current_role = Some(UnifiedRole::User);
-
-                            current_parts.push(GeminiPart {
+                            parts.push(GeminiPart {
                                 function_response: Some(GeminiFunctionResponse {
                                     name: tool_use_id.clone(),
-                                    response: json!({ "name": tool_use_id, "content": content.clone() }),
+                                    response: json!({ "content": content.clone() }),
                                 }),
                                 ..Default::default()
                             });
-
-                            // Flush immediately as a tool response is a self-contained message
-                            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
-                            current_role = None;
                         }
                         _ => {} // Ignore other block types
                     }
                 }
+
+                if !parts.is_empty() {
+                    gemini_contents.push(GeminiContent {
+                        role: Some(gemini_role.to_string()),
+                        parts,
+                    });
+                }
             }
-            flush_message(&mut gemini_contents, &current_role, &mut current_parts);
         }
 
         // --- Prompt Injection Logic ---

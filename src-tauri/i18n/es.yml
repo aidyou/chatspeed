@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "Error en la solicitud de API al servicio %{provider}: %{details}"
     deserialization_failed: "Error al deserializar '%{context}': %{details}"
     invalid_input: "Entrada no válida: %{details}"
     response_parse_failed: "Error al analizar la respuesta de %{provider}: %{details}"
@@ -19,28 +18,21 @@ chat:
     tool_call_serialization_failed: "Error al serializar la llamada a la herramienta: %{details}"
     upstream_chat_error: "Error en el servicio de chat ascendente: %{message}"
   api_key_is_require_for_list_models: "Se requiere una clave de API para obtener la lista de modelos. Configure una clave de API válida en los ajustes."
-  chat_completion_failed_after_retries: "La finalización del chat falló después de %{retries} reintentos"
   chat_not_found: "No se encontró la sesión de chat especificada"
-  empty_chat_id: "El ID del chat не puede estar vacío"
-  empty_messages: "La lista de mensajes не puede estar vacía"
-  empty_model: "El nombre del modelo не puede estar vacío"
+  empty_chat_id: "El ID del chat no puede estar vacío"
+  empty_messages: "La lista de mensajes no puede estar vacía"
+  empty_model: "El nombre del modelo no puede estar vacío"
   empty_provider_id: "El ID del proveedor no puede estar vacío"
   failed_to_convert_language_code: "Error al convertir el código de idioma: %{error}"
   failed_to_create_file: "Error al crear el archivo: %{error}"
   failed_to_detect_language: "Error al detectar el idioma"
-  failed_to_find_user_message_content: "No se pudo encontrar el contenido del mensaje del usuario"
   failed_to_get_available_languages: "Error al obtener la lista de idiomas disponibles: %{error}"
   failed_to_write_file: "Error al escribir en el archivo: %{error}"
-  invalid_search_model: "Modelo de búsqueda no válido: %{model_name}"
   note_already_exists: "Esta nota ya existe, no es necesario agregarla de nuevo"
-  search_analysing: "Analizando datos..."
-  search_fetching: "Obteniendo datos..."
   search_not_found: "No se encontró la sesión de búsqueda especificada"
-  search_results: "Se encontraron %{count} resultados en total"
-  searching: "Buscando información..."
-  user_message_with_references: "[Materiales de referencia]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nAl responder a las preguntas de los usuarios, dé prioridad al uso de su propio conocimiento. Si la pregunta excede su conocimiento o requiere información actualizada, puede consultar los materiales dentro de las etiquetas `<ref></ref>`. Al citar estos materiales, marque con [^id] después de las oraciones correspondientes. No se limite a repetir el contenido de referencia, sino que proporcione respuestas después de un análisis exhaustivo.\n\n[Pregunta del usuario]\n %{content}"
 
 db:
+  agent_name_exists: "El nombre del agente '%{name}' ya existe"
   ai_model_not_found_by_id: "No se encontró el modelo de IA con ID %{id}"
   ai_skill_not_found_by_id: "No se encontró la habilidad de IA con ID %{id}"
   already_exists: "Los datos ya existen: %{error}"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Error al serializar el esquema de salida del complemento a JSON: %{error}"
   plugin_not_found_by_uuid: "No se encontró el complemento con UUID %{uuid}"
   tauri_error: "Error de Tauri: %{error}"
-  unknown_database_version: "Versión de base de datos desconocida: %{version}"
 
 http:
   client_build_failed: "Error al crear el cliente HTTP: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "Error al crear la ventana de WebView: %{error}"
   failed_to_emit_event: "Error al enviar el evento: %{error}"
   failed_to_find_window_with_label: "Error al encontrar la ventana con la etiqueta: %{label}"
+  failed_to_get_current_monitor: "Error al obtener el monitor actual: %{error}"
+  failed_to_get_window_size: "Error al obtener el tamaño de la ventana: %{error}"
   failed_to_initialize_logger: "Error al inicializar el registrador"
   failed_to_navigate_to_url: "Error al navegar a la URL: %{url}, error: %{error}"
   failed_to_retrieve_log_directory: "Error al recuperar el directorio de registros de la aplicación"
   failed_to_set_window_always_on_top: "Error al configurar la ventana para que esté siempre en la parte superior: %{error}"
   failed_to_set_window_focus: "Error al establecer el foco de la ventana: %{error}"
+  failed_to_set_window_position: "Error al establecer la posición de la ventana: %{error}"
   failed_to_show_window: "Error al mostrar la ventana: %{error}"
   failed_to_start_up_application: "Error al iniciar la aplicación"
+  invalid_direction: "Dirección no válida, actualmente solo se admite: left->izquierda, right->derecha"
   window_not_ready: "La ventana aún no está lista"
   shortcut:
     failed_to_unregister_old: "Error al anular el registro del acceso directo antiguo: %{error}"
@@ -168,9 +163,9 @@ main:
 mcp:
   config:
     name_must_be_non_empty: "El nombre de la configuración de MCP no puede estar vacío. Introduzca un nombre de configuración válido."
-    sse_url_must_be_non_empty: "La URL de SSE de la configuración de MCP не puede estar vacía"
-    stdio_args_must_be_non_empty: "Los 'Argumentos de inicio' de la configuración de MCP no pueden estar vacíos"
-    stdio_command_must_be_non_empty: "El 'Comando de inicio' de la configuración de MCP не puede estar vacío"
+    sse_url_must_be_non_empty: "La URL de SSE de la configuración de MCP no puede estar vacía"
+    stdio_args_must_be_non_empty: "Los Argumentos de inicio de la configuración de MCP no pueden estar vacíos"
+    stdio_command_must_be_non_empty: "El Comando de inicio de la configuración de MCP no puede estar vacío"
   client:
     config_error_for_server: "Error de configuración del servidor MCP '%{server_name}': %{error}"
     config_mismatch: "Error de coincidencia de configuración de MCP, cliente MCP creado %{client}, tipo de configuración: %{protocol_type}"
@@ -183,8 +178,8 @@ mcp:
     sse_service_start_failed: "Error al iniciar el servicio SSE (URL: %{url}), motivo: %{error}"
     sse_transport_start_failed: "Error al iniciar el transporte SSE (URL: %{url}), motivo: %{error}"
     sse_url_cant_be_empty: "El parámetro de URL del cliente SSE no puede estar vacío"
-    stdio_args_cant_be_empty: "El parámetro de argumentos del cliente stdio не puede estar vacío"
-    stdio_command_cant_be_empty: "El parámetro de comando 'Comando de inicio' del cliente stdio не puede estar vacío"
+    stdio_args_cant_be_empty: "El parámetro de argumentos del cliente stdio no puede estar vacío"
+    stdio_command_cant_be_empty: "El parámetro de comando Comando de inicio del cliente stdio no puede estar vacío"
     stdio_command_not_found_no_help: 'No se pudo iniciar el servicio MCP: no se encontró el comando "%{command}" (error original: %{original_error}). Asegúrese de que el comando esté instalado y en la variable de entorno PATH de su sistema.'
     stdio_command_not_found_with_help: 'No se pudo iniciar el servicio MCP: no se encontró el comando "%{command}" (error original: %{original_error}).'
     stdio_npx_not_found_help: "Esto suele significar que Node.js no está instalado correctamente o que el comando 'npx' no está en la variable de entorno PATH de su sistema. Compruebe la instalación de Node.js."
@@ -201,8 +196,6 @@ network:
   client_build_error: "Error al crear el cliente HTTP: %{error}"
   header_error: "Error al crear el encabezado de la solicitud: %{error}"
   proxy_error: "Error al configurar el proxy: %{error}"
-  request_failed_with_status: "Error en la solicitud (%{status}): %{message}"
-  request_failed_with_type: "Error en la solicitud (código de estado: %{status}) - %{error_type}: %{message}"
   request_failed: "Error en la solicitud: %{error}"
   response_read_error: "Error al leer la respuesta: %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "El archivo no existe: %{file_path}"
 
 tools:
-  execution_failed: "Llamada a la herramienta fallida, nombre de la herramienta: %{name}, error: %{error}"
   failed_to_get_model: "Error al obtener el modelo %{model_type}"
   function_already_exists: "La función ya existe: %{name}"
   function_not_found: "No se encontró la función de la herramienta en el flujo de trabajo: %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "El ID del motor de búsqueda de Google no puede estar vacío"
     serper_api_key_empty: "La clave de API de Serper no puede estar vacía"
     tavily_api_key_empty: "La clave de API de Tavily no puede estar vacía"
-    web_search_failed: "Error en la búsqueda web (proveedor: %{provider}, palabra clave: %{keyword}): %{details}"
 
 tray:
   about: "Acerca de"
+  agent: "Agente"
   assistant: "Asistente"
   chat: "Chat"
   mcp: "MCP"

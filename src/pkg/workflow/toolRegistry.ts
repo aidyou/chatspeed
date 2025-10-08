@@ -48,6 +48,26 @@ export class ToolRegistry {
   }
 
   /**
+   * Gets the names of all registered tools.
+   * @returns An array of tool names.
+   */
+  public getToolNames(): string[] {
+    return Array.from(this.tools.values()).map(tool => tool.name)
+  }
+
+  /**
+   * Gets the declarations of all registered tools in a format suitable for the LLM.
+   * @returns An array of tool declaration objects.
+   */
+  public getToolDeclarations(): object[] {
+    return Array.from(this.tools.values()).map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema
+    }))
+  }
+
+  /**
    * Executes a tool based on its implementation type (Unified Dispatcher).
    * @param request The tool execution request.
    * @returns A promise that resolves with the execution result.

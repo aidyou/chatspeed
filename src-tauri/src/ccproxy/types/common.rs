@@ -66,7 +66,7 @@ pub struct ProxyModel {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
-    pub metadata: Option<Value>,
+    pub model_metadata: Option<Value>,
     pub prompt_injection: String,
     pub prompt_injection_position: Option<String>,
     pub prompt_text: String,

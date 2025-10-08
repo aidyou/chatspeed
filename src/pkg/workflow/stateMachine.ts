@@ -243,6 +243,13 @@ export class WorkflowStateMachine extends EventEmitter {
   }
 
   /**
+   * Directly sets the state. Should only be used when restoring from a snapshot.
+   */
+  public setState(newState: WorkflowState): void {
+    this.currentState = newState
+  }
+
+  /**
    * Set context data
    */
   public setContext(context: unknown): void {

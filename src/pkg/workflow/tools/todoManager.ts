@@ -9,7 +9,7 @@ export const todoManagerTool: ToolDefinition = {
   name: 'TodoManager',
   description:
     'A tool to manage a list of tasks. You can add, list, and update the status of tasks.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       operation: {
@@ -73,9 +73,9 @@ export const todoManagerTool: ToolDefinition = {
         if (taskIndex === -1) {
           return `Error: Task with ID '${params.task_id}' not found.`
         }
-        // Type assertion after validation
-        todoList[taskIndex].status = params.new_status as 'pending' | 'in_progress' | 'completed'
-        return `Task '${todoList[taskIndex].title}' updated to status '${params.new_status}'.`
+        const task = todoList[taskIndex] as TodoItem
+        task.status = params.new_status as 'pending' | 'in_progress' | 'completed'
+        return `Task '${task.title}' updated to status '${params.new_status}'.`
       }
 
       default:

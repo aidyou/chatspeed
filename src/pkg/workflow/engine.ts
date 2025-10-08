@@ -1,105 +1,150 @@
 /**
  * The core ReAct workflow engine.
- * This class orchestrates the entire workflow, using the state machine and tool registry
- * to manage the agent's lifecycle of thought, action, and observation.
  */
 
-import { callLLM, parseLLMResponse } from './llm'
+import {
+  addWorkflowMessage,
+  createWorkflow,
+  getWorkflowSnapshot,
+  updateWorkflowStatus
+} from './api'
+import { callLLM } from './llm'
 import { WorkflowStateMachine } from './stateMachine'
 import { ToolRegistry } from './toolRegistry'
 import { askUserTool } from './tools/askUser'
+import { taskCompleteTool } from './tools/taskCompleteTool'
 import { todoManagerTool } from './tools/todoManager'
-import type { Agent, ConversationContext, ParsedLLMResponse, WorkflowMessage } from './types'
-import { WorkflowState } from './types'
+import {
+  WorkflowState,
+  type Agent,
+  type ConversationContext,
+  type ParsedLLMResponse,
+  type WorkflowMessage,
+  type OmitWorkflowMessage
+} from './types'
 
 export class WorkflowEngine {
   public readonly stateMachine: WorkflowStateMachine
   public readonly toolRegistry: ToolRegistry
+  public readonly sessionId: string
   private context: ConversationContext
-  private readonly sessionId: string
-  private messageCounter: number
 
-  constructor(agent: Agent) {
+  // Constructor is private to force instantiation via static methods.
+  private constructor(agent: Agent, sessionId: string) {
     this.stateMachine = new WorkflowStateMachine()
-    this.toolRegistry = new ToolRegistry()
-    this.sessionId = `sess_${Date.now()}`
-    this.messageCounter = 0
+    this.sessionId = sessionId
 
-    // Register built-in TS tools
+    // Register all available tools
+    this.toolRegistry = new ToolRegistry()
     this.toolRegistry.register(askUserTool)
     this.toolRegistry.register(todoManagerTool)
+    this.toolRegistry.register(taskCompleteTool)
 
-    // TODO: Register Rust tools by fetching their definitions
-
-    // Initialize the context with agent-specific information
     this.context = {
       agent,
-      messages: [
-        {
-          id: this.getNextMessageId(),
-          sessionId: this.sessionId,
-          role: 'system',
-          message: agent.systemPrompt,
-          createdAt: new Date()
-        }
-      ],
+      messages: [],
       maxTokens: agent.maxContexts,
-      totalTokens: 0, // Token calculation to be implemented
-      systemPrompt: agent.systemPrompt // <-- Added this line
+      totalTokens: 0, // Token calculation to be implemented in callLLM.onDone
+      systemPrompt: agent.systemPrompt
     }
-
-    // Pass the initial context to the state machine
-    this.stateMachine.setContext(this.context)
 
     this.setupEventHandlers()
   }
 
-  private getNextMessageId(): number {
-    this.messageCounter += 1
-    return this.messageCounter
+  /**
+   * Creates and starts a new workflow.
+   * @param agent The agent to use.
+   * @param userQuery The initial user query.
+   * @returns A promise that resolves with the initialized WorkflowEngine instance.
+   */
+  public static async startNew(agent: Agent, userQuery: string): Promise<WorkflowEngine> {
+    const workflow = await createWorkflow(userQuery, agent.id)
+    const engine = new WorkflowEngine(agent, workflow.id)
+
+    // Create and persist initial user message
+    const userMessage: OmitWorkflowMessage = {
+      sessionId: engine.sessionId,
+      role: 'user',
+      message: userQuery
+    }
+    await engine.addMessage(userMessage)
+
+    // Start the workflow
+    const transitionEvent = agent.agentType === 'planning' ? 'START_PLANNING' : 'START_EXECUTION'
+    engine.stateMachine.transition(transitionEvent)
+
+    return engine
   }
 
   /**
-   * Sets up handlers for events emitted by the state machine or other components.
+   * Loads an existing workflow from the database.
+   * @param agent The agent associated with the workflow.
+   * @param workflowId The ID of the workflow to load.
+   * @returns A promise that resolves with the loaded WorkflowEngine instance.
    */
+  public static async load(agent: Agent, workflowId: string): Promise<WorkflowEngine> {
+    const snapshot = await getWorkflowSnapshot(workflowId)
+    const engine = new WorkflowEngine(agent, workflowId)
+
+    // Restore context and state
+    engine.context.messages = snapshot.messages.map(
+      m =>
+        ({
+          id: m.id,
+          sessionId: m.sessionId,
+          role: m.role as 'system' | 'assistant' | 'tool' | 'user',
+          message: m.message,
+          metadata: m.metadata,
+          // Ensure date objects are correctly parsed if stored as strings
+          createdAt: m.createdAt ? new Date(m.createdAt) : new Date()
+        }) as WorkflowMessage
+    )
+    engine.stateMachine.setState(snapshot.workflow.status as WorkflowState)
+
+    return engine
+  }
+
+  /**
+   * Resumes a paused workflow.
+   */
+  public resume(): void {
+    if (this.stateMachine.isInState(WorkflowState.PAUSED)) {
+      this.stateMachine.transition('RESUME')
+    } else {
+      console.warn('Workflow can only be resumed from a paused state.')
+    }
+  }
+
+  private async addMessage(message: OmitWorkflowMessage): Promise<void> {
+    const newApiMessage = await addWorkflowMessage(message)
+
+    if (newApiMessage.id === null || newApiMessage.id === undefined) {
+      throw new Error('Backend did not return an ID for the new message.')
+    }
+
+    this.context.messages.push({
+      id: newApiMessage.id,
+      sessionId: newApiMessage.sessionId,
+      role: newApiMessage.role as 'system' | 'assistant' | 'tool' | 'user',
+      message: newApiMessage.message,
+      ...(newApiMessage.metadata && { metadata: newApiMessage.metadata }),
+      createdAt: newApiMessage.createdAt ? new Date(newApiMessage.createdAt) : new Date()
+    })
+  }
+
   private setupEventHandlers(): void {
     this.stateMachine.on('stateChanged', event => {
-      console.log(`Workflow state changed to: ${event.payload.newState}`)
-      // Run the main loop whenever the state changes
-      this.run()
+      console.log(`Workflow state changed: ${event.payload.oldState} -> ${event.payload.newState}`)
+      // Persist status change
+      updateWorkflowStatus(this.sessionId, event.payload.newState).catch(console.error)
+
+      // Avoid re-triggering if the state was just set by the load method
+      if (event.payload.newState !== this.stateMachine.getState()) {
+        this.run()
+      }
     })
   }
 
-  /**
-   * Starts the workflow based on the agent's type.
-   * @param userQuery The initial query from the user.
-   */
-  public start(userQuery: string): void {
-    if (this.stateMachine.getState() !== WorkflowState.IDLE) {
-      console.warn('Workflow is already running.')
-      return
-    }
-
-    // Add user query to context
-    this.context.messages.push({
-      id: this.getNextMessageId(),
-      sessionId: this.sessionId,
-      role: 'user',
-      message: userQuery,
-      createdAt: new Date()
-    })
-
-    // Trigger the first state transition
-    if (this.context.agent.agentType === 'planning') {
-      this.stateMachine.transition('START_PLANNING')
-    } else {
-      this.stateMachine.transition('START_EXECUTION')
-    }
-  }
-
-  /**
-   * The main run loop, triggered by state changes.
-   */
   private async run(): Promise<void> {
     const currentState = this.stateMachine.getState()
 
@@ -108,132 +153,118 @@ export class WorkflowEngine {
         case WorkflowState.PLANNING:
           await this.handlePlanningState()
           break
-
         case WorkflowState.THINKING:
           await this.handleThinkingState()
           break
-
         case WorkflowState.EXECUTING_TOOL:
           await this.handleExecutingToolState()
           break
-
-        // Other states can be handled here as well
       }
     } catch (error: unknown) {
-      console.error('Error during workflow run:', error)
       const errorMessage = error instanceof Error ? error.message : String(error)
       this.stateMachine.transition('ERROR_OCCURRED', { error: errorMessage })
     }
   }
 
-  /**
-   * Handles the logic for the PLANNING state.
-   */
   private async handlePlanningState(): Promise<void> {
-    const { agent } = this.stateMachine.getContext() as ConversationContext
-    const { planModel, planningPrompt } = agent
-    if (!planModel || !planModel.id) {
-      throw new Error("Agent's planning model is not configured.")
-    }
-
-    // Construct a planning-specific message history
-    const planningMessages: WorkflowMessage[] = [
-      {
-        id: this.getNextMessageId(),
-        sessionId: this.sessionId,
-        role: 'system',
-        message: planningPrompt || 'Please create a plan.',
-        createdAt: new Date()
-      },
-      {
-        id: this.getNextMessageId(),
-        sessionId: this.sessionId,
-        role: 'user',
-        message: `Here is the user's request: ${
-          (this.stateMachine.getContext() as ConversationContext).messages.find(
-            m => m.role === 'user'
-          )?.message || ''
-        }`,
-        createdAt: new Date()
-      }
-    ]
-
-    const rawResponse = await callLLM({
-      providerId: planModel.id,
-      modelId: planModel.model,
-      messages: planningMessages
-    })
-
-    // For now, we assume the plan is the raw response.
-    // TODO: Implement robust plan parsing (e.g., from JSON or Markdown)
-    const plan = rawResponse
-
-    this.stateMachine.transition('PLAN_READY', { plan })
+    // Implementation for planning mode will be detailed here
+    this.stateMachine.transition('SKIP_APPROVAL')
   }
 
-  /**
-   * Handles the logic for the THINKING state.
-   */
   private async handleThinkingState(): Promise<void> {
-    const { actModel } = (this.stateMachine.getContext() as ConversationContext).agent
+    const { actModel } = this.context.agent
     if (!actModel || !actModel.id) {
       throw new Error("Agent's action model is not configured.")
     }
 
-    const rawResponse = await callLLM({
-      providerId: actModel.id,
-      modelId: actModel.model,
-      messages: (this.stateMachine.getContext() as ConversationContext).messages
-    })
+    let thought = ''
+    let finalContent = ''
+    let actionCalled = false
 
-    const parsed = parseLLMResponse(rawResponse)
-
-    if (parsed.thought) {
-      ;(this.stateMachine.getContext() as ConversationContext).messages.push({
-        id: this.getNextMessageId(),
+    const messagesForLLM: WorkflowMessage[] = [
+      {
+        // id, createdAt are not needed for the LLM call
         sessionId: this.sessionId,
-        role: 'assistant',
-        message: parsed.thought,
-        createdAt: new Date()
-      })
-    }
+        role: 'system',
+        message: this.context.agent.systemPrompt
+      } as OmitWorkflowMessage,
+      ...this.context.messages
+    ]
 
-    if (parsed.action) {
-      const tool = this.toolRegistry.get(parsed.action.tool)
-      if (!tool) {
-        throw new Error(`Tool '${parsed.action.tool}' not found in registry.`)
+    await callLLM(
+      {
+        providerId: actModel.id,
+        modelId: actModel.model,
+        messages: messagesForLLM,
+        availableTools: this.toolRegistry.getToolNames(),
+        tsTools: this.toolRegistry.getToolDeclarations()
+      },
+      {
+        onReasoning: chunk => {
+          thought += chunk
+          console.log('AI Thought:', chunk)
+        },
+        onContent: chunk => {
+          finalContent += chunk
+        },
+        onAction: async action => {
+          actionCalled = true
+          if (thought) {
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'assistant',
+              message: thought
+            } as OmitWorkflowMessage)
+          }
+
+          const toolName = action?.name
+          if (!toolName) {
+            throw new Error('Action name is required but was not provided.')
+          }
+
+          if (toolName === taskCompleteTool.name) {
+            const finalAnswer = (action.arguments?.finalAnswer as string) || 'Task is complete.'
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'assistant',
+              message: finalAnswer
+            } as OmitWorkflowMessage)
+            this.stateMachine.transition('TASK_COMPLETE')
+            return
+          }
+
+          const tool = this.toolRegistry.get(toolName)
+          if (!tool) {
+            throw new Error(`Tool '${toolName}' not found in registry.`)
+          }
+
+          const needsApproval =
+            tool.requiresApproval && !this.context.agent.autoApprove.includes(tool.id)
+          this.stateMachine.setContext({ currentAction: action })
+
+          if (needsApproval) {
+            this.stateMachine.transition('NEED_APPROVAL')
+          } else {
+            this.stateMachine.transition('EXECUTE_TOOL')
+          }
+        },
+        onDone: async () => {
+          if (!actionCalled && finalContent) {
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'assistant',
+              message: finalContent
+            } as OmitWorkflowMessage)
+            this.stateMachine.transition('TASK_COMPLETE')
+          }
+        },
+        onError: error => {
+          throw error
+        }
       }
-
-      // Approval Hook Logic
-      const needsApproval =
-        tool.requiresApproval &&
-        !(this.stateMachine.getContext() as ConversationContext).agent.autoApprove.includes(tool.id)
-
-      this.stateMachine.setContext({ currentAction: parsed.action })
-
-      if (needsApproval) {
-        this.stateMachine.transition('NEED_APPROVAL')
-      } else {
-        this.stateMachine.transition('EXECUTE_TOOL')
-      }
-    } else if (parsed.finalAnswer) {
-      ;(this.stateMachine.getContext() as ConversationContext).messages.push({
-        id: this.getNextMessageId(),
-        sessionId: this.sessionId,
-        role: 'assistant',
-        message: parsed.finalAnswer,
-        createdAt: new Date()
-      })
-      this.stateMachine.transition('TASK_COMPLETE')
-    } else {
-      // If the model output is unclear, ask it to clarify or try again.
-      throw new Error('LLM response was not a valid action or final answer.')
-    }
+    )
   }
 
-  /**
-   * Handles the logic for the EXECUTING_TOOL state.
-   */
   private async handleExecutingToolState(): Promise<void> {
     const { currentAction } = this.stateMachine.getContext() as {
       currentAction: ParsedLLMResponse['action']
@@ -242,29 +273,22 @@ export class WorkflowEngine {
       throw new Error('No action to execute.')
     }
 
-    const { tool, parameters } = currentAction
+    const { name, arguments: parameters } = currentAction
 
     const result = await this.toolRegistry.execute({
-      toolId: tool,
+      toolId: name,
       parameters
     })
 
-    // Create the observation message
-    const observationMessage: string = `Observation: ${JSON.stringify(result)}`
+    const observationMessage = `Observation: ${JSON.stringify(result)}`
 
-    ;(this.stateMachine.getContext() as ConversationContext).messages.push({
-      id: this.getNextMessageId(),
+    await this.addMessage({
       sessionId: this.sessionId,
       role: 'tool',
       message: observationMessage,
-      metadata: { tool, parameters, result },
-      createdAt: new Date()
-    })
+      metadata: { tool: name, parameters, result }
+    } as OmitWorkflowMessage)
 
-    if (result.success) {
-      this.stateMachine.transition('TOOL_COMPLETE')
-    } else {
-      this.stateMachine.transition('TOOL_FAILED', { error: result.error })
-    }
+    this.stateMachine.transition('TOOL_COMPLETE')
   }
 }

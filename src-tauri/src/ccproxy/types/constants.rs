@@ -3,6 +3,8 @@ pub const TOOL_TAG_END: &str = "</cs:tool_use>";
 pub const TODO_TAG_START: &str = "<cs:todo>";
 pub const TODO_TAG_END: &str = "</cs:todo>";
 
+pub const TOOL_CALL_EMPTY_REMAIN:&str = "<system-reminder>The tool call was cancelled or failed. The model can try again later if necessary.</system-reminder>";
+
 pub const TOOL_PARSE_ERROR_REMINDER: &str = r###"<system-reminder>
 Your last tool call had an invalid XML format and could not be parsed. Please check carefully and strictly follow the tool usage specifications.
 Common reasons for failure:
@@ -59,10 +61,11 @@ IMPORTANT: Do not escape any other characters at the XML level (e.g., write `"` 
 The content inside an `<arg>` tag depends on its `type` attribute.
 
 - For `type="string"` (Literal Content)
-  The value is treated as a raw, literal string.
+  The value is treated as a raw, literal string, AS IS.
   - Newlines: Use literal newlines, not `\n`.
   - Quotes: Write quotes like `"` and `'` directly, do not escape them like `\"`.
   - XML Escaping: You MUST still escape `&`, `<`, `>` as described in 3.1.
+  - For file paths, do NOT add any newlines or leading/trailing whitespace. The path must be exact.
 
 - For `type="array"` or `type="object"` (JSON Content)
   The value MUST be a single, valid JSON string.

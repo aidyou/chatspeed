@@ -13,6 +13,8 @@ pub struct UnifiedChatMessage {
     pub tool_calls: Option<Vec<UnifiedToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>, // Used by "tool" role messages in requests
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>, // Name of the tool, if applicable
 
     // Added for custom reasoning content
     // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing

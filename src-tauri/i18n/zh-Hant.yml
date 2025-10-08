@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "與 %{provider} 服務介面請求失敗: %{details}"
     deserialization_failed: "反序列化 '%{context}' 失敗: %{details}"
     invalid_input: "無效的輸入：%{details}"
     response_parse_failed: "解析來自 %{provider} 的回應失敗: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "工具呼叫序列化失敗: %{details}"
     upstream_chat_error: "上游聊天服務發生錯誤: %{message}"
   api_key_is_require_for_list_models: "獲取模型清單需要提供 API 金鑰，請在設定中配置有效的 API 金鑰"
-  chat_completion_failed_after_retries: "聊天補全在 %{retries} 次重試後失敗"
   chat_not_found: "未找到指定的聊天會話"
   empty_chat_id: "聊天ID不可為空"
   empty_messages: "訊息清單不可為空"
@@ -28,19 +26,13 @@ chat:
   failed_to_convert_language_code: "轉換語言代碼失敗: %{error}"
   failed_to_create_file: "建立檔案失敗：%{error}"
   failed_to_detect_language: "偵測語言失敗"
-  failed_to_find_user_message_content: "未能找到使用者訊息內容"
   failed_to_get_available_languages: "獲取可用語言清單失敗: %{error}"
   failed_to_write_file: "無法寫入檔案: %{error}"
-  invalid_search_model: "無效的搜尋模型: %{model_name}"
   note_already_exists: "該筆記已存在，無需重複新增"
-  search_analysing: "正在分析資料..."
-  search_fetching: "正在擷取資料..."
   search_not_found: "未找到指定的搜尋會話"
-  search_results: "本次共搜尋到%{count}筆結果"
-  searching: "正在搜尋資訊..."
-  user_message_with_references: "[參考資料]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\n回答使用者問題時，請優先使用你自身的知識。如果問題超出你的知識範圍或需要最新資訊，可以參考`<ref></ref>`標籤內的資料。引用這些資料時，請在相關句子後標註[^id]。請不要簡單重複參考資料的內容，而是進行綜合分析後給出回答。\n\n[使用者問題]\n %{content}"
 
 db:
+  agent_name_exists: "智能體名稱 '%{name}' 已存在"
   ai_model_not_found_by_id: "未找到ID為 %{id} 的AI模型"
   ai_skill_not_found_by_id: "未找到ID為 %{id} 的AI技能"
   already_exists: "資料已存在: %{error}"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "序列化外掛輸出結構為JSON失敗: %{error}"
   plugin_not_found_by_uuid: "未找到UUID為 %{uuid} 的外掛"
   tauri_error: "Tauri錯誤：%{error}"
-  unknown_database_version: "未知的資料庫版本號: %{version}"
 
 http:
   client_build_failed: "建立HTTP用戶端失敗: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "無法建立WebView視窗: %{error}"
   failed_to_emit_event: "傳送事件失敗：%{error}"
   failed_to_find_window_with_label: "無法找到帶有標籤的視窗: %{label}"
+  failed_to_get_current_monitor: "獲取目前顯示器失敗: %{error}"
+  failed_to_get_window_size: "獲取視窗大小失敗: %{error}"
   failed_to_initialize_logger: "無法初始化記錄器"
   failed_to_navigate_to_url: "無法導覽到URL: %{url}，錯誤：%{error}"
   failed_to_retrieve_log_directory: "無法擷取應用程式日誌目錄"
   failed_to_set_window_always_on_top: "無法置頂視窗：%{error}"
   failed_to_set_window_focus: "無法設定視窗焦點: %{error}"
+  failed_to_set_window_position: "無法設定視窗位置: %{error}"
   failed_to_show_window: "無法顯示視窗: %{error}"
   failed_to_start_up_application: "無法啟動應用程式"
+  invalid_direction: "無效的方向，目前只支援：left->左，right->右"
   window_not_ready: "視窗尚未準備好"
   shortcut:
     failed_to_unregister_old: "註銷舊快捷鍵失敗: %{error}"
@@ -169,8 +164,8 @@ mcp:
   config:
     name_must_be_non_empty: "MCP 配置名稱不可為空，請輸入一個有效的配置名稱"
     sse_url_must_be_non_empty: "MCP配置的 SSE URL 不可為空"
-    stdio_args_must_be_non_empty: "MCP配置的「啟動參數」不可為空"
-    stdio_command_must_be_non_empty: "MCP配置的「啟動指令」不可為空"
+    stdio_args_must_be_non_empty: "MCP配置的啟動參數不可為空"
+    stdio_command_must_be_non_empty: "MCP配置的啟動指令不可為空"
   client:
     config_error_for_server: "MCP伺服器 '%{server_name}' 配置錯誤: %{error}"
     config_mismatch: "MCP配置不符，正在建立的MCP用戶端 %{client}，配置類型：%{protocol_type}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "啟動 SSE 傳輸失敗 (URL: %{url})，原因: %{error}"
     sse_url_cant_be_empty: "sse用戶端的url參數不可為空"
     stdio_args_cant_be_empty: "stdio用戶端的args參數不可為空"
-    stdio_command_cant_be_empty: "stdio用戶端的「啟動指令」參數command不可為空"
+    stdio_command_cant_be_empty: "stdio用戶端的啟動指令參數command不可為空"
     stdio_command_not_found_no_help: "無法啟動 MCP 服務：指令「%{command}」未找到 (原始錯誤: %{original_error})。請確保該指令已安裝並在系統的 PATH 環境變數中。"
     stdio_command_not_found_with_help: "無法啟動 MCP 服務：指令「%{command}」未找到 (原始錯誤: %{original_error})。"
     stdio_npx_not_found_help: "這通常意味著 Node.js 未正確安裝，或 'npx' 指令不在系統的 PATH 環境變數中。請檢查您的 Node.js 安裝。"
@@ -201,8 +196,6 @@ network:
   client_build_error: "建立HTTP用戶端失敗: %{error}"
   header_error: "建立請求標頭失敗: %{error}"
   proxy_error: "配置代理失敗: %{error}"
-  request_failed_with_status: "請求失敗（%{status}）: %{message}"
-  request_failed_with_type: "請求失敗 (狀態碼: %{status}) - %{error_type}: %{message}"
   request_failed: "請求失敗: %{error}"
   response_read_error: "讀取回應失敗: %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "檔案不存在：%{file_path}"
 
 tools:
-  execution_failed: "工具調用失敗，工具名稱：%{name}，錯誤: %{error}"
   failed_to_get_model: "獲取 %{model_type} 模型失敗"
   function_already_exists: "函數已存在: %{name}"
   function_not_found: "工作流程中未找到工具函數: %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "Google 搜尋引擎 ID 不可為空"
     serper_api_key_empty: "Serper API 金鑰不可為空"
     tavily_api_key_empty: "Tavily API 金鑰不可為空"
-    web_search_failed: "網路搜尋失敗 (服務商: %{provider}, 關鍵詞: %{keyword}): %{details}"
 
 tray:
   about: "關於"
+  agent: "智能體"
   assistant: "助理"
   chat: "聊天"
   mcp: "MCP"

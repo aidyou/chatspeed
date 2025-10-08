@@ -17,6 +17,7 @@ use crate::ai::traits::chat::{
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{init_extra_params, update_or_create_metadata};
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
+use crate::db::ModelConfig;
 use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
@@ -137,17 +138,13 @@ impl OpenAIChat {
                             for part in tool_call_parts {
                                 // part is a ToolCallDeclaration
                                 let acc_call = accumulated_tool_calls
-                                    .entry(part.index) // Use part.index as HashMap key
-                                    .or_insert_with(|| {
-                                        // First time encountering this index, this part should contain valid id and name
-                                        // part.id and part.name are already String type (unwrapped_or_default in stream.rs)
-                                        ToolCallDeclaration {
-                                            index: part.index,
-                                            id: part.id.clone(),
-                                            name: part.name.clone(),
-                                            arguments: Some(String::new()), // Initialize with empty string
-                                            results: None,
-                                        }
+                                    .entry(part.index)
+                                    .or_insert_with(|| ToolCallDeclaration {
+                                        index: part.index,
+                                        id: part.id.clone(),
+                                        name: part.name.clone(),
+                                        arguments: Some(String::new()),
+                                        results: None,
                                     });
 
                                 // Append current part's arguments
@@ -167,98 +164,14 @@ impl OpenAIChat {
                         if chunk.finish_reason == Some("tool_calls".to_string()) {
                             if !accumulated_tool_calls.is_empty() {
                                 finish_reason = FinishReason::ToolCalls;
-
-                                // First, send the AssistantAction message with all requested tool calls
-                                let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
-                                    .iter()
-                                    .map(|(idx, tcd)| {
-                                        // Convert ToolCallDeclaration to the format expected in the assistant's message
-                                        // OpenAI's assistant message tool_calls usually look like:
-                                        // { "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }
-                                        // Our ToolCallDeclaration is already very close to this.
-                                        // We might need to ensure the arguments are a string as expected by some models.
-                                        let arguments_str =
-                                            tcd.arguments.as_deref().unwrap_or_default();
-                                        json!({
-                                            "index": idx,
-                                            "id": tcd.id,
-                                            "type": "function", // Assuming all tools are functions for now
-                                            "function": {
-                                                "name": tcd.name,
-                                                "arguments": arguments_str
-                                            }
-                                        })
-                                    })
-                                    .collect();
-
-                                let assistant_action_message = json!({
-                                    "role": "assistant",
-                                    "content": full_response,
-                                    "tool_calls": assistant_tool_requests
-                                });
-
-                                match serde_json::to_string(&assistant_action_message) {
-                                    Ok(serialized_assistant_action) => {
-                                        callback(ChatResponse::new_with_arc(
-                                            chat_id.clone(),
-                                            serialized_assistant_action,
-                                            MessageType::ToolCalls,
-                                            metadata_option.clone(),
-                                            None,
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        log::error!(
-                                            "Failed to serialize AssistantAction message: {}",
-                                            e
-                                        );
-                                        // Optionally send an error message via callback here
-                                    }
-                                }
-
-                                // Then, send individual ToolCall messages for each tool
-                                for tcd in accumulated_tool_calls.values() {
-                                    let mut trimmed_tcd = tcd.clone();
-                                    if let Some(args) = trimmed_tcd.arguments.as_mut() {
-                                        *args = args.trim().to_string();
-                                    }
-                                    match serde_json::to_string(&trimmed_tcd) {
-                                        Ok(serialized_tcd) => {
-                                            callback(ChatResponse::new_with_arc(
-                                                chat_id.clone(),
-                                                serialized_tcd,
-                                                MessageType::ToolResults,
-                                                metadata_option.clone(),
-                                                None,
-                                            ));
-                                            #[cfg(debug_assertions)]
-                                            {
-                                                log::debug!(
-                                                    "tool_call: {}",
-                                                    serde_json::to_string_pretty(tcd)
-                                                        .unwrap_or_default()
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let err = AiError::ToolCallSerializationFailed {
-                                                details: e.to_string(),
-                                            };
-                                            log::error!(
-                                                "{} tool call serialization error for tool {:?}: {}",
-                                                provider_name, tcd.name, err
-                                            );
-                                            callback(ChatResponse::new_with_arc(
-                                                chat_id.clone(),
-                                                err.to_string(),
-                                                MessageType::Error,
-                                                metadata_option.clone(),
-                                                None,
-                                            ));
-                                        }
-                                    }
-                                }
-                                accumulated_tool_calls.clear(); // Clear for next batch
+                                self.process_and_send_tool_calls(
+                                    &mut accumulated_tool_calls,
+                                    &full_response,
+                                    &chat_id,
+                                    &metadata_option,
+                                    &provider_name,
+                                    &callback,
+                                );
                             }
                         }
                     }
@@ -276,11 +189,27 @@ impl OpenAIChat {
                         metadata_option.clone(),
                         None,
                     ));
+                    return Err(err);
                 }
             }
         }
 
-        // Send final response with token usage
+        if !accumulated_tool_calls.is_empty() {
+            log::debug!(
+                "Manually triggering tool call processing after stream end for chat_id: {}",
+                chat_id
+            );
+            finish_reason = FinishReason::ToolCalls;
+            self.process_and_send_tool_calls(
+                &mut accumulated_tool_calls,
+                &full_response,
+                &chat_id,
+                &metadata_option,
+                &provider_name,
+                &callback,
+            );
+        }
+
         callback(ChatResponse::new_with_arc(
             chat_id.clone(),
             String::new(),
@@ -298,10 +227,152 @@ impl OpenAIChat {
             Some(finish_reason),
         ));
 
-        Ok(format!(
-            "<think>{}</think>{}",
-            reasoning_content, full_response
-        ))
+        Ok(json!({
+            "reasoning": reasoning_content,
+            "content": full_response
+        })
+        .to_string())
+    }
+
+    /// Processes and sends accumulated tool calls.
+    fn process_and_send_tool_calls<F: Fn(Arc<ChatResponse>) + Send + 'static>(
+        &self,
+        accumulated_tool_calls: &mut HashMap<u32, ToolCallDeclaration>,
+        full_response: &str,
+        chat_id: &str,
+        metadata_option: &Option<Value>,
+        provider_name: &str,
+        callback: &F,
+    ) {
+        let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
+            .iter()
+            .map(|(idx, tcd)| {
+                let arguments_str = tcd.arguments.as_deref().unwrap_or_default();
+                json!({
+                    "index": idx,
+                    "id": tcd.id,
+                    "type": "function",
+                    "function": { "name": tcd.name, "arguments": arguments_str }
+                })
+            })
+            .collect();
+
+        let assistant_action_message = json!({
+            "role": "assistant",
+            "content": full_response,
+            "tool_calls": assistant_tool_requests
+        });
+
+        match serde_json::to_string(&assistant_action_message) {
+            Ok(serialized_assistant_action) => {
+                callback(ChatResponse::new_with_arc(
+                    chat_id.to_string(),
+                    serialized_assistant_action,
+                    MessageType::ToolCalls,
+                    metadata_option.clone(),
+                    None,
+                ));
+            }
+            Err(e) => {
+                let err = AiError::ToolCallSerializationFailed {
+                    details: e.to_string(),
+                };
+                log::error!("Failed to serialize AssistantAction message: {}", err);
+                callback(ChatResponse::new_with_arc(
+                    chat_id.to_string(),
+                    err.to_string(),
+                    MessageType::Error,
+                    metadata_option.clone(),
+                    Some(FinishReason::Error),
+                ));
+                return;
+            }
+        }
+
+        for tcd in accumulated_tool_calls.values() {
+            let mut trimmed_tcd = tcd.clone();
+            if let Some(args) = trimmed_tcd.arguments.as_mut() {
+                *args = args.trim().to_string();
+            }
+            match serde_json::to_string(&trimmed_tcd) {
+                Ok(serialized_tcd) => {
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.to_string(),
+                        serialized_tcd,
+                        MessageType::ToolResults,
+                        metadata_option.clone(),
+                        None,
+                    ));
+                    #[cfg(debug_assertions)]
+                    {
+                        log::debug!(
+                            "tool_call: {}",
+                            serde_json::to_string_pretty(tcd).unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    let err = AiError::ToolCallSerializationFailed {
+                        details: e.to_string(),
+                    };
+                    log::error!(
+                        "{} tool call serialization error for tool {:?}: {}",
+                        provider_name,
+                        tcd.name,
+                        err
+                    );
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.to_string(),
+                        err.to_string(),
+                        MessageType::Error,
+                        metadata_option.clone(),
+                        Some(FinishReason::Error),
+                    ));
+                }
+            }
+        }
+        accumulated_tool_calls.clear();
+    }
+
+    /// Determines the appropriate API endpoint based on tools and function call settings
+    fn get_endpoint(
+        &self,
+        messages: &[Value],
+        tools: &Option<Vec<MCPToolDeclaration>>,
+        model_detail: &[ModelConfig],
+        model: &str,
+    ) -> &'static str {
+        let has_tool_calls = messages.iter().any(|msg| {
+            msg.get("role")
+                .and_then(|r| r.as_str())
+                .map(|role| {
+                    role == "tool"
+                        || (role == "assistant"
+                            && msg
+                                .get("tool_calls")
+                                .and_then(|tc| tc.as_array())
+                                .map(|arr| !arr.is_empty())
+                                .unwrap_or(false))
+                })
+                .unwrap_or(false)
+        });
+
+        let has_tools = tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+        let function_call = model_detail
+            .iter()
+            .find(|m| m.id == model)
+            .and_then(|m| m.function_call)
+            .unwrap_or(false);
+
+        if has_tool_calls || has_tools {
+            if function_call {
+                "/v1/chat/completions"
+            } else {
+                "/compat_mode/v1/chat/completions"
+            }
+        } else {
+            "/v1/chat/completions"
+        }
     }
 }
 
@@ -333,13 +404,31 @@ impl AiChatTrait for OpenAIChat {
             .main_store
             .read()
             .map_err(|e| {
-                AiError::InitFailed(
+                let err = AiError::InitFailed(
                     t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                )
+                );
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    err.to_string(),
+                    MessageType::Error,
+                    extra_params.clone(),
+                    Some(FinishReason::Error),
+                ));
+                err
             })?
             .config
             .get_ai_model_by_id(provider_id)
-            .map_err(|e| AiError::InitFailed(e.to_string()))?;
+            .map_err(|e| {
+                let err = AiError::InitFailed(e.to_string());
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    err.to_string(),
+                    MessageType::Error,
+                    extra_params.clone(),
+                    Some(FinishReason::Error),
+                ));
+                err
+            })?;
 
         let params = init_extra_params(model_detail.metadata);
 
@@ -460,28 +549,38 @@ impl AiChatTrait for OpenAIChat {
             Some(headers),
         );
 
-        let endpoint = match tools.as_ref() {
-            Some(t) => {
-                if t.is_empty() {
-                    "/v1/chat/completions"
-                } else {
-                    "/compat_mode/v1/chat/completions"
-                }
-            }
-            None => "/v1/chat/completions",
-        };
+        let endpoint = self.get_endpoint(&messages, &tools, &model_detail.models, model);
+
         let response = self
             .client
             .post_request(&config, endpoint, payload, true)
             .await
-            .map_err(|e| AiError::ApiRequestFailed {
-                provider: model_detail.api_protocol.clone(),
-                details: e.to_string(),
+            .map_err(|e| {
+                let err = AiError::ApiRequestFailed {
+                    status_code: "N/A".to_string(),
+                    provider: model_detail.api_protocol.clone(),
+                    details: e.to_string(),
+                };
+
+                callback(ChatResponse::new_with_arc(
+                    chat_id.clone(),
+                    err.to_string(),
+                    MessageType::Error,
+                    extra_params.clone(),
+                    Some(FinishReason::Error),
+                ));
+                err
             })?;
 
         if response.is_error {
+            let status_code = response
+                .raw_response
+                .map(|r| r.status().to_string())
+                .unwrap_or("N/A".to_string()); // No HTTP response received
+
             let err = AiError::ApiRequestFailed {
-                provider: model_detail.api_protocol.clone(),
+                status_code,
+                provider: model_detail.name.clone(),
                 details: response.content.clone(),
             };
             // log::error!("{} API returned an error: {}", provider_name_for_error, err);
@@ -505,14 +604,21 @@ impl AiChatTrait for OpenAIChat {
             )
             .await
         } else {
+            // This case occurs when the request fails in a way that a response object isn't available,
+            // but it wasn't caught by the initial network error mapping. The content field contains the error details.
+            let err = AiError::ApiRequestFailed {
+                status_code: "N/A".to_string(),
+                provider: model_detail.name.clone(),
+                details: response.content.clone(),
+            };
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                response.content.clone(),
-                MessageType::Finished,
+                err.to_string(),
+                MessageType::Error,
                 extra_params,
                 Some(FinishReason::Error),
             ));
-            Ok(response.content)
+            return Err(err);
         }
     }
 

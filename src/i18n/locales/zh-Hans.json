@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "问AI",
     "askDescription": "你好呀！我能为你做啥？",
-    "chatPlaceholder": "提问、翻译、写作、编程等…… 使用↑↓选择技能\n回复AI的消息请按快捷键 ALT+Q，ALT+C 复制消息",
+    "chatPlaceholder": "提问、翻译、写作、编程等…… 使用 ALT+↑↓ 选择技能\n回复AI的消息请按快捷键 ALT+Q，ALT+C 复制消息",
     "haveNoModel": "您尚未添加任何模型，请从设置中心添加"
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "确定要删除这个消息吗？",
     "collapseSidebar": "折叠侧边栏 (Cmd/Ctrl+B)",
     "expandSidebar": "展开侧边栏 (Cmd/Ctrl+B)",
-    "contextCleared": "上下文已清除",
     "conversation": "对话",
     "conversationNotFound": "对话不存在或者已删除",
     "conversationTitle": "对话主题",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "获取当前对话ID失败: {error}",
     "errorOnGoToChat": "跳转聊天窗口失败: {error}",
     "errorOnLoadMessages": "加载消息失败: {error}",
+    "errorOnMoveWindow": "移动窗口失败: {error}",
     "errorOnSaveMessage": "存储您的对话信息失败: {error}",
     "errorOnSendMessage": "发送聊天消息失败: {error}",
     "errorOnStopChat": "停止聊天失败: {error}",
@@ -41,6 +41,7 @@
     "mcpDisabled": "禁用 MCP 工具",
     "mcpEnabled": "启用 MCP 工具",
     "messageCopied": "消息已复制",
+    "messageNotFound": "消息不存在或者已被删除",
     "mindmapError": "思维导图渲染失败",
     "networkDisabled": "关闭联网",
     "networkEnabled": "开启联网：自动抓取连接中的内容或者搜索相关信息",
@@ -149,7 +150,6 @@
       "description": "描述",
       "edit": "编辑智能体",
       "fetchFailed": "获取智能体失败",
-      "fetchToolsFailed": "获取可用工具列表失败",
       "maxContexts": "最大上下文长度",
       "models": "模型",
       "name": "智能体名称",
@@ -158,6 +158,8 @@
       "notFound": "未找到智能体",
       "planModel": "规划模型",
       "planningMode": "规划模式",
+      "planningPrompt": "规划提示词",
+      "reorderFailed": "智能体排序失败：{error}",
       "saveFailed": "智能体保存失败：{error}",
       "selectActModel": "选择行动模型",
       "selectAutoApproveTools": "选择自动批准工具",
@@ -518,6 +520,8 @@
         "disabled": "禁用",
         "maxContext": "最大上下文长度",
         "maxContextPlaceholder": "请参考各模型的发布信息或者接口信息，0 值将不设置",
+        "modelInjectionCondition": "模型注入条件",
+        "modelInjectionConditionPlaceholder": "模型 id 匹配时才注入，留空不限，可以用 *匹配任意多个字符，用?匹配单个字符",
         "name": "分组名称",
         "namePlaceholder": "请输入分组名称",
         "promptInjection": "提示词注入",
@@ -602,7 +606,8 @@
       "model": "AI引擎",
       "proxy": "代理",
       "privacy": "隐私",
-      "skill": "技能"
+      "skill": "技能",
+      "scraperTest": "爬虫测试"
     }
   }
 }

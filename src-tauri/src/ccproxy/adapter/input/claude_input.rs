@@ -25,7 +25,12 @@ fn convert_claude_content_block(
             media_type: source.media_type,
             data: source.data,
         }]),
-        ClaudeNativeContentBlock::ToolUse { id, name, input } => {
+        ClaudeNativeContentBlock::ToolUse {
+            id,
+            name,
+            input,
+            cache_control: _,
+        } => {
             let cleaned_input_str = input.to_string();
             match serde_json::from_str(&cleaned_input_str) {
                 Ok(cleaned_input) => Ok(vec![UnifiedContentBlock::ToolUse {
@@ -62,6 +67,7 @@ fn convert_claude_content_block(
             tool_use_id,
             content,
             is_error,
+            cache_control: _,
         } => Ok(vec![UnifiedContentBlock::ToolResult {
             tool_use_id,
             content, // The source is already a String, which is correct for the unified format.

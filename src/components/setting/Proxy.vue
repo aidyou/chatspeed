@@ -1260,9 +1260,6 @@ const genTableData = () => {
 
 .tip {
   font-size: var(--cs-font-size);
-  margin: var(--cs-space-lg) 0 var(--cs-space-lg);
-  // padding: var(--cs-space);
-  // background-color: var(--cs-bg-color-deep);
   border-radius: var(--cs-border-radius);
 
   ul > li {
@@ -1274,6 +1271,17 @@ const genTableData = () => {
   .api-table {
     width: 100%;
     margin-bottom: var(--cs-space);
+  }
+}
+
+:deep(.el-tabs) {
+  .el-tabs__header {
+    position: sticky;
+    top: -2px;
+    z-index: 100;
+    background-color: var(--cs-bg-color);
+    border-bottom: 1px solid var(--cs-border-color-light);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
 }
 </style>

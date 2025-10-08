@@ -139,9 +139,9 @@
     </main>
 
     <!-- chat message -->
-    <main class="main" v-else :class="{ 'split-view': currentAssistantMessage || isChatting }">
+    <main class="main" v-else :class="{ 'split-view': chatState.message || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
-      <div class="skill-list-sidebar" v-if="currentAssistantMessage || isChatting">
+      <div class="skill-list-sidebar" v-if="chatState.message || isChatting">
         <el-tooltip
           v-for="(skill, index) in skills"
           :key="skill.id"
@@ -165,55 +165,18 @@
 
       <!-- Main Content Area -->
       <div class="main-content-area">
-        <div class="chat" v-if="currentAssistantMessage || isChatting">
+        <div class="chat" v-if="chatState.message || isChatting">
           <div class="message">
             <div class="content-container">
-              <!-- todo: use markdown component -->
-              <!-- Due to the involvement of the component's scroll event, directly replacing it with the markdown component may cause bugs, so it is temporarily not handled -->
-              <div class="content" ref="chatMessagesRef">
-                <div class="chat-reference" v-if="chatState.reference.length > 0">
-                  <div
-                    class="chat-reference-title"
-                    :class="{ expanded: showReference }"
-                    @click="showReference = !showReference">
-                    <span>{{ $t('chat.reference', { count: chatState.reference.length }) }}</span>
-                  </div>
-                  <ul class="chat-reference-list" v-show="showReference" v-link>
-                    <li v-for="item in chatState.reference" :key="item.id">
-                      <a :href="item.url" :title="item.title.trim()">{{ item.title.trim() }}</a>
-                    </li>
-                  </ul>
-                </div>
-                <div class="chat-think" v-if="chatState.reasoning != ''">
-                  <div
-                    class="chat-think-title"
-                    :class="{ expanded: showThink }"
-                    @click="showThink = !showThink">
-                    <span>{{
-                      $t(`chat.${chatState.isReasoning ? 'reasoning' : 'reasoningProcess'}`)
-                    }}</span>
-                  </div>
-                  <div
-                    v-show="showThink"
-                    class="think-content"
-                    v-highlight
-                    v-link
-                    v-table
-                    v-katex
-                    v-html="parseMarkdown(chatState.reasoning)"></div>
-                </div>
-                <ChatToolCalls
-                  v-if="chatState.toolCall.length > 0"
-                  :tool-calls="chatState.toolCall" />
-                <div
-                  v-html="currentAssistantMessageHtml"
-                  v-highlight
-                  v-link
-                  v-table
-                  v-katex
-                  v-think
-                  v-mermaid />
-              </div>
+              <chatting
+                ref="chatMessagesRef"
+                :key="lastChatId"
+                :content="chatState.lastMessageChunk"
+                :reference="chatState.reference"
+                :reasoning="chatState.lastReasoningChunk"
+                :toolCalls="chatState.toolCall || []"
+                :is-reasoning="chatState.isReasoning"
+                :is-chatting="isChatting" />
             </div>
           </div>
         </div>
@@ -232,7 +195,7 @@
         </div>
       </div>
     </main>
-    <footer class="footer" v-if="!isChatting && currentAssistantMessage">
+    <footer class="footer" v-if="!isChatting && chatState.message">
       <div class="metadata">
         <div class="buttons">
           <el-tooltip
@@ -322,14 +285,15 @@ const quoteMessage = ref('')
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const userMessage = ref('')
-const currentAssistantMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
 const lastChatId = ref()
 const getDefaultChatState = () => ({
   message: '',
+  lastMessageChunk: '',
   reference: [],
   reasoning: '',
+  lastReasoningChunk: '',
   isReasoning: false,
   toolCall: []
 })
@@ -430,35 +394,23 @@ const toolsEnabled = computed(() => {
 // MCP servers for visibility control
 const mcpServers = computed(() => mcpStore.servers)
 
-const currentAssistantMessageHtml = computed(() =>
-  currentAssistantMessage.value
-    ? parseMarkdown(
-        currentAssistantMessage.value +
-          (isChatting.value ? ' <span class="cs cs-spin-linear">☯</span>' : ''),
-        chatState.value?.reference || []
-      )
-    : isChatting.value
-      ? '<div class="cs cs-loading cs-spin"></div>'
-      : ''
-)
-
 /**
  * Setup scroll listener only when chatting
  */
 const setupScrollListener = () => {
-  chatMessagesRef.value?.addEventListener('scroll', onScroll)
+  chatMessagesRef.value?.contentRef?.addEventListener('scroll', onScroll)
 }
 
 /**
  * Remove scroll listener
  */
 const removeScrollListener = () => {
-  chatMessagesRef.value?.removeEventListener('scroll', onScroll)
+  chatMessagesRef.value?.contentRef?.removeEventListener('scroll', onScroll)
 }
 
 watch(
   () => isChatting.value,
-  newVal => {
+  (newVal) => {
     if (newVal) {
       // ensure scroll listener is set after the element is rendered
       nextTick(() => {
@@ -473,7 +425,7 @@ watch(
 /**
  * Scroll to bottom when assistant message changes
  */
-watch([() => currentAssistantMessage.value, () => chatState.value.reasoning], () => {
+watch([() => chatState.value.message, () => chatState.value.reasoning], () => {
   nextTick(() => {
     scrollToBottomIfNeeded()
   })
@@ -485,7 +437,7 @@ watch(
     // get default sub model from local storage
     const defaultSubModel = csGetStorage(csStorageKey.defaultModelAtDialog)
     if (defaultSubModel) {
-      const model = currentModelProvider.value.models.find(m => m.id === defaultSubModel)
+      const model = currentModelProvider.value.models.find((m) => m.id === defaultSubModel)
       if (model) {
         currentModelProvider.value.defaultModel = defaultSubModel
       }
@@ -516,7 +468,7 @@ onMounted(async () => {
   }
 
   // listen chat_stream event
-  unlistenChunkResponse.value = await listen('chat_stream', async event => {
+  unlistenChunkResponse.value = await listen('chat_stream', async (event) => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.windowLabel !== settingStore.windowLabel) {
       return
@@ -525,7 +477,7 @@ onMounted(async () => {
     handleChatMessage(event.payload)
   })
 
-  unlistenPasteResponse.value = await listen('assistant-window-paste', async event => {
+  unlistenPasteResponse.value = await listen('assistant-window-paste', async (event) => {
     // we don't want to process messages from other windows
     if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
@@ -543,24 +495,6 @@ onMounted(async () => {
       }
     }
   })
-
-  // // Listen for window show event
-  // focusListener.value = await getCurrentWindow().listen('tauri://focus', async () => {
-  //   await readClipboard().then(async text => {
-  //     text = text.trim()
-  //     if (text && !inputMessage.value) {
-  //       currentAssistantMessage.value = ''
-  //       inputMessage.value = text
-
-  //       await nextTick()
-  //       const textarea = inputRef.value?.$el?.querySelector('textarea')
-  //       if (textarea) {
-  //         textarea.scrollTop = textarea.scrollHeight
-  //         textarea.focus()
-  //       }
-  //     }
-  //   })
-  // })
 
   windowStore.initAssistantAlwaysOnTop()
   document.addEventListener('keydown', onKeydown)
@@ -580,8 +514,8 @@ onUnmounted(() => {
   //   focusListener.value()
   // }
 
-  if (chatMessagesRef.value) {
-    chatMessagesRef.value.removeEventListener('scroll', onScroll)
+  if (chatMessagesRef.value?.contentRef) {
+    chatMessagesRef.value.contentRef.removeEventListener('scroll', onScroll)
   }
 
   document.removeEventListener('keydown', onKeydown)
@@ -624,7 +558,6 @@ const dispatchChatCompletion = async () => {
   chatErrorMessage.value = ''
   quoteMessage.value = ''
   inputMessage.value = ''
-  currentAssistantMessage.value = ''
   payloadMetadata.value = {}
   isChatting.value = true
   chatState.value = getDefaultChatState()
@@ -658,13 +591,12 @@ const payloadMetadata = ref({})
 /**
  * Handle chat message event
  */
-const handleChatMessage = async payload => {
+const handleChatMessage = async (payload) => {
   // Use the common handler for shared logic
   handleChatMessageCommon(
     payload,
     chatState,
     {
-      currentAssistantMessage,
       chatErrorMessage,
       isChatting
     },
@@ -675,7 +607,6 @@ const handleChatMessage = async payload => {
       // to prepare for the final answer, but keep the tool call data.
       if (payload.finishReason === 'toolCalls') {
         chatState.value.message = ''
-        currentAssistantMessage.value = ''
       } else {
         // This is the final end of the entire turn.
         payloadMetadata.value = {
@@ -707,13 +638,13 @@ const isScrolledToBottom = ref(true)
  * Scroll to the bottom of the chat messages if conditions are met
  */
 const scrollToBottomIfNeeded = () => {
-  if (!chatMessagesRef.value) return
+  if (!chatMessagesRef.value?.contentRef) return
 
   // 确保内容已经渲染
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
-      chatMessagesRef.value.scrollTop =
-        chatMessagesRef.value.scrollHeight - chatMessagesRef.value.clientHeight
+      const el = chatMessagesRef.value.contentRef
+      el.scrollTop = el.scrollHeight - el.clientHeight
     }
   })
 }
@@ -722,18 +653,16 @@ const scrollToBottomIfNeeded = () => {
  * Handle scroll event of chat messages container
  */
 const onScroll = () => {
-  if (!chatMessagesRef.value) {
+  if (!chatMessagesRef.value?.contentRef) {
     return
   }
 
-  const element = chatMessagesRef.value
+  const element = chatMessagesRef.value.contentRef
   const { scrollTop, scrollHeight, clientHeight } = element
 
-  isScrolledToBottom.value = Math.abs(scrollTop + clientHeight - scrollHeight) <= 2
+  isScrolledToBottom.value = scrollTop + clientHeight >= scrollHeight - 10
 
-  if (isScrolledToBottom.value) {
-    userHasScrolled.value = false
-  } else if (scrollTop < scrollHeight - clientHeight) {
+  if (!isScrolledToBottom.value) {
     userHasScrolled.value = true
   }
 }
@@ -806,10 +735,10 @@ const onSelectSkill = index => {
  * @param {Number} id message id
  */
 const onReplyMessage = id => {
-  if (!currentAssistantMessage.value?.trim()) {
+  if (!chatState.value.message?.trim()) {
     return
   }
-  quoteMessage.value = currentAssistantMessage.value.trim()
+  quoteMessage.value = chatState.value.message.trim()
   inputRef.value.focus()
 }
 
@@ -834,7 +763,7 @@ const onGoToChat = async () => {
       await chatStore.addChatMessage(
         chatStore.currentConversationId,
         'assistant',
-        currentAssistantMessage.value,
+        chatState.value.message,
         payloadMetadata.value
       )
 
@@ -855,11 +784,11 @@ const onGoToChat = async () => {
  * Copy message content
  */
 const onCopyMessage = () => {
-  if (!currentAssistantMessage.value?.trim()) {
+  if (!chatState.value?.message?.trim()) {
     return
   }
   try {
-    navigator.clipboard.writeText(currentAssistantMessage.value.trim())
+    navigator.clipboard.writeText(chatState.value.message.trim())
     showMessage(t('chat.messageCopied'), 'success', 1000)
   } catch (error) {
     showMessage(t('chat.errorOnCopyMessage', { error }), 'error', 3000)
@@ -903,9 +832,9 @@ const onCompositionEnd = () => {
 const onInput = () => {
   // When in split-view mode (indicated by a previous userMessage),
   // typing should not reset the view to the initial skill list.
-  if (inputMessage.value.trim() && !userMessage.value) {
-    currentAssistantMessage.value = ''
-  }
+  // if (inputMessage.value.trim() && !userMessage.value) {
+  //   currentAssistantMessage.value = ''
+  // }
 }
 
 /**
@@ -928,16 +857,18 @@ const onKeyEnter = event => {
  * Handle keydown event
  */
 const onKeydown = event => {
-  if (event.key === 'ArrowDown') {
-    event.preventDefault()
-    event.stopPropagation()
-    skillIndex.value = (skillIndex.value + 1) % skills.value.length
-  } else if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    event.stopPropagation()
-    skillIndex.value = (skillIndex.value - 1 + skills.value.length) % skills.value.length
-  } else if (event.altKey) {
+  if (event.altKey) {
     switch (event.code) {
+      case 'ArrowDown':
+        event.preventDefault()
+        event.stopPropagation()
+        skillIndex.value = (skillIndex.value + 1) % skills.value.length
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        event.stopPropagation()
+        skillIndex.value = (skillIndex.value - 1 + skills.value.length) % skills.value.length
+        break
       case 'KeyC':
         event.preventDefault()
         event.stopPropagation()
@@ -946,8 +877,8 @@ const onKeydown = event => {
       case 'KeyQ':
         event.preventDefault()
         event.stopPropagation()
-        if (currentAssistantMessage.value) {
-          quoteMessage.value = currentAssistantMessage.value.trim()
+        if (chatState.value.message.trim()) {
+          quoteMessage.value = chatState.value.message.trim()
           inputRef.value.focus()
         }
     }

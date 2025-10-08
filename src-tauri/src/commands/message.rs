@@ -306,7 +306,7 @@ pub fn add_message(
 /// console.log('Message deleted successfully');
 /// ```
 #[command]
-pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
+pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<(), String> {
     let main_store = state
         .write()
         .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;

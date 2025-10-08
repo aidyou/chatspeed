@@ -1,6 +1,3 @@
-use crate::db::StoreError;
-use rusqlite::Connection;
-
 /// Version 2 migration SQL statements
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
     // Agents table for ReAct agent configuration
@@ -24,27 +21,3 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         )"
     ),
 ];
-
-/// Applies version 2 database migration
-pub fn run_migration(conn: &mut Connection) -> Result<(), StoreError> {
-    // It's a migration example for new version
-    if MIGRATION_SQL.is_empty() {
-        return Ok(());
-    }
-
-    // start transaction
-    let tx = conn.transaction()?;
-
-    // execute all migration SQL
-    for (_name, sql) in MIGRATION_SQL {
-        tx.execute(sql, [])?;
-    }
-
-    // insert database version
-    tx.execute("INSERT INTO db_version (version) VALUES (2)", [])?;
-
-    // commit transaction
-    tx.commit()?;
-
-    Ok(())
-}

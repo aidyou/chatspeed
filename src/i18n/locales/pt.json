@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "Perguntar à IA",
     "askDescription": "Olá! O que posso fazer por você?",
-    "chatPlaceholder": "Pergunte, traduza, escreva, programe, etc... Use ↑↓ para selecionar uma habilidade.\nPara responder à mensagem da IA, pressione Alt+Q, Alt+C para copiar a mensagem.",
+    "chatPlaceholder": "Pergunte, traduza, escreva, programe, etc... Use ALT+↑↓ para selecionar uma habilidade.\nPara responder à mensagem da IA, pressione Alt+Q, Alt+C para copiar a mensagem.",
     "haveNoModel": "Você ainda não adicionou nenhum modelo. Por favor, adicione um nas configurações."
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "Tem certeza de que deseja excluir esta mensagem?",
     "collapseSidebar": "Recolher barra lateral (Cmd/Ctrl+B)",
     "expandSidebar": "Expandir barra lateral (Cmd/Ctrl+B)",
-    "contextCleared": "Contexto limpo",
     "conversation": "Conversa",
     "conversationNotFound": "Conversa não encontrada ou excluída",
     "conversationTitle": "Título da conversa",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "Falha ao obter o ID da conversa atual: {error}",
     "errorOnGoToChat": "Falha ao ir para a janela de bate-papo: {error}",
     "errorOnLoadMessages": "Falha ao carregar mensagens: {error}",
+    "errorOnMoveWindow": "Falha ao mover a janela: {error}",
     "errorOnSaveMessage": "Falha ao salvar as informações da conversa: {error}",
     "errorOnSendMessage": "Falha ao enviar mensagem: {error}",
     "errorOnStopChat": "Falha ao parar o chat: {error}",
@@ -39,6 +39,7 @@
     "haveNoModel": "Você ainda não adicionou nenhum modelo. Por favor, clique no botão \"Adicionar Modelo+\" na barra de título para adicionar um.",
     "inputMessagePlaceholder": "Digite {at} para invocar uma habilidade",
     "messageCopied": "Mensagem copiada",
+    "messageNotFound": "Mensagem não encontrada ou excluída",
     "newConversaction": "Nova conversa (Cmd/Ctrl + N)",
     "mindmapError": "Falha ao renderizar o mapa mental",
     "networkDisabled": "Rede desativada",
@@ -117,6 +118,7 @@
   "menu": {
     "about": "Sobre",
     "assistant": "Assistente de Área de Trabalho",
+    "agent": "Agente",
     "mcp": "MCP",
     "model": "Motor de IA",
     "note": "Anotação",
@@ -132,9 +134,11 @@
   "settings": {
     "agent": {
       "actModel": "Modelo de Ação",
+      "agentType": "Tipo de Agente",
       "add": "Adicionar Agente",
       "addSuccess": "Agente adicionado com sucesso!",
       "autoApprove": "Ferramentas de Aprovação Automática",
+      "autonomousMode": "Modo Autônomo",
       "availableTools": "Ferramentas Disponíveis",
       "basicInfo": "Informações Básicas",
       "copy": "Copiar Agente",
@@ -146,7 +150,6 @@
       "description": "Descrição",
       "edit": "Editar Agente",
       "fetchFailed": "Falha ao buscar o agente",
-      "fetchToolsFailed": "Falha ao buscar ferramentas disponíveis",
       "maxContexts": "Comprimento Máximo do Contexto",
       "models": "Modelos",
       "name": "Nome do Agente",
@@ -154,11 +157,15 @@
       "noAgents": "Nenhum agente encontrado",
       "notFound": "Agente não encontrado",
       "planModel": "Modelo de Planejamento",
+      "planningMode": "Modo de Planejamento",
+      "planningPrompt": "Prompt de Planejamento",
+      "reorderFailed": "Falha ao reordenar o agente: {error}",
       "saveFailed": "Falha ao salvar o agente: {error}",
       "selectActModel": "Selecionar Modelo de Ação",
       "selectAutoApproveTools": "Selecionar Ferramentas de Aprovação Automática",
       "selectAvailableTools": "Selecionar Ferramentas Disponíveis",
       "selectPlanModel": "Selecionar Modelo de Planejamento",
+      "selectProvider": "Selecionar Provedor",
       "selectVisionModel": "Selecionar Modelo de Visão",
       "systemPrompt": "Prompt do Sistema",
       "systemPromptRequired": "Por favor, insira o prompt do sistema",
@@ -513,6 +520,8 @@
         "disabled": "Desativado",
         "maxContext": "Comprimento máximo do contexto",
         "maxContextPlaceholder": "Consulte as informações de lançamento ou as informações da interface de cada modelo, um valor de 0 não será definido",
+        "modelInjectionCondition": "Condição de injeção do modelo",
+        "modelInjectionConditionPlaceholder": "Injetar apenas quando o ID do modelo corresponder, deixar em branco para sem limite, usar * para corresponder a vários caracteres, ? para um único caractere",
         "name": "Nome do grupo",
         "namePlaceholder": "Insira um nome de grupo",
         "promptInjection": "Injeção de prompt",
@@ -597,7 +606,8 @@
       "model": "Motor de IA",
       "proxy": "Proxy",
       "privacy": "Privacidade",
-      "skill": "Habilidade"
+      "skill": "Habilidade",
+      "scraperTest": "Teste do scraper"
     }
   }
 }

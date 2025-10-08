@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "Ask AI",
     "askDescription": "Hi there! What can I do for you?",
-    "chatPlaceholder": "Ask questions, translate, write, code, etc... Use ↑↓ to select skills.\nTo reply to AI's message, press Alt+Q, Alt+C to copy the message.",
+    "chatPlaceholder": "Ask questions, translate, write, code, etc... Use ALT+↑↓ to select skills.\nTo reply to AI's message, press Alt+Q, Alt+C to copy the message.",
     "haveNoModel": "You haven't added any models yet. Please add one from the settings."
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "Are you sure you want to delete this message?",
     "collapseSidebar": "Collapse Sidebar (Cmd/Ctrl+B)",
     "expandSidebar": "Expand Sidebar (Cmd/Ctrl+B)",
-    "contextCleared": "Context cleared",
     "conversation": "Conversation",
     "conversationNotFound": "Conversation not found or deleted",
     "conversationTitle": "Conversation Title",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "Failed to get current conversation ID: {error}",
     "errorOnGoToChat": "Failed to go to chat: {error}",
     "errorOnLoadMessages": "Failed to load messages: {error}",
+    "errorOnMoveWindow": "Failed to move window: {error}",
     "errorOnSaveMessage": "Failed to save conversation information: {error}",
     "errorOnSendMessage": "Failed to send message: {error}",
     "errorOnStopChat": "Failed to stop chat: {error}",
@@ -39,6 +39,7 @@
     "haveNoModel": "You haven't added any models yet. Please click \"Add Model+\" in the title bar to add one.",
     "inputMessagePlaceholder": "Enter {at} to call up a skill",
     "messageCopied": "Message copied",
+    "messageNotFound": "Message not found or deleted",
     "newConversaction": "New Conversation (Cmd/Ctrl + N)",
     "mindmapError": "Failed to render mind map",
     "networkDisabled": "Network Disabled",
@@ -117,6 +118,7 @@
   "menu": {
     "about": "About",
     "assistant": "Assistant",
+    "agent": "Agent",
     "mcp": "MCP",
     "model": "AI Engine",
     "note": "Note",
@@ -132,9 +134,11 @@
   "settings": {
     "agent": {
       "actModel": "Act Model",
+      "agentType": "Agent Type",
       "add": "Add Agent",
       "addSuccess": "Agent added successfully!",
       "autoApprove": "Auto-Approve Tools",
+      "autonomousMode": "Autonomous Mode",
       "availableTools": "Available Tools",
       "basicInfo": "Basic Info",
       "copy": "Copy Agent",
@@ -146,19 +150,22 @@
       "description": "Description",
       "edit": "Edit Agent",
       "fetchFailed": "Failed to fetch agent",
-      "fetchToolsFailed": "Failed to fetch available tools",
       "maxContexts": "Max Contexts Length",
       "models": "Models",
       "name": "Agent Name",
       "nameRequired": "Please enter agent name",
       "noAgents": "No agents found",
       "notFound": "Agent not found",
-      "planModel": "Plan Model",
+      "planModel": "Planning Model",
+      "planningMode": "Planning Mode",
+      "planningPrompt": "Planning Prompt",
+      "reorderFailed": "Failed to reorder agent: {error}",
       "saveFailed": "Failed to save agent: {error}",
       "selectActModel": "Select Act Model",
       "selectAutoApproveTools": "Select Auto-Approve Tools",
       "selectAvailableTools": "Select Available Tools",
       "selectPlanModel": "Select Plan Model",
+      "selectProvider": "Select Provider",
       "selectVisionModel": "Select Vision Model",
       "systemPrompt": "System Prompt",
       "systemPromptRequired": "Please enter system prompt",
@@ -513,6 +520,8 @@
         "disabled": "Disabled",
         "maxContext": "Max Context Length",
         "maxContextPlaceholder": "Please refer to the release information or interface information of each model, a value of 0 will not be set",
+        "modelInjectionCondition": "Model Injection Condition",
+        "modelInjectionConditionPlaceholder": "Inject only when model id matches, leave blank for no limit, use * to match multiple characters, ? to match a single character",
         "name": "Group Name",
         "namePlaceholder": "Please enter a group name",
         "promptInjection": "Prompt Injection",
@@ -597,7 +606,8 @@
       "model": "AI Engine",
       "proxy": "Proxy",
       "privacy": "Privacy",
-      "skill": "Skill"
+      "skill": "Skill",
+      "scraperTest": "Scraper Test"
     }
   }
 }

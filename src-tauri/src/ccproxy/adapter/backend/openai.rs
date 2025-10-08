@@ -38,6 +38,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
         model: &str,
         log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
+
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
         // into the system message. This is a specific adaptation for models that
@@ -215,10 +217,28 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             content,
                             ..
                         } => {
+                            // Find the tool name from history, as some servers require it in the tool response.
+                            let tool_name = unified_request
+                                .messages
+                                .iter()
+                                .flat_map(|m| &m.content)
+                                .find_map(|block| {
+                                    if let UnifiedContentBlock::ToolUse { id, name, .. } = block {
+                                        if id == tool_use_id {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                });
+
                             tool_result_messages.push(UnifiedChatMessage {
                                 role: Some("tool".to_string()),
                                 content: Some(OpenAIMessageContent::Text(content.clone())),
                                 tool_call_id: Some(tool_use_id.clone()),
+                                name: tool_name,
                                 ..Default::default()
                             });
                         }

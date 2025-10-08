@@ -521,7 +521,6 @@ export const parseMarkdown = (content, reference, toolCalls) => {
  * @param {Object} payload - The payload from chat_stream event
  * @param {Object} chatStateRef - The chat state ref object (reactive ref)
  * @param {Object} refs - Object containing reactive references
- * @param {Function} refs.currentAssistantMessage - Ref for current assistant message
  * @param {Function} refs.chatErrorMessage - Ref for chat error message
  * @param {Function} refs.isChatting - Ref for chatting state
  * @param {Function} onComplete - Optional callback when message is completed
@@ -533,9 +532,6 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
   chatState.isReasoning = payload?.type === 'reasoning'
 
   switch (payload?.type) {
-    case 'step':
-      refs.currentAssistantMessage.value = payload?.chunk || ''
-      return false
     case 'reference':
       if (payload?.chunk) {
         try {
@@ -551,8 +547,8 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
               chatState.reference.push(...payload.chunk)
             }
           }
-          chatState.reference.forEach((r,id) => {
-            r.id = id+1
+          chatState.reference.forEach((r, id) => {
+            r.id = id + 1
           })
         } catch (e) {
           console.error('error on parse reference:', e)
@@ -562,9 +558,10 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       break
     case 'reasoning':
       chatState.reasoning += payload?.chunk || ''
+      chatState.lastReasoningChunk = payload?.chunk || ''
       break
     case 'error':
-      refs.chatErrorMessage.value = payload?.chunk || ''
+      refs.chatErrorMessage.value = parseErrorMsg(payload?.chunk)
       isDone = true
       break
     case 'finished':
@@ -573,6 +570,7 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       break
     case 'text':
       chatState.message += payload?.chunk || ''
+      chatState.lastMessageChunk = payload?.chunk || ''
       // handle deepseek-r1 reasoning flag `<think></think>`
       if (chatState.message.startsWith('<think>') && chatState.message.includes('</think>')) {
         const messages = chatState.message.split('</think>')
@@ -582,7 +580,7 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       break
 
     case 'toolCalls':
-      chatState.message += '\n<!--[ToolCalls]-->\n'
+      chatState.message += '\n\n<!--[ToolCalls]-->\n\n'
       break
 
     case 'toolResults':
@@ -600,27 +598,27 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       }
       break
 
-    case 'log':
-      chatState.log.push(payload?.chunk || '')
-      break
-    case 'plan':
-      if (payload?.chunk) {
-        try {
-          const plan = JSON.parse(payload?.chunk || '[]')
-          chatState.plan = Array.isArray(plan) ? [...plan] : []
-        } catch (e) {
-          console.log('error on parse plan:', e)
-          console.log('chunk', payload?.chunk)
-        }
-      }
-      break
+    // case 'step':
+    //   refs.currentAssistantMessage.value = payload?.chunk || ''
+    //   return false
+    // case 'log':
+    //   chatState.log.push(payload?.chunk || '')
+    //   break
+    // case 'plan':
+    //   if (payload?.chunk) {
+    //     try {
+    //       const plan = JSON.parse(payload?.chunk || '[]')
+    //       chatState.plan = Array.isArray(plan) ? [...plan] : []
+    //     } catch (e) {
+    //       console.log('error on parse plan:', e)
+    //       console.log('chunk', payload?.chunk)
+    //     }
+    //   }
+    // break
     default:
       console.warn('Unknown message type:', payload?.type, payload?.chunk)
       break
   }
-
-  // Update current assistant message
-  refs.currentAssistantMessage.value = chatState.message || ''
 
   // Handle completion
   if (isDone) {
@@ -634,6 +632,41 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
   }
 
   return isDone
+}
+
+const parseErrorMsg = errorStr => {
+  try {
+    const err = JSON.parse(errorStr || '{}')
+    const errorMsg = []
+    if (err?.code && err.code !== 'N/A') {
+      errorMsg.push(`Code: ${err.code}`)
+    }
+    if (err?.provider && err.provider !== 'N/A') {
+      errorMsg.push(`Provider: ${err.provider}`)
+    }
+    if (err?.details) {
+      try {
+        const details = JSON.parse(err.details)
+        errorMsg.push('Detail: ')
+        for (const key in details) {
+          if (details[key] && details[key] !== 'N/A') {
+            errorMsg.push(`    ${key}: ${details[key]}`)
+          }
+        }
+      } catch {
+        errorMsg.push(err.details)
+      }
+    }
+    if (err?.error) {
+      errorMsg.push(`Error: ${err.error}`)
+    }
+    if (err?.message) {
+      errorMsg.push(`Message: ${err.message}`)
+    }
+    return errorMsg.join('\n')
+  } catch {
+    return errorStr || ''
+  }
 }
 
 const createToolCallHtml = (content, toolCalls) => {

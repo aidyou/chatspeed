@@ -356,8 +356,10 @@ pub async fn handle_chat_completion(
     };
 
     // Build HTTP client with proxy settings
-    let http_client =
-        ModelResolver::build_http_client(main_store_arc.clone(), proxy_model.metadata.clone())?;
+    let http_client = ModelResolver::build_http_client(
+        main_store_arc.clone(),
+        proxy_model.model_metadata.clone(),
+    )?;
 
     // 3. Adapt and send request to backend
     let mut onward_request_builder = backend_adapter
@@ -417,14 +419,15 @@ pub async fn handle_chat_completion(
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
 
         if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "OpenAI-Compatible Response Error, Status: {}, Body: \n{}\n---", status_code, error_body_str);
+            log::info!(target: "ccproxy_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
         }
 
         log::warn!(
-            "Backend API error (alias: '{}', model: '{}', provider: '{}'): status_code={}, response={}",
+            "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
             proxy_alias,
             proxy_model.model,
             proxy_model.provider,
+            &full_url,
             status_code,
             error_body_str
         );

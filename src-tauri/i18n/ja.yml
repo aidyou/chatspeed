@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "%{provider} サービスへのAPIリクエストに失敗しました: %{details}"
     deserialization_failed: "'%{context}' のデシリアライズに失敗しました: %{details}"
     invalid_input: "無効な入力: %{details}"
     response_parse_failed: "%{provider} からの応答の解析に失敗しました: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "ツール呼び出しのシリアル化に失敗しました: %{details}"
     upstream_chat_error: "アップストリームチャットサービスでエラーが発生しました: %{message}"
   api_key_is_require_for_list_models: "モデルリストを取得するにはAPIキーが必要です。設定で有効なAPIキーを設定してください。"
-  chat_completion_failed_after_retries: "チャット補完は %{retries} 回のリトライ後に失敗しました"
   chat_not_found: "指定されたチャットセッションが見つかりません"
   empty_chat_id: "チャットIDは空にできません"
   empty_messages: "メッセージリストは空にできません"
@@ -28,19 +26,13 @@ chat:
   failed_to_convert_language_code: "言語コードの変換に失敗しました: %{error}"
   failed_to_create_file: "ファイルの作成に失敗しました: %{error}"
   failed_to_detect_language: "言語の検出に失敗しました"
-  failed_to_find_user_message_content: "ユーザーメッセージのコンテンツが見つかりませんでした"
   failed_to_get_available_languages: "利用可能な言語リストの取得に失敗しました: %{error}"
   failed_to_write_file: "ファイルへの書き込みに失敗しました: %{error}"
-  invalid_search_model: "無効な検索モデル: %{model_name}"
   note_already_exists: "このノートは既に存在するため、再度追加する必要はありません"
-  search_analysing: "データを分析中..."
-  search_fetching: "データを取得中..."
   search_not_found: "指定された検索セッションが見つかりません"
-  search_results: "合計%{count}件の結果が見つかりました"
-  searching: "情報を検索中..."
-  user_message_with_references: "[参考資料]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nユーザーの質問に答える際は、まずご自身の知識を優先して使用してください。質問がご自身の知識の範囲を超える場合や最新情報が必要な場合は、`<ref></ref>`タグ内の情報を参考にすることができます。これらの情報を引用する際は、関連する文の後に[^id]を付けてください。参考資料の内容を単純に繰り返すのではなく、総合的に分析した上で回答してください。\n\n[ユーザーの質問]\n %{content}"
 
 db:
+  agent_name_exists: "エージェント名 '%{name}' は既に存在します"
   ai_model_not_found_by_id: "ID %{id} のAIモデルが見つかりません"
   ai_skill_not_found_by_id: "ID %{id} のAIスキルが見つかりません"
   already_exists: "データは既に存在します: %{error}"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "プラグイン出力スキーマのJSONへのシリアル化に失敗しました: %{error}"
   plugin_not_found_by_uuid: "UUID %{uuid} のプラグインが見つかりません"
   tauri_error: "Tauriエラー: %{error}"
-  unknown_database_version: "不明なデータベースバージョン: %{version}"
 
 http:
   client_build_failed: "HTTPクライアントの作成に失敗しました: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "WebViewウィンドウの作成に失敗しました: %{error}"
   failed_to_emit_event: "イベントの送信に失敗しました: %{error}"
   failed_to_find_window_with_label: "ラベル付きのウィンドウが見つかりません: %{label}"
+  failed_to_get_current_monitor: "現在のモニターの取得に失敗しました: %{error}"
+  failed_to_get_window_size: "ウィンドウサイズの取得に失敗しました: %{error}"
   failed_to_initialize_logger: "ロガーの初期化に失敗しました"
   failed_to_navigate_to_url: "URLへのナビゲーションに失敗しました: %{url}, エラー: %{error}"
   failed_to_retrieve_log_directory: "アプリケーションログディレクトリの取得に失敗しました"
   failed_to_set_window_always_on_top: "ウィンドウを常に手前に表示する設定に失敗しました: %{error}"
   failed_to_set_window_focus: "ウィンドウフォーカスの設定に失敗しました: %{error}"
+  failed_to_set_window_position: "ウィンドウ位置の設定に失敗しました: %{error}"
   failed_to_show_window: "ウィンドウの表示に失敗しました: %{error}"
   failed_to_start_up_application: "アプリケーションの起動に失敗しました"
+  invalid_direction: "無効な方向です。現在サポートされているのは: left->左, right->右"
   window_not_ready: "ウィンドウの準備ができていません"
   shortcut:
     failed_to_unregister_old: "古いショートカットキーの登録解除に失敗しました: %{error}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "SSEトランスポートの起動に失敗しました (URL: %{url}), 原因: %{error}"
     sse_url_cant_be_empty: "SSEクライアントのURLパラメータは空にできません"
     stdio_args_cant_be_empty: "stdioクライアントのargsパラメータは空にできません"
-    stdio_command_cant_be_empty: "stdioクライアントの「起動コマンド」パラメータcommandは空にできません"
+    stdio_command_cant_be_empty: "stdioクライアントの起動コマンドパラメータcommandは空にできません"
     stdio_command_not_found_no_help: 'MCPサービスの起動に失敗しました: コマンド "%{command}" が見つかりません (元のエラー: %{original_error})。コマンドがインストールされ、システムのPATH環境変数に含まれていることを確認してください。'
     stdio_command_not_found_with_help: 'MCPサービスの起動に失敗しました: コマンド "%{command}" が見つかりません (元のエラー: %{original_error})。'
     stdio_npx_not_found_help: "これは通常、Node.jsが正しくインストールされていないか、'npx'コマンドがシステムのPATH環境変数に含まれていないことを意味します。Node.jsのインストールを確認してください。"
@@ -201,8 +196,6 @@ network:
   client_build_error: "HTTPクライアントの作成に失敗しました: %{error}"
   header_error: "リクエストヘッダーの作成に失敗しました: %{error}"
   proxy_error: "プロキシの設定に失敗しました: %{error}"
-  request_failed_with_status: "リクエストに失敗しました (%{status}): %{message}"
-  request_failed_with_type: "リクエストに失敗しました (ステータスコード: %{status}) - %{error_type}: %{message}"
   request_failed: "リクエストに失敗しました: %{error}"
   response_read_error: "レスポンスの読み取りに失敗しました: %{error}"
 
@@ -231,6 +224,7 @@ setting:
 
 tray:
   about: "概要"
+  agent: "エージェント"
   assistant: "アシスタント"
   chat: "チャット"
   mcp: "MCP"
@@ -242,7 +236,6 @@ tray:
   skill: "スキル"
 
 tools:
-  execution_failed: "ツール呼び出しに失敗しました、ツール名: %{name}、エラー: %{error}"
   failed_to_get_model: "%{model_type} モデルの取得に失敗しました"
   function_already_exists: "関数は既に存在します: %{name}"
   function_not_found: "ワークフローにツール関数が見つかりません: %{name}"
@@ -259,7 +252,6 @@ tools:
     google_cx_empty: "Google検索エンジンIDは空にできません"
     serper_api_key_empty: "Serper APIキーは空にできません"
     tavily_api_key_empty: "Tavily APIキーは空にできません"
-    web_search_failed: "ウェブ検索に失敗しました (プロバイダー: %{provider}, キーワード: %{keyword}): %{details}"
 
 updater:
   errors:

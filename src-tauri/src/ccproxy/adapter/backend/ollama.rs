@@ -38,6 +38,8 @@ impl BackendAdapter for OllamaBackendAdapter {
         model: &str,
         log_proxy_to_file: bool,
     ) -> Result<RequestBuilder, anyhow::Error> {
+        crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
+
         // --- Tool Compatibility Mode Handling ---
         // If tool_compat_mode is enabled, we inject a system prompt with tool definitions
         // into the system message. This is a specific adaptation for models that
@@ -191,7 +193,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                 };
 
                 let mut content_parts = Vec::new();
-                let mut image_parts: Vec<String> = Vec::new();
+                let mut image_parts = Vec::new();
                 let mut tool_calls = Vec::new();
 
                 for block in &msg.content {

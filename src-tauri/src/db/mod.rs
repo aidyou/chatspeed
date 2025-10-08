@@ -10,6 +10,7 @@ mod note;
 mod proxy_group;
 mod sql;
 mod types;
+mod workflow;
 
 pub use agent::Agent;
 pub use backup::{BackupConfig, DbBackup};
@@ -19,3 +20,4 @@ pub use mcp::Mcp;
 pub use note::{Note, NoteTag};
 pub use proxy_group::ProxyGroup;
 pub use types::{AiModel, AiSkill, Conversation, ModelConfig};
+pub use workflow::{Workflow, WorkflowMessage, WorkflowSnapshot};

@@ -1,10 +1,10 @@
-import i18n from '@/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import i18n from '@/i18n';
 
-import { csStorageKey } from '@/config/config';
 import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
+import { csStorageKey } from '@/config/config';
 
 let isConversationLoading = false
 
@@ -221,14 +221,14 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * Deletes a message by its ID and updates the state.
-   * @param {number} id - The ID of the message to delete.
+   * @param {Array<number>} ids - The IDs of the messages to delete.
    * @returns {Promise<void>} A promise that resolves when the deletion is complete.
    */
   const deleteMessage = (id) => {
     console.debug('delete message', id)
     return new Promise((resolve, reject) => {
       invoke('delete_message', { id }).then(() => {
-        messages.value = messages.value.filter((message) => message.id !== id)
+        messages.value = messages.value.filter((message) => !id.includes(message.id))
         resolve()
       }).catch((error) => {
         console.error('Error deleting message:', error)

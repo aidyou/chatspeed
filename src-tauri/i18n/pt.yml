@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "Falha na solicitação da API para o serviço %{provider}: %{details}"
     deserialization_failed: "Falha na desserialização de '%{context}': %{details}"
     invalid_input: "Entrada inválida: %{details}"
     response_parse_failed: "Falha ao analisar a resposta de %{provider}: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "Falha na serialização da chamada de ferramenta: %{details}"
     upstream_chat_error: "Erro no serviço de chat upstream: %{message}"
   api_key_is_require_for_list_models: "É necessária uma chave de API para obter a lista de modelos. Configure uma chave de API válida nas configurações."
-  chat_completion_failed_after_retries: "A conclusão do chat falhou após %{retries} tentativas"
   chat_not_found: "Sessão de chat especificada não encontrada"
   empty_chat_id: "O ID do chat não pode estar vazio"
   empty_messages: "A lista de mensagens não pode estar vazia"
@@ -28,19 +26,13 @@ chat:
   failed_to_convert_language_code: "Falha ao converter código de idioma: %{error}"
   failed_to_create_file: "Não foi possível criar o arquivo: %{error}"
   failed_to_detect_language: "Falha ao detectar o idioma"
-  failed_to_find_user_message_content: "Não foi possível encontrar o conteúdo da mensagem do usuário"
   failed_to_get_available_languages: "Falha ao obter a lista de idiomas disponíveis: %{error}"
   failed_to_write_file: "Não foi possível escrever no arquivo: %{error}"
-  invalid_search_model: "Modelo de pesquisa inválido: %{model_name}"
   note_already_exists: "Esta nota já existe, não há necessidade de adicioná-la novamente"
-  search_analysing: "Analisando dados..."
-  search_fetching: "Buscando dados..."
   search_not_found: "Sessão de pesquisa especificada não encontrada"
-  search_results: "Foram encontrados %{count} resultados no total"
-  searching: "Procurando informações..."
-  user_message_with_references: "[Materiais de referência]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nAo responder às perguntas dos usuários, priorize o uso de seu próprio conhecimento. Se a pergunta exceder seu escopo de conhecimento ou exigir informações atualizadas, você pode consultar os materiais dentro das tags `<ref></ref>`. Ao citar esses materiais, marque com [^id] após as sentenças relevantes. Não repita simplesmente o conteúdo de referência, mas forneça respostas após uma análise abrangente.\n\n[Pergunta do usuário]\n %{content}"
 
 db:
+  agent_name_exists: "O nome do agente '%{name}' já existe"
   ai_model_not_found_by_id: "Modelo de IA com ID %{id} não encontrado"
   ai_skill_not_found_by_id: "Habilidade de IA com ID %{id} não encontrada"
   already_exists: "Os dados já existem: %{error}"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Falha ao serializar o esquema de saída do plugin para JSON: %{error}"
   plugin_not_found_by_uuid: "Plugin com UUID %{uuid} não encontrado"
   tauri_error: "Erro Tauri: %{error}"
-  unknown_database_version: "Versão de banco de dados desconhecida: %{version}"
 
 http:
   client_build_failed: "Falha ao construir o cliente HTTP: %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "Não foi possível criar a janela WebView: %{error}"
   failed_to_emit_event: "Falha ao enviar o evento: %{error}"
   failed_to_find_window_with_label: "Não foi possível encontrar a janela com o rótulo: %{label}"
+  failed_to_get_current_monitor: "Falha ao obter o monitor atual: %{error}"
+  failed_to_get_window_size: "Falha ao obter o tamanho da janela: %{error}"
   failed_to_initialize_logger: "Não foi possível inicializar o logger"
   failed_to_navigate_to_url: "Não foi possível navegar para a URL: %{url}, erro: %{error}"
   failed_to_retrieve_log_directory: "Não foi possível recuperar o diretório de log do aplicativo"
   failed_to_set_window_always_on_top: "Não foi possível definir a janela para sempre no topo: %{error}"
   failed_to_set_window_focus: "Não foi possível definir o foco da janela: %{error}"
+  failed_to_set_window_position: "Falha ao definir a posição da janela: %{error}"
   failed_to_show_window: "Não foi possível mostrar a janela: %{error}"
   failed_to_start_up_application: "Não foi possível iniciar o aplicativo"
+  invalid_direction: "Direção inválida, atualmente só é suportado: left->esquerda, right->direita"
   window_not_ready: "A janela ainda não está pronta"
   shortcut:
     failed_to_unregister_old: "Falha ao cancelar o registro do atalho antigo: %{error}"
@@ -169,8 +164,8 @@ mcp:
   config:
     name_must_be_non_empty: "O nome da configuração MCP não pode estar vazio, insira um nome de configuração válido"
     sse_url_must_be_non_empty: "A URL SSE da configuração MCP não pode estar vazia"
-    stdio_args_must_be_non_empty: "Os 'Argumentos de Inicialização' da configuração MCP não podem estar vazios"
-    stdio_command_must_be_non_empty: "O 'Comando de Inicialização' da configuração MCP не pode estar vazio"
+    stdio_args_must_be_non_empty: "Os Argumentos de Inicialização da configuração MCP não podem estar vazios"
+    stdio_command_must_be_non_empty: "O Comando de Inicialização da configuração MCP não pode estar vazio"
   client:
     config_error_for_server: "Erro de configuração do servidor MCP '%{server_name}': %{error}"
     config_mismatch: "Incompatibilidade de configuração MCP, cliente MCP criado %{client}, tipo de configuração: %{protocol_type}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "Falha ao iniciar o transporte SSE (URL: %{url}), motivo: %{error}"
     sse_url_cant_be_empty: "O parâmetro URL do cliente SSE não pode estar vazio"
     stdio_args_cant_be_empty: "O parâmetro args do cliente stdio não pode estar vazio"
-    stdio_command_cant_be_empty: "O parâmetro command 'Comando de Inicialização' do cliente stdio não pode estar vazio"
+    stdio_command_cant_be_empty: "O parâmetro command Comando de Inicialização do cliente stdio não pode estar vazio"
     stdio_command_not_found_no_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}). Certifique-se de que o comando está instalado e no PATH do seu sistema.'
     stdio_command_not_found_with_help: 'Falha ao iniciar o serviço MCP: comando "%{command}" não encontrado (erro original: %{original_error}).'
     stdio_npx_not_found_help: "Isso geralmente significa que o Node.js não está instalado corretamente ou o comando 'npx' não está no PATH do seu sistema. Verifique a instalação do Node.js."
@@ -201,8 +196,6 @@ network:
   client_build_error: "Falha ao construir o cliente HTTP: %{error}"
   header_error: "Falha ao criar o cabeçalho da solicitação: %{error}"
   proxy_error: "Falha ao configurar o proxy: %{error}"
-  request_failed_with_status: "Solicitação falhou (%{status}): %{message}"
-  request_failed_with_type: "Solicitação falhou (Código de Status: %{status}) - %{error_type}: %{message}"
   request_failed: "Solicitação falhou: %{error}"
   response_read_error: "Falha ao ler a resposta: %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "O arquivo não existe: %{file_path}"
 
 tools:
-  execution_failed: "Falha na chamada da ferramenta, nome da ferramenta: %{name}, erro: %{error}"
   failed_to_get_model: "Falha ao obter o modelo %{model_type}"
   function_already_exists: "A função já existe: %{name}"
   function_not_found: "Função de ferramenta não encontrada no fluxo de trabalho: %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "O ID do mecanismo de busca do Google não pode estar vazio"
     serper_api_key_empty: "A chave de API do Serper não pode estar vazia"
     tavily_api_key_empty: "A chave de API do Tavily não pode estar vazia"
-    web_search_failed: "Falha na pesquisa na web (provedor: %{provider}, palavra-chave: %{keyword}): %{details}"
 
 tray:
   about: "Sobre"
+  agent: "Agente"
   assistant: "Assistente"
   chat: "Chat"
   mcp: "MCP"

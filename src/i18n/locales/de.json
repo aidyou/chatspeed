@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "Frag KI",
     "askDescription": "Hallo! Was kann ich für dich tun?",
-    "chatPlaceholder": "Fragen stellen, übersetzen, schreiben, programmieren usw. Verwende ↑↓ zur Auswahl einer Fähigkeit\nAntworte auf die Nachricht der KI mit der Tastenkombination Alt+q, Alt+c kopiert die Nachricht",
+    "chatPlaceholder": "Fragen stellen, übersetzen, schreiben, programmieren usw. Verwende ALT+↑↓ zur Auswahl einer Fähigkeit\nAntworte auf KI-Nachrichten mit Alt+Q, kopiere Nachrichten mit Alt+C",
     "haveNoModel": "Du hast noch keine Modelle hinzugefügt. Bitte füge sie im Einstellungszentrum hinzu."
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "Möchtest du diese Nachricht wirklich löschen?",
     "collapseSidebar": "Seitenleiste ausblenden (Cmd/Ctrl+B)",
     "expandSidebar": "Seitenleiste einblenden (Cmd/Ctrl+B)",
-    "contextCleared": "Kontext gelöscht",
     "conversation": "Gespräch",
     "conversationNotFound": "Dialog nicht gefunden oder gelöscht",
     "conversationTitle": "Dialogtitel",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "Fehler beim Abrufen der aktuellen Dialog-ID: {error}",
     "errorOnGoToChat": "Fehler beim Wechsel zum Chatfenster: {error}",
     "errorOnLoadMessages": "Fehler beim Laden der Nachrichten: {error}",
+    "errorOnMoveWindow": "Fehler beim Verschieben des Fensters: {error}",
     "errorOnSaveMessage": "Fehler beim Speichern deiner Dialoginformationen: {error}",
     "errorOnSendMessage": "Fehler beim Senden der Chatnachricht: {error}",
     "errorOnStopChat": "Fehler beim Beenden des Chats: {error}",
@@ -39,6 +39,7 @@
     "haveNoModel": "Du hast noch keine Modelle hinzugefügt. Klicke auf die Schaltfläche „Modell hinzufügen +“ in der Titelleiste, um sie hinzuzufügen.",
     "inputMessagePlaceholder": "Eingabe {at} zur Aktivierung von Fähigkeiten",
     "messageCopied": "Nachricht kopiert",
+    "messageNotFound": "Nachricht nicht gefunden oder gelöscht",
     "newConversaction": "Neues Gespräch (Cmd/Ctrl + N)",
     "mindmapError": "Fehler beim Rendern der Mindmap",
     "networkDisabled": "Netzwerk deaktiviert",
@@ -117,6 +118,7 @@
   "menu": {
     "about": "Über",
     "assistant": "Desktop-Assistent",
+    "agent": "Agent",
     "mcp": "MCP",
     "model": "KI-Engine",
     "note": "Notiz",
@@ -132,9 +134,11 @@
   "settings": {
     "agent": {
       "actModel": "Aktionsmodell",
+      "agentType": "Agententyp",
       "add": "Agent hinzufügen",
       "addSuccess": "Agent erfolgreich hinzugefügt!",
       "autoApprove": "Tools automatisch genehmigen",
+      "autonomousMode": "Autonomer Modus",
       "availableTools": "Verfügbare Tools",
       "basicInfo": "Grundlegende Informationen",
       "copy": "Agent kopieren",
@@ -146,7 +150,6 @@
       "description": "Beschreibung",
       "edit": "Agent bearbeiten",
       "fetchFailed": "Fehler beim Abrufen des Agenten",
-      "fetchToolsFailed": "Fehler beim Abrufen der verfügbaren Tools",
       "maxContexts": "Maximale Kontextlänge",
       "models": "Modelle",
       "name": "Agentenname",
@@ -154,11 +157,15 @@
       "noAgents": "Keine Agenten gefunden",
       "notFound": "Agent nicht gefunden",
       "planModel": "Planungsmodell",
+      "planningMode": "Planungsmodus",
+      "planningPrompt": "Planungs-Prompt",
+      "reorderFailed": "Fehler beim Sortieren des Agenten: {error}",
       "saveFailed": "Fehler beim Speichern des Agenten: {error}",
       "selectActModel": "Aktionsmodell auswählen",
       "selectAutoApproveTools": "Tools für die automatische Genehmigung auswählen",
       "selectAvailableTools": "Verfügbare Tools auswählen",
       "selectPlanModel": "Planungsmodell auswählen",
+      "selectProvider": "Anbieter auswählen",
       "selectVisionModel": "Vision-Modell auswählen",
       "systemPrompt": "System-Prompt",
       "systemPromptRequired": "Bitte geben Sie einen System-Prompt ein",
@@ -513,6 +520,8 @@
         "disabled": "Deaktiviert",
         "maxContext": "Maximale Kontextlänge",
         "maxContextPlaceholder": "Bitte beachten Sie die Veröffentlichungsinformationen oder Schnittstelleninformationen der einzelnen Modelle, der Wert 0 wird nicht gesetzt",
+        "modelInjectionCondition": "Modell-Injektionsbedingung",
+        "modelInjectionConditionPlaceholder": "Nur injizieren, wenn Model-ID übereinstimmt, leer lassen für keine Begrenzung, * für beliebig viele Zeichen, ? für einzelnes Zeichen",
         "name": "Gruppenname",
         "namePlaceholder": "Bitte Gruppennamen eingeben",
         "promptInjection": "Prompt-Injektion",
@@ -597,7 +606,8 @@
       "model": "KI-Engine",
       "proxy": "Proxy",
       "privacy": "Datenschutz",
-      "skill": "Fähigkeit"
+      "skill": "Fähigkeit",
+      "scraperTest": "Scraper-Test"
     }
   }
 }

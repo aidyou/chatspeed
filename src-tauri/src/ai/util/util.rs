@@ -288,9 +288,7 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
     }
 
     // Most Gemini models support it.
-    // For Gemma, newer instruct models (e.g., based on Gemma 1 like 2B/7B instruct, or future Gemma 3+) support/will support it.
-    // Gemma 2 instruct did not. This is a general catch for current and upcoming Gemma.
-    if lower_model_id.contains("gemini") || lower_model_id.contains("gemma3") {
+    if lower_model_id.contains("gemini") {
         return true;
     }
 
@@ -298,7 +296,6 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
     if lower_model_id.contains("qwq")
         || lower_model_id.contains("qw2.5")
         || lower_model_id.contains("qwen3")
-        || lower_model_id.contains("qwencoder")
     {
         return true;
     }
@@ -322,43 +319,6 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
             || lower_model_id.contains("coder")
             || lower_model_id.contains("v3"))
     {
-        return true;
-    }
-
-    // Cohere Command R series
-    if lower_model_id.contains("command-r") {
-        return true;
-    }
-
-    // MistralAI models (Large, Small, Nemo, Codestral, Mixtral series)
-    if lower_model_id.contains("mistral-large") // Covers mistral-large-latest, mistral-large-2402 etc.
-        || lower_model_id.contains("mistral-small") // Covers mistral-small-latest etc.
-        || lower_model_id.contains("mistral-nemo")
-        || lower_model_id.contains("codestral")
-        || lower_model_id.contains("mixtral")
-    // Covers open-mixtral-8x7b, open-mixtral-8x22b etc.
-    {
-        return true;
-    }
-
-    // Meta Llama (Llama 3 series, Llama 3.1, Code Llama)
-    if (lower_model_id.contains("llama-3") || lower_model_id.contains("llama3")) // Covers Llama 3 and Llama 3.1
-        || lower_model_id.contains("code-llama")
-    // Covers Code Llama instruct versions
-    {
-        return true;
-    }
-
-    // Specialized function calling models
-    if lower_model_id.contains("firefunction-v1") // Specific model from Fireworks AI
-        || lower_model_id.contains("toolcall-")
-    // Generic identifier for tool-calling fine-tunes
-    {
-        return true;
-    }
-
-    // Microsoft Phi-3 models
-    if lower_model_id.contains("phi-3") || lower_model_id.contains("phi3") {
         return true;
     }
 
@@ -393,7 +353,9 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
 /// * `bool` - True if the model is known for reasoning/thinking step output, false otherwise.
 pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
     // qwq series models, especially qwq3
-    if lower_model_id.contains("qwq") || lower_model_id.contains("qwen3") {
+    if lower_model_id.contains("qwq")
+        || (lower_model_id.contains("qwen") && lower_model_id.contains("thinking"))
+    {
         return true;
     }
 
@@ -416,6 +378,10 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         || lower_model_id.contains("claude-sonnet-4")
         || lower_model_id.contains("claude-3-7-sonnet")
     {
+        return true;
+    }
+
+    if lower_model_id.contains("glm4.5") || lower_model_id.contains("glm4.6") {
         return true;
     }
 

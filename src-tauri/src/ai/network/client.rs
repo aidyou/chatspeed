@@ -232,7 +232,7 @@ impl DefaultApiClient {
             .await
             .map_err(|e| t!("network.response_read_error", error = e.to_string()).to_string())?;
 
-        let error_message =
+        let (error_message, error_type) =
             if let Some((mut error_type, message)) = self.error_format.parse_error(&error_text) {
                 if error_type.is_empty() {
                     error_type = inner_type;
@@ -244,23 +244,16 @@ impl DefaultApiClient {
                     message
                 );
 
-                t!(
-                    "network.request_failed_with_type",
-                    status = status_code.to_string(),
-                    error_type = error_type,
-                    message = message
-                )
-                .to_string()
+                (message, Some(error_type))
             } else {
-                t!(
-                    "network.request_failed_with_status",
-                    status = status_code.to_string(),
-                    message = error_text
-                )
-                .to_string()
+                (error_text, None)
             };
 
-        Ok(ApiResponse::error(error_message))
+        Ok(ApiResponse::error(ResponseError::new(
+            Some(status_code),
+            error_type,
+            error_message,
+        )))
     }
 }
 

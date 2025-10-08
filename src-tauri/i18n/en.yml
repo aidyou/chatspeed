@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "API request to %{provider} service failed: %{details}"
     deserialization_failed: "Deserialization of '%{context}' failed: %{details}"
     invalid_input: "Invalid input: %{details}"
     response_parse_failed: "Failed to parse response from %{provider}: %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "Tool call serialization failed: %{details}"
     upstream_chat_error: "Upstream chat service error: %{message}"
   api_key_is_require_for_list_models: "Getting model list requires API key, please configure a valid API key in settings"
-  chat_completion_failed_after_retries: "Chat completion failed after %{retries} retries"
   chat_not_found: "Specified chat session not found"
   empty_chat_id: "Chat ID cannot be empty"
   empty_messages: "Message list cannot be empty"
@@ -28,19 +26,13 @@ chat:
   failed_to_convert_language_code: "Failed to convert language code: %{error}"
   failed_to_create_file: "Failed to create file: %{error}"
   failed_to_detect_language: "Failed to detect language"
-  failed_to_find_user_message_content: "Failed to find user message content"
   failed_to_get_available_languages: "Failed to get available languages list: %{error}"
   failed_to_write_file: "Failed to write file: %{error}"
-  invalid_search_model: "Invalid search model: %{model_name}"
   note_already_exists: "This note already exists, no need to add again"
-  search_analysing: "Analyzing data..."
-  search_fetching: "Fetching data..."
   search_not_found: "Specified search session not found"
-  search_results: "Found %{count} results in total"
-  searching: "Searching for information..."
-  user_message_with_references: "[Reference Materials]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nWhen answering user questions, please prioritize using your own knowledge. If the question exceeds your knowledge scope or requires latest information, you can refer to the materials within `<ref></ref>` tags. When citing these materials, please mark with [^id] after relevant sentences. Please don't simply repeat the reference content, but provide answers after comprehensive analysis.\n\n[User Question]\n %{content}"
 
 db:
+  agent_name_exists: "Agent name '%{name}' already exists"
   ai_model_not_found_by_id: "AI model with ID %{id} not found"
   ai_skill_not_found_by_id: "AI skill with ID %{id} not found"
   already_exists: "Data already exists: %{error}"
@@ -72,9 +64,7 @@ db:
   failed_to_insert_config_migration: "Failed to insert config to new database during migration: %{error}"
   failed_to_insert_conversation_migration: "Failed to insert conversation to new database during migration: %{error}"
   failed_to_insert_message_migration: "Failed to insert message to new database during migration: %{error}"
-  # For database operations
-  agent_name_exists: "Agent name '{name}' already exists."
-  failed_to_lock_main_store: "Failed to lock main store: {error}"
+  failed_to_lock_main_store: "Failed to lock main store: %{error}"
   failed_to_migrate_database: "Failed to migrate database: %{error}"
   failed_to_open_chat_db_for_migration: "Failed to open old chat database '%{path}' for migration: %{error}"
   failed_to_open_config_db_for_migration: "Failed to open old config database '%{path}' for migration: %{error}"
@@ -121,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Failed to serialize plugin output schema to JSON: %{error}"
   plugin_not_found_by_uuid: "Plugin with UUID %{uuid} not found"
   tauri_error: "Tauri error: %{error}"
-  unknown_database_version: "Unknown database version: %{version}"
 
 http:
   client_build_failed: "Failed to create HTTP client: %{error}"
@@ -154,13 +143,17 @@ main:
   failed_to_create_webview_window: "Failed to create WebView window: %{error}"
   failed_to_emit_event: "Failed to send event: %{error}"
   failed_to_find_window_with_label: "Failed to find window with label: %{label}"
+  failed_to_get_current_monitor: "Failed to get current monitor: %{error}"
+  failed_to_get_window_size: "Failed to get window size: %{error}"
   failed_to_initialize_logger: "Failed to initialize logger"
   failed_to_navigate_to_url: "Failed to navigate to URL: %{url}, error: %{error}"
   failed_to_retrieve_log_directory: "Failed to retrieve application log directory"
   failed_to_set_window_always_on_top: "Failed to set window always on top: %{error}"
   failed_to_set_window_focus: "Failed to set window focus: %{error}"
+  failed_to_set_window_position: "Failed to set window position: %{error}"
   failed_to_show_window: "Failed to show window: %{error}"
   failed_to_start_up_application: "Failed to start application"
+  invalid_direction: "Invalid direction, currently only supported: left->left, right->right"
   window_not_ready: "Window not ready yet"
   shortcut:
     failed_to_unregister_old: "Failed to unregister old shortcut: %{error}"
@@ -203,8 +196,6 @@ network:
   client_build_error: "Failed to create HTTP client: %{error}"
   header_error: "Failed to create request header: %{error}"
   proxy_error: "Failed to configure proxy: %{error}"
-  request_failed_with_status: "Request failed (%{status}): %{message}"
-  request_failed_with_type: "Request failed (status code: %{status}) - %{error_type}: %{message}"
   request_failed: "Request failed: %{error}"
   response_read_error: "Failed to read response: %{error}"
 
@@ -232,7 +223,6 @@ setting:
   file_not_exists: "File does not exist: %{file_path}"
 
 tools:
-  execution_failed: "Tool call failed, tool name: %{name}, error: %{error}"
   failed_to_get_model: "Failed to get %{model_type} model"
   function_already_exists: "Function already exists: %{name}"
   function_not_found: "Tool function not found in workflow: %{name}"
@@ -249,10 +239,10 @@ tools:
     google_cx_empty: "Google Search Engine ID cannot be empty"
     serper_api_key_empty: "Serper API key cannot be empty"
     tavily_api_key_empty: "Tavily API key cannot be empty"
-    web_search_failed: "Web search failed (Provider: %{provider}, Keyword: %{keyword}): %{details}"
 
 tray:
   about: "About"
+  agent: "Agent"
   assistant: "Assistant"
   chat: "Chat"
   mcp: "MCP"

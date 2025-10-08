@@ -2,7 +2,7 @@
   "assistant": {
     "ask": "AIに質問",
     "askDescription": "こんにちは！何かお手伝いできることはありますか？",
-    "chatPlaceholder": "質問、翻訳、執筆、プログラミングなど… ↑↓キーでスキルを選択\nAIのメッセージに返信する際は、Alt+Qキーで返信、Alt+Cキーでメッセージをコピーしてください",
+    "chatPlaceholder": "質問、翻訳、執筆、プログラミングなど… ALT+↑↓ キーでスキルを選択\nAIのメッセージに返信する際は、Alt+Qキーで返信、Alt+Cキーでメッセージをコピーしてください",
     "haveNoModel": "まだモデルが追加されていません。設定から追加してください。"
   },
   "chat": {
@@ -10,7 +10,6 @@
     "confirmDeleteMessage": "このメッセージを削除してもよろしいですか？",
     "collapseSidebar": "サイドバーを折りたたむ (Cmd/Ctrl+B)",
     "expandSidebar": "サイドバーを展開 (Cmd/Ctrl+B)",
-    "contextCleared": "コンテキストをクリアしました",
     "conversation": "会話",
     "conversationNotFound": "会話が見つかりません、または削除されました",
     "conversationTitle": "会話のタイトル",
@@ -29,6 +28,7 @@
     "errorOnGetCurrentConversationId": "現在の会話IDの取得に失敗しました: {error}",
     "errorOnGoToChat": "チャット画面への移動に失敗しました: {error}",
     "errorOnLoadMessages": "メッセージの読み込みに失敗しました: {error}",
+    "errorOnMoveWindow": "ウィンドウの移動に失敗しました: {error}",
     "errorOnSaveMessage": "会話情報の保存に失敗しました: {error}",
     "errorOnSendMessage": "チャットメッセージの送信に失敗しました: {error}",
     "errorOnStopChat": "チャットの停止に失敗しました: {error}",
@@ -39,6 +39,7 @@
     "haveNoModel": "モデルが追加されていません。タイトルバーの「モデルを追加+」ボタンをクリックして追加してください",
     "inputMessagePlaceholder": "{at} を入力してスキルを呼び出す",
     "messageCopied": "メッセージをコピーしました",
+    "messageNotFound": "メッセージが見つかりません、または削除されました",
     "newConversaction": "新しい会話（Cmd/Ctrl + N）",
     "mindmapError": "マインドマップのレンダリングに失敗しました",
     "networkDisabled": "インターネット接続を無効にする",
@@ -116,6 +117,7 @@
   },
   "menu": {
     "about": "バージョン情報",
+    "agent": "エージェント",
     "assistant": "デスクトップアシスタント",
     "mcp": "MCP",
     "model": "AIエンジン",
@@ -131,10 +133,12 @@
   },
   "settings": {
     "agent": {
+      "agentType": "エージェントタイプ",
       "actModel": "行動モデル",
       "add": "エージェントを追加",
       "addSuccess": "エージェントが正常に追加されました！",
       "autoApprove": "自動承認ツール",
+      "autonomousMode": "自律モード",
       "availableTools": "利用可能なツール",
       "basicInfo": "基本情報",
       "copy": "エージェントをコピー",
@@ -146,7 +150,6 @@
       "description": "説明",
       "edit": "エージェントを編集",
       "fetchFailed": "エージェントの取得に失敗しました",
-      "fetchToolsFailed": "利用可能なツールのリストの取得に失敗しました",
       "maxContexts": "最大コンテキスト長",
       "models": "モデル",
       "name": "エージェント名",
@@ -154,11 +157,15 @@
       "noAgents": "エージェントが見つかりません",
       "notFound": "エージェントが見つかりません",
       "planModel": "計画モデル",
+      "planningMode": "計画モード",
+      "planningPrompt": "計画プロンプト",
+      "reorderFailed": "エージェントの並べ替えに失敗しました：{error}",
       "saveFailed": "エージェントの保存に失敗しました：{error}",
       "selectActModel": "行動モデルを選択",
       "selectAutoApproveTools": "自動承認ツールを選択",
       "selectAvailableTools": "利用可能なツールを選択",
       "selectPlanModel": "計画モデルを選択",
+      "selectProvider": "プロバイダーを選択",
       "selectVisionModel": "ビジョンモデルを選択",
       "systemPrompt": "システムプロンプト",
       "systemPromptRequired": "システムプロンプトを入力してください",
@@ -513,6 +520,8 @@
         "disabled": "無効",
         "maxContext": "最大コンテキスト長",
         "maxContextPlaceholder": "各モデルのリリース情報またはインターフェース情報を参照してください。0の値は設定されません",
+        "modelInjectionCondition": "モデル注入条件",
+        "modelInjectionConditionPlaceholder": "モデルIDが一致した場合のみ注入、空欄の場合は制限なし、*で複数文字、?で1文字をマッチ",
         "name": "グループ名",
         "namePlaceholder": "グループ名を入力してください",
         "promptInjection": "プロンプトインジェクション",
@@ -597,7 +606,8 @@
       "model": "AIエンジン",
       "proxy": "プロキシ",
       "privacy": "プライバシー",
-      "skill": "スキル"
+      "skill": "スキル",
+      "scraperTest": "スクレイパーのテスト"
     }
   }
 }

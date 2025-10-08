@@ -11,7 +11,6 @@ command:
 
 chat:
   error:
-    api_request_failed: "La requête API au service %{provider} a échoué : %{details}"
     deserialization_failed: "La désérialisation de '%{context}' a échoué : %{details}"
     invalid_input: "Saisie non valide : %{details}"
     response_parse_failed: "Échec de l'analyse de la réponse de %{provider} : %{details}"
@@ -19,7 +18,6 @@ chat:
     tool_call_serialization_failed: "Échec de la sérialisation de l'appel d'outil : %{details}"
     upstream_chat_error: "Erreur du service de discussion en amont : %{message}"
   api_key_is_require_for_list_models: "Une clé API est requise pour obtenir la liste des modèles. Veuillez configurer une clé API valide dans les paramètres."
-  chat_completion_failed_after_retries: "La complétion de la discussion a échoué après %{retries} tentatives"
   chat_not_found: "Session de discussion spécifiée non trouvée"
   empty_chat_id: "L'ID de la discussion ne peut pas être vide"
   empty_messages: "La liste des messages ne peut pas être vide"
@@ -28,21 +26,15 @@ chat:
   failed_to_convert_language_code: "Échec de la conversion du code de langue : %{error}"
   failed_to_create_file: "Échec de la création du fichier : %{error}"
   failed_to_detect_language: "Échec de la détection de la langue"
-  failed_to_find_user_message_content: "Échec de la recherche du contenu du message de l'utilisateur"
   failed_to_get_available_languages: "Échec de l'obtention de la liste des langues disponibles : %{error}"
   failed_to_write_file: "Échec de l'écriture dans le fichier : %{error}"
-  invalid_search_model: "Modèle de recherche non valide : %{model_name}"
   note_already_exists: "Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau"
-  search_analysing: "Analyse des données en cours..."
-  search_fetching: "Récupération des données en cours..."
   search_not_found: "Session de recherche spécifiée non trouvée"
-  search_results: "%{count} résultats trouvés au total"
-  searching: "Recherche d'informations en cours..."
-  user_message_with_references: "[Documents de référence]\n<ref data-type=\"json\">\n%{crawl_content}\n</ref>\n\nLorsque vous répondez aux questions des utilisateurs, veuillez donner la priorité à l'utilisation de vos propres connaissances. Si la question dépasse le cadre de vos connaissances ou nécessite des informations à jour, vous pouvez vous référer aux documents contenus dans les balises `<ref></ref>`. Lorsque vous citez ces documents, veuillez l'indiquer par [^id] après les phrases concernées. Ne vous contentez pas de répéter le contenu de référence, mais fournissez des réponses après une analyse complète.\n\n[Question de l'utilisateur]\n %{content}"
 
 db:
   ai_model_not_found_by_id: "Modèle d'IA avec l'ID %{id} non trouvé"
   ai_skill_not_found_by_id: "Compétence d'IA avec l'ID %{id} non trouvée"
+  agent_name_exists: "Le nom de l'agent '%{name}' existe déjà"
   already_exists: "Les données existent déjà : %{error}"
   backup_busy_locked: "La base de données est occupée ou verrouillée, échec après plusieurs tentatives, veuillez réessayer plus tard ou redémarrer l'application"
   backup_copy_incomplete: "Copie de la base de données incomplète"
@@ -119,7 +111,6 @@ db:
   plugin_json_serialize_failed_output_schema: "Échec de la sérialisation du schéma de sortie du plugin en JSON : %{error}"
   plugin_not_found_by_uuid: "Plugin avec l'UUID %{uuid} non trouvé"
   tauri_error: "Erreur Tauri : %{error}"
-  unknown_database_version: "Version de base de données inconnue : %{version}"
 
 http:
   client_build_failed: "Échec de la création du client HTTP : %{error}"
@@ -152,13 +143,17 @@ main:
   failed_to_create_webview_window: "Échec de la création de la fenêtre WebView : %{error}"
   failed_to_emit_event: "Échec de l'envoi de l'événement : %{error}"
   failed_to_find_window_with_label: "Échec de la recherche de la fenêtre avec l'étiquette : %{label}"
+  failed_to_get_current_monitor: "Échec de l'obtention du moniteur actuel : %{error}"
+  failed_to_get_window_size: "Échec de l'obtention de la taille de la fenêtre : %{error}"
   failed_to_initialize_logger: "Échec de l'initialisation du journaliseur"
   failed_to_navigate_to_url: "Échec de la navigation vers l'URL : %{url}, erreur : %{error}"
   failed_to_retrieve_log_directory: "Échec de la récupération du répertoire des journaux de l'application"
   failed_to_set_window_always_on_top: "Échec de la configuration de la fenêtre pour qu'elle soit toujours au premier plan : %{error}"
   failed_to_set_window_focus: "Échec de la mise au point de la fenêtre : %{error}"
+  failed_to_set_window_position: "Échec de la définition de la position de la fenêtre : %{error}"
   failed_to_show_window: "Échec de l'affichage de la fenêtre : %{error}"
   failed_to_start_up_application: "Échec du démarrage de l'application"
+  invalid_direction: "Direction invalide, actuellement uniquement pris en charge : left->gauche, right->droite"
   window_not_ready: "La fenêtre n'est pas encore prête"
   shortcut:
     failed_to_unregister_old: "Échec de la désinscription de l'ancien raccourci : %{error}"
@@ -169,8 +164,8 @@ mcp:
   config:
     name_must_be_non_empty: "Le nom de la configuration MCP ne peut pas être vide, veuillez saisir un nom de configuration valide"
     sse_url_must_be_non_empty: "L'URL SSE de la configuration MCP ne peut pas être vide"
-    stdio_args_must_be_non_empty: "Les 'Arguments de démarrage' de la configuration MCP ne peuvent pas être vides"
-    stdio_command_must_be_non_empty: "La 'Commande de démarrage' de la configuration MCP ne peut pas être vide"
+    stdio_args_must_be_non_empty: "Les Arguments de démarrage de la configuration MCP ne peuvent pas être vides"
+    stdio_command_must_be_non_empty: "La Commande de démarrage de la configuration MCP ne peut pas être vide"
   client:
     config_error_for_server: "Erreur de configuration du serveur MCP '%{server_name}' : %{error}"
     config_mismatch: "Inadéquation de la configuration MCP, client MCP créé %{client}, type de configuration : %{protocol_type}"
@@ -184,7 +179,7 @@ mcp:
     sse_transport_start_failed: "Échec du démarrage du transport SSE (URL : %{url}), raison : %{error}"
     sse_url_cant_be_empty: "Le paramètre d'URL du client SSE ne peut pas être vide"
     stdio_args_cant_be_empty: "Le paramètre d'arguments du client stdio ne peut pas être vide"
-    stdio_command_cant_be_empty: "Le paramètre de commande 'Commande de démarrage' du client stdio ne peut pas être vide"
+    stdio_command_cant_be_empty: "Le paramètre de commande Commande de démarrage du client stdio ne peut pas être vide"
     stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}). Veuillez vous assurer que la commande est installée et dans la variable d''environnement PATH de votre système.'
     stdio_command_not_found_with_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}).'
     stdio_npx_not_found_help: "Cela signifie généralement que Node.js n'est pas correctement installé ou que la commande 'npx' ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre installation de Node.js."
@@ -201,8 +196,6 @@ network:
   client_build_error: "Échec de la création du client HTTP : %{error}"
   header_error: "Échec de la création de l'en-tête de la requête : %{error}"
   proxy_error: "Échec de la configuration du proxy : %{error}"
-  request_failed_with_status: "Échec de la requête (%{status}) : %{message}"
-  request_failed_with_type: "Échec de la requête (code d'état : %{status}) - %{error_type} : %{message}"
   request_failed: "Échec de la requête : %{error}"
   response_read_error: "Échec de la lecture de la réponse : %{error}"
 
@@ -230,7 +223,6 @@ setting:
   file_not_exists: "Le fichier n'existe pas : %{file_path}"
 
 tools:
-  execution_failed: "Échec de l'appel de l'outil, nom de l'outil : %{name}, erreur : %{error}"
   failed_to_get_model: "Échec de l'obtention du modèle %{model_type}"
   function_already_exists: "La fonction existe déjà : %{name}"
   function_not_found: "Fonction d'outil non trouvée dans le flux de travail : %{name}"
@@ -247,10 +239,10 @@ tools:
     google_cx_empty: "L'ID du moteur de recherche Google ne peut pas être vide"
     serper_api_key_empty: "La clé API Serper ne peut pas être vide"
     tavily_api_key_empty: "La clé API Tavily ne peut pas être vide"
-    web_search_failed: "Échec de la recherche sur le Web (fournisseur : %{provider}, mot-clé : %{keyword}) : %{details}"
 
 tray:
   about: "À propos"
+  agent: "Agent"
   assistant: "Assistant"
   chat: "Discussion"
   mcp: "MCP"

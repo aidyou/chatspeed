@@ -1,11 +1,11 @@
+import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-
-import { csStorageKey } from '@/config/config'
-import { csGetStorage, csSetStorage } from '@/libs/util'
+import { csStorageKey } from '@/config/config';
+import { csGetStorage, csSetStorage, showMessage } from '@/libs/util';
 
 const windowLabel = getCurrentWebviewWindow().label
 
@@ -14,6 +14,8 @@ const windowLabel = getCurrentWebviewWindow().label
  * It includes state for the visibility of the chat sidebar and related operations.
  */
 export const useWindowStore = defineStore('window', () => {
+  const { t } = useI18n()
+
   // operating system information, like 'macOS', 'Windows', 'Linux'
   const os = ref('')
 
@@ -142,6 +144,22 @@ export const useWindowStore = defineStore('window', () => {
     invoke('set_mouse_event_state', { state, windowLabel })
   }
 
+  /**
+   * Move window to the left or right bottom corner of the current screen
+   * @param {string} direction - 'left' or 'right'
+   */
+  const moveWindowToScreenEdge = async (direction) => {
+    try {
+      await invoke('move_window_to_screen_edge', {
+        windowLabel: windowLabel,
+        direction: direction
+      })
+    } catch (error) {
+      console.error('Failed to move window:', error)
+      showMessage(t('chat.errorOnMoveWindow', { error }), 'error', 3000)
+    }
+  }
+
   initOs()
 
   return {
@@ -156,6 +174,7 @@ export const useWindowStore = defineStore('window', () => {
     mainWindowAlwaysOnTop,
     initMainWindowAlwaysOnTop,
     toggleMainWindowAlwaysOnTop,
-    setMouseEventState
+    setMouseEventState,
+    moveWindowToScreenEdge,
   }
 })
