@@ -152,6 +152,28 @@ impl McpClient for StdioClient {
             };
 
         log::info!("Starting StdioClient with command: {}", executable_to_run);
+
+        #[cfg(windows)]
+        let mut cmd = {
+            let path = std::path::Path::new(&executable_to_run);
+            let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            let is_script = extension.eq_ignore_ascii_case("cmd")
+                || extension.eq_ignore_ascii_case("bat")
+                || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("npx");
+
+            let mut cmd = if is_script {
+                let mut c = Command::new("cmd");
+                c.arg("/c").arg(&executable_to_run);
+                c
+            } else {
+                Command::new(&executable_to_run)
+            };
+            // Fix(mcp): Set CREATE_NO_WINDOW to hide the console window when starting the process
+            cmd.creation_flags(0x08000000);
+            cmd
+        };
+
+        #[cfg(not(windows))]
         let mut cmd = Command::new(&executable_to_run);
 
         let args = config
