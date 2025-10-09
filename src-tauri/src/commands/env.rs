@@ -22,6 +22,7 @@ pub fn get_os_info() -> Value {
     json!({
         "os": consts::OS,
         "arch": consts::ARCH,
+        "language": rust_i18n::locale().to_string(),
     })
 }
 

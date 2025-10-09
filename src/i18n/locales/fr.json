@@ -36,7 +36,7 @@
     "generatingDiagram": "Génération du diagramme en cours...",
     "generatingMindmap": "Génération de la carte mentale en cours...",
     "goToChat": "Continuer la conversation",
-    "haveNoModel": "Vous n'avez ajouté aucun modèle. Veuillez cliquer sur le bouton \"Ajouter un modèle +\" dans la barre de titre pour en ajouter un.",
+    "haveNoModel": "Vous n'avez ajouté aucun modèle. Veuillez cliquer sur le bouton \"+ Ajouter un modèle\" ci-dessous pour en ajouter un.",
     "inputMessagePlaceholder": "Entrez {at} pour appeler une compétence",
     "mcpDisabled": "Désactiver les outils MCP",
     "mcpEnabled": "Activer les outils MCP",

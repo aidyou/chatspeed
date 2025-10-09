@@ -21,7 +21,9 @@ use crate::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::{
     CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-    DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT,
+        CFG_MOVE_WINDOW_LEFT_SHORTCUT, CFG_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+        DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT,
+        DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT, DEFAULT_CENTER_WINDOW_SHORTCUT,
 };
 
 /// Retrieves current shortcuts from the configuration store
@@ -71,6 +73,30 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
             ),
         );
 
+        shortcuts.insert(
+            CFG_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_MOVE_WINDOW_LEFT_SHORTCUT,
+                DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
+            ),
+        );
+
+        shortcuts.insert(
+            CFG_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_MOVE_WINDOW_RIGHT_SHORTCUT,
+                DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
+            ),
+        );
+
+        shortcuts.insert(
+            CFG_CENTER_WINDOW_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_CENTER_WINDOW_SHORTCUT,
+                DEFAULT_CENTER_WINDOW_SHORTCUT.to_string(),
+            ),
+        );
+
         // Add new shortcuts here if needed
         // shortcuts.insert("new_window_shortcut".to_string(), c.get_config("new_window_shortcut", "default_value".to_string()));
     } else {
@@ -89,6 +115,18 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
         shortcuts.insert(
             CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
             DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        shortcuts.insert(
+            CFG_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
+            DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
+        );
+        shortcuts.insert(
+            CFG_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
+            DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
+        );
+        shortcuts.insert(
+            CFG_CENTER_WINDOW_SHORTCUT.to_string(),
+            DEFAULT_CENTER_WINDOW_SHORTCUT.to_string(),
         );
     }
 
@@ -129,6 +167,28 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
                     log::error!("Failed to open note window: {}", e);
                 }
             });
+        }
+        CFG_MOVE_WINDOW_LEFT_SHORTCUT => {
+            if let Err(e) =
+                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "left")
+            {
+                log::error!("Failed to move window left: {}", e);
+            }
+            show_and_focus_main_window(app);
+        }
+        CFG_MOVE_WINDOW_RIGHT_SHORTCUT => {
+            if let Err(e) =
+                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "right")
+            {
+                log::error!("Failed to move window right: {}", e);
+            }
+            show_and_focus_main_window(app);
+        }
+        CFG_CENTER_WINDOW_SHORTCUT => {
+            if let Err(e) = crate::commands::window::center_window(app.clone(), "main") {
+                log::error!("Failed to center window: {}", e);
+            }
+            show_and_focus_main_window(app);
         }
         _ => {}
     }

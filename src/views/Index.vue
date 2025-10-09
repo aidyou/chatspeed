@@ -99,15 +99,13 @@
 
             <div class="empty-message" v-if="!canChat">
               {{ $t('chat.haveNoModel') }}
+              <el-button type="primary" round @click="onOpenSettingWindow('model')">
+                <cs name="add" class="small" />
+                {{ $t('settings.model.add') }}
+              </el-button>
             </div>
             <div v-else-if="chatStore.messages.length === 0 && !isChatting" class="empty-message">
               <logo :name="currentModel?.logo || 'ai-common'" class="logo" size="40" />
-              <ul>
-                <li><strong>cmd/ctrl + n</strong> New Chat</li>
-                <li><strong>cmd/ctrl + b</strong> Toggle Sidebar</li>
-                <li><strong>alt + →</strong> Move To Right Button</li>
-                <li><strong>alt + ←</strong> Move To Left Button</li>
-              </ul>
             </div>
 
             <!-- message list -->
@@ -451,6 +449,7 @@ import { useI18n } from 'vue-i18n'
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import markdown from '@/components/chat/Markdown.vue'
 import chatting from '@/components/chat/Chatting.vue'
@@ -478,6 +477,7 @@ import { useMcpStore } from '@/stores/mcp'
 const { t } = useI18n()
 const unlistenChunkResponse = ref(null)
 const unlistenSendMessage = ref(null)
+const unlistenFocus = ref(null)
 
 const chatStore = useChatStore()
 const modelStore = useModelStore()
@@ -1347,6 +1347,15 @@ onMounted(async () => {
     inputRef.value.focus()
   }
 
+  const appWindow = getCurrentWebviewWindow()
+  unlistenFocus.value = await listen('tauri://focus', event => {
+    if (event.windowLabel === appWindow.label) {
+      if (inputRef.value) {
+        inputRef.value.focus()
+      }
+    }
+  })
+
   try {
     const osInfo = await invoke('get_os_info')
     osType.value = osInfo.os
@@ -1458,6 +1467,8 @@ onBeforeUnmount(() => {
   unlistenSendMessage.value?.()
   // unlisten chat_stream event
   unlistenChunkResponse.value?.()
+  // unlisten focus event
+  unlistenFocus.value?.()
 
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)
 
@@ -1755,19 +1766,7 @@ const onGlobalKeyDown = event => {
     }
   }
 
-  // Handle ALT + Arrow keys for window positioning
-  if (event.altKey) {
-    switch (event.key.toLowerCase()) {
-      case 'arrowleft':
-        event.preventDefault()
-        windowStore.moveWindowToScreenEdge('left')
-        break
-      case 'arrowright':
-        event.preventDefault()
-        windowStore.moveWindowToScreenEdge('right')
-        break
-    }
-  }
+
 }
 
 // =================================================
@@ -2198,6 +2197,7 @@ const onTakeNote = message => {
       width: 100%;
       padding: var(--cs-space-lg);
       box-sizing: border-box;
+      gap: var(--cs-space);
 
       ul {
         li {

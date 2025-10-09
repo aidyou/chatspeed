@@ -389,3 +389,16 @@ pub fn move_window_to_screen_edge(
 
     Ok(())
 }
+
+#[tauri::command]
+pub fn center_window(app: tauri::AppHandle, window_label: &str) -> Result<(), String> {
+    let window = app.get_webview_window(window_label).ok_or_else(|| {
+        t!(
+            "main.failed_to_find_window_with_label",
+            label = window_label
+        )
+        .to_string()
+    })?;
+    window.center().map_err(|e| e.to_string())?;
+    Ok(())
+}

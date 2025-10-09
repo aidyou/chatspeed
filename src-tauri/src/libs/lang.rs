@@ -12,23 +12,31 @@ pub fn get_system_locale() -> String {
     // Get the current system locale
     let locale = Locale::current().to_string();
 
+    if locale.starts_with("en-") || locale == "en" {
+        return "en".to_string();
+    }
+    if locale.starts_with("fr-") || locale == "fr" {
+        return "fr".to_string();
+    }
+    if locale.starts_with("de-") || locale == "de" {
+        return "de".to_string();
+    }
+    if locale.starts_with("es-") || locale == "es" {
+        return "es".to_string();
+    }
+    if locale.starts_with("ja-") || locale == "ja" {
+        return "ja".to_string();
+    }
+    if locale.starts_with("ko-") || locale == "ko" {
+        return "ko".to_string();
+    }
+
+    // If not one of the above, use the more specific matching from before.
     match locale.as_str() {
         // Simplified Chinese retains zh-CN
         "zh-CN" => "zh-Hans".to_string(),
         // Traditional Chinese is unified to zh-HK
         "zh-TW" | "zh-HK" | "zh-MO" | "zh-SG" => "zh-Hant".to_string(),
-        // English-speaking regions are unified to en
-        "en-US" | "en-GB" | "en-CA" | "en-AU" | "en-NZ" | "en" => "en".to_string(),
-        // French-speaking regions are unified to fr-FR
-        "fr-FR" | "fr-CA" | "fr-BE" | "fr-CH" | "fr" => "fr".to_string(),
-        // German-speaking regions are unified to de-DE
-        "de-DE" | "de-AT" | "de-CH" | "de-LI" | "de" => "de".to_string(),
-        // Spanish-speaking regions are unified to es-ES
-        "es-ES" | "es-MX" | "es-AR" | "es-CO" | "es" => "es".to_string(),
-        // Japanese-speaking regions are unified to ja-JP
-        "ja-JP" | "ja" => "ja".to_string(),
-        // Korean-speaking regions are unified to ko-KR
-        "ko-KR" | "ko" => "ko".to_string(),
         // Other languages retain their original form
         _ => locale,
     }

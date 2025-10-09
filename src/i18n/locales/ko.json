@@ -36,7 +36,7 @@
     "generatingDiagram": "플로우차트 생성 중...",
     "generatingMindmap": "마인드맵 생성 중...",
     "goToChat": "계속 질문하기",
-    "haveNoModel": "아직 모델이 추가되지 않았습니다. 상단 메뉴의 \"모델 추가+\" 버튼을 클릭하여 추가해주세요.",
+    "haveNoModel": "아직 모델이 추가되지 않았습니다. 아래의 \"+ 모델 추가\" 버튼을 클릭하여 추가하십시오.",
     "inputMessagePlaceholder": "{at} 입력으로 스킬 호출",
     "messageCopied": "메시지가 복사되었습니다.",
     "messageNotFound": "메시지가 존재하지 않거나 삭제되었습니다.",

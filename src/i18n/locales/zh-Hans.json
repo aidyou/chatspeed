@@ -36,7 +36,7 @@
     "generatingDiagram": "正在生成流程图……",
     "generatingMindmap": "正在生成思维导图……",
     "goToChat": "继续提问",
-    "haveNoModel": "您尚未添加任何模型，请点击标题栏的 “添加模型+” 按钮添加",
+    "haveNoModel": "您尚未添加任何模型，请点击下方的 “+添加模型” 按钮添加",
     "inputMessagePlaceholder": "输入 {at} 可呼出技能",
     "mcpDisabled": "禁用 MCP 工具",
     "mcpEnabled": "启用 MCP 工具",

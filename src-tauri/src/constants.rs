@@ -52,6 +52,16 @@ pub const DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT: &str = "Alt+S";
 
 pub const CFG_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "note_window_visible_shortcut";
 pub const DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+N";
+
+pub const CFG_MOVE_WINDOW_LEFT_SHORTCUT: &str = "move_window_left_shortcut";
+pub const DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT: &str = "Alt+Shift+Left";
+
+pub const CFG_MOVE_WINDOW_RIGHT_SHORTCUT: &str = "move_window_right_shortcut";
+pub const DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT: &str = "Alt+Shift+Right";
+
+pub const CFG_CENTER_WINDOW_SHORTCUT: &str = "center_window_shortcut";
+pub const DEFAULT_CENTER_WINDOW_SHORTCUT: &str = "Alt+Shift+C";
+
 //======================================================
 // end main window shortcuts
 //======================================================

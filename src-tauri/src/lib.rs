@@ -104,11 +104,6 @@ static MOVE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
 static LAST_MOVE: StdMutex<Option<Instant>> = StdMutex::new(None);
 
 pub async fn run() -> Result<()> {
-    // let system_locale = libs::lang::get_system_locale();
-    // if system_locale != "" && system_locale != "en" {
-    //     set_locale(&system_locale);
-    // }
-
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -214,6 +209,7 @@ pub async fn run() -> Result<()> {
             quit_window,
             set_mouse_event_state,
             move_window_to_screen_edge,
+            center_window,
 
             // workflow
             run_dag_workflow,

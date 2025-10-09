@@ -36,7 +36,7 @@
     "generatingDiagram": "フローチャートを生成中…",
     "generatingMindmap": "マインドマップを生成中…",
     "goToChat": "続けて質問",
-    "haveNoModel": "モデルが追加されていません。タイトルバーの「モデルを追加+」ボタンをクリックして追加してください",
+    "haveNoModel": "まだモデルが追加されていません。下の「+ モデルを追加」ボタンをクリックして追加してください。",
     "inputMessagePlaceholder": "{at} を入力してスキルを呼び出す",
     "messageCopied": "メッセージをコピーしました",
     "messageNotFound": "メッセージが見つかりません、または削除されました",

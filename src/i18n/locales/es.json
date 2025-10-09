@@ -36,7 +36,7 @@
     "generatingDiagram": "Generando diagrama...",
     "generatingMindmap": "Generando mapa mental...",
     "goToChat": "Continuar preguntando",
-    "haveNoModel": "Aún no has añadido ningún modelo. Por favor, haz clic en el botón \"Añadir modelo+\" en la barra de título para añadir uno.",
+    "haveNoModel": "Aún no has añadido ningún modelo. Haz clic en el botón \"+ Añadir modelo\" de abajo para añadir uno.",
     "inputMessagePlaceholder": "Introduce {at} para invocar una habilidad",
     "messageCopied": "Mensaje copiado",
     "messageNotFound": "Mensaje no encontrado o eliminado",

@@ -116,6 +116,7 @@ watch(
 onMounted(async () => {
   windowType.value = router.currentRoute.value.name
 
+  await settingStore.getEnv(true)
   // update the setting store
   await settingStore.updateSettingStore()
 

@@ -11,8 +11,7 @@ import es from './locales/es.json'
 import ru from './locales/ru.json'
 import pt from './locales/pt.json'
 
-const savedLocale = localStorage.getItem('locale') || 'zh-Hans'
-console.log(savedLocale)
+const savedLocale = localStorage.getItem('locale') || 'en'
 const i18n = createI18n({
   legacy: false,
   locale: savedLocale,

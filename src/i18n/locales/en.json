@@ -36,7 +36,7 @@
     "generatingDiagram": "Generating diagram...",
     "generatingMindmap": "Generating mind map...",
     "goToChat": "Continue Chatting",
-    "haveNoModel": "You haven't added any models yet. Please click \"Add Model+\" in the title bar to add one.",
+    "haveNoModel": "You haven't added any models yet. Please click the \"+ Add Model\" button below to add one.",
     "inputMessagePlaceholder": "Enter {at} to call up a skill",
     "messageCopied": "Message copied",
     "messageNotFound": "Message not found or deleted",

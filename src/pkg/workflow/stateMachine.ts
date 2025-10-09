@@ -148,6 +148,13 @@ export class WorkflowStateMachine extends EventEmitter {
       event: 'RETRY'
     })
 
+    // From FINISHED
+    this.addTransition({
+      from: WorkflowState.FINISHED,
+      to: WorkflowState.THINKING,
+      event: 'TASK_CONTINUE'
+    })
+
     // Global transitions (can happen from any state)
     this.addTransition({
       from: [

@@ -91,12 +91,12 @@ const defaultSettings = {
   chatCompletionProxyLogProxyToFile: false,
   // Search
   googleApiKey: '',
-  googleSearchId: "",
-  serperApiKey: "",
-  tavilyApiKey: "",
+  googleSearchId: '',
+  serperApiKey: '',
+  tavilyApiKey: '',
   websearchModel: { id: '', model: '' },
   searchEngine: '',
-  scraperConcurrencyCount: 5,
+  scraperConcurrencyCount: 5
 }
 
 /**
@@ -122,38 +122,36 @@ export const useSettingStore = defineStore('setting', () => {
    * @returns {Promise<void>} A promise that resolves when the setting is successfully updated.
    */
   const setSetting = async (key, value) => {
-    return new Promise(async (resolve, reject) => {
-      // Convert camelCase to snake_case
-      let dbKey = camelToSnake(key)
+    // Convert camelCase to snake_case
+    const dbKey = camelToSnake(key)
 
-      // Update shortcut if the key is for a main or assistant window shortcut setting
-      //
-      // IMPORTANT:
-      //  We must ensure the shortcut binding is successful before updating the database
-      if (
-        key === 'mainWindowVisibleShortcut' ||
-        key === 'assistantWindowVisibleShortcut' ||
-        key === 'noteWindowVisibleShortcut'
-      ) {
-        try {
-          await invoke('update_shortcut', { key: dbKey, value })
-        } catch (error) {
-          console.error('Failed to update shortcut:', error)
-          return reject(i18n.global.t('settings.general.updateShortcutFailed', { error }))
-        }
+    // Update shortcut if the key is for a main or assistant window shortcut setting
+    //
+    // IMPORTANT:
+    //  We must ensure the shortcut binding is successful before updating the database
+    if (
+      key === 'mainWindowVisibleShortcut' ||
+      key === 'assistantWindowVisibleShortcut' ||
+      key === 'assistantWindowVisibleAndPasteShortcut' ||
+      key === 'moveWindowLeftShortcut' ||
+      key === 'moveWindowRightShortcut' ||
+      key === 'centerWindowShortcut' ||
+      key === 'noteWindowVisibleShortcut'
+    ) {
+      try {
+        await invoke('update_shortcut', { key: dbKey, value })
+      } catch (error) {
+        console.error('Failed to update shortcut:', error)
+        throw new Error(i18n.global.t('settings.general.updateShortcutFailed', { error }))
       }
+    }
 
-      invoke('set_config', { key: dbKey, value })
-        .then(() => {
-          settings.value = {
-            ...settings.value,
-            [key]: value
-          }
-          sendSyncState('setting_changed', windowLabel, { [key]: value })
-
-          resolve()
-        })
-        .catch(reject)
+    return invoke('set_config', { key: dbKey, value }).then(() => {
+      settings.value = {
+        ...settings.value,
+        [key]: value
+      }
+      sendSyncState('setting_changed', windowLabel, { [key]: value })
     })
   }
 
@@ -230,10 +228,16 @@ export const useSettingStore = defineStore('setting', () => {
     })
   }
 
-  const getEnv = () => {
+  const getEnv = (setLanguage = false) => {
     return new Promise((resolve, reject) => {
       invoke('get_env')
         .then(result => {
+          if (setLanguage && result.language) {
+            settings.value.interfaceLanguage = result.language
+            settings.value.primaryLanguage = result.language
+            settings.value.secondaryLanguage = result.language !== 'en' ? result.language : 'en'
+            console.log('Language updated:', result.language)
+          }
           env.value = { ...env.value, ...result }
           resolve()
         })

@@ -40,7 +40,7 @@
     "generatingDiagram": "正在產生流程圖……",
     "generatingMindmap": "正在產生思維導圖……",
     "goToChat": "繼續提問",
-    "haveNoModel": "您尚未新增任何模型，請點擊標題列的「新增模型+」按鈕新增",
+    "haveNoModel": "您尚未新增任何模型，請點擊下方的「+ 新增模型」按鈕新增",
     "inputMessagePlaceholder": "輸入 {at} 可呼叫技能",
     "messageCopied": "訊息已複製",
     "messageNotFound": "訊息不存在或已被刪除",
