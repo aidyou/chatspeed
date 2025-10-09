@@ -57,9 +57,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { listen } from '@tauri-apps/api/event'
 
 import about from '@/components/setting/About.vue'
 import general from '@/components/setting/General.vue'
@@ -90,21 +91,35 @@ const menuItems = computed(() => [
   { label: t('settings.type.about'), icon: 'about', id: 'about' }
 ])
 
+let unlistenFromRust = null
+
 onMounted(async () => {
   // Switch the setting window to the user-defined type or default to 'general' if not set
   const route = useRoute()
   const queryType = route.params.type
   if (queryType) {
-    const menuItem = menuItems.value.find(item => item.id === queryType)
+    const menuItem = menuItems.value.find((item) => item.id === queryType)
     if (menuItem) {
       settingType.value = menuItem.id
       settingLabel.value = menuItem.label
     }
   }
   console.log('settingType', settingType.value, route.params.type)
+
+  unlistenFromRust = await listen('settings-navigate', (event) => {
+    if (event.payload && event.payload.type) {
+      switchSetting(event.payload.type)
+    }
+  })
 })
 
-const switchSetting = id => {
+onUnmounted(() => {
+  if (unlistenFromRust) {
+    unlistenFromRust()
+  }
+})
+
+const switchSetting = (id) => {
   settingType.value = id
   settingLabel.value = t(`settings.type.${id}`)
 }

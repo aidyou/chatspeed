@@ -218,8 +218,7 @@ fn register_shortcuts(
             if let Ok(hotkey) = Shortcut::from_str(&shortcut) {
                 // Alaway unregister the old shortcut before registering a new one
                 if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
-                    log::warn!("Failed to unregister shortcut '{}': {}", shortcut, err);
-                    continue;
+                    log::info!("Failed to unregister shortcut '{}': {}", shortcut, err);
                 }
 
                 log::debug!("Registering shortcut: {} for {}", shortcut, shortcut_type);

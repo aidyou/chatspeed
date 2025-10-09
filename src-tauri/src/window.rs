@@ -7,6 +7,7 @@ use log::{error, warn};
 use rust_i18n::t;
 use serde::Deserialize;
 use serde::Serialize;
+use tauri::Emitter;
 use tauri::Listener;
 use tauri::LogicalSize;
 use tauri::PhysicalPosition;
@@ -360,6 +361,14 @@ pub async fn create_or_focus_setting_window(
     let label = "settings";
     if let Some(_) = app_handle.get_webview_window(label) {
         show_and_focus_window(&app_handle, label);
+        if let Some(st) = setting_type {
+            let _ = app_handle
+                .emit("settings-navigate", serde_json::json!({ "type": st }))
+                .map_err(|e| {
+                    log::error!("failed to emit settings-navigate event");
+                    e
+                });
+        }
     } else {
         let mut max_height: f64 = 1024.0;
         let mut height: f64 = 1024.0;

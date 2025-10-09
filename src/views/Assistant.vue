@@ -121,6 +121,10 @@
         <div class="add-model-btn" @click="onAddModel">
           {{ $t('settings.model.add') }}
         </div>
+        <el-button type="primary" round @click="onOpenSettingWindow('model')">
+          <cs name="add" class="small" />
+          {{ $t('settings.model.add') }}
+        </el-button>
       </div>
     </main>
 
