@@ -1,6 +1,6 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
-# Chatspeed v1.1.16 Release Notes
+# Chatspeed v1.1.17 Release Notes
 
 ### ✨ Enhancements
 
@@ -13,6 +13,11 @@
 
 ### 🐞 Bug Fixes
 
+- **Fixed Windows ARM64 Crash Issue**: Resolved the issue where the Windows ARM64 version crashed after installation in a PD virtual machine, by explicitly specifying the `sqlite3` library path.
+- **Fixed Windows Command Line Popup Issue**: Fixed the problem of an unexpected command line window popping up when starting the MCP service on the Windows platform.
+- **Fixed Windows MCP Startup Error**: Corrected the MCP service startup error on Windows, where directly running the `npx` script instead of wrapping it with `cmd /c` led to a `%1 is not a valid Win32 application` error.
+- **Optimized Log Visibility**: Improved the log output level for shell command failures (e.g., shell not found or internal command failure) when searching for `npx` and similar commands in Linux environments, making them visible in production.
+- **Fixed Form State Overwrite Issue**: Addressed a bug in `Agent.vue` and `Skill.vue` components where editing an item and then adding a new one would overwrite the previous item due to un-reset form data.
 - **Fixed Initial Language Setting Issue**: Fixed the issue where initial installation language was incorrectly set to Simplified Chinese; now it prioritizes the user's native language with fallback to English if unsupported
 - **Fixed Shortcut Key Validation**: Fixed error notifications when shortcut keys are left empty during setting
 - **Fixed Shortcut Key Binding Mechanism**: Fixed issue where unset shortcuts caused module shortcut binding failures
@@ -22,8 +27,6 @@
 
 ### 🕰 In Progress
 Part of the ReAct logic has been completed, and development of this workflow module will continue
-
----
 
 # Chatspeed v1.1.15 Release Notes
 
