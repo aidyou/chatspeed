@@ -82,7 +82,8 @@
     class="model-edit-dialog"
     :show-close="false"
     :close-on-click-modal="false"
-    :close-on-press-escape="false">
+    :close-on-press-escape="false"
+    @closed="onModelDialogClose">
     <el-form :model="modelForm" :rules="modelRules" ref="formRef" label-width="120px">
       <el-tabs v-model="activeTab">
         <!-- basic info -->
@@ -691,6 +692,12 @@ const editModel = async (id, model) => {
     modelForm.value.baseUrl,
     modelForm.value.apiKey
   )
+}
+
+const onModelDialogClose = () => {
+  editId.value = null
+  modelForm.value = { ...defaultFormData }
+  formRef.value?.resetFields()
 }
 
 /**

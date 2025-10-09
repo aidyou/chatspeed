@@ -1,5 +1,15 @@
 [English](./RELEASE.md) | 简体中文
 
+# Chatspeed v1.1.17 发布日志
+
+### 🐞 Bug 修复
+
+- **修复 Windows ARM64 闪退问题**: 修复了 Windows ARM64 版本在 PD 虚拟机中安装后闪退的问题，通过显式指定 `sqlite3` 库路径解决。
+- **修复 Windows 命令行弹窗问题**: 修复了 Windows 平台上启动 MCP 服务时意外弹出命令行窗口的问题。
+- **修复 Windows MCP 启动错误**: 修复了 Windows 平台上 MCP 服务启动时，因直接运行 `npx` 脚本而非通过 `cmd /c` 包装导致的 `%1 is not a valid Win32 application` 错误。
+- **优化日志可见性**: 优化了在 Linux 环境下查找 `npx` 等命令时，当 shell 找不到或内部命令失败时的日志输出级别，使其在生产环境中可见。
+- **修复表单状态覆盖问题**: 修复了 `Agent.vue` 和 `Skill.vue` 组件中，编辑后添加新项时，表单数据未重置导致覆盖旧项的 bug。
+
 # Chatspeed v1.1.16 发布日志
 
 ### ✨ 功能增强

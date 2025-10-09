@@ -79,7 +79,8 @@
     class="agent-edit-dialog"
     :show-close="false"
     :close-on-click-modal="false"
-    :close-on-press-escape="false">
+    :close-on-press-escape="false"
+    @closed="onAgentDialogClose">
     <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="120px">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
@@ -340,6 +341,12 @@ const editAgent = async id => {
   }
 
   agentDialogVisible.value = true
+}
+
+const onAgentDialogClose = () => {
+  editId.value = null
+  agentForm.value = { ...defaultFormData }
+  formRef.value?.resetFields()
 }
 
 /**

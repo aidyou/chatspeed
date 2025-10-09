@@ -145,7 +145,7 @@ fn setup_environment_variables() -> Result<(), String> {
             let merged_path = merge_paths(&original_path, &full_path);
             env::set_var("PATH", &merged_path);
 
-            log::debug!("New PATH set: {}", merged_path);
+            log::info!("New PATH set: {}", merged_path);
 
             Ok(())
         }

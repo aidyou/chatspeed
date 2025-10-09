@@ -81,7 +81,8 @@
     class="skill-edit-dialog"
     :show-close="false"
     :close-on-click-modal="false"
-    :close-on-press-escape="false">
+    :close-on-press-escape="false"
+    @closed="onSkillDialogClose">
     <el-form :model="skillForm" :rules="skillRules" ref="formRef">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="t('settings.skill.basicInfo')" name="basic">
@@ -341,6 +342,13 @@ const editSkill = async id => {
   }
 
   skillDialogVisible.value = true
+}
+
+const onSkillDialogClose = () => {
+  editId.value = null
+  skillForm.value = { ...defaultFormData }
+  formRef.value?.resetFields()
+  fileSelectorRef.value?.reset()
 }
 
 /**
