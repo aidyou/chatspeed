@@ -110,11 +110,11 @@ jobs:
           vcpkg install
 
           # Set library directory variables (using project vcpkg_installed)
-          # $SQLITE3_LIB_DIR = "vcpkg_installed/$TRIPLET/lib"
-          # $SQLITE3_INCLUDE_DIR = "vcpkg_installed/$TRIPLET/include"
+          $SQLITE3_LIB_DIR = "vcpkg_installed/$TRIPLET/lib"
+          $SQLITE3_INCLUDE_DIR = "vcpkg_installed/$TRIPLET/include"
 
-          # echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
-          # echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
+          echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
+          echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
           # echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
           # Verification is now handled by the build.rs script, which will panic if paths are not found.
 
