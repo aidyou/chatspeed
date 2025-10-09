@@ -2,6 +2,8 @@
 
 # Chatspeed v1.1.17 Release Notes
 
+Chatspeed v1.1.17 focuses on enhancing cross-platform stability and user experience by addressing critical bugs across Windows and Linux environments, optimizing environment variable loading, and resolving UI state management issues in key settings components. This release also incorporates all features and fixes from the unreleased v1.1.16, including new window positioning shortcuts and unified custom event formats.
+
 ### ✨ Enhancements
 
 - **Added Main Window Positioning Shortcuts**: Added main window center, left and right positioning shortcuts to improve window management efficiency
@@ -9,7 +11,7 @@
 
 ### 🔧 Technical Optimizations
 
-- **Global Shortcut Upgrade**: Upgraded main window positioning shortcuts (to bottom-left and bottom-right) to global shortcuts, allowing triggering without application being active
+- **Global Shortcut Upgrade**: Upgraded main window positioning shortcuts (to left and right) to global shortcuts, allowing triggering without application being active
 
 ### 🐞 Bug Fixes
 

@@ -122,12 +122,18 @@ verify_version_update() {
 commit_version_changes() {
     local version=$1
 
+    # 运行 cargo 命令更新 Cargo.lock
+    print_info "Updating Cargo.lock file..."
+    cd src-tauri
+    cargo metadata --format-version 1 > /dev/null 2>&1 || cargo generate-lockfile
+    cd ..
+
     # 检查是否有未提交的更改
-    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml; then
+    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock; then
         print_info "Committing version changes..."
 
         # 添加版本文件到暂存区
-        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
+        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 
         # 提交更改
         git commit -m "chore: bump version to $version"

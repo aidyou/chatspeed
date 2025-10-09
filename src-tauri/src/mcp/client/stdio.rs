@@ -168,8 +168,8 @@ impl McpClient for StdioClient {
             } else {
                 Command::new(&executable_to_run)
             };
-            // Fix(mcp): Set CREATE_NO_WINDOW to hide the console window when starting the process
-            cmd.creation_flags(0x08000000);
+            // Fix(mcp): Set CREATE_NO_WINDOW and DETACHED_PROCESS to hide the console window when starting the process
+            cmd.creation_flags(0x08000000 | 0x00000008);
             cmd
         };
 

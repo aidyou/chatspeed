@@ -458,7 +458,9 @@ pub async fn run() -> Result<()> {
             setup_logger(&app);
 
             // Initialize environment
-            environment::init_environment();
+            tauri::async_runtime::spawn(async move {
+                environment::init_environment().await;
+            });
 
             // Initialize the main store
             #[cfg(debug_assertions)]

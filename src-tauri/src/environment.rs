@@ -1,5 +1,5 @@
 use std::env;
-use std::process::Command;
+use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
 /// Attempts to retrieve the full system PATH environment variable on Windows.
@@ -10,7 +10,7 @@ use std::process::Command;
 /// # Returns
 /// - `Some(String)`: The full PATH string if successfully retrieved.
 /// - `None`: If the PATH could not be retrieved using the attempted methods.
-fn get_shell_path() -> Option<String> {
+async fn get_shell_path() -> Option<String> {
     // Windows: Try multiple methods to get full PATH
     let methods = vec![
         // PowerShell
@@ -20,7 +20,7 @@ fn get_shell_path() -> Option<String> {
     ];
 
     for (shell, args) in methods {
-        if let Ok(output) = Command::new(shell).args(&args).output() {
+        if let Ok(output) = Command::new(shell).args(&args).creation_flags(0x08000000 | 0x00000008).output().await {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() && path != "%PATH%" {
@@ -36,27 +36,66 @@ fn get_shell_path() -> Option<String> {
 ///
 /// This function tries various available shells (e.g., zsh, bash, sh) by launching them
 /// as login shells to ensure a complete environment, then echoes the `$PATH`.
+/// It prioritizes interactive login shells for a more complete PATH.
 ///
 /// # Returns
 /// - `Some(String)`: The full PATH string if successfully retrieved.
 /// - `None`: If the PATH could not be retrieved using the attempted methods.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn get_shell_path() -> Option<String> {
+async fn get_shell_path() -> Option<String> {
     // Unix-like systems: Try multiple shells
-    let shells = get_available_shells();
+    let shells = get_available_shells().await;
 
     for shell in shells {
-        // Use login shell to get full environment
-        let args = vec!["-l", "-c", "echo $PATH"];
-
-        if let Ok(output) = Command::new(&shell).args(&args).output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    // log::debug!("Using {} to get PATH: {}", shell, path);
-                    return Some(path);
+        // Helper to try executing a command and return path or error kind
+        let try_command = async move |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
+            match Command::new(shell_name).args(&args).output().await {
+                Ok(output) => {
+                    if output.status.success() {
+                        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !path.is_empty() {
+                            return Ok(Some(path));
+                        }
+                    }
+                    Ok(None)
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        Err(std::io::ErrorKind::NotFound)
+                    } else {
+                        log::warn!("Failed to run shell command for {}: {}", shell_name, e);
+                        Ok(None)
+                    }
                 }
             }
+        };
+
+        // 1. Try interactive login shell first (most likely to have full user PATH)
+        log::debug!("Attempting to get PATH using interactive login shell: {} -l -i -c \"echo $PATH\"", shell);
+        match try_command(&shell, vec!["-l", "-i", "-c", "echo $PATH"]).await {
+            Ok(Some(path)) => {
+                log::debug!("Using {} -l -i -c to get PATH: {}", shell, path);
+                return Some(path);
+            }
+            Err(std::io::ErrorKind::NotFound) => {
+                log::debug!("Shell {} not found, skipping further attempts with this shell.", shell);
+                continue; // Shell not found, try next one
+            }
+            _ => { /* Fall through to non-interactive attempt */ }
+        }
+
+        // 2. If interactive login shell didn't yield a PATH, try non-interactive login shell
+        log::debug!("Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"", shell);
+        match try_command(&shell, vec!["-l", "-c", "echo $PATH"]).await {
+            Ok(Some(path)) => {
+                log::debug!("Using {} -l -c to get PATH: {}", shell, path);
+                return Some(path);
+            }
+            Err(std::io::ErrorKind::NotFound) => {
+                log::debug!("Shell {} not found, skipping further attempts with this shell.", shell);
+                continue; // Should have been caught by interactive attempt, but for safety
+            }
+            _ => { /* Fall through to next shell */ }
         }
     }
     None
@@ -74,7 +113,7 @@ fn get_shell_path() -> Option<String> {
 /// # Returns
 /// - `Vec<String>`: A vector of paths to available shell executables.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn get_available_shells() -> Vec<String> {
+async fn get_available_shells() -> Vec<String> {
     let mut shells = Vec::new();
 
     // 1. First try user's default shell
@@ -100,7 +139,7 @@ fn get_available_shells() -> Vec<String> {
     // 3. Try to find via which command
     let shell_names = vec!["zsh", "bash", "sh"];
     for shell_name in shell_names {
-        if let Ok(output) = Command::new("which").arg(shell_name).output() {
+        if let Ok(output) = Command::new("which").arg(shell_name).output().await {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() && !shells.contains(&path) {
@@ -131,7 +170,7 @@ fn get_available_shells() -> Vec<String> {
 /// # Returns
 /// - `Ok(())`: If the environment variables were set up successfully.
 /// - `Err(String)`: If there was an error obtaining the full shell PATH.
-fn setup_environment_variables() -> Result<(), String> {
+async fn setup_environment_variables() -> Result<(), String> {
     log::debug!("Setting up environment variables...");
 
     // Save original PATH as backup
@@ -139,7 +178,7 @@ fn setup_environment_variables() -> Result<(), String> {
     // log::debug!("Original PATH: {}", original_path);
 
     // Try to get full PATH
-    match get_shell_path() {
+    match get_shell_path().await {
         Some(full_path) => {
             // Merge PATHs, avoiding duplicates
             let merged_path = merge_paths(&original_path, &full_path);
@@ -198,10 +237,10 @@ fn merge_paths(original: &str, new: &str) -> String {
 ///
 /// This function calls `setup_environment_variables` to configure the system PATH
 /// and then `set_additional_env_vars` to ensure other necessary environment variables are present.
-pub fn init_environment() {
+pub async fn init_environment() {
     log::debug!("Initializing cross-platform environment...");
 
-    if let Err(e) = setup_environment_variables() {
+    if let Err(e) = setup_environment_variables().await {
         log::warn!("Environment setup error: {}", e);
     }
 
