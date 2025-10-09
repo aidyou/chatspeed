@@ -315,15 +315,28 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
                         } else {
                             log::debug!("Step 4: Login shell {} command -v output produced no usable lines.", shell);
                         }
+                    } else {
+                        log::info!(
+                            "Step 4: Shell '{}' executed, but the inner command failed (e.g., '{}' not found in its path). Trying next shell.",
+                            shell, command_name
+                        );
                     }
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Step 4: Failed to run login shell command {} -l -c \"{}\": {}",
-                        shell,
-                        command_to_run_in_shell,
-                        e
-                    );
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        log::info!(
+                            "Step 4: Shell '{}' not found, trying next one. Error: {}",
+                            shell,
+                            e
+                        );
+                    } else {
+                        log::warn!(
+                            "Step 4: Failed to run login shell command {} -l -c \"{}\": {}",
+                            shell,
+                            command_to_run_in_shell,
+                            e
+                        );
+                    }
                 }
             }
         }
