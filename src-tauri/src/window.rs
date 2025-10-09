@@ -189,19 +189,19 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         log::debug!("Attempting to show and focus window: {}", label);
 
-        // 1. Unminimize if it's minimized.
-        if let Ok(true) = window.is_minimized() {
-            log::debug!("Window '{}' is minimized, unminimizing.", label);
-            if let Err(e) = window.unminimize() {
-                log::warn!("Failed to unminimize window '{}': {}", label, e);
-            }
-        }
-
-        // 2. Show the window if it's not visible.
+        // 1. Show the window if it's not visible. This might also handle un-minimizing on some platforms.
         if let Ok(false) = window.is_visible() {
             log::debug!("Window '{}' is not visible, showing.", label);
             if let Err(e) = window.show() {
                 log::warn!("Failed to show window '{}': {}", label, e);
+            }
+        }
+
+        // 2. Unminimize if it's still minimized.
+        if let Ok(true) = window.is_minimized() {
+            log::debug!("Window '{}' is minimized, unminimizing.", label);
+            if let Err(e) = window.unminimize() {
+                log::warn!("Failed to unminimize window '{}': {}", label, e);
             }
         }
 
