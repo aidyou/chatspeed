@@ -1,5 +1,30 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.16 Release Notes
+
+### ✨ Enhancements
+
+- **Added Main Window Positioning Shortcuts**: Added main window center, left and right positioning shortcuts to improve window management efficiency
+- **Unified Custom Event Format**: Unified all custom events to start with `cs://`, standardizing the application's internal event system
+
+### 🔧 Technical Optimizations
+
+- **Global Shortcut Upgrade**: Upgraded main window positioning shortcuts (to bottom-left and bottom-right) to global shortcuts, allowing triggering without application being active
+
+### 🐞 Bug Fixes
+
+- **Fixed Initial Language Setting Issue**: Fixed the issue where initial installation language was incorrectly set to Simplified Chinese; now it prioritizes the user's native language with fallback to English if unsupported
+- **Fixed Shortcut Key Validation**: Fixed error notifications when shortcut keys are left empty during setting
+- **Fixed Shortcut Key Binding Mechanism**: Fixed issue where unset shortcuts caused module shortcut binding failures
+- **Fixed Settings Window Switching**: Fixed issue where switching between setting windows via menu fails after opening a settings window
+- **Removed Unavailable Vendor**: Removed built-in `Pollinations` vendor as it was mostly unusable after testing
+- **Fixed Ubuntu Window Display**: Fixed issue where window could not be shown via shortcut after being minimized on Ubuntu
+
+### 🕰 In Progress
+Part of the ReAct logic has been completed, and development of this workflow module will continue
+
+---
+
 # Chatspeed v1.1.15 Release Notes
 
 v1.1.15 focuses on enhancing the user experience of tool calls and system stability, while optimizing the protocol conversion capabilities of the ccproxy module.
