@@ -72,7 +72,8 @@ watch(
           updateTrayFlag.value = false
         })
     }
-  }
+  },
+  { immediate: true }
 )
 
 watch(isSystemDark, newVal => {
