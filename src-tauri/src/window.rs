@@ -189,19 +189,28 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         log::debug!("Attempting to show and focus window: {}", label);
 
-        // 1. Show the window if it's not visible. This might also handle un-minimizing on some platforms.
-        if let Ok(false) = window.is_visible() {
-            log::debug!("Window '{}' is not visible, showing.", label);
+        let is_visible = window.is_visible().unwrap_or(false);
+        let is_minimized = window.is_minimized().unwrap_or(false);
+
+        // If window is not visible or is minimized, we need to restore it.
+        if !is_visible || is_minimized {
+            log::debug!(
+                "Window '{}' is not visible or is minimized. Restoring. is_visible: {}, is_minimized: {}",
+                label, is_visible, is_minimized
+            );
+
+            // On some systems (like Ubuntu), a minimized window needs to be explicitly un-minimized.
+            if is_minimized {
+                // Requesting attention can help bubble the window up in some window managers.
+                window.request_user_attention(None).ok(); // Use informational type
+                if let Err(e) = window.unminimize() {
+                    log::warn!("Failed to unminimize window '{}': {}", label, e);
+                }
+            }
+
+            // After un-minimizing, or if it was just hidden, we still need to ensure it's shown.
             if let Err(e) = window.show() {
                 log::warn!("Failed to show window '{}': {}", label, e);
-            }
-        }
-
-        // 2. Unminimize if it's still minimized.
-        if let Ok(true) = window.is_minimized() {
-            log::debug!("Window '{}' is minimized, unminimizing.", label);
-            if let Err(e) = window.unminimize() {
-                log::warn!("Failed to unminimize window '{}': {}", label, e);
             }
         }
 
@@ -363,9 +372,12 @@ pub async fn create_or_focus_setting_window(
         show_and_focus_window(&app_handle, label);
         if let Some(st) = setting_type {
             let _ = app_handle
-                .emit("settings-navigate", serde_json::json!({ "type": st }))
+                .emit(
+                    "cs://settings-navigate",
+                    serde_json::json!({ "type": st, "windowLabel": "settings" }),
+                )
                 .map_err(|e| {
-                    log::error!("failed to emit settings-navigate event");
+                    log::error!("failed to emit cs://settings-navigate event");
                     e
                 });
         }

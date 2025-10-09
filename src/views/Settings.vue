@@ -61,6 +61,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import about from '@/components/setting/About.vue'
 import general from '@/components/setting/General.vue'
@@ -94,6 +95,7 @@ const menuItems = computed(() => [
 let unlistenFromRust = null
 
 onMounted(async () => {
+  const appWindow = getCurrentWebviewWindow()
   // Switch the setting window to the user-defined type or default to 'general' if not set
   const route = useRoute()
   const queryType = route.params.type
@@ -106,8 +108,8 @@ onMounted(async () => {
   }
   console.log('settingType', settingType.value, route.params.type)
 
-  unlistenFromRust = await listen('settings-navigate', (event) => {
-    if (event.payload && event.payload.type) {
+  unlistenFromRust = await listen('cs://settings-navigate', (event) => {
+    if (event.payload && event.payload.windowLabel === appWindow.label && event.payload.type) {
       switchSetting(event.payload.type)
     }
   })

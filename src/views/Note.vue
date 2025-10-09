@@ -146,7 +146,7 @@ onMounted(async () => {
   noteStore.getTagList()
 
   // listen note_update event
-  await listen('sync_state', event => {
+  await listen('cs://sync-state', event => {
     if (event.payload.windowLabel === noteStore.windowLabel) {
       return
     }

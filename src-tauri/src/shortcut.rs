@@ -7,7 +7,8 @@ use arboard::Clipboard;
 use rust_i18n::t;
 use serde_json::json;
 use tauri::AppHandle;
-use tauri::Emitter;
+
+use tauri::Emitter as _;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_global_shortcut::Shortcut;
@@ -20,10 +21,11 @@ use crate::window::{show_and_focus_main_window, toggle_assistant_window};
 use crate::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT;
 use crate::{
-    CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-        CFG_MOVE_WINDOW_LEFT_SHORTCUT, CFG_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-        DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT,
-        DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT, DEFAULT_CENTER_WINDOW_SHORTCUT,
+    CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT,
+    CFG_MAIN_WINDOW_VISIBLE_SHORTCUT, CFG_MOVE_WINDOW_LEFT_SHORTCUT,
+    CFG_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+    DEFAULT_CENTER_WINDOW_SHORTCUT, DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT,
+    DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT, DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT,
 };
 
 /// Retrieves current shortcuts from the configuration store
@@ -151,10 +153,10 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
             if let Ok(mut clipboard) = Clipboard::new().map_err(|e| e.to_string()) {
                 let content = clipboard.get_text().unwrap_or_default();
                 if let Err(e) = app.emit(
-                    "assistant-window-paste",
+                    "cs://assistant-paste",
                     json!({ "windowLabel": "assistant", "content": content }),
                 ) {
-                    log::error!("Failed to emit assistant-window-paste event: {}", e);
+                    log::error!("Failed to emit cs://assistant-paste event: {}", e);
                 }
             } else {
                 log::error!("Failed to initialize clipboard for paste shortcut.");
@@ -175,6 +177,7 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
                 log::error!("Failed to move window left: {}", e);
             }
             show_and_focus_main_window(app);
+            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
         }
         CFG_MOVE_WINDOW_RIGHT_SHORTCUT => {
             if let Err(e) =
@@ -183,12 +186,14 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
                 log::error!("Failed to move window right: {}", e);
             }
             show_and_focus_main_window(app);
+            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
         }
         CFG_CENTER_WINDOW_SHORTCUT => {
             if let Err(e) = crate::commands::window::center_window(app.clone(), "main") {
                 log::error!("Failed to center window: {}", e);
             }
             show_and_focus_main_window(app);
+            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
         }
         _ => {}
     }

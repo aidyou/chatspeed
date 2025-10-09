@@ -124,7 +124,7 @@ impl ChatState {
                                 status
                             );
                             if let Err(e) = app_handle_clone_for_spawn.emit(
-                                "sync_state",
+                                "cs://sync-state",
                                 json!({
                                     "type": "mcp_status_changed",
                                     "name": server_name,

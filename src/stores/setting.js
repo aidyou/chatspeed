@@ -30,6 +30,9 @@ const defaultSettings = {
   noteWindowVisibleShortcut: 'ALT+N',
   assistantWindowVisibleShortcut: 'ALT+Z',
   assistantWindowVisibleAndPasteShortcut: 'ALT+S',
+  moveWindowLeftShortcut: 'Alt+Shift+ArrowLeft',
+  moveWindowRightShortcut: 'Alt+Shift+ArrowRight',
+  centerWindowShortcut: 'Alt+Shift+C',
   // network settings
   proxyType: 'none', // none, http, system
   proxyServer: '',

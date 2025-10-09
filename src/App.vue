@@ -138,7 +138,7 @@ onMounted(async () => {
     })
   }
 
-  listener.value = await listen('sync_state', event => {
+  listener.value = await listen('cs://sync-state', event => {
     const eventType = event?.payload?.type || ''
 
     // Global event handler

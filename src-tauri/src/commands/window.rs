@@ -226,7 +226,7 @@ pub fn sync_state(
         payload.insert("metadata".to_string(), metadata);
     }
 
-    let _ = app.emit("sync_state", payload);
+    let _ = app.emit("cs://sync-state", payload);
 }
 
 /// Toggle the always on top state of a window
@@ -342,47 +342,44 @@ pub fn move_window_to_screen_edge(
         .to_string()
     })?;
 
-    if let Ok(monitor) = window.current_monitor() {
-        if let Some(monitor) = monitor {
-            let monitor_size = monitor.size();
-            let monitor_position = monitor.position();
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let monitor_size = monitor.size();
+        let monitor_position = monitor.position();
 
-            // Get current window outer size (including title bar and borders)
-            let window_size = window.outer_size().map_err(|e| {
-                t!("main.failed_to_get_window_size", error = e.to_string()).to_string()
-            })?;
+        // Get current window outer size (including title bar and borders)
+        let window_size = window.outer_size().map_err(|e| {
+            t!("main.failed_to_get_window_size", error = e.to_string()).to_string()
+        })?;
 
-            // Calculate new x position based on direction
-            let new_x = match direction {
-                "left" => monitor_position.x + 1,
-                "right" => {
-                    monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - 1
-                }
-                _ => return Err(t!("main.invalid_direction", direction = direction).to_string()),
-            };
+        // Get current window position to preserve the y-coordinate
+        let current_pos = window.outer_position().map_err(|e| e.to_string())?;
 
-            // Calculate new y position for bottom alignment
-            // Note: We need to consider taskbar/dock height, so we leave some margin
-            let taskbar_margin = 50; // Leave some space for taskbar/dock
-            let new_y = monitor_position.y + monitor_size.height as i32
-                - window_size.height as i32
-                - taskbar_margin;
+        // Calculate new x position based on direction
+        let new_x = match direction {
+            "left" => monitor_position.x + 1,
+            "right" => {
+                monitor_position.x + monitor_size.width as i32 - window_size.width as i32 - 1
+            }
+            _ => return Err(t!("main.invalid_direction", direction = direction).to_string()),
+        };
 
-            let new_position =
-                tauri::Position::Physical(tauri::PhysicalPosition { x: new_x, y: new_y });
+        // Keep current y-coordinate
+        let new_y = current_pos.y;
 
-            window.set_position(new_position).map_err(|e| {
-                t!("main.failed_to_set_window_position", error = e.to_string()).to_string()
-            })?;
+        let new_position =
+            tauri::Position::Physical(tauri::PhysicalPosition { x: new_x, y: new_y });
 
-            log::debug!(
-                "Moved window '{}' to {} bottom corner of screen at x: {}, y: {}",
-                window_label,
-                direction,
-                new_x,
-                new_y
-            );
-        }
+        window.set_position(new_position).map_err(|e| {
+            t!("main.failed_to_set_window_position", error = e.to_string()).to_string()
+        })?;
+
+        log::debug!(
+            "Moved window '{}' horizontally to {} at x: {}, y: {}",
+            window_label,
+            direction,
+            new_x,
+            new_y
+        );
     } else {
         return Err(t!("main.failed_to_get_current_monitor").to_string());
     }
@@ -399,6 +396,24 @@ pub fn center_window(app: tauri::AppHandle, window_label: &str) -> Result<(), St
         )
         .to_string()
     })?;
-    window.center().map_err(|e| e.to_string())?;
+
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let monitor_size = monitor.size();
+        let monitor_pos = monitor.position();
+        let window_size = window.outer_size().map_err(|e| e.to_string())?;
+        let current_pos = window.outer_position().map_err(|e| e.to_string())?;
+
+        let new_x = monitor_pos.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
+        let new_y = current_pos.y;
+
+        let new_position = tauri::Position::Physical(tauri::PhysicalPosition { x: new_x, y: new_y });
+        window
+            .set_position(new_position)
+            .map_err(|e| e.to_string())?;
+    } else {
+        // Fallback to default center if monitor info is not available
+        window.center().map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }

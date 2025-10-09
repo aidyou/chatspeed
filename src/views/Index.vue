@@ -478,6 +478,7 @@ const { t } = useI18n()
 const unlistenChunkResponse = ref(null)
 const unlistenSendMessage = ref(null)
 const unlistenFocus = ref(null)
+const unlistenFocusInput = ref(null)
 
 const chatStore = useChatStore()
 const modelStore = useModelStore()
@@ -1356,6 +1357,14 @@ onMounted(async () => {
     }
   })
 
+  unlistenFocusInput.value = await listen('cs://main-focus-input', (event) => {
+    if (event.payload && event.payload.windowLabel === appWindow.label) {
+      if (inputRef.value) {
+        inputRef.value.focus();
+      }
+    }
+  });
+
   try {
     const osInfo = await invoke('get_os_info')
     osType.value = osInfo.os
@@ -1419,7 +1428,7 @@ onMounted(async () => {
     }
   })
 
-  await listen('sync_state', event => {
+  await listen('cs://sync-state', event => {
     if (event.payload.windowLabel !== settingStore.windowLabel) {
       return
     }
@@ -1469,6 +1478,7 @@ onBeforeUnmount(() => {
   unlistenChunkResponse.value?.()
   // unlisten focus event
   unlistenFocus.value?.()
+  unlistenFocusInput.value?.()
 
   chatMessagesRef.value?.removeEventListener('scroll', onScroll)
 

@@ -481,7 +481,7 @@ onMounted(async () => {
     handleChatMessage(event.payload)
   })
 
-  unlistenPasteResponse.value = await listen('assistant-window-paste', async (event) => {
+  unlistenPasteResponse.value = await listen('cs://assistant-paste', async (event) => {
     // we don't want to process messages from other windows
     if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
@@ -491,6 +491,13 @@ onMounted(async () => {
         return
       }
       inputMessage.value = event.payload.content
+
+      nextTick(() => {
+        const textarea = inputRef.value?.textarea;
+        if (textarea) {
+          textarea.scrollTop = textarea.scrollHeight;
+        }
+      });
 
       if (isTranslation.value) {
         setTimeout(() => {
@@ -839,7 +846,7 @@ const onInput = () => {
   // if (inputMessage.value.trim() && !userMessage.value) {
   //   currentAssistantMessage.value = ''
   // }
-}
+ }
 
 /**
  * Handle enter key event
