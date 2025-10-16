@@ -35,6 +35,16 @@
           </div>
           <div class="value">
             <el-tooltip
+              :content="$t('settings.model.' + (element.disabled ? 'enable' : 'disable'))"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-switch
+                :model-value="!element.disabled"
+                @update:model-value="toggleModelStatus(element)" />
+            </el-tooltip>
+            <el-tooltip
               :content="$t('settings.model.edit')"
               placement="top"
               :hide-after="0"
@@ -534,7 +544,118 @@ const { t } = useI18n()
 import { Sortable } from 'sortablejs-vue3'
 
 import { showMessage, toInt, toFloat, openUrl } from '@/libs/util'
+import { FrontendAppError } from '@/libs/tauri'
 import { useModelStore } from '@/stores/model'
+
+const isValidUrl = url => {
+  if (!url) return false
+
+  // Extract hostname part using regex to catch malformed hostnames before URL parsing
+  const urlRegex = /^(https?):\/\/([^\/\s:]+)(?::(\d+))?(\/.*)?$/i
+  const match = url.match(urlRegex)
+
+  if (!match) {
+    // Check for other common malformed URLs that don't match our pattern
+    const basicCheck = /^(https?):\/\//i
+    if (!basicCheck.test(url)) {
+      return false
+    }
+
+    // If it starts with http/https but doesn't match our pattern, it might have malformed host
+    try {
+      const parsed = new URL(url)
+      // Check if hostname is valid after parsing
+      if (!isValidHostname(parsed.hostname)) {
+        return false
+      }
+
+      // Check protocol
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return false
+      }
+
+      return true
+    } catch (e) {
+      return false
+    }
+  }
+
+  // Extract components from the match
+  const protocol = match[1]
+  const hostname = match[2]
+
+  // Validate hostname
+  if (!isValidHostname(hostname)) {
+    return false
+  }
+
+  // Validate protocol
+  if (protocol !== 'http' && protocol !== 'https') {
+    return false
+  }
+
+  return true
+}
+
+// Helper function to validate hostname format
+const isValidHostname = hostname => {
+  if (!hostname) return false
+
+  // Check for IP address format
+  // Valid IP address must have 4 parts separated by dots
+  const ipParts = hostname.split('.')
+
+  if (ipParts.length === 4) {
+    // All parts should be numbers between 0-255
+    for (const part of ipParts) {
+      const num = parseInt(part, 10)
+      if (isNaN(num) || num < 0 || num > 255 || part !== num.toString()) {
+        return false // Not a valid number or has leading zeros that aren't exactly "0"
+      }
+    }
+    return true // Valid IP address
+  } else if (ipParts.length > 1 && ipParts.length < 4) {
+    // Partial IP address like "1.1" or "1.1.1" - these are invalid
+    // Check if all parts are numeric to identify partial IPs
+    const allPartsAreNumeric = ipParts.every(part => /^\d+$/.test(part))
+    if (allPartsAreNumeric) {
+      return false // Incomplete IP address
+    }
+    // If parts contain non-numeric values, it might be a domain name which we'll validate below
+  } else if (ipParts.length === 1) {
+    // Single field like "1", "12", "127" - not a valid IP address
+    // But could be a valid hostname (like "localhost")
+    // Check if it's all digits, which would be an invalid IP but could be a hostname
+    if (/^\d+$/.test(ipParts[0])) {
+      // Numeric single field is not a valid IP address
+      return false
+    }
+  }
+
+  // For domain names, validate they follow valid domain name rules
+  // Check that hostname doesn't end with a dot (which would be invalid)
+  if (hostname.endsWith('.')) {
+    return false
+  }
+
+  // Check for valid domain name format
+  const domainRegex =
+    /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
+  if (!domainRegex.test(hostname) || hostname.length > 253) {
+    return false
+  }
+
+  return true
+}
+
+const debounce = (func, delay) => {
+  let timeout
+  return function (...args) {
+    const context = this
+    clearTimeout(timeout)
+    timeout = setTimeout(() => func.apply(context, args), delay)
+  }
+}
 
 // models
 const modelStore = useModelStore()
@@ -631,10 +752,10 @@ const createFromModel = srcModel => {
     defaultModel: srcModel.defaultModel,
     baseUrl: srcModel.baseUrl,
     apiKey: srcModel.apiKey,
-    maxTokens: srcModel.maxTokens,
-    temperature: srcModel.temperature,
-    topP: srcModel.topP,
-    topK: srcModel.topK,
+    maxTokens: toInt(srcModel.maxTokens),
+    temperature: toFloat(srcModel.temperature),
+    topP: toFloat(srcModel.topP),
+    topK: toInt(srcModel.topK),
     disabled: srcModel.disabled,
     // metadata
     presencePenalty: srcModel?.metadata?.presencePenalty || 0.0,
@@ -780,7 +901,13 @@ const updateModel = () => {
           modelDialogVisible.value = false
         })
         .catch(err => {
-          showMessage(err, 'error')
+          if (err instanceof FrontendAppError) {
+            showMessage(err.toFormattedString(), 'error')
+            console.error('Error updating model:', err.originalError)
+          } else {
+            showMessage(err.message || String(err), 'error')
+            console.error('Error updating model:', err)
+          }
         })
     } else {
       console.log('error submit!')
@@ -806,9 +933,51 @@ const deleteModel = id => {
         showMessage(t('settings.model.deleteSuccess'), 'success')
       })
       .catch(err => {
-        showMessage(err, 'error')
+        if (err instanceof FrontendAppError) {
+          showMessage(err.toFormattedString(), 'error')
+          console.error('Error deleting model:', err.originalError)
+        } else {
+          showMessage(err.message || String(err), 'error')
+          console.error('Error deleting model:', err)
+        }
       })
   })
+}
+
+/**
+ * Toggles the disabled status of a model provider
+ * @param {Object} model - The model provider to toggle
+ */
+const toggleModelStatus = async (model) => {
+  const originalDisabled = model.disabled
+  try {
+    // Create a copy of the model with the toggled disabled status
+    const updatedModel = {
+      ...model,
+      disabled: !model.disabled
+    }
+    
+    // Update the model using the setModelProvider function
+    await modelStore.setModelProvider(updatedModel)
+    
+    // Update the UI state to reflect the change
+    model.disabled = !model.disabled
+    
+    const actionText = model.disabled ? 'disable' : 'enable'
+    showMessage(t(`settings.model.${actionText}Success`, { name: model.name }), 'success')
+  } catch (e) {
+    model.disabled = originalDisabled
+    const actionText = originalDisabled ? 'enable' : 'disable'
+    const langKey = `settings.model.${actionText}Failed`
+    
+    if (e instanceof FrontendAppError) {
+      showMessage(t(langKey, { error: e.toFormattedString(), name: model.name }), 'error')
+      console.error('Error toggling model status:', e.originalError)
+    } else {
+      showMessage(t(langKey, { error: e.message || String(e), name: model.name }), 'error')
+      console.error('Error toggling model status:', e)
+    }
+  }
 }
 
 // =================================================
@@ -915,6 +1084,10 @@ const providerModelSelected = ref({})
 const providerModelKeyword = ref('')
 const isLoadingProviderModels = ref(false)
 
+const debouncedFetchedProviderModelsFromServer = debounce((protocol, baseUrl, apiKey, metadata) => {
+  fetchedProviderModelsFromServer(protocol, baseUrl, apiKey, metadata)
+}, 500)
+
 watchEffect(async () => {
   const protocol = modelForm.value.apiProtocol
   const baseUrl = modelForm.value.baseUrl
@@ -930,8 +1103,8 @@ watchEffect(async () => {
   const essentialParamsPresentAndDialogVisible = modelDialogVisible.value && protocol && baseUrl
   const canFetch = essentialParamsPresentAndDialogVisible && (apiKey || apiKeyIsOptional)
 
-  if (canFetch) {
-    fetchedProviderModelsFromServer(protocol, baseUrl, apiKey, {
+  if (canFetch && isValidUrl(baseUrl)) {
+    debouncedFetchedProviderModelsFromServer(protocol, baseUrl, apiKey, {
       proxyType: modelForm.value.proxyType,
       proxyUsername: modelForm.value.proxyUsername,
       proxyPassword: modelForm.value.proxyPassword
@@ -948,7 +1121,14 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
     fetchedProviderModels.value =
       (await modelStore.listModels(protocol, baseUrl, apiKey, metadata)) || []
   } catch (error) {
-    console.error('Failed to fetch provider models:', error)
+    if (error instanceof FrontendAppError) {
+      console.error(
+        `Failed to fetch provider models: ${error.toFormattedString()}`,
+        error.originalError
+      )
+    } else {
+      console.error('Failed to fetch provider models:', error)
+    }
     fetchedProviderModels.value = []
   } finally {
     isLoadingProviderModels.value = false
@@ -1046,8 +1226,13 @@ const onProviderModelSave = () => {
  */
 const onDragEnd = () => {
   modelStore.updateModelProviderOrder().catch(err => {
-    showMessage(err, 'error')
-    console.error('settings.model.updateOrderFailed', err)
+    if (err instanceof FrontendAppError) {
+      showMessage(err.toFormattedString(), 'error')
+      console.error('Error updating model order:', err.originalError)
+    } else {
+      showMessage(err.message || String(err), 'error')
+      console.error('Error updating model order:', err)
+    }
   })
 }
 
@@ -1088,7 +1273,17 @@ const showPresetModels = async () => {
         return { ...x }
       })
     } catch (error) {
-      return showMessage(t('settings.model.loadPresetError'), 'error')
+      if (error instanceof FrontendAppError) {
+        return showMessage(
+          t('settings.model.loadPresetError', { error: error.toFormattedString() }),
+          'error'
+        )
+      } else {
+        return showMessage(
+          t('settings.model.loadPresetError', { error: error.message || String(error) }),
+          'error'
+        )
+      }
     }
   }
   presetModelsVisible.value = true

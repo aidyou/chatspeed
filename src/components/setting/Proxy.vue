@@ -479,7 +479,15 @@ const baseUrl = computed(() => {
   )
 })
 
-const chatCompletionProxy = computed(() => settingStore.settings.chatCompletionProxy || {})
+const chatCompletionProxy = computed(() => {
+  const proxy = settingStore.settings.chatCompletionProxy || {}
+  return Object.keys(proxy)
+    .sort((a, b) => a.localeCompare(b))
+    .reduce((obj, key) => {
+      obj[key] = proxy[key]
+      return obj
+    }, {})
+})
 const hasChatCompletionProxy = computed(() => {
   return Object.values(chatCompletionProxy.value).some(proxy => Object.keys(proxy).length > 0)
 })
@@ -720,8 +728,13 @@ const handleProxyConfigSubmit = async () => {
         )
         dialogVisible.value = false
       } catch (error) {
-        console.error('Failed to save proxy config:', error)
-        showMessage(t('settings.proxy.saveFailed', { error: error.message || error }), 'error')
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to save proxy config: ${error.toFormattedString()}`, error.originalError)
+          showMessage(t('settings.proxy.saveFailed', { error: error.toFormattedString() }), 'error')
+        } else {
+          console.error('Failed to save proxy config:', error)
+          showMessage(t('settings.proxy.saveFailed', { error: error.message || error }), 'error')
+        }
       } finally {
         formLoading.value = false
       }
@@ -758,8 +771,13 @@ const handleDeleteProxy = async (groupName, aliasToDelete) => {
     await settingStore.setSetting('chatCompletionProxy', newProxies)
     showMessage(t('settings.proxy.deleteSuccess'), 'success')
   } catch (error) {
-    console.error('Failed to delete proxy config:', error)
-    showMessage(t('settings.proxy.deleteFailed', { error: error.message || error }), 'error')
+    if (error instanceof FrontendAppError) {
+      console.error(`Failed to delete proxy config: ${error.toFormattedString()}`, error.originalError)
+      showMessage(t('settings.proxy.deleteFailed', { error: error.toFormattedString() }), 'error')
+    } else {
+      console.error('Failed to delete proxy config:', error)
+      showMessage(t('settings.proxy.deleteFailed', { error: error.message || error }), 'error')
+    }
   }
 }
 
@@ -769,8 +787,13 @@ const copyKeyToClipboard = async token => {
     await navigator.clipboard.writeText(token)
     showMessage(t('settings.proxy.proxyKey.copySuccess'), 'success')
   } catch (err) {
-    console.error('Failed to copy key: ', err)
-    showMessage(t('settings.proxy.proxyKey.copyFailed', { error: err.message }), 'error')
+    if (err instanceof FrontendAppError) {
+      console.error(`Failed to copy key: ${err.toFormattedString()}`, err.originalError)
+      showMessage(t('settings.proxy.proxyKey.copyFailed', { error: err.toFormattedString() }), 'error')
+    } else {
+      console.error('Failed to copy key: ', err)
+      showMessage(t('settings.proxy.proxyKey.copyFailed', { error: err.message }), 'error')
+    }
   }
 }
 
@@ -813,11 +836,16 @@ const handleKeySubmit = async () => {
         showMessage(t('settings.proxy.proxyKey.addSuccess'), 'success')
         keyDialogVisible.value = false
       } catch (error) {
-        console.error('Failed to save proxy key:', error)
-        showMessage(
-          t('settings.proxy.proxyKey.saveFailed', { error: error.message || error }),
-          'error'
-        )
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to save proxy key: ${error.toFormattedString()}`, error.originalError)
+          showMessage(t('settings.proxy.proxyKey.saveFailed', { error: error.toFormattedString() }), 'error')
+        } else {
+          console.error('Failed to save proxy key:', error)
+          showMessage(
+            t('settings.proxy.proxyKey.saveFailed', { error: error.message || error }),
+            'error'
+          )
+        }
       } finally {
         keyFormLoading.value = false
       }
@@ -847,11 +875,16 @@ const handleDeleteKey = async indexToDelete => {
     await settingStore.setSetting('chatCompletionProxyKeys', updatedKeys)
     showMessage(t('settings.proxy.proxyKey.deleteSuccess'), 'success')
   } catch (error) {
-    console.error('Failed to delete proxy key:', error)
-    showMessage(
-      t('settings.proxy.proxyKey.deleteFailed', { error: error.message || error }),
-      'error'
-    )
+    if (error instanceof FrontendAppError) {
+      console.error(`Failed to delete proxy key: ${error.toFormattedString()}`, error.originalError)
+      showMessage(t('settings.proxy.proxyKey.deleteFailed', { error: error.toFormattedString() }), 'error')
+    } else {
+      console.error('Failed to delete proxy key:', error)
+      showMessage(
+        t('settings.proxy.proxyKey.deleteFailed', { error: error.message || error }),
+        'error'
+      )
+    }
   }
 }
 
@@ -871,7 +904,13 @@ const saveProxySettings = async key => {
     await settingStore.setSetting(key, val)
     showMessage(t('settings.proxy.settings.saveSuccess'), 'success')
   } catch (error) {
-    showMessage(t('settings.proxy.settings.saveFailed', { error: error.message || error }), 'error')
+    if (error instanceof FrontendAppError) {
+      showMessage(t('settings.proxy.settings.saveFailed', { error: error.toFormattedString() }), 'error')
+      console.error('Error saving proxy settings:', error.originalError)
+    } else {
+      showMessage(t('settings.proxy.settings.saveFailed', { error: error.message || error }), 'error')
+      console.error('Error saving proxy settings:', error)
+    }
   }
 }
 
@@ -880,8 +919,13 @@ const copyModelToClipboard = async model => {
     await navigator.clipboard.writeText(model)
     showMessage(t('settings.proxy.modelCopySuccess'), 'success')
   } catch (err) {
-    console.error('Failed to copy key: ', err)
-    showMessage(t('settings.proxy.modelCopyFailed', { error: err.message }), 'error')
+    if (err instanceof FrontendAppError) {
+      console.error(`Failed to copy model: ${err.toFormattedString()}`, err.originalError)
+      showMessage(t('settings.proxy.modelCopyFailed', { error: err.toFormattedString() }), 'error')
+    } else {
+      console.error('Failed to copy key: ', err)
+      showMessage(t('settings.proxy.modelCopyFailed', { error: err.message }), 'error')
+    }
   }
 }
 const copyBaseUrlToClipboard = async () => {
@@ -889,8 +933,13 @@ const copyBaseUrlToClipboard = async () => {
     await navigator.clipboard.writeText(baseUrl.value || '')
     showMessage(t('settings.proxy.baseUrlCopySuccess'), 'success')
   } catch (err) {
-    console.error('Failed to copy key: ', err)
-    showMessage(t('settings.proxy.baseUrlCopyFailed', { error: err.message }), 'error')
+    if (err instanceof FrontendAppError) {
+      console.error(`Failed to copy base URL: ${err.toFormattedString()}`, err.originalError)
+      showMessage(t('settings.proxy.baseUrlCopyFailed', { error: err.toFormattedString() }), 'error')
+    } else {
+      console.error('Failed to copy key: ', err)
+      showMessage(t('settings.proxy.baseUrlCopyFailed', { error: err.message }), 'error')
+    }
   }
 }
 const genTableData = () => {

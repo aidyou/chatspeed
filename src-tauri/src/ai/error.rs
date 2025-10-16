@@ -1,12 +1,13 @@
 use rust_i18n::t;
-use serde_json::json;
+use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AiError {
-    #[error("{}", json!({ "code": status_code, "provider": provider, "details": details }).to_string())]
+    #[error("{}",t!("chat.error.api_request_failed",provider=provider,details=details,status_code=status_code))]
     ApiRequestFailed {
-        status_code: String,
+        status_code: u16,
         provider: String,
         details: String,
     },
@@ -25,9 +26,7 @@ pub enum AiError {
 
     #[error("{}", t!("chat.error.tool_call_serialization_failed", details = .details))]
     ToolCallSerializationFailed { details: String },
-    // #[error("{}", t!("chat.error.deserialization_failed", context = .context, details = .details))]
-    // DeserializationFailed { context: String, details: String },
 
-    // #[error("{}", t!("chat.error.upstream_chat_error", message = .message))]
-    // UpstreamChatError { message: String },
+    #[error("{}", t!("chat.error.failed_to_get_or_create_window_channel", error = .0))]
+    FailedToGetOrCreateWindowChannel(String),
 }

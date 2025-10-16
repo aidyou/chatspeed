@@ -27,15 +27,15 @@
 //! console.log(conversations);
 //! ```
 
-use crate::db::{Conversation, MainStore};
-
-use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
 use tauri::{command, Emitter, Manager, State};
+
+use crate::db::{Conversation, MainStore};
+use crate::error::{AppError, Result};
 
 /// Get all conversations
 ///
@@ -57,15 +57,9 @@ use tauri::{command, Emitter, Manager, State};
 /// console.log(conversations);
 /// ```
 #[command]
-pub fn get_all_conversations(
-    state: State<Arc<RwLock<MainStore>>>,
-) -> Result<Vec<Conversation>, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store
-        .get_all_conversations()
-        .map_err(|e| e.to_string())
+pub fn get_all_conversations(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<Conversation>> {
+    let main_store = state.read()?;
+    main_store.get_all_conversations().map_err(AppError::Db)
 }
 
 /// Get a conversation by ID
@@ -92,13 +86,9 @@ pub fn get_all_conversations(
 pub fn get_conversation_by_id(
     state: State<Arc<RwLock<MainStore>>>,
     id: i64,
-) -> Result<Conversation, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store
-        .get_conversation_by_id(id)
-        .map_err(|e| e.to_string())
+) -> Result<Conversation> {
+    let main_store = state.read()?;
+    main_store.get_conversation_by_id(id).map_err(AppError::Db)
 }
 
 /// Add a new conversation
@@ -122,16 +112,9 @@ pub fn get_conversation_by_id(
 /// console.log(`Added Conversation with ID: ${newConversationId}`);
 /// ```
 #[command]
-pub fn add_conversation(
-    state: State<Arc<RwLock<MainStore>>>,
-    title: String,
-) -> Result<i64, String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store
-        .add_conversation(title)
-        .map_err(|e| e.to_string())
+pub fn add_conversation(state: State<Arc<RwLock<MainStore>>>, title: String) -> Result<i64> {
+    let main_store = state.write()?;
+    main_store.add_conversation(title).map_err(AppError::Db)
 }
 
 /// Update conversation favorite status
@@ -161,13 +144,11 @@ pub fn update_conversation(
     id: i64,
     title: Option<String>,
     is_favorite: Option<bool>,
-) -> Result<(), String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+) -> Result<()> {
+    let main_store = state.write()?;
     main_store
         .update_conversation(id, title, is_favorite)
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
 }
 
 /// Delete a conversation
@@ -191,13 +172,9 @@ pub fn update_conversation(
 /// console.log('Conversation deleted successfully');
 /// ```
 #[command]
-pub fn delete_conversation(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store
-        .delete_conversation(id)
-        .map_err(|e| e.to_string())
+pub fn delete_conversation(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+    let main_store = state.write()?;
+    main_store.delete_conversation(id).map_err(AppError::Db)
 }
 
 /// Get messages for a conversation
@@ -226,14 +203,12 @@ pub fn get_messages_for_conversation(
     state: State<Arc<RwLock<MainStore>>>,
     conversation_id: i64,
     window_label: Option<String>,
-) -> Result<(), String> {
+) -> Result<()> {
     let label = window_label.unwrap_or(window.label().to_string());
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+    let main_store = state.read()?;
     let messages = main_store
         .get_messages_for_conversation(conversation_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(AppError::Db)?;
 
     let app = window.app_handle();
     for m in messages.iter() {
@@ -276,13 +251,11 @@ pub fn add_message(
     role: String,
     content: String,
     metadata: Option<serde_json::Value>,
-) -> Result<i64, String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+) -> Result<i64> {
+    let main_store = state.write()?;
     main_store
         .add_message(conversation_id, role, content, metadata)
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
 }
 
 /// Delete a message
@@ -306,11 +279,9 @@ pub fn add_message(
 /// console.log('Message deleted successfully');
 /// ```
 #[command]
-pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<(), String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.delete_message(id).map_err(|e| e.to_string())
+pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<()> {
+    let main_store = state.write()?;
+    main_store.delete_message(id).map_err(AppError::Db)
 }
 /// Update the metadata of a message
 ///
@@ -337,13 +308,11 @@ pub fn update_message_metadata(
     state: State<Arc<RwLock<MainStore>>>,
     id: i64,
     metadata: serde_json::Value,
-) -> Result<(), String> {
-    let main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+) -> Result<()> {
+    let main_store = state.write()?;
     main_store
         .update_message_metadata(id, Some(metadata))
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Db)
 }
 
 /// Sends a conversation message to the frontend with the specified label and message content.

@@ -1,7 +1,7 @@
 {
   "name": "chatspeed",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.1.18",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -20,19 +20,19 @@
     "@vue/shared": "^3.5.22",
     "element-plus": "^2.11.4",
     "he": "^1.2.0",
-    "highlight.js": "^11.10.0",
-    "katex": "^0.16.23",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.25",
     "marked": "^16.4.0",
     "markmap-common": "^0.18",
     "markmap-lib": "^0.18",
     "markmap-view": "^0.18",
     "mermaid": "^11.12.0",
     "pinia": "^3.0.3",
-    "sortablejs": "^1.15.3",
-    "sortablejs-vue3": "^1.2.11",
+    "sortablejs": "^1.15.6",
+    "sortablejs-vue3": "^1.3.0",
     "vue": "^3.5.22",
-    "vue-i18n": "^11.1.10",
-    "vue-router": "^4.4.5"
+    "vue-i18n": "^11.1.12",
+    "vue-router": "^4.6.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.4",
@@ -41,7 +41,7 @@
     "typescript": "^5.9.3",
     "unplugin-auto-import": "^20.2.0",
     "unplugin-vue-components": "^29.1.0",
-    "vite": "^7.1.9",
+    "vite": "^7.1.10",
     "vite-plugin-svg-icons": "^2.0.1"
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e",

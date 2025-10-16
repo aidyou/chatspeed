@@ -201,7 +201,7 @@ impl HttpClient {
         let mut downloaded: u64 = 0;
         let mut file = File::create(save_path)
             .await
-            .map_err(|e| HttpError::Io(e))?;
+            .map_err(|e| HttpError::Io(e.to_string()))?;
 
         let mut stream = response.bytes_stream();
         let mut last_progress: Option<u8> = None;
@@ -212,7 +212,7 @@ impl HttpClient {
         while let Some(chunk) = stream.try_next().await.map_err(|e| {
             HttpError::Response(t!("http.download_failed", error = e.to_string()).to_string())
         })? {
-            file.write_all(&chunk).await.map_err(|e| HttpError::Io(e))?;
+            file.write_all(&chunk).await.map_err(|e| HttpError::Io(e.to_string()))?;
 
             downloaded += chunk.len() as u64;
             let current_progress = if total_size > 0 {
@@ -250,7 +250,7 @@ impl HttpClient {
             }
         }
 
-        file.flush().await.map_err(|e| HttpError::Io(e))?;
+        file.flush().await.map_err(|e| HttpError::Io(e.to_string()))?;
         drop(file);
 
         if let Some(callback) = request.config.progress_callback.as_ref() {

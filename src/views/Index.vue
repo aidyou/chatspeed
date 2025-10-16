@@ -447,7 +447,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { invoke } from '@tauri-apps/api/core'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
@@ -1055,7 +1055,7 @@ const dispatchChatCompletion = async (messageId = null) => {
 
       try {
         console.log('tool enabled:', toolsEnabled.value)
-        await invoke('chat_completion', {
+        await invokeWrapper('chat_completion', {
           providerId: currentModel.value.id,
           model: currentModel.value.defaultModel,
           chatId: lastChatId.value,
@@ -1069,14 +1069,30 @@ const dispatchChatCompletion = async (messageId = null) => {
           }
         })
       } catch (error) {
-        chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
-        console.error('error on sendMessage:', error)
+        if (error instanceof FrontendAppError) {
+          chatErrorMessage.value = t('chat.errorOnSendMessage', {
+            error: error.toFormattedString()
+          })
+          console.error('error on sendMessage:', error.originalError)
+        } else {
+          chatErrorMessage.value = t('chat.errorOnSendMessage', {
+            error: error.message || String(error)
+          })
+          console.error('error on sendMessage:', error)
+        }
         isChatting.value = false
       }
     })
     .catch(error => {
-      chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
-      console.error('error on addChatMessage:', error)
+      if (error instanceof FrontendAppError) {
+        chatErrorMessage.value = t('chat.errorOnSaveMessage', { error: error.toFormattedString() })
+        console.error('error on addChatMessage:', error.originalError)
+      } else {
+        chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+          error: error.message || String(error)
+        })
+        console.error('error on addChatMessage:', error)
+      }
     })
 }
 
@@ -1147,7 +1163,7 @@ const genTitleByAi = () => {
     model = settingStore.settings.conversationTitleGenModel?.model || model
   }
   titleChatId.value = Uuid()
-  invoke('chat_completion', {
+  invokeWrapper('chat_completion', {
     providerId: genModel.id,
     model: model,
     chatId: titleChatId.value,
@@ -1162,7 +1178,11 @@ const genTitleByAi = () => {
     }
   }).catch(error => {
     titleGenerating.value = false
-    console.error('error on genTitleByAi:', error)
+    if (error instanceof FrontendAppError) {
+      console.error(`error on genTitleByAi: ` + error.toFormattedString(), error.originalError)
+    } else {
+      console.error('error on genTitleByAi:', error)
+    }
     // add retry logic
     if (titleRetryCount.value < MAX_TITLE_RETRY) {
       titleRetryCount.value++
@@ -1357,19 +1377,23 @@ onMounted(async () => {
     }
   })
 
-  unlistenFocusInput.value = await listen('cs://main-focus-input', (event) => {
+  unlistenFocusInput.value = await listen('cs://main-focus-input', event => {
     if (event.payload && event.payload.windowLabel === appWindow.label) {
       if (inputRef.value) {
-        inputRef.value.focus();
+        inputRef.value.focus()
       }
     }
-  });
+  })
 
   try {
-    const osInfo = await invoke('get_os_info')
+    const osInfo = await invokeWrapper('get_os_info')
     osType.value = osInfo.os
-  } catch (e) {
-    console.error('Failed to get OS info:', e)
+  } catch (error) {
+    if (error instanceof FrontendAppError) {
+      console.error(`Failed to get OS info: ` + error.toFormattedString(), error.originalError)
+    } else {
+      console.error('Failed to get OS info:', error)
+    }
   }
 
   await chatStore.loadConversations() // Ensure this is awaited
@@ -1580,8 +1604,31 @@ const onDeleteConversation = id => {
   })
 }
 
-const onOpenSettingWindow = type => {
-  invoke('open_setting_window', { settingType: type })
+const onOpenSettingWindow = async type => {
+  try {
+    await invokeWrapper('open_setting_window', { settingType: type })
+  } catch (error) {
+    if (error instanceof FrontendAppError) {
+      console.error(
+        `Error opening setting window: ` + error.toFormattedString(),
+        error.originalError
+      )
+      showMessage(
+        t('chat.errorOnOpenSettingWindow', {
+          error: error.toFormattedString()
+        }),
+        'error',
+        3000
+      )
+    } else {
+      console.error('Error opening setting window:', error)
+      showMessage(
+        t('chat.errorOnOpenSettingWindow', { error: error.message || String(error) }),
+        'error',
+        3000
+      )
+    }
+  }
 }
 
 /**
@@ -1589,7 +1636,7 @@ const onOpenSettingWindow = type => {
  */
 const onStopChat = () => {
   const param = { chatId: lastChatId.value, apiProtocol: currentModel.value.apiProtocol }
-  invoke('stop_chat', param)
+  invokeWrapper('stop_chat', param)
     .then(() => {
       if (chatState.value.message.trim()) {
         chatStore
@@ -1606,12 +1653,32 @@ const onStopChat = () => {
             }
           )
           .catch(error => {
-            chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
+            if (error instanceof FrontendAppError) {
+              chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+                error: error.toFormattedString()
+              })
+              console.error('error on save message:', error.originalError)
+            } else {
+              chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+                error: error.message || String(error)
+              })
+              console.error('error on save message:', error)
+            }
           })
       }
     })
     .catch(error => {
-      showMessage(t('chat.errorOnStopChat', { error }), 'error', 3000)
+      if (error instanceof FrontendAppError) {
+        showMessage(t('chat.errorOnStopChat', { error: error.toFormattedString() }), 'error', 3000)
+        console.error('error on stop chat:', error.originalError)
+      } else {
+        showMessage(
+          t('chat.errorOnStopChat', { error: error.message || String(error) }),
+          'error',
+          3000
+        )
+        console.error('error on stop chat:', error)
+      }
     })
     .finally(() => {
       lastChatId.value = ''
@@ -1775,8 +1842,6 @@ const onGlobalKeyDown = event => {
         break
     }
   }
-
-
 }
 
 // =================================================

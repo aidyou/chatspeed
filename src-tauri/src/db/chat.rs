@@ -22,7 +22,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let conversation = conn
             .query_row(
                 "SELECT id, title, created_at, is_favorite FROM conversations WHERE id = ?",
@@ -60,7 +60,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, title, created_at, is_favorite FROM conversations order by id desc",
         )?;
@@ -97,7 +97,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, role, content, timestamp, metadata
              FROM messages WHERE conversation_id = ? order by id asc",
@@ -152,7 +152,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
             "INSERT INTO conversations (title,is_favorite, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
             [title],
@@ -180,7 +180,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         if let Some(title) = title {
             conn.execute(
                 "UPDATE conversations SET title = ? WHERE id = ?",
@@ -211,7 +211,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute("DELETE FROM conversations WHERE id = ?", params![id])?;
         Ok(())
     }
@@ -243,7 +243,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -281,7 +281,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         // Create placeholders for the IN clause (?, ?, ? ...)
         let placeholders: Vec<String> = id.iter().map(|_| "?".to_string()).collect();
@@ -310,7 +310,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()

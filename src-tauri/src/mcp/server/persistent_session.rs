@@ -7,7 +7,6 @@
 //! It is heavily based on the `rmcp`'s `LocalSessionManager`, but adds a persistence
 //! layer with `sled` and session expiration logic.
 
-use crate::constants::STORE_DIR;
 use anyhow::Context;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::Stream;
@@ -29,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     marker::PhantomData,
-    num::ParseIntError,
     sync::Arc,
     time::Duration,
 };
@@ -39,6 +37,8 @@ use tokio::sync::{
     oneshot, RwLock,
 };
 use tokio_stream::wrappers::ReceiverStream;
+
+use crate::constants::STORE_DIR;
 
 const SESSION_LIFETIME_DAYS: i64 = 7;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
@@ -82,21 +82,8 @@ impl<S: rmcp::Service<RoleServer>> Clone for PersistentSessionManager<S> {
 //======================================================
 // Error Types
 //======================================================
-#[derive(Debug, Error)]
-pub enum PersistentSessionManagerError {
-    #[error("Session not found: {0}")]
-    SessionNotFound(SessionId),
-    #[error("Session error: {0}")]
-    SessionError(#[from] SessionError),
-    #[error("Invalid event id: {0}")]
-    InvalidEventId(#[from] EventIdParseError),
-    #[error("Sled database error: {0}")]
-    SledError(#[from] sled::Error),
-    #[error("Failed to (de)serialize session data: {0}")]
-    SerializationError(#[from] serde_json::Error),
-    #[error("Failed to create service instance: {0}")]
-    ServiceCreationError(std::io::Error),
-}
+use crate::mcp::McpError;
+use rust_i18n::t;
 
 //======================================================
 // PersistentSessionManager Implementation
@@ -108,7 +95,7 @@ where
     /// Creates a new `PersistentSessionManager`.
     pub fn new(
         service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, McpError> {
         let store_dir = STORE_DIR.read();
         let db_path = store_dir.join("mcp_sessions");
         let db = sled::open(&db_path)
@@ -148,15 +135,12 @@ where
         });
     }
 
-    async fn rehydrate_session(
-        &self,
-        id: &SessionId,
-    ) -> Result<LocalSessionHandle, PersistentSessionManagerError> {
+    async fn rehydrate_session(&self, id: &SessionId) -> Result<LocalSessionHandle, McpError> {
         let (handle, worker) = create_local_session(id.clone(), self.session_config.clone(), true);
         let transport = WorkerTransport::spawn(worker);
 
         let service = (self.service_factory)()
-            .map_err(PersistentSessionManagerError::ServiceCreationError)?;
+            .map_err(|e| McpError::ServerInitializationError(e.to_string()))?;
 
         let session_manager_clone = self.clone();
         let session_id_clone = id.clone();
@@ -194,7 +178,7 @@ where
     async fn get_or_rehydrate_handle(
         &self,
         id: &SessionId,
-    ) -> Result<LocalSessionHandle, PersistentSessionManagerError> {
+    ) -> Result<LocalSessionHandle, McpError> {
         let sessions = self.sessions.read().await;
         if let Some(handle) = sessions.get(id) {
             return Ok(handle.clone());
@@ -204,14 +188,11 @@ where
         if self.check_db_session(id).await? {
             self.rehydrate_session(id).await
         } else {
-            Err(PersistentSessionManagerError::SessionNotFound(id.clone()))
+            Err(McpError::General(format!("Session not found: {}", id)))
         }
     }
 
-    async fn check_db_session(
-        &self,
-        id: &SessionId,
-    ) -> Result<bool, PersistentSessionManagerError> {
+    async fn check_db_session(&self, id: &SessionId) -> Result<bool, McpError> {
         match self.db.get(id.as_ref())? {
             Some(session_data_bytes) => {
                 let session_data: SessionData = serde_json::from_slice(&session_data_bytes)?;
@@ -234,7 +215,7 @@ impl<S> SessionManager for PersistentSessionManager<S>
 where
     S: rmcp::Service<RoleServer> + Send + 'static,
 {
-    type Error = PersistentSessionManagerError;
+    type Error = McpError;
     type Transport = WorkerTransport<LocalSessionWorker>;
 
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
@@ -347,27 +328,29 @@ impl std::fmt::Display for EventId {
     }
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Serialize)]
 pub enum EventIdParseError {
     #[error("Invalid index: {0}")]
-    InvalidIndex(ParseIntError),
+    InvalidIndex(String),
     #[error("Invalid numeric request id: {0}")]
-    InvalidNumericRequestId(ParseIntError),
+    InvalidNumericRequestId(String),
 }
 
 impl std::str::FromStr for EventId {
     type Err = EventIdParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some((index, request_id)) = s.split_once('/') {
-            let index = usize::from_str(index).map_err(EventIdParseError::InvalidIndex)?;
-            let request_id =
-                u64::from_str(request_id).map_err(EventIdParseError::InvalidNumericRequestId)?;
+            let index = usize::from_str(index)
+                .map_err(|e| EventIdParseError::InvalidIndex(e.to_string()))?;
+            let request_id = u64::from_str(request_id)
+                .map_err(|e| EventIdParseError::InvalidNumericRequestId(e.to_string()))?;
             Ok(EventId {
                 http_request_id: Some(request_id),
                 index,
             })
         } else {
-            let index = usize::from_str(s).map_err(EventIdParseError::InvalidIndex)?;
+            let index =
+                usize::from_str(s).map_err(|e| EventIdParseError::InvalidIndex(e.to_string()))?;
             Ok(EventId {
                 http_request_id: None,
                 index,
@@ -477,28 +460,32 @@ pub struct LocalSessionWorker {
     is_rehydrated: bool,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionError {
     #[error("Invalid request id: {0}")]
     DuplicatedRequestId(HttpRequestId),
     #[error("Channel closed: {0:?}")]
     ChannelClosed(Option<HttpRequestId>),
     #[error("Cannot parse event id: {0}")]
-    EventIdParseError(#[from] EventIdParseError),
+    EventIdParseError(EventIdParseError),
     #[error("Session service terminated")]
     SessionServiceTerminated,
     #[error("Invalid event id")]
     InvalidEventId,
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("{}", t!("mcp.error.io_error", error = _0))]
+    Io(String),
 }
 
-impl From<SessionError> for std::io::Error {
-    fn from(value: SessionError) -> Self {
-        match value {
-            SessionError::Io(io) => io,
-            _ => std::io::Error::other(format!("Session error: {value}")),
-        }
+impl From<std::io::Error> for SessionError {
+    fn from(err: std::io::Error) -> Self {
+        SessionError::Io(err.to_string())
+    }
+}
+
+impl From<EventIdParseError> for SessionError {
+    fn from(err: EventIdParseError) -> Self {
+        SessionError::EventIdParseError(err)
     }
 }
 
@@ -872,16 +859,22 @@ pub enum LocalSessionWorkerError {
     #[error("Transport closed")]
     TransportClosed,
     #[error("Tokio join error {0}")]
-    TokioJoinError(#[from] tokio::task::JoinError),
+    TokioJoinError(String),
+}
+
+impl From<tokio::task::JoinError> for LocalSessionWorkerError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        LocalSessionWorkerError::TokioJoinError(err.to_string())
+    }
 }
 impl Worker for LocalSessionWorker {
-    type Error = LocalSessionWorkerError;
+    type Error = McpError;
     type Role = RoleServer;
     fn err_closed() -> Self::Error {
-        LocalSessionWorkerError::TransportClosed
+        McpError::General("Transport closed".to_string())
     }
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
-        LocalSessionWorkerError::TokioJoinError(e)
+        McpError::General(e.to_string())
     }
     fn config(&self) -> rmcp::transport::worker::WorkerConfig {
         rmcp::transport::worker::WorkerConfig {
@@ -901,13 +894,13 @@ impl Worker for LocalSessionWorker {
         if !self.is_rehydrated {
             let evt = self.event_rx.recv().await.ok_or_else(|| {
                 WorkerQuitReason::fatal(
-                    LocalSessionWorkerError::TransportTerminated,
+                    McpError::General("Transport terminated".to_string()),
                     "get initialize request",
                 )
             })?;
             let SessionEvent::InitializeRequest { request, responder } = evt else {
                 return Err(WorkerQuitReason::fatal(
-                    LocalSessionWorkerError::UnexpectedEvent(evt),
+                    McpError::General("Unexpected event".to_string()),
                     "get initialize request",
                 ));
             };
@@ -917,9 +910,7 @@ impl Worker for LocalSessionWorker {
                 .send(Ok(send_initialize_response.message))
                 .map_err(|_| {
                     WorkerQuitReason::fatal(
-                        LocalSessionWorkerError::FailToSendInitializeRequest(
-                            SessionError::SessionServiceTerminated,
-                        ),
+                        McpError::General("Fail to send initialize request".to_string()),
                         "send initialize response",
                     )
                 })?;
@@ -938,7 +929,7 @@ impl Worker for LocalSessionWorker {
                     if let Some(event) = event {
                         InnerEvent::FromHttpService(event)
                     } else {
-                        return Err(WorkerQuitReason::fatal(LocalSessionWorkerError::TransportTerminated, "waiting next session event"))
+                        return Err(WorkerQuitReason::fatal(McpError::General("Transport terminated".to_string()), "waiting next session event"))
                     }
                 },
                 from_handler = context.recv_from_handler() => {
@@ -948,7 +939,7 @@ impl Worker for LocalSessionWorker {
                     return Err(WorkerQuitReason::Cancelled)
                 }
                 _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::fatal(LocalSessionWorkerError::KeepAliveTimeout(keep_alive), "poll next session event"))
+                    return Err(WorkerQuitReason::fatal(McpError::Timeout(keep_alive.as_millis().to_string()), "poll next session event"))
                 }
             };
             match event {
@@ -967,7 +958,7 @@ impl Worker for LocalSessionWorker {
                     let handle_result = self
                         .handle_server_message(message)
                         .await
-                        .map_err(LocalSessionWorkerError::FailToHandleMessage);
+                        .map_err(|e| McpError::General(e.to_string()));
                     let _ = responder.send(handle_result).inspect_err(|error| {
                         log::warn!(
                             "failed to send message to http service handler, error = {:?}",

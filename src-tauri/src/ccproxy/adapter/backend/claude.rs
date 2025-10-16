@@ -153,9 +153,10 @@ impl ClaudeBackendAdapter {
             unified_chunks,
         );
 
-        self.handle_remaining_buffer_content(status, unified_chunks);
+        // self.handle_remaining_buffer_content(status, unified_chunks);
     }
 
+    /*
     fn handle_remaining_buffer_content(
         &self,
         status: &mut std::sync::RwLockWriteGuard<SseStatus>,
@@ -204,6 +205,7 @@ impl ClaudeBackendAdapter {
             }
         }
     }
+    */
 }
 
 #[async_trait]
@@ -707,8 +709,10 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                     if let Some(msg) = claude_event.message {
                                         if let Ok(mut status) = sse_status.write() {
                                             status.message_start = true;
-                                            status.message_id = msg.id.clone();
                                             status.model_id = msg.model.clone();
+                                            if status.message_id.is_empty() {
+                                                status.message_id = msg.id.clone();
+                                            }
                                         }
                                         unified_chunks.push(UnifiedStreamChunk::MessageStart {
                                             id: msg.id,
@@ -741,35 +745,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                                 // On stream finish, try to auto-complete any dangling tool tag.
                                                 crate::ccproxy::adapter::backend::common::auto_complete_and_process_tool_tag(&mut status, &mut unified_chunks);
 
-                                                if !status.tool_compat_buffer.is_empty()
-                                                    || !status
-                                                        .tool_compat_fragment_buffer
-                                                        .is_empty()
-                                                {
-                                                    self.flush_tool_compat_buffer(
-                                                        &mut status,
-                                                        &mut unified_chunks,
-                                                    );
-
-                                                    if !status.tool_compat_buffer.is_empty()
-                                                        || !status
-                                                            .tool_compat_fragment_buffer
-                                                            .is_empty()
-                                                    {
-                                                        unified_chunks.push(
-                                                            UnifiedStreamChunk::Text {
-                                                                delta: format!(
-                                                                "{}{}",
-                                                                status.tool_compat_buffer,
-                                                                status.tool_compat_fragment_buffer
-                                                            ),
-                                                            },
-                                                        );
-
-                                                        status.tool_compat_buffer.clear();
-                                                        status.tool_compat_fragment_buffer.clear();
-                                                        status.in_tool_call_block = false;
-                                                    }
+                                                // After attempting to complete and process tags, send any remaining text.
+                                                if !status.tool_compat_buffer.is_empty() {
+                                                    unified_chunks.push(UnifiedStreamChunk::Text {
+                                                        delta: status.tool_compat_buffer.clone(),
+                                                    });
+                                                    status.tool_compat_buffer.clear();
                                                 }
                                             }
                                             let usage = claude_event
@@ -792,29 +773,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         // On stream finish, try to auto-complete any dangling tool tag.
                                         crate::ccproxy::adapter::backend::common::auto_complete_and_process_tool_tag(&mut status, &mut unified_chunks);
 
-                                        if !status.tool_compat_buffer.is_empty()
-                                            || !status.tool_compat_fragment_buffer.is_empty()
-                                        {
-                                            self.flush_tool_compat_buffer(
-                                                &mut status,
-                                                &mut unified_chunks,
-                                            );
-
-                                            if !status.tool_compat_buffer.is_empty()
-                                                || !status.tool_compat_fragment_buffer.is_empty()
-                                            {
-                                                unified_chunks.push(UnifiedStreamChunk::Text {
-                                                    delta: format!(
-                                                        "{}{}",
-                                                        status.tool_compat_buffer,
-                                                        status.tool_compat_fragment_buffer
-                                                    ),
-                                                });
-
-                                                status.tool_compat_buffer.clear();
-                                                status.tool_compat_fragment_buffer.clear();
-                                                status.in_tool_call_block = false;
-                                            }
+                                        // After attempting to complete and process tags, send any remaining text.
+                                        if !status.tool_compat_buffer.is_empty() {
+                                            unified_chunks.push(UnifiedStreamChunk::Text {
+                                                delta: status.tool_compat_buffer.clone(),
+                                            });
+                                            status.tool_compat_buffer.clear();
                                         }
                                         status.message_start = false;
                                     }
@@ -854,8 +818,10 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         .to_string();
                                     if let Ok(mut status) = sse_status.write() {
                                         status.message_start = true;
-                                        status.message_id = msg.id.clone();
                                         status.model_id = model.clone();
+                                        if status.message_id.is_empty() {
+                                            status.message_id = msg.id.clone();
+                                        }
                                     }
                                     unified_chunks.push(UnifiedStreamChunk::MessageStart {
                                         id: msg.id,

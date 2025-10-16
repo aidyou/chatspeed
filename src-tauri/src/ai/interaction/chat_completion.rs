@@ -9,7 +9,6 @@ use tokio::sync::{
     Mutex,
 };
 
-use crate::constants::DEFAULT_WEB_SEARCH_TOOL;
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -24,8 +23,10 @@ use crate::{
         },
     },
     db::MainStore,
+    error::AppError,
     libs::window_channels::WindowChannels,
 };
+use crate::{ccproxy::CCProxyError, constants::DEFAULT_WEB_SEARCH_TOOL};
 use crate::{ccproxy::ChatProtocol, commands::types::workflow::WorkflowChatPayload};
 
 macro_rules! init_chats {
@@ -291,8 +292,9 @@ pub async fn list_models_async(
     api_url: Option<&str>,
     api_key: Option<&str>,
     metadata: Option<Value>,
-) -> Result<Vec<ModelDetails>, String> {
-    let chat_protocol = ChatProtocol::from_str(&api_protocol)?;
+) -> crate::error::Result<Vec<ModelDetails>> {
+    let chat_protocol = ChatProtocol::from_str(&api_protocol)
+        .map_err(|_| CCProxyError::InvalidProtocolError(api_protocol.clone()))?;
     let (api_url_clone, api_key_clone) = prepare_chat_parameters(
         chat_protocol.clone(),
         api_url.as_deref(),
@@ -310,7 +312,7 @@ pub async fn list_models_async(
             metadata,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(AppError::Ai)
 }
 
 pub async fn start_new_chat_interaction(
@@ -322,7 +324,7 @@ pub async fn start_new_chat_interaction(
     tools: Option<Vec<MCPToolDeclaration>>,
     mut metadata: Option<Value>,
     callback: Option<Box<dyn Fn(Arc<ChatResponse>) + Send + 'static>>,
-) -> Result<(), String> {
+) -> crate::error::Result<()> {
     // Update the shared message history with the complete list of messages for this turn.
     // This ensures that the history reflects the state *before* the AI responds to the current messages.
     {

@@ -635,38 +635,21 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
 }
 
 const parseErrorMsg = errorStr => {
-  try {
-    const err = JSON.parse(errorStr || '{}')
-    const errorMsg = []
-    if (err?.code && err.code !== 'N/A') {
-      errorMsg.push(`Code: ${err.code}`)
-    }
-    if (err?.provider && err.provider !== 'N/A') {
-      errorMsg.push(`Provider: ${err.provider}`)
-    }
-    if (err?.details) {
-      try {
-        const details = JSON.parse(err.details)
-        errorMsg.push('Detail: ')
-        for (const key in details) {
-          if (details[key] && details[key] !== 'N/A') {
-            errorMsg.push(`    ${key}: ${details[key]}`)
-          }
-        }
-      } catch {
-        errorMsg.push(err.details)
-      }
-    }
-    if (err?.error) {
-      errorMsg.push(`Error: ${err.error}`)
-    }
-    if (err?.message) {
-      errorMsg.push(`Message: ${err.message}`)
-    }
-    return errorMsg.join('\n')
-  } catch {
-    return errorStr || ''
+  if (!errorStr) {
+    return ''
   }
+  try {
+    // The backend now sends a unified JSON object: { status: u16, message: String }
+    const err = JSON.parse(errorStr)
+    // The 'message' field contains the full, pre-formatted error string from Rust's AiError.
+    if (err?.message) {
+      return err.message
+    }
+  } catch {
+    // If parsing fails, it's likely a plain string error message, so we return it directly.
+  }
+  // Fallback for non-JSON strings or JSON without a 'message' field.
+  return errorStr
 }
 
 const createToolCallHtml = (content, toolCalls) => {
@@ -690,7 +673,15 @@ const createToolCallHtml = (content, toolCalls) => {
       }
 
       let tools = '<div class="chat-tool-calls">'
-      const args = call.function.arguments ? JSON.parse(call.function.arguments) : []
+      let args = []
+      if (call?.function?.arguments) {
+        try {
+          args = JSON.parse(call.function.arguments)
+        } catch (e) {
+          console.warn('Error parsing function arguments:', e)
+          args = []
+        }
+      }
       if (functionName.includes('__MCP__')) {
         const names = functionName.split('__MCP__')
         if (names.length === 2) {

@@ -3,8 +3,10 @@
 //! This module implements the MCP server handler that proxies tool calls to the internal tool manager.
 
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::mcp::McpError;
 use crate::tools::ToolCallResult;
 use crate::{ai::interaction::chat_completion::ChatState, tools::MCP_TOOL_NAME_SPLIT};
+
 use rmcp::model::IntoContents;
 use rmcp::{
     model::{
@@ -13,7 +15,7 @@ use rmcp::{
         ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
-    ErrorData as McpError, ServerHandler,
+    ServerHandler,
 };
 use rust_i18n::t;
 use serde_json::{json, Value};
@@ -98,7 +100,7 @@ impl McpProxyHandler {
         drop(tool_map_guard);
 
         log::debug!("Tool map is empty, reloading tools...");
-        
+
         // Rebuild tool map using the same logic as list_tools
         let exclude_tools = HashSet::from(["chat_completion".to_string()]);
         let all_tools = self
@@ -176,7 +178,7 @@ impl ServerHandler for McpProxyHandler {
         &self,
         _request: InitializeRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> Result<InitializeResult, McpError> {
+    ) -> Result<InitializeResult, rmcp::model::ErrorData> {
         Ok(self.get_info())
     }
 
@@ -184,7 +186,7 @@ impl ServerHandler for McpProxyHandler {
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> Result<ListToolsResult, rmcp::model::ErrorData> {
         let exclude_tools = HashSet::from(["chat_completion".to_string()]);
         let all_tools = self
             .chat_state
@@ -256,7 +258,7 @@ impl ServerHandler for McpProxyHandler {
         &self,
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResult, rmcp::model::ErrorData> {
         // Ensure tool map is loaded
         self.ensure_tool_map_loaded().await?;
 

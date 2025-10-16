@@ -69,7 +69,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(&format!(
             "INSERT INTO {} (name, description, prompt_injection, prompt_text, tool_filter, temperature, metadata, disabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             PROXY_GROUP_TABLE
@@ -98,7 +98,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(&format!(
             "UPDATE {} SET name = ?1, description = ?2, prompt_injection = ?3, prompt_text = ?4, tool_filter = ?5, temperature = ?6, metadata = ?7, disabled = ?8 WHERE id = ?9",
             PROXY_GROUP_TABLE
@@ -129,7 +129,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(&format!("DELETE FROM {} WHERE id = ?1", PROXY_GROUP_TABLE))?;
         let changed = stmt.execute(params![id])?;
 

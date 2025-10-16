@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 
 import { ref } from 'vue'
 
-import { invoke } from '@tauri-apps/api/core'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import { sendSyncState } from '@/libs/sync'
@@ -142,19 +142,30 @@ export const useSettingStore = defineStore('setting', () => {
       key === 'noteWindowVisibleShortcut'
     ) {
       try {
-        await invoke('update_shortcut', { key: dbKey, value })
+        await invokeWrapper('update_shortcut', { key: dbKey, value })
       } catch (error) {
-        console.error('Failed to update shortcut:', error)
-        throw new Error(i18n.global.t('settings.general.updateShortcutFailed', { error }))
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to update shortcut: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Failed to update shortcut:', error);
+        }
+        throw new Error(i18n.global.t('settings.general.updateShortcutFailed', { error: error.message || String(error) }))
       }
     }
 
-    return invoke('set_config', { key: dbKey, value }).then(() => {
+    return invokeWrapper('set_config', { key: dbKey, value }).then(() => {
       settings.value = {
         ...settings.value,
         [key]: value
       }
       sendSyncState('setting_changed', windowLabel, { [key]: value })
+    }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Failed to set config: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Failed to set config:', error);
+      }
+      throw error;
     })
   }
 
@@ -166,7 +177,7 @@ export const useSettingStore = defineStore('setting', () => {
    */
   const updateSettingStore = () => {
     return new Promise((resolve, reject) => {
-      invoke('get_all_config')
+      invokeWrapper('get_all_config')
         .then(result => {
           // Update the entire object reactively
           settings.value = {
@@ -180,32 +191,39 @@ export const useSettingStore = defineStore('setting', () => {
           }
           resolve()
         })
-        .catch(reject)
+        .catch(error => {
+          if (error instanceof FrontendAppError) {
+            console.error(`Failed to update setting store: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Failed to update setting store:', error);
+          }
+          reject(error);
+        })
     })
   }
 
   const setTextMonitor = start => {
     return new Promise((resolve, reject) => {
       if (start) {
-        invoke('start_text_monitor', { force: true })
+        invokeWrapper('start_text_monitor', { force: true })
           .then(() => {
             setSetting('wordSelectionToolbar', true).then(resolve)
           })
           .catch(err => {
             settings.value.wordSelectionToolbar = false
-            invoke('open_text_selection_permission_settings')
+            invokeWrapper('open_text_selection_permission_settings')
             reject(
-              i18n.global.t('settings.general.startWordSelectionToolbarFailed', { error: err })
+              i18n.global.t('settings.general.startWordSelectionToolbarFailed', { error: err.message || String(err) })
             )
           })
       } else {
-        invoke('stop_text_monitor')
+        invokeWrapper('stop_text_monitor')
           .then(() => {
             setSetting('wordSelectionToolbar', false).then(resolve)
           })
           .catch(err => {
             settings.value.wordSelectionToolbar = true
-            reject(i18n.global.t('settings.general.stopWordSelectionToolbarFailed', { error: err }))
+            reject(i18n.global.t('settings.general.stopWordSelectionToolbarFailed', { error: err.message || String(err) }))
           })
       }
     })
@@ -213,27 +231,41 @@ export const useSettingStore = defineStore('setting', () => {
 
   const reloadConfig = () => {
     return new Promise((resolve, reject) => {
-      invoke('reload_config')
+      invokeWrapper('reload_config')
         .then(() => {
           updateSettingStore().then(resolve)
         })
-        .catch(reject)
+        .catch(error => {
+          if (error instanceof FrontendAppError) {
+            console.error(`Failed to reload config: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Failed to reload config:', error);
+          }
+          reject(error);
+        })
     })
   }
 
   const updateTray = () => {
     return new Promise((resolve, reject) => {
-      invoke('update_tray')
+      invokeWrapper('update_tray')
         .then(() => {
           resolve()
         })
-        .catch(reject)
+        .catch(error => {
+          if (error instanceof FrontendAppError) {
+            console.error(`Failed to update tray: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Failed to update tray:', error);
+          }
+          reject(error);
+        })
     })
   }
 
   const getEnv = (setLanguage = false) => {
     return new Promise((resolve, reject) => {
-      invoke('get_env')
+      invokeWrapper('get_env')
         .then(result => {
           if (setLanguage && result.language) {
             settings.value.interfaceLanguage = result.language
@@ -244,7 +276,14 @@ export const useSettingStore = defineStore('setting', () => {
           env.value = { ...env.value, ...result }
           resolve()
         })
-        .catch(reject)
+        .catch(error => {
+          if (error instanceof FrontendAppError) {
+            console.error(`Failed to get env: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Failed to get env:', error);
+          }
+          reject(error);
+        })
     })
   }
 

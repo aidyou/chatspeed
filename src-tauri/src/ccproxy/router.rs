@@ -70,6 +70,7 @@
 //!
 
 use crate::ai::interaction::chat_completion::ChatState;
+use crate::ccproxy::errors::CCProxyError;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     auth::authenticate_request,
@@ -114,8 +115,8 @@ async fn openai_chat_logic(
     body: Bytes,
     group_name: Option<String>,
     compat_mode: bool,
-) -> Response {
-    handle_chat_completion(
+) -> Result<Response, CCProxyError> {
+    Ok(handle_chat_completion(
         ChatProtocol::OpenAI,
         headers,
         query,
@@ -127,7 +128,7 @@ async fn openai_chat_logic(
         state.main_store.clone(),
     )
     .await
-    .into_response()
+    .into_response())
 }
 
 async fn claude_chat_logic(
@@ -137,8 +138,8 @@ async fn claude_chat_logic(
     body: Bytes,
     group_name: Option<String>,
     compat_mode: bool,
-) -> Response {
-    handle_chat_completion(
+) -> Result<Response, CCProxyError> {
+    Ok(handle_chat_completion(
         ChatProtocol::Claude,
         headers,
         query,
@@ -150,7 +151,7 @@ async fn claude_chat_logic(
         state.main_store.clone(),
     )
     .await
-    .into_response()
+    .into_response())
 }
 
 async fn gemini_chat_logic(
@@ -162,8 +163,8 @@ async fn gemini_chat_logic(
     compat_mode: bool,
     model_id: String,
     action: String,
-) -> Response {
-    handle_chat_completion(
+) -> Result<Response, CCProxyError> {
+    Ok(handle_chat_completion(
         ChatProtocol::Gemini,
         headers,
         query,
@@ -175,7 +176,7 @@ async fn gemini_chat_logic(
         state.main_store.clone(),
     )
     .await
-    .into_response()
+    .into_response())
 }
 
 async fn ollama_chat_logic(
@@ -185,8 +186,8 @@ async fn ollama_chat_logic(
     body: Bytes,
     group_name: Option<String>,
     compat_mode: bool,
-) -> Response {
-    handle_chat_completion(
+) -> Result<Response, CCProxyError> {
+    Ok(handle_chat_completion(
         ChatProtocol::Ollama,
         headers,
         query,
@@ -198,7 +199,7 @@ async fn ollama_chat_logic(
         state.main_store.clone(),
     )
     .await
-    .into_response()
+    .into_response())
 }
 
 // ----------------------------------------------------------------------------
@@ -223,7 +224,7 @@ fn openai_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
                     handle_list_models(Some(group_name), state.main_store.clone())
                         .await
-                        .into_response()
+                        .map_err(|e| e.into_response())
                 },
             ),
         )
@@ -234,13 +235,15 @@ fn openai_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
-                    openai_chat_logic(state, query, headers, body, None, compat_mode).await
+                    openai_chat_logic(state, query, headers, body, None, compat_mode)
+                        .await
+                        .map_err(|e| e.into_response())
                 },
             ),
             get(|State(state): State<Arc<SharedState>>| async move {
                 handle_list_models(None, state.main_store.clone())
                     .await
-                    .into_response()
+                    .map_err(|e| e.into_response())
             }),
         )
     };
@@ -259,7 +262,9 @@ fn claude_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                   Query(query): Query<CcproxyQuery>,
                   headers: HeaderMap,
                   body: Bytes| async move {
-                claude_chat_logic(state, query, headers, body, Some(group_name), compat_mode).await
+                claude_chat_logic(state, query, headers, body, Some(group_name), compat_mode)
+                    .await
+                    .map_err(|e| e.into_response())
             },
         )
     } else {
@@ -268,7 +273,9 @@ fn claude_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                   Query(query): Query<CcproxyQuery>,
                   headers: HeaderMap,
                   body: Bytes| async move {
-                claude_chat_logic(state, query, headers, body, None, compat_mode).await
+                claude_chat_logic(state, query, headers, body, None, compat_mode)
+                    .await
+                    .map_err(|e| e.into_response())
             },
         )
     };
@@ -285,16 +292,10 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
-                    let (model_id, action) = match model_and_action.rsplit_once(':') {
-                        Some((m, a)) => (m.to_string(), a.to_string()),
-                        None => {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                "Invalid model and action format. Expected 'model:action'.",
-                            )
-                                .into_response()
-                        }
-                    };
+                    let (model_id, action) = model_and_action
+                        .rsplit_once(':')
+                        .ok_or_else(|| CCProxyError::InvalidProtocolError(model_and_action.clone()))
+                        .map_err(|e| e.into_response())?;
                     gemini_chat_logic(
                         state,
                         query,
@@ -302,15 +303,18 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                         body,
                         Some(group_name),
                         compat_mode,
-                        model_id,
-                        action,
+                        model_id.to_string(),
+                        action.to_string(),
                     )
                     .await
+                    .map_err(|e| e.into_response())
                 },
             ),
             get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
-                    handle_gemini_list_models(Some(group_name), state.main_store.clone()).await
+                    handle_gemini_list_models(Some(group_name), state.main_store.clone())
+                        .await
+                        .map_err(|e| e.into_response())
                 },
             ),
         )
@@ -322,16 +326,10 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
-                    let (model_id, action) = match model_and_action.rsplit_once(':') {
-                        Some((m, a)) => (m.to_string(), a.to_string()),
-                        None => {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                "Invalid model and action format. Expected 'model:action'.",
-                            )
-                                .into_response()
-                        }
-                    };
+                    let (model_id, action) = model_and_action
+                        .rsplit_once(':')
+                        .ok_or_else(|| CCProxyError::InvalidProtocolError(model_and_action.clone()))
+                        .map_err(|e| e.into_response())?;
                     gemini_chat_logic(
                         state,
                         query,
@@ -339,16 +337,17 @@ fn gemini_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedState>> {
                         body,
                         None,
                         compat_mode,
-                        model_id,
-                        action,
+                        model_id.to_string(),
+                        action.to_string(),
                     )
                     .await
+                    .map_err(|e| e.into_response())
                 },
             ),
             get(|State(state): State<Arc<SharedState>>| async move {
                 handle_gemini_list_models(None, state.main_store.clone())
                     .await
-                    .into_response()
+                    .map_err(|e| e.into_response())
             }),
         )
     };
@@ -370,13 +369,14 @@ fn ollama_chat_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedStat
                       body: Bytes| async move {
                     ollama_chat_logic(state, query, headers, body, Some(group_name), compat_mode)
                         .await
+                        .map_err(|e| e.into_response())
                 },
             ),
             get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
                     handle_ollama_tags(Some(group_name), state.main_store.clone())
                         .await
-                        .into_response()
+                        .map_err(|e| e.into_response())
                 },
             ),
         )
@@ -387,13 +387,15 @@ fn ollama_chat_routes(compat_mode: bool, grouped: bool) -> Router<Arc<SharedStat
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
-                    ollama_chat_logic(state, query, headers, body, None, compat_mode).await
+                    ollama_chat_logic(state, query, headers, body, None, compat_mode)
+                        .await
+                        .map_err(|e| e.into_response())
                 },
             ),
             get(|State(state): State<Arc<SharedState>>| async move {
                 handle_ollama_tags(None, state.main_store.clone())
                     .await
-                    .into_response()
+                    .map_err(|e| e.into_response())
             }),
         )
     };
@@ -419,7 +421,7 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
                 |State(state): State<Arc<SharedState>>, body: Json<ShowRequest>| async move {
                     handle_ollama_show(state.main_store.clone(), body)
                         .await
-                        .into_response()
+                        .map_err(|e| e.into_response())
                 },
             ),
         )
@@ -596,13 +598,13 @@ async fn authenticate_request_middleware(
     req: http::Request<axum::body::Body>,
     next: Next,
     is_local: bool,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, Response> {
     let path = req.uri().path().to_string();
     match authenticate_request(headers, query, state.main_store.clone(), is_local).await {
         Ok(_) => Ok(next.run(req).await),
         Err(e) => {
             log::warn!("Authentication failed for path {}: {:?}", path, e);
-            Err(StatusCode::UNAUTHORIZED)
+            Err(e.into_response())
         }
     }
 }

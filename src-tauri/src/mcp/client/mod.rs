@@ -9,5 +9,5 @@ pub use sse::SseClient;
 pub use stdio::StdioClient;
 pub use streamable_http::StreamableHttpClient;
 pub use types::{
-    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig, McpStatus,
+    McpClient, McpClientResult, McpProtocolType, McpServerConfig, McpStatus, StatusChangeCallback,
 };

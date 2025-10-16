@@ -199,27 +199,27 @@ impl MainStore {
         let mut conn = Connection::open(&db_path).map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
-            StoreError::DatabaseError(err)
+            StoreError::Query(err)
         })?;
 
         Self::init_db(&mut conn).map_err(|e| {
             let err = t!("db.failed_to_initialize_database", error = e.to_string()).to_string();
             log::error!("{}", err);
-            StoreError::DatabaseError(err)
+            StoreError::Query(err)
         })?;
 
         let db_dir = db_path.as_ref().parent().unwrap_or(db_path.as_ref());
         Self::migrate_data(&db_dir).map_err(|e| {
             let err = t!("db.failed_to_migrate_database", error = e.to_string()).to_string();
             log::error!("{}", err);
-            StoreError::DatabaseError(err)
+            StoreError::Query(err)
         })?;
 
         let conn = Mutex::new(conn);
         let config = {
             let locked_conn = conn
                 .lock()
-                .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+                .map_err(|e| StoreError::LockError(e.to_string()))?;
             Self::load_config(&locked_conn)?
         };
 
@@ -262,7 +262,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         match Self::load_config(&conn) {
             Ok(config) => {
                 self.config = config;
@@ -504,7 +504,7 @@ impl MainStore {
 
         // Create new database and initialize tables
         let mut new_conn = Connection::open(&new_db_path).map_err(|e| {
-            StoreError::DatabaseError(
+            StoreError::Query(
                 t!(
                     "db.failed_to_create_new_database_at",
                     path = new_db_path.display(),
@@ -519,7 +519,7 @@ impl MainStore {
         if chat_db_path.exists() {
             log::info!("Starting chat database migration");
             let chat_conn = Connection::open(&chat_db_path).map_err(|e| {
-                StoreError::DatabaseError(
+                StoreError::Query(
                     t!(
                         "db.failed_to_open_chat_db_for_migration",
                         path = chat_db_path.display(),
@@ -533,7 +533,7 @@ impl MainStore {
             let mut stmt = chat_conn
                 .prepare("SELECT id, title, created_at, is_favorite FROM conversations")
                 .map_err(|e| {
-                    StoreError::DatabaseError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_prepare_query_migration",
                             query = "conversations from old chat.db",
@@ -553,7 +553,7 @@ impl MainStore {
                     ))
                 })
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_query_conversations_migration",
                             error = e.to_string()
@@ -566,7 +566,7 @@ impl MainStore {
             for conversation_result in conversations {
                 let (conv_id, title, created_at, is_favorite) =
                     conversation_result.map_err(|e| {
-                        StoreError::StringError(
+                        StoreError::Query(
                             t!(
                                 "db.failed_to_read_conversation_migration",
                                 error = e.to_string()
@@ -579,7 +579,7 @@ impl MainStore {
                     "INSERT INTO conversations (id, title, created_at, is_favorite) VALUES (?, ?, ?, ?)",
                     params![conv_id, title, created_at, is_favorite],
                 ).map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!("db.failed_to_insert_conversation_migration", error = e.to_string()).to_string(),
                     )
                 })?;
@@ -588,7 +588,7 @@ impl MainStore {
                 let mut msg_stmt = chat_conn.prepare(
                     "SELECT id, role, content, timestamp, metadata FROM messages WHERE conversation_id = ?"
                 ).map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!("db.failed_to_prepare_messages_query_migration", error = e.to_string()).to_string(),
                     )
                 })?;
@@ -604,7 +604,7 @@ impl MainStore {
                         ))
                     })
                     .map_err(|e| {
-                        StoreError::StringError(
+                        StoreError::Query(
                             t!(
                                 "db.failed_to_query_messages_migration",
                                 error = e.to_string()
@@ -616,7 +616,7 @@ impl MainStore {
                 for message_result in messages {
                     let (msg_id, role, content, timestamp, metadata) =
                         message_result.map_err(|e| {
-                            StoreError::StringError(
+                            StoreError::Query(
                                 t!("db.failed_to_read_message_migration", error = e.to_string())
                                     .to_string(),
                             )
@@ -626,7 +626,7 @@ impl MainStore {
                         "INSERT INTO messages (id, conversation_id, role, content, timestamp, metadata) VALUES (?, ?, ?, ?, ?, ?)",
                         params![msg_id, conv_id, role, content, timestamp, metadata.unwrap_or_default()],
                     ).map_err(|e| {
-                        StoreError::StringError(
+                        StoreError::Query(
                             t!("db.failed_to_insert_message_migration", error = e.to_string()).to_string(),
                         )
                     })?;
@@ -642,7 +642,7 @@ impl MainStore {
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let backup_path = backup_dir.join(format!("chat_{}.db.bak", timestamp));
             std::fs::rename(&chat_db_path, &backup_path).map_err(|e| {
-                StoreError::StringError(
+                StoreError::Query(
                     t!(
                         "db.failed_to_backup_old_chat_database",
                         path = chat_db_path.display(),
@@ -658,7 +658,7 @@ impl MainStore {
         if config_db_path.exists() {
             log::info!("Starting config database migration");
             let config_conn = Connection::open(&config_db_path).map_err(|e| {
-                StoreError::DatabaseError(
+                StoreError::Query(
                     t!(
                         "db.failed_to_open_config_db_for_migration",
                         path = config_db_path.display(),
@@ -672,7 +672,7 @@ impl MainStore {
             let mut stmt = config_conn
                 .prepare("SELECT key, value FROM config")
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_prepare_config_query_migration",
                             error = e.to_string()
@@ -686,7 +686,7 @@ impl MainStore {
                     Ok((row.get::<_, String>("key")?, row.get::<_, String>("value")?))
                 })
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_query_configs_migration",
                             error = e.to_string()
@@ -698,7 +698,7 @@ impl MainStore {
             let tx = new_conn.transaction()?;
             for config_result in configs {
                 let (key, value) = config_result.map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!("db.failed_to_read_config_migration", error = e.to_string()).to_string(),
                     )
                 })?;
@@ -708,7 +708,7 @@ impl MainStore {
                     params![key, value],
                 )
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_insert_config_migration",
                             error = e.to_string()
@@ -724,7 +724,7 @@ impl MainStore {
                 temperature, top_p, top_k, sort_index, is_default, disabled, is_official, official_id, metadata \
                 FROM ai_model"
             ).map_err(|e| {
-                StoreError::StringError(
+                StoreError::Query(
                     t!("db.failed_to_prepare_ai_model_query_migration", error = e.to_string()).to_string(),
                 )
             })?;
@@ -752,7 +752,7 @@ impl MainStore {
                     ))
                 })
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_query_ai_models_migration",
                             error = e.to_string()
@@ -781,7 +781,7 @@ impl MainStore {
                     official_id,
                     metadata,
                 ) = model.map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_read_ai_model_migration",
                             error = e.to_string()
@@ -798,7 +798,7 @@ impl MainStore {
                         max_tokens, temperature, top_p, top_k, sort_index, is_default, disabled,
                         is_official, official_id, metadata.unwrap_or_default()],
                 ).map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!("db.failed_to_insert_ai_model_migration", error = e.to_string()).to_string(),
                     )
                 })?;
@@ -808,7 +808,7 @@ impl MainStore {
             let mut stmt = config_conn.prepare(
                 "SELECT id, name, icon, logo, prompt, share_id, sort_index, disabled, metadata FROM ai_skill"
             ).map_err(|e| {
-                StoreError::StringError(
+                StoreError::Query(
                     t!("db.failed_to_prepare_ai_skill_query_migration", error = e.to_string()).to_string(),
                 )
             })?;
@@ -828,7 +828,7 @@ impl MainStore {
                     ))
                 })
                 .map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!(
                             "db.failed_to_query_ai_skills_migration",
                             error = e.to_string()
@@ -840,7 +840,7 @@ impl MainStore {
             for skill in skills {
                 let (id, name, icon, logo, prompt, share_id, sort_index, disabled, metadata) =
                     skill.map_err(|e| {
-                        StoreError::StringError(
+                        StoreError::Query(
                             t!(
                                 "db.failed_to_read_ai_skill_migration",
                                 error = e.to_string()
@@ -854,7 +854,7 @@ impl MainStore {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![id, name, icon, logo, prompt, share_id.unwrap_or_default(), sort_index, disabled, metadata.unwrap_or_default()],
                 ).map_err(|e| {
-                    StoreError::StringError(
+                    StoreError::Query(
                         t!("db.failed_to_insert_ai_skill_migration", error = e.to_string()).to_string(),
                     )
                 })?;
@@ -869,7 +869,7 @@ impl MainStore {
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let backup_path = backup_dir.join(format!("config_{}.db.bak", timestamp));
             std::fs::rename(&config_db_path, &backup_path).map_err(|e| {
-                StoreError::StringError(
+                StoreError::Query(
                     t!(
                         "db.failed_to_backup_old_config_database",
                         path = config_db_path.display(),

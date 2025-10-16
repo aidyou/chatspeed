@@ -20,9 +20,16 @@
 
     <div class="body">
       <el-aside class="sidebar" :style="{ width: sidebarWidth + 'px' }" v-show="!sidebarCollapsed">
-        <el-tree :data="treeData" :props="defaultProps" :expand-on-click-node="true" :default-expand-all="true"
-          :highlight-current="true" @node-click="onHandleNodeClick" @node-expand="onHandleNodeExpand"
-          @node-collapse="onHandleNodeCollapse" node-key="id">
+        <el-tree
+          :data="treeData"
+          :props="defaultProps"
+          :expand-on-click-node="true"
+          :default-expand-all="true"
+          :highlight-current="true"
+          @node-click="onHandleNodeClick"
+          @node-expand="onHandleNodeExpand"
+          @node-collapse="onHandleNodeCollapse"
+          node-key="id">
           <template #default="{ node, data }">
             <div class="tree-node" :class="{ 'is-tag': data.type === 'tag' }">
               <div class="label">
@@ -42,7 +49,9 @@
       <div class="resize-handle" @mousedown="handleResizeStart" v-show="!sidebarCollapsed"></div>
       <el-main ref="mainContent" class="main">
         <div v-if="currentNote" class="chat note-content">
-          <markdown :content="currentNote.content" :reference="currentNote?.metadata?.reference || []"
+          <markdown
+            :content="currentNote.content"
+            :reference="currentNote?.metadata?.reference || []"
             :reasoning="currentNote?.metadata?.reasoning || ''" />
           <div class="note-footer">
             <div class="note-meta">
@@ -62,11 +71,22 @@
     </div>
   </el-container>
 
-  <el-dialog class="note-search-dialog" v-model="searchDialogVisible" :close-on-press-escape="false"
+  <el-dialog
+    class="note-search-dialog"
+    v-model="searchDialogVisible"
+    :close-on-press-escape="false"
     :show-close="false">
-    <el-input ref="searchInputRef" v-model="kw" :placeholder="$t('note.searchNotePlaceholder')" @input="onSearchNote" />
+    <el-input
+      ref="searchInputRef"
+      v-model="kw"
+      :placeholder="$t('note.searchNotePlaceholder')"
+      @input="onSearchNote" />
     <div class="note-list">
-      <div class="note-item" v-for="note in searchResult" :key="note.id" @click="onSelectNote(note)">
+      <div
+        class="note-item"
+        v-for="note in searchResult"
+        :key="note.id"
+        @click="onSelectNote(note)">
         {{ note.title }}
       </div>
     </div>
@@ -81,6 +101,7 @@ import { listen } from '@tauri-apps/api/event'
 
 import markdown from '@/components/chat/Markdown.vue'
 
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { csStorageKey } from '@/config/config'
 import { formatTime } from '@/libs/util'
 import { useNoteStore } from '@/stores/note'
@@ -209,20 +230,37 @@ const handleResizeEnd = () => {
   document.removeEventListener('mouseup', handleResizeEnd)
 }
 
-const onHandleNodeClick = data => {
+const onHandleNodeClick = async data => {
   if (data.type === 'tag') {
     if (typeof data.expanded === 'undefined') {
       data.expanded = true
     }
-    noteStore.getNotes(data.id).then(res => {
+    try {
+      const res = await noteStore.getNotes(data.id)
       data.nodes = res.map(note => ({
         id: note.id,
         type: 'note',
         label: note.title
       }))
-    })
+    } catch (error) {
+      if (error instanceof FrontendAppError) {
+        console.error(
+          `Error getting notes by tag: ` + error.toFormattedString(),
+          error.originalError
+        )
+        showMessage(t('chat.errorOnGetNotes', { error: error.toFormattedString() }), 'error', 3000)
+      } else {
+        console.error('Error getting notes by tag:', error)
+        showMessage(
+          t('chat.errorOnGetNotes', { error: error.message || String(error) }),
+          'error',
+          3000
+        )
+      }
+    }
   } else {
-    noteStore.getNote(data.id).then(res => {
+    try {
+      const res = await noteStore.getNote(data.id)
       currentNote.value = res
       // reset scroll
       nextTick(() => {
@@ -230,7 +268,19 @@ const onHandleNodeClick = data => {
           mainContent.value.$el.scrollTop = 0
         }
       })
-    })
+    } catch (error) {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error getting note: ` + error.toFormattedString(), error.originalError)
+        showMessage(t('chat.errorOnGetNote', { error: error.toFormattedString() }), 'error', 3000)
+      } else {
+        console.error('Error getting note:', error)
+        showMessage(
+          t('chat.errorOnGetNote', { error: error.message || String(error) }),
+          'error',
+          3000
+        )
+      }
+    }
   }
 }
 
@@ -253,41 +303,68 @@ const onNoteTrash = () => {
     confirmButtonText: t('common.confirm'),
     cancelButtonText: t('common.cancel'),
     type: 'warning'
-  }).then(() => {
-    noteStore
-      .deleteNote(currentNote.value.id)
-      .then(() => {
-        // remove note from tags and filter out empty tags
-        treeData.value = treeData.value
-          ?.map(tag => {
-            if (tag.nodes.length > 0) {
-              tag.nodes = tag.nodes.filter(note => note.id !== currentNote.value.id)
-              tag.count = tag.nodes.length
-            }
-            return tag
-          })
-          .filter(tag => tag.count > 0)
+  }).then(async () => {
+    try {
+      await noteStore.deleteNote(currentNote.value.id)
+      // remove note from tags and filter out empty tags
+      treeData.value = treeData.value
+        ?.map(tag => {
+          if (tag.nodes.length > 0) {
+            tag.nodes = tag.nodes.filter(note => note.id !== currentNote.value.id)
+            tag.count = tag.nodes.length
+          }
+          return tag
+        })
+        .filter(tag => tag.count > 0)
 
-        // clear current note and reset UI
-        currentNote.value = null
-        if (mainContent.value) {
-          mainContent.value.scrollTop = 0
-        }
-      })
-      .catch(error => {
-        showMessage(t('chat.errorOnDeleteNote', { error }), 'error', 5000)
-      })
+      // clear current note and reset UI
+      currentNote.value = null
+      if (mainContent.value) {
+        mainContent.value.$el.scrollTop = 0
+      }
+    } catch (error) {
+      if (error instanceof FrontendAppError) {
+        showMessage(
+          t('chat.errorOnDeleteNote', {
+            error: error.toFormattedString()
+          }),
+          'error',
+          5000
+        )
+        console.error('Error deleting note:', error.originalError)
+      } else {
+        showMessage(
+          t('chat.errorOnDeleteNote', { error: error.message || String(error) }),
+          'error',
+          5000
+        )
+        console.error('Error deleting note:', error)
+      }
+    }
   })
 }
 
-const onSearchNote = () => {
+const onSearchNote = async () => {
   if (!kw.value) {
     searchResult.value = []
     return
   }
-  noteStore.searchNotes(kw.value).then(res => {
+  try {
+    const res = await noteStore.searchNotes(kw.value)
     searchResult.value = res
-  })
+  } catch (error) {
+    if (error instanceof FrontendAppError) {
+      console.error(`Error searching notes: ` + error.toFormattedString(), error.originalError)
+      showMessage(t('chat.errorOnSearchNotes', { error: error.toFormattedString() }), 'error', 3000)
+    } else {
+      console.error('Error searching notes:', error)
+      showMessage(
+        t('chat.errorOnSearchNotes', { error: error.message || String(error) }),
+        'error',
+        3000
+      )
+    }
+  }
 }
 
 const onSelectNote = note => {
@@ -349,7 +426,7 @@ const onSelectNote = note => {
         -moz-user-select: none;
         -webkit-user-select: none;
 
-        &.el-tree--highlight-current .el-tree-node.is-current>.el-tree-node__content {
+        &.el-tree--highlight-current .el-tree-node.is-current > .el-tree-node__content {
           background-color: var(--cs-active-bg-color);
         }
 

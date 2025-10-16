@@ -106,7 +106,7 @@ impl MainStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
         // Check for name uniqueness
@@ -117,7 +117,7 @@ impl MainStore {
         )?;
 
         if count > 0 {
-            return Err(StoreError::DatabaseError(
+            return Err(StoreError::Query(
                 t!("db.agent_name_exists", name = &agent.name).to_string(),
             ));
         }
@@ -152,7 +152,7 @@ impl MainStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
         // Check for name uniqueness on other agents
@@ -163,7 +163,7 @@ impl MainStore {
         )?;
 
         if count > 0 {
-            return Err(StoreError::DatabaseError(
+            return Err(StoreError::Query(
                 t!("db.agent_name_exists", name = &agent.name).to_string(),
             ));
         }
@@ -198,7 +198,7 @@ impl MainStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
         // Delete the agent
@@ -214,7 +214,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let mut stmt = conn.prepare("SELECT * FROM agents WHERE id = ?1")?;
 
@@ -230,7 +230,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let mut stmt = conn.prepare("SELECT * FROM agents ORDER BY name")?;
 

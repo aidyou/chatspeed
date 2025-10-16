@@ -133,7 +133,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 
 // import { openPath } from '@tauri-apps/plugin-opener'
@@ -211,11 +211,17 @@ const runTest = async () => {
   }
 
   try {
-    const response = await invoke('test_scrape', { requestData: params })
+    const response = await invokeWrapper('test_scrape', { requestData: params })
     result.value = requestType.value === 'search' ? response : JSON.parse(response)
   } catch (e) {
     error.value = e
-    showMessage('Test Failed: ' + e.message)
+    if (e instanceof FrontendAppError) {
+      showMessage('Test Failed: ' + e.toFormattedString(), 'error')
+      console.error('Scraper test failed:', e.originalError)
+    } else {
+      showMessage('Test Failed: ' + (e.message || String(e)), 'error')
+      console.error('Scraper test failed:', e)
+    }
   } finally {
     loading.value = false
   }

@@ -4,7 +4,6 @@ use rmcp::RoleClient;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
@@ -12,7 +11,8 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::ai::traits::chat::MCPToolDeclaration; // Ensure this is the correct path
+use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::mcp::McpError; // Ensure this is the correct path
 
 use super::util::get_tools;
 
@@ -127,26 +127,7 @@ impl Default for McpServerConfig {
     }
 }
 
-#[derive(Debug, Error, Clone)]
-pub enum McpClientError {
-    /// Call error
-    #[error("{0}")]
-    CallError(String),
-    /// Configuration error
-    #[error("{0}")]
-    ConfigError(String),
-    /// Start error
-    #[error("{0}")]
-    StartError(String),
-    /// Stop error
-    #[error("{0}")]
-    StopError(String),
-
-    #[error("{0}")]
-    StatusError(String),
-}
-
-pub type McpClientResult<T> = Result<T, McpClientError>;
+pub type McpClientResult<T> = Result<T, McpError>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -256,7 +237,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
                     // The status should reflect the error.
                     self.set_status(McpStatus::Error(format!("Failed to stop: {}", err_msg)))
                         .await;
-                    Err(McpClientError::StopError(err_msg))
+                    Err(McpError::ClientStopError(err_msg))
                 }
             }
         } else {
@@ -280,7 +261,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
             .await
             {
                 Ok(result) => {
-                    let tools = result.map_err(|e| McpClientError::CallError(e.to_string()))?; // Changed StatusError to CallError for tool listing
+                    let tools = result.map_err(|e| McpError::ClientCallError(e.to_string()))?; // Changed StatusError to CallError for tool listing
 
                     // set status to running
                     self.set_status(McpStatus::Running).await;
@@ -288,7 +269,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
                     Ok(get_tools(&tools))
                 }
                 Err(_) => {
-                    let err = McpClientError::StatusError(
+                    let err = McpError::ClientStatusError(
                         t!(
                             "mcp.client.list_tools_timeout",
                             name = self.config().await.name
@@ -300,7 +281,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
                 }
             }
         } else {
-            Err(McpClientError::StatusError(
+            Err(McpError::ClientStatusError(
                 t!("mcp.client.no_running", client = self.name().await).to_string(),
             ))
         }
@@ -361,7 +342,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
                     arguments: self.arg_parser(args),
                 })
                 .await
-                .map_err(|e| McpClientError::CallError(e.to_string()))?;
+                .map_err(|e| McpError::ClientCallError(e.to_string()))?;
 
             // Check the `is_error` field from rmcp::model::CallToolResult
             // If `is_error` is Some(true), it indicates a tool execution error.
@@ -370,7 +351,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
                 // This assumes `Content` can be serialized.
                 let error_content_str = serde_json::to_string(&call_tool_result.content)
                     .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e));
-                return Err(McpClientError::CallError(error_content_str));
+                return Err(McpError::ClientCallError(error_content_str));
             }
 
             // If not an error (is_error is Some(false) or None),
@@ -378,10 +359,10 @@ pub trait McpClient: Send + Sync + McpClientInternal {
             // This assumes `Content` can be serialized to `Value`.
             // We'll serialize the Vec<Content> into a JSON Value (likely an array).
             serde_json::to_value(call_tool_result).map_err(|e| {
-                McpClientError::CallError(format!("Failed to serialize successful content: {}", e))
+                McpError::ClientCallError(format!("Failed to serialize successful content: {}", e))
             })
         } else {
-            Err(McpClientError::StatusError(
+            Err(McpError::ClientStatusError(
                 t!("mcp.client.no_running", client = self.name().await).to_string(),
             ))
         }

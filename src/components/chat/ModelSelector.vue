@@ -1,10 +1,18 @@
 <template>
-  <div class="model-selector-trigger" @click.stop="toggleVisible"
+  <div
+    class="model-selector-trigger"
+    @click.stop="toggleVisible"
     :style="{ width: triggerSize + 'px', height: triggerSize + 'px' }">
-    <el-tooltip :content="triggerTooltip || `${currentModel.name} / ${currentModel?.defaultModel}`" :hide-after="0"
-      :enterable="false" placement="top">
+    <el-tooltip
+      :content="triggerTooltip || `${currentModel.name} / ${currentModel?.defaultModel}`"
+      :hide-after="0"
+      :enterable="false"
+      placement="top">
       <template v-if="useProviderAvatar">
-        <img :src="currentModel?.providerLogo" v-if="currentModel?.providerLogo !== ''" class="provider-avatar"
+        <img
+          :src="currentModel?.providerLogo"
+          v-if="currentModel?.providerLogo !== ''"
+          class="provider-avatar"
           :style="{ width: triggerSize + 'px', height: triggerSize + 'px' }" />
         <avatar :text="currentModel?.name" :size="triggerSize" v-else />
       </template>
@@ -13,11 +21,20 @@
   </div>
 
   <!-- Model selection panel -->
-  <div class="select-group upperLayer" v-if="visible" @click.stop
+  <div
+    class="select-group upperLayer"
+    v-if="visible"
+    @click.stop
     :class="{ 'position-top': position === 'top', 'position-bottom': position === 'bottom' }">
-    <div class="selector arrow" :class="{ 'arrow-top': position === 'top', 'arrow-bottom': position === 'bottom' }">
+    <div
+      class="selector arrow"
+      :class="{ 'arrow-top': position === 'top', 'arrow-bottom': position === 'bottom' }">
       <div class="selector-content">
-        <div class="item" v-for="model in modelProviders" @click.stop="handleModelSelect(model)" :key="model.id"
+        <div
+          class="item"
+          v-for="model in modelProviders"
+          @click.stop="handleModelSelect(model)"
+          :key="model.id"
           :class="{ active: currentModel.id === model.id }">
           <div class="name">
             <img :src="model.providerLogo" v-if="model.providerLogo !== ''" class="provider-logo" />
@@ -38,7 +55,11 @@
               {{ group }}
             </div>
           </div>
-          <div class="item" v-for="(model, index) in models" @click.stop="handleSubModelSelect(model)" :key="index"
+          <div
+            class="item"
+            v-for="(model, index) in models"
+            @click.stop="handleSubModelSelect(model)"
+            :key="index"
             :class="{ active: currentModel?.defaultModel === model.id }">
             <div class="name">
               <span>{{ model.name || model.id.split('/').pop() }}</span>
@@ -57,6 +78,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, toRefs } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useModelStore } from '@/stores/model'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 
 const { t } = useI18n()
 const modelStore = useModelStore()
@@ -72,7 +94,7 @@ const props = defineProps({
   position: {
     type: String,
     default: 'bottom',
-    validator: (value) => ['top', 'bottom'].includes(value)
+    validator: value => ['top', 'bottom'].includes(value)
   },
   // Trigger button icon.
   triggerIcon: {
@@ -97,7 +119,12 @@ const props = defineProps({
 })
 
 // Emits
-const emit = defineEmits(['update:modelValue', 'model-select', 'sub-model-select', 'selection-complete'])
+const emit = defineEmits([
+  'update:modelValue',
+  'model-select',
+  'sub-model-select',
+  'selection-complete'
+])
 
 const visible = ref(false)
 
@@ -116,30 +143,41 @@ const currentSubModels = computed(() =>
 )
 
 // Watch for model providers changes to ensure reactivity
-watch(() => modelStore.providers, (newProviders, oldProviders) => {
-  // Force reactivity update when providers change
-  // This ensures the component updates when models are added/deleted from backend
-  console.debug('ModelSelector: providers changed', newProviders?.length, oldProviders?.length)
-}, { deep: true })
+watch(
+  () => modelStore.providers,
+  (newProviders, oldProviders) => {
+    // Force reactivity update when providers change
+    // This ensures the component updates when models are added/deleted from backend
+    console.debug('ModelSelector: providers changed', newProviders?.length, oldProviders?.length)
+  },
+  { deep: true }
+)
 
 // Also watch the length to catch array changes
-watch(() => modelStore.providers.length, (newLength, oldLength) => {
-  console.debug('ModelSelector: providers length changed', newLength, oldLength)
-})
+watch(
+  () => modelStore.providers.length,
+  (newLength, oldLength) => {
+    console.debug('ModelSelector: providers length changed', newLength, oldLength)
+  }
+)
 
 // Watch for default model changes to ensure current selection is valid
-watch(() => modelStore.defaultModelProvider, (newDefault) => {
-  // Check if current model is still available
-  if (!props.modelValue && newDefault) {
-    console.debug('ModelSelector: default model updated', newDefault)
-  }
-}, { deep: true })
+watch(
+  () => modelStore.defaultModelProvider,
+  newDefault => {
+    // Check if current model is still available
+    if (!props.modelValue && newDefault) {
+      console.debug('ModelSelector: default model updated', newDefault)
+    }
+  },
+  { deep: true }
+)
 
 const toggleVisible = () => {
   visible.value = !visible.value
 }
 
-const handleModelSelect = (model) => {
+const handleModelSelect = model => {
   emit('model-select', model)
   if (!props.modelValue) {
     // If modelValue is not passed in, update the store
@@ -150,7 +188,7 @@ const handleModelSelect = (model) => {
   }
 }
 
-const handleSubModelSelect = (model) => {
+const handleSubModelSelect = model => {
   const modelId = model.id
   emit('sub-model-select', model, modelId)
 
@@ -160,17 +198,26 @@ const handleSubModelSelect = (model) => {
     modelStore.setDefaultModelProvider(currentModel.value)
 
     // Update database records
-    modelStore.setModelProvider({
-      ...currentModel.value,
-      defaultModel: modelId,
-      metadata: {
-        ...currentModel.value.metadata,
-        proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
-        logo: currentModel.value?.metadata?.logo || ''
-      }
-    }).catch(error => {
-      console.error(error)
-    })
+    modelStore
+      .setModelProvider({
+        ...currentModel.value,
+        defaultModel: modelId,
+        metadata: {
+          ...currentModel.value.metadata,
+          proxyType: currentModel.value?.metadata?.proxyType || 'bySetting',
+          logo: currentModel.value?.metadata?.logo || ''
+        }
+      })
+      .catch(error => {
+        if (error instanceof FrontendAppError) {
+          console.error(
+            `Error setting model provider: ` + error.toFormattedString(),
+            error.originalError
+          )
+        } else {
+          console.error('Error setting model provider:', error)
+        }
+      })
   } else {
     // If modelValue is passed in, update via v-model (for Assistant.vue)
     const updatedModel = { ...currentModel.value, defaultModel: modelId }
@@ -183,14 +230,18 @@ const handleSubModelSelect = (model) => {
 }
 
 // Hide the panel when clicking outside
-const handleClickOutside = (event) => {
-  if (visible.value && !event.target.closest('.model-selector-trigger') && !event.target.closest('.select-group')) {
+const handleClickOutside = event => {
+  if (
+    visible.value &&
+    !event.target.closest('.model-selector-trigger') &&
+    !event.target.closest('.select-group')
+  ) {
     visible.value = false
   }
 }
 
 // Hide the panel when pressing the ESC key
-const handleKeyDown = (event) => {
+const handleKeyDown = event => {
   if (event.key === 'Escape' && visible.value) {
     visible.value = false
   }

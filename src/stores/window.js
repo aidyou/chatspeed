@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
@@ -28,10 +28,14 @@ export const useWindowStore = defineStore('window', () => {
       return
     }
     try {
-      const info = await invoke('get_os_info'); // Directly await the promise
+      const info = await invokeWrapper('get_os_info'); // Directly await the promise
       os.value = info.os.toLowerCase()
     } catch (error) {
-      console.error('error on get_os_info:', error)
+      if (error instanceof FrontendAppError) {
+        console.error(`Error on get_os_info: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error on get_os_info:', error);
+      }
     }
   }
 
@@ -74,14 +78,18 @@ export const useWindowStore = defineStore('window', () => {
    */
   const toggleWindowAlwaysOnTop = async (windowLabel, state) => {
     try {
-      const newState = await invoke('toggle_window_always_on_top', {
+      const newState = await invokeWrapper('toggle_window_always_on_top', {
         windowLabel,
         newState: !state
       })
       console.log('pin state change to:', newState, ' window label:', windowLabel)
       return newState
     } catch (error) {
-      console.error('Failed to toggle window always on top:', error)
+      if (error instanceof FrontendAppError) {
+        console.error(`Failed to toggle window always on top: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Failed to toggle window always on top:', error);
+      }
       return false
     }
   }
@@ -91,7 +99,7 @@ export const useWindowStore = defineStore('window', () => {
    * @param {string} windowLabel - The label of the window to initialize
    */
   const initWindowAlwaysOnTop = (windowLabel) => {
-    invoke('get_window_always_on_top', { windowLabel })
+    invokeWrapper('get_window_always_on_top', { windowLabel })
       .then(state => {
         console.log('pin state:', state, ' window label:', windowLabel)
         switch (windowLabel) {
@@ -104,7 +112,11 @@ export const useWindowStore = defineStore('window', () => {
         }
       })
       .catch(error => {
-        console.error('Failed to get window always on top:', error);
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to get window always on top: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Failed to get window always on top:', error);
+        }
       });
   }
 
@@ -141,7 +153,14 @@ export const useWindowStore = defineStore('window', () => {
   }
 
   const setMouseEventState = (state) => {
-    invoke('set_mouse_event_state', { state, windowLabel })
+    invokeWrapper('set_mouse_event_state', { state, windowLabel })
+      .catch(error => {
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to set mouse event state: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Failed to set mouse event state:', error);
+        }
+      });
   }
 
   /**
@@ -150,13 +169,18 @@ export const useWindowStore = defineStore('window', () => {
    */
   const moveWindowToScreenEdge = async (direction) => {
     try {
-      await invoke('move_window_to_screen_edge', {
+      await invokeWrapper('move_window_to_screen_edge', {
         windowLabel: windowLabel,
         direction: direction
       })
     } catch (error) {
-      console.error('Failed to move window:', error)
-      showMessage(t('chat.errorOnMoveWindow', { error }), 'error', 3000)
+      if (error instanceof FrontendAppError) {
+        console.error(`Failed to move window: ${error.toFormattedString()}`, error.originalError);
+        showMessage(t('chat.errorOnMoveWindow', { error: error.toFormattedString() }), 'error', 3000);
+      } else {
+        console.error('Failed to move window:', error)
+        showMessage(t('chat.errorOnMoveWindow', { error: error.message || String(error) }), 'error', 3000)
+      }
     }
   }
 

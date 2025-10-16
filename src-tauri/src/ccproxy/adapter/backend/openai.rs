@@ -512,6 +512,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         &self,
         backend_response: BackendResponse,
     ) -> Result<UnifiedResponse, anyhow::Error> {
+        #[cfg(debug_assertions)]
         log::debug!(
             "openai response: {}",
             String::from_utf8_lossy(&backend_response.body)
@@ -841,18 +842,18 @@ impl OpenAIBackendAdapter {
     /// Handle message start event
     fn handle_message_start(
         &self,
-        openai_chunk: &OpenAIChatCompletionStreamResponse,
+        _openai_chunk: &OpenAIChatCompletionStreamResponse,
         sse_status: &Arc<RwLock<SseStatus>>,
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if let Ok(mut status) = sse_status.write() {
             if !status.message_start {
                 status.message_start = true;
-                if let Some(id) = openai_chunk.id.as_ref() {
-                    if !id.is_empty() {
-                        status.message_id = id.clone();
-                    }
-                }
+                // if let Some(id) = openai_chunk.id.as_ref() {
+                //     if status.message_id.is_empty() && !id.is_empty() {
+                //         status.message_id = id.clone();
+                //     }
+                // }
                 unified_chunks.push(UnifiedStreamChunk::MessageStart {
                     id: status.message_id.clone(),
                     model: status.model_id.clone(),
@@ -1013,34 +1014,12 @@ impl OpenAIBackendAdapter {
                 common::auto_complete_and_process_tool_tag(&mut status, unified_chunks);
             }
 
-            if !status.tool_compat_buffer.is_empty()
-                || !status.tool_compat_fragment_buffer.is_empty()
-            {
-                log::debug!("Flushing remaining buffers at stream end - buffer: {} chars, fragment: {} chars, in_tool_block: {}\ntool buffer: {}",
-                    status.tool_compat_buffer.len(),
-                    status.tool_compat_fragment_buffer.len(),
-                    status.in_tool_call_block,
-                    status.tool_compat_buffer
-                );
-
-                // First, try to flush and process any remaining tool calls
-                self.flush_tool_compat_buffer(&mut status, unified_chunks);
-
-                // If there's still content in the buffer after processing, output it as text
-                if !status.tool_compat_buffer.is_empty()
-                    || !status.tool_compat_fragment_buffer.is_empty()
-                {
-                    unified_chunks.push(UnifiedStreamChunk::Text {
-                        delta: format!(
-                            "{}{} ",
-                            status.tool_compat_buffer, status.tool_compat_fragment_buffer
-                        ),
-                    });
-
-                    status.tool_compat_buffer.clear();
-                    status.tool_compat_fragment_buffer.clear();
-                    status.in_tool_call_block = false;
-                }
+            // After attempting to complete and process tags, send any remaining text.
+            if !status.tool_compat_buffer.is_empty() {
+                unified_chunks.push(UnifiedStreamChunk::Text {
+                    delta: status.tool_compat_buffer.clone(),
+                });
+                status.tool_compat_buffer.clear();
             }
         }
 
@@ -1143,7 +1122,7 @@ impl OpenAIBackendAdapter {
         common::process_tool_calls_in_buffer(status, unified_chunks);
 
         // Handle remaining buffer content
-        self.handle_remaining_buffer_content(status, unified_chunks);
+        // self.handle_remaining_buffer_content(status, unified_chunks);
     }
 
     /// Handle remaining content in buffer that's not part of tool calls

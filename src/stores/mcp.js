@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
@@ -58,9 +58,14 @@ export const useMcpStore = defineStore('mcp', () => {
   const error = ref(null);
 
   const _handleError = async (err) => {
-    error.value = err.message || String(err);
     loading.value = false;
-    console.error('MCP Store Error:', error.value);
+    if (err instanceof FrontendAppError) {
+      error.value = err.toFormattedString();
+      console.error('MCP Store Error:', error.value, err.originalError);
+    } else {
+      error.value = err.message || String(err);
+      console.error('MCP Store Error:', error.value);
+    }
     throw err; // Re-throw for component-level handling if needed
   };
 
@@ -71,7 +76,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      const fetchedServers = await invoke('list_mcp_servers');
+      const fetchedServers = await invokeWrapper('list_mcp_servers');
       servers.value = fetchedServers.map(server => {
         // Ensure server.config exists and disabled_tools is an array
         const config = server.config || {}; // Defensive, though McpServer type implies config exists
@@ -107,7 +112,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      const newServer = await invoke('add_mcp_server', payload);
+      const newServer = await invokeWrapper('add_mcp_server', payload);
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'add', data: newServer });
       sendSyncState('mcp', label, { event: 'add', data: newServer });
@@ -133,7 +138,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      const updatedServer = await invoke('update_mcp_server', payload);
+      const updatedServer = await invokeWrapper('update_mcp_server', payload);
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: updatedServer });
 
@@ -177,7 +182,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('delete_mcp_server', { id });
+      await invokeWrapper('delete_mcp_server', { id });
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'delete', data: { id } });
       sendSyncState('mcp', label, { event: 'delete', data: { id } });
@@ -196,7 +201,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('enable_mcp_server', { id });
+      await invokeWrapper('enable_mcp_server', { id });
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: false } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: false } });
@@ -215,7 +220,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('disable_mcp_server', { id });
+      await invokeWrapper('disable_mcp_server', { id });
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: true } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: true } });
@@ -230,7 +235,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('restart_mcp_server', { id });
+      await invokeWrapper('restart_mcp_server', { id });
 
       // Restart might change status, but we don't get the new status back synchronously here.
       // Rely on status updates pushed from backend or a periodic refresh if needed.
@@ -245,7 +250,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('refresh_mcp_server', { id });
+      await invokeWrapper('refresh_mcp_server', { id });
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -261,7 +266,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading.value = true;
     error.value = null;
     try {
-      const tools = await invoke('get_mcp_server_tools', { id: serverId });
+      const tools = await invokeWrapper('get_mcp_server_tools', { id: serverId });
       serverTools.value = {
         ...serverTools.value,
         [serverId]: tools,
@@ -308,7 +313,7 @@ export const useMcpStore = defineStore('mcp', () => {
 
       // Call the backend to update the server configuration
       // We expect this call to primarily affect the tool's status within the server's config.
-      const backendUpdateResult = await invoke('update_mcp_tool_status', { id: serverId, toolName: toolName, disabled: newDisabledStateForTool });
+      const backendUpdateResult = await invokeWrapper('update_mcp_tool_status', { id: serverId, toolName: toolName, disabled: newDisabledStateForTool });
 
       if (backendUpdateResult) {
         // Preserve the existing server state (like 'status') and merge the backend update.
@@ -335,7 +340,11 @@ export const useMcpStore = defineStore('mcp', () => {
 
       return servers.value[serverIndex]; // Return the updated server state from the store
     } catch (err) {
-      console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend:`, err); // Use toolName for consistency
+      if (err instanceof FrontendAppError) {
+        console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend: ${err.toFormattedString()}`, err.originalError);
+      } else {
+        console.error(`Failed to toggle tool "${toolName}" state for server ID ${serverId} via backend:`, err);
+      }
       throw err; // Re-throw the error
     }
   }

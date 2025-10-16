@@ -239,7 +239,7 @@
 import { computed, nextTick, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { invoke } from '@tauri-apps/api/core'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { listen } from '@tauri-apps/api/event'
 
 import SkillItem from '@/components/chat/SkillItem.vue'
@@ -414,7 +414,7 @@ const removeScrollListener = () => {
 
 watch(
   () => isChatting.value,
-  (newVal) => {
+  newVal => {
     if (newVal) {
       // ensure scroll listener is set after the element is rendered
       nextTick(() => {
@@ -441,7 +441,7 @@ watch(
     // get default sub model from local storage
     const defaultSubModel = csGetStorage(csStorageKey.defaultModelAtDialog)
     if (defaultSubModel) {
-      const model = currentModelProvider.value.models.find((m) => m.id === defaultSubModel)
+      const model = currentModelProvider.value.models.find(m => m.id === defaultSubModel)
       if (model) {
         currentModelProvider.value.defaultModel = defaultSubModel
       }
@@ -472,7 +472,7 @@ onMounted(async () => {
   }
 
   // listen chat_stream event
-  unlistenChunkResponse.value = await listen('chat_stream', async (event) => {
+  unlistenChunkResponse.value = await listen('chat_stream', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.metadata?.windowLabel !== settingStore.windowLabel) {
       return
@@ -481,7 +481,7 @@ onMounted(async () => {
     handleChatMessage(event.payload)
   })
 
-  unlistenPasteResponse.value = await listen('cs://assistant-paste', async (event) => {
+  unlistenPasteResponse.value = await listen('cs://assistant-paste', async event => {
     // we don't want to process messages from other windows
     if (event.payload?.windowLabel !== settingStore.windowLabel) {
       return
@@ -493,11 +493,11 @@ onMounted(async () => {
       inputMessage.value = event.payload.content
 
       nextTick(() => {
-        const textarea = inputRef.value?.textarea;
+        const textarea = inputRef.value?.textarea
         if (textarea) {
-          textarea.scrollTop = textarea.scrollHeight;
+          textarea.scrollTop = textarea.scrollHeight
         }
-      });
+      })
 
       if (isTranslation.value) {
         setTimeout(() => {
@@ -579,7 +579,7 @@ const dispatchChatCompletion = async () => {
   nextTick(scrollToBottomIfNeeded)
 
   try {
-    await invoke('chat_completion', {
+    await invokeWrapper('chat_completion', {
       providerId: currentModelProvider.value.id,
       model: currentModelProvider.value.defaultModel,
       chatId: lastChatId.value,
@@ -592,8 +592,15 @@ const dispatchChatCompletion = async () => {
       }
     })
   } catch (error) {
-    chatErrorMessage.value = t('chat.errorOnSendMessage', { error })
-    console.error('error on sendMessage:', error)
+    if (error instanceof FrontendAppError) {
+      chatErrorMessage.value = t('chat.errorOnSendMessage', { error: error.toFormattedString() })
+      console.error('error on sendMessage:', error.originalError)
+    } else {
+      chatErrorMessage.value = t('chat.errorOnSendMessage', {
+        error: error.message || String(error)
+      })
+      console.error('error on sendMessage:', error)
+    }
     isChatting.value = false
   }
 }
@@ -602,7 +609,7 @@ const payloadMetadata = ref({})
 /**
  * Handle chat message event
  */
-const handleChatMessage = async (payload) => {
+const handleChatMessage = async payload => {
   // Use the common handler for shared logic
   handleChatMessageCommon(
     payload,
@@ -783,10 +790,19 @@ const onGoToChat = async () => {
         conversationId: chatStore.currentConversationId
       })
       // show main window
-      invoke('show_window', { windowLabel: 'main' })
+      invokeWrapper('show_window', { windowLabel: 'main' })
     } catch (error) {
-      console.error('error on go to chat:', error)
-      showMessage(t('chat.errorOnGoToChat', { error }), 'error', 3000)
+      if (error instanceof FrontendAppError) {
+        console.error(`error on go to chat: ` + error.toFormattedString(), error.originalError)
+        showMessage(t('chat.errorOnGoToChat', { error: error.toFormattedString() }), 'error', 3000)
+      } else {
+        console.error('error on go to chat:', error)
+        showMessage(
+          t('chat.errorOnGoToChat', { error: error.message || String(error) }),
+          'error',
+          3000
+        )
+      }
     }
   })
 }
@@ -846,7 +862,7 @@ const onInput = () => {
   // if (inputMessage.value.trim() && !userMessage.value) {
   //   currentAssistantMessage.value = ''
   // }
- }
+}
 
 /**
  * Handle enter key event
@@ -896,8 +912,31 @@ const onKeydown = event => {
   }
 }
 
-const onAddModel = () => {
-  invoke('open_setting_window', { settingType: 'model' })
+const onAddModel = async () => {
+  try {
+    await invokeWrapper('open_setting_window', { settingType: 'model' })
+  } catch (error) {
+    if (error instanceof FrontendAppError) {
+      console.error(
+        `Error opening setting window: ` + error.toFormattedString(),
+        error.originalError
+      )
+      showMessage(
+        t('chat.errorOnOpenSettingWindow', {
+          error: error.toFormattedString()
+        }),
+        'error',
+        3000
+      )
+    } else {
+      console.error('Error opening setting window:', error)
+      showMessage(
+        t('chat.errorOnOpenSettingWindow', { error: error.message || String(error) }),
+        'error',
+        3000
+      )
+    }
+  }
 }
 </script>
 

@@ -4,7 +4,7 @@
 //! clients to connect and invoke enabled MCP tools.
 
 mod handler;
-mod persistent_session;
+pub mod persistent_session;
 mod standalone;
 
 pub use standalone::{create_http_service, create_sse_router};

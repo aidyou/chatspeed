@@ -15,10 +15,12 @@ use rmcp::{
 use rust_i18n::t;
 use tokio::sync::RwLock;
 
+use crate::mcp::McpError;
+
 use super::core::McpClientCore;
 use super::{
     types::{McpClientInternal, McpStatus, StatusChangeCallback},
-    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
+    McpClient, McpClientResult, McpProtocolType, McpServerConfig,
 };
 
 /// Handles connection lifecycle and provides methods for:
@@ -32,7 +34,7 @@ impl StreamableHttpClient {
     /// Creates a new HTTP Protocol of MCP client instance with given configuration
     pub fn new(config: McpServerConfig) -> McpClientResult<Self> {
         if config.protocol_type != McpProtocolType::StreamableHttp {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!(
                     "mcp.client.config_mismatch",
                     client = "StreamableHttpClient",
@@ -43,7 +45,7 @@ impl StreamableHttpClient {
         }
 
         if config.url.as_deref().unwrap_or_default().is_empty() {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!("mcp.client.http_url_cant_be_empty").to_string(),
             ));
         }
@@ -71,7 +73,7 @@ impl StreamableHttpClient {
                 headers.insert(
                     header::AUTHORIZATION,
                     header::HeaderValue::from_str(&format!("Bearer {}", token))
-                        .map_err(|e| McpClientError::ConfigError(e.to_string()))?,
+                        .map_err(|e| McpError::ClientConfigError(e.to_string()))?,
                 );
 
                 client_builder = client_builder.default_headers(headers);
@@ -81,14 +83,14 @@ impl StreamableHttpClient {
         if let Some(proxy) = current_config.proxy.as_ref() {
             if !proxy.trim().is_empty() {
                 let proxy = reqwest::Proxy::all(proxy)
-                    .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
+                    .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
                 client_builder = client_builder.proxy(proxy);
             }
         }
 
         let http_client = client_builder
             .build()
-            .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
+            .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
         Ok(http_client)
     }
 }
@@ -116,7 +118,7 @@ impl McpClient for StreamableHttpClient {
             Some(u) => u,
             None => {
                 let err_msg = t!("mcp.client.http_url_cant_be_empty").to_string();
-                return Err(McpClientError::ConfigError(err_msg));
+                return Err(McpError::ClientConfigError(err_msg));
             }
         };
 
@@ -154,7 +156,7 @@ impl McpClient for StreamableHttpClient {
             Err(e) => {
                 let detailed_error = e.to_string();
                 log::error!("Start HttpClient error: {}", detailed_error);
-                return Err(McpClientError::StartError(
+                return Err(McpError::ClientStartError(
                     t!(
                         "mcp.client.http_service_start_failed",
                         url = url,
@@ -201,13 +203,15 @@ impl McpClient for StreamableHttpClient {
 
 #[cfg(test)]
 mod test {
-    use crate::mcp::client::{
-        streamable_http::StreamableHttpClient, McpClient as _, McpClientError, McpProtocolType,
-        McpServerConfig,
+    use crate::mcp::{
+        client::{
+            streamable_http::StreamableHttpClient, McpClient as _, McpProtocolType, McpServerConfig,
+        },
+        McpError,
     };
 
     #[tokio::test]
-    async fn http_test() -> Result<(), McpClientError> {
+    async fn http_test() -> Result<(), McpError> {
         let client = StreamableHttpClient::new(McpServerConfig {
             protocol_type: McpProtocolType::StreamableHttp,
             url: Some("http://127.0.0.1:8000/tools/inference/sse".to_string()),

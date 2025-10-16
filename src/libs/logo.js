@@ -20,6 +20,8 @@ export function getModelLogo(model) {
   // Exact match dictionary
   const exactMatch = {
     'k1': 'moonshot',
+    'k1.5': 'moonshot',
+    'k2': 'moonshot',
     'kimi': 'moonshot',
     'deep_seek': 'deepseek'
   };

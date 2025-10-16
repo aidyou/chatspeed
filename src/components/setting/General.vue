@@ -752,6 +752,7 @@ import {
   getSoftwareLanguages,
   mapBrowserLangToStandard
 } from '@/i18n/langUtils'
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
 import { showMessage, openUrl } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 
@@ -829,7 +830,19 @@ onMounted(async () => {
  */
 const setSetting = (key, value) => {
   settingStore.setSetting(key, value).catch(err => {
-    showMessage(t('settings.general.updateSettingFailed', { error: err }), 'error')
+    if (err instanceof FrontendAppError) {
+      showMessage(
+        t('settings.general.updateSettingFailed', { error: err.toFormattedString() }),
+        'error'
+      )
+      console.error('Error updating setting:', err.originalError)
+    } else {
+      showMessage(
+        t('settings.general.updateSettingFailed', { error: err.message || String(err) }),
+        'error'
+      )
+      console.error('Error updating setting:', err)
+    }
   })
 }
 
@@ -1164,10 +1177,19 @@ const onAutoStartChange = async value => {
     // Only update the setting if the autostart operation succeeded
     setSetting('autoStart', value)
   } catch (error) {
-    console.error('Failed to change autostart setting:', error)
-    // Revert the switch state
-    settings.value.autoStart = !value
-    showMessage(t('settings.general.autoStartChangeFailed', { error: error.toString() }), 'error')
+    if (error instanceof FrontendAppError) {
+      console.error(
+        `Failed to change autostart setting: ${error.toFormattedString()}`,
+        error.originalError
+      )
+      showMessage(
+        t('settings.general.autoStartChangeFailed', { error: error.toFormattedString() }),
+        'error'
+      )
+    } else {
+      console.error('Failed to change autostart setting:', error)
+      showMessage(t('settings.general.autoStartChangeFailed', { error: error.toString() }), 'error')
+    }
   }
 }
 
@@ -1195,7 +1217,13 @@ const selectBackupDir = async () => {
     }
   } catch (error) {
     settings.value.backupDir = ''
-    showMessage(error.toString(), 'error')
+    if (error instanceof FrontendAppError) {
+      showMessage(error.toFormattedString(), 'error')
+      console.error('Error selecting backup directory:', error.originalError)
+    } else {
+      showMessage(error.toString(), 'error')
+      console.error('Error selecting backup directory:', error)
+    }
   } finally {
     setSetting('backupDir', settings.value.backupDir)
     getAllBackups()
@@ -1215,11 +1243,17 @@ const startBackup = async () => {
   try {
     isBackingUp.value = true
 
-    await invoke('backup_setting', { backupDir: settings.value.backupDir })
+    await invokeWrapper('backup_setting', { backupDir: settings.value.backupDir })
     getAllBackups()
     showMessage(t('settings.general.backupSuccess'), 'success')
   } catch (error) {
-    showMessage(error.toString(), 'error')
+    if (error instanceof FrontendAppError) {
+      showMessage(error.toFormattedString(), 'error')
+      console.error('Error backing up settings:', error.originalError)
+    } else {
+      showMessage(error.toString(), 'error')
+      console.error('Error backing up settings:', error)
+    }
   } finally {
     isBackingUp.value = false
     // Hide loading state
@@ -1237,7 +1271,7 @@ const onRestore = value => {
     }
   )
     .then(() => {
-      invoke('restore_setting', { backupDir: value })
+      invokeWrapper('restore_setting', { backupDir: value })
         .then(() => {
           settingStore.reloadConfig().then(() => {
             sendSyncState('model', 'all')
@@ -1247,7 +1281,13 @@ const onRestore = value => {
           })
         })
         .catch(error => {
-          showMessage(error.toString(), 'error')
+          if (error instanceof FrontendAppError) {
+            showMessage(error.toFormattedString(), 'error')
+            console.error('Error restoring settings:', error.originalError)
+          } else {
+            showMessage(error.toString(), 'error')
+            console.error('Error restoring settings:', error)
+          }
         })
     })
     .catch(() => {
@@ -1256,19 +1296,29 @@ const onRestore = value => {
 }
 
 const getAllBackups = () => {
-  invoke('get_all_backups', { backupDir: settings.value.backupDir }).then(dirs => {
-    if (!dirs || !Array.isArray(dirs)) {
-      backups.value = []
-    } else {
-      backups.value = []
-      dirs.forEach(b => {
-        backups.value.push({
-          label: b.split('/').pop(),
-          value: b
+  invokeWrapper('get_all_backups', { backupDir: settings.value.backupDir })
+    .then(dirs => {
+      if (!dirs || !Array.isArray(dirs)) {
+        backups.value = []
+      } else {
+        backups.value = []
+        dirs.forEach(b => {
+          backups.value.push({
+            label: b.split('/').pop(),
+            value: b
+          })
         })
-      })
-    }
-  })
+      }
+    })
+    .catch(error => {
+      if (error instanceof FrontendAppError) {
+        showMessage(error.toFormattedString(), 'error')
+        console.error('Error getting all backups:', error.originalError)
+      } else {
+        showMessage(error.toString(), 'error')
+        console.error('Error getting all backups:', error)
+      }
+    })
 }
 </script>
 

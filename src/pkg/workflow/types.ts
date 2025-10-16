@@ -132,7 +132,8 @@ export interface PlanResponse {
 export interface ParsedLLMResponse {
   action?: {
     name: string
-    arguments: Record<string, unknown>
+    arguments: Record<string, any>
+    retryCount?: number
   }
   reasoning?: string
   content?: string

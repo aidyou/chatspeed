@@ -80,7 +80,7 @@ impl MainStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let content_hash = format!("{:x}", xxh32(content.as_bytes(), 0));
 
         // 检查是否存在重复笔记
@@ -166,7 +166,7 @@ impl MainStore {
         let mut conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
         // Handle stmt in a separate scope to ensure it gets dropped before the transaction is committed
@@ -218,7 +218,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT * FROM notes WHERE id = ?1")?;
         let note = stmt.query_row(params![note_id], |row| {
             let metadata_str: Option<String> = row.get("metadata")?;
@@ -261,7 +261,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let sql = match tag_id {
             Some(_) => {
                 "
@@ -337,7 +337,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT n.* FROM notes n WHERE n.title LIKE ?1 ORDER BY n.updated_at DESC")?;
 
@@ -382,7 +382,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "
             SELECT * FROM note_tag_items

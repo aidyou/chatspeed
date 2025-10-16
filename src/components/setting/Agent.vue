@@ -89,8 +89,12 @@
           </el-form-item>
           <el-form-item :label="$t('settings.agent.agentType')" prop="agentType">
             <el-radio-group v-model="agentForm.agentType">
-              <el-radio-button label="autonomous">{{ $t('settings.agent.autonomousMode') }}</el-radio-button>
-              <el-radio-button label="planning">{{ $t('settings.agent.planningMode') }}</el-radio-button>
+              <el-radio-button label="autonomous">{{
+                $t('settings.agent.autonomousMode')
+              }}</el-radio-button>
+              <el-radio-button label="planning">{{
+                $t('settings.agent.planningMode')
+              }}</el-radio-button>
             </el-radio-group>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
@@ -99,7 +103,10 @@
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
             <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="6" />
           </el-form-item>
-          <el-form-item v-if="agentForm.agentType === 'planning'" :label="$t('settings.agent.planningPrompt')" prop="planningPrompt">
+          <el-form-item
+            v-if="agentForm.agentType === 'planning'"
+            :label="$t('settings.agent.planningPrompt')"
+            prop="planningPrompt">
             <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="6" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.maxContexts')" prop="maxContexts">
@@ -328,7 +335,16 @@ const editAgent = async id => {
       editId.value = id
       agentForm.value = agentData
     } catch (error) {
-      showMessage(t('settings.agent.fetchFailed'), 'error')
+      if (error instanceof FrontendAppError) {
+        showMessage(t('settings.agent.fetchFailed', { error: error.toFormattedString() }), 'error')
+        console.error('Error fetching agent:', error.originalError)
+      } else {
+        showMessage(
+          t('settings.agent.fetchFailed', { error: error.message || String(error) }),
+          'error'
+        )
+        console.error('Error fetching agent:', error)
+      }
       return
     }
   } else {
@@ -360,7 +376,21 @@ const copyAgent = async id => {
     editId.value = null // Ensure editId is cleared for copy
     agentDialogVisible.value = true
   } catch (error) {
-    showMessage(t('settings.agent.fetchFailed'), 'error')
+    if (error instanceof FrontendAppError) {
+      showMessage(
+        t('settings.agent.fetchFailed', {
+          error: error.toFormattedString()
+        }),
+        'error'
+      )
+      console.error('Error copying agent:', error.originalError)
+    } else {
+      showMessage(
+        t('settings.agent.fetchFailed', { error: error.message || String(error) }),
+        'error'
+      )
+      console.error('Error copying agent:', error)
+    }
   }
 }
 
@@ -378,7 +408,21 @@ const updateAgent = () => {
         )
         agentDialogVisible.value = false
       } catch (error) {
-        showMessage(t('settings.agent.saveFailed', { error: error.message || error }), 'error')
+        if (error instanceof FrontendAppError) {
+          showMessage(
+            t('settings.agent.saveFailed', {
+              error: error.toFormattedString()
+            }),
+            'error'
+          )
+          console.error('Error saving agent:', error.originalError)
+        } else {
+          showMessage(
+            t('settings.agent.saveFailed', { error: error.message || String(error) }),
+            'error'
+          )
+          console.error('Error saving agent:', error)
+        }
       }
     } else {
       console.log('error submit!')
@@ -401,7 +445,21 @@ const deleteAgent = id => {
       await agentStore.deleteAgent(id)
       showMessage(t('settings.agent.deleteSuccess'), 'success')
     } catch (error) {
-      showMessage(t('settings.agent.deleteFailed', { error: error.message || error }), 'error')
+      if (error instanceof FrontendAppError) {
+        showMessage(
+          t('settings.agent.deleteFailed', {
+            error: error.toFormattedString()
+          }),
+          'error'
+        )
+        console.error('Error deleting agent:', error.originalError)
+      } else {
+        showMessage(
+          t('settings.agent.deleteFailed', { error: error.message || String(error) }),
+          'error'
+        )
+        console.error('Error deleting agent:', error)
+      }
     }
   })
 }
@@ -411,7 +469,21 @@ const deleteAgent = id => {
  */
 const onDragEnd = () => {
   agentStore.updateAgentOrder(agents.value).catch(error => {
-    showMessage(t('settings.agent.reorderFailed', { error: error.message || error }), 'error')
+    if (error instanceof FrontendAppError) {
+      showMessage(
+        t('settings.agent.reorderFailed', {
+          error: error.toFormattedString()
+        }),
+        'error'
+      )
+      console.error('Error reordering agents:', error.originalError)
+    } else {
+      showMessage(
+        t('settings.agent.reorderFailed', { error: error.message || String(error) }),
+        'error'
+      )
+      console.error('Error reordering agents:', error)
+    }
     // Revert visual change by fetching the original order
     agentStore.fetchAgents()
   })

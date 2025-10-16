@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use reqwest::Response;
 use rust_i18n::t;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -21,6 +22,13 @@ use crate::db::ModelConfig;
 use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
+
+/// A standardized error structure for streaming to the frontend.
+#[derive(Serialize)]
+struct JsonErrorPayload<'a> {
+    status: u16,
+    message: &'a str,
+}
 
 /// OpenAI chat implementation
 #[derive(Clone)]
@@ -77,9 +85,17 @@ impl OpenAIChat {
                             details: e.to_string(),
                         };
                         log::error!("{} stream processing error: {}", provider_name, err);
+
+                        let error_payload = JsonErrorPayload {
+                            status: 500, // Internal processing error
+                            message: &err.to_string(),
+                        };
+                        let chunk = serde_json::to_string(&error_payload)
+                            .unwrap_or_else(|_| err.to_string());
+
                         callback(ChatResponse::new_with_arc(
                             chat_id.clone(),
-                            err.to_string(),
+                            chunk,
                             MessageType::Error,
                             metadata_option.clone(),
                             Some(FinishReason::Error),
@@ -182,9 +198,17 @@ impl OpenAIChat {
                         details: e.to_string(),
                     };
                     log::error!("{} stream event error: {}", provider_name, err);
+
+                    let error_payload = JsonErrorPayload {
+                        status: 500, // Internal processing error
+                        message: &err.to_string(),
+                    };
+                    let chunk =
+                        serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
                     callback(ChatResponse::new_with_arc(
                         chat_id.clone(),
-                        err.to_string(),
+                        chunk,
                         MessageType::Error,
                         metadata_option.clone(),
                         None,
@@ -278,9 +302,17 @@ impl OpenAIChat {
                     details: e.to_string(),
                 };
                 log::error!("Failed to serialize AssistantAction message: {}", err);
+
+                let error_payload = JsonErrorPayload {
+                    status: 500,
+                    message: &err.to_string(),
+                };
+                let chunk =
+                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
                 callback(ChatResponse::new_with_arc(
                     chat_id.to_string(),
-                    err.to_string(),
+                    chunk,
                     MessageType::Error,
                     metadata_option.clone(),
                     Some(FinishReason::Error),
@@ -321,9 +353,15 @@ impl OpenAIChat {
                         tcd.name,
                         err
                     );
+                    let error_payload = JsonErrorPayload {
+                        status: 500,
+                        message: &err.to_string(),
+                    };
+                    let chunk =
+                        serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
                     callback(ChatResponse::new_with_arc(
                         chat_id.to_string(),
-                        err.to_string(),
+                        chunk,
                         MessageType::Error,
                         metadata_option.clone(),
                         Some(FinishReason::Error),
@@ -407,9 +445,15 @@ impl AiChatTrait for OpenAIChat {
                 let err = AiError::InitFailed(
                     t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
                 );
+                let error_payload = JsonErrorPayload {
+                    status: 500,
+                    message: &err.to_string(),
+                };
+                let chunk =
+                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
-                    err.to_string(),
+                    chunk,
                     MessageType::Error,
                     extra_params.clone(),
                     Some(FinishReason::Error),
@@ -420,9 +464,15 @@ impl AiChatTrait for OpenAIChat {
             .get_ai_model_by_id(provider_id)
             .map_err(|e| {
                 let err = AiError::InitFailed(e.to_string());
+                let error_payload = JsonErrorPayload {
+                    status: 500,
+                    message: &err.to_string(),
+                };
+                let chunk =
+                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
-                    err.to_string(),
+                    chunk,
                     MessageType::Error,
                     extra_params.clone(),
                     Some(FinishReason::Error),
@@ -557,14 +607,21 @@ impl AiChatTrait for OpenAIChat {
             .await
             .map_err(|e| {
                 let err = AiError::ApiRequestFailed {
-                    status_code: "N/A".to_string(),
+                    status_code: 0, // N/A for network errors before HTTP response
                     provider: model_detail.api_protocol.clone(),
                     details: e.to_string(),
                 };
 
+                let error_payload = JsonErrorPayload {
+                    status: 503, // Service Unavailable or network error
+                    message: &err.to_string(),
+                };
+                let chunk =
+                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
                 callback(ChatResponse::new_with_arc(
                     chat_id.clone(),
-                    err.to_string(),
+                    chunk,
                     MessageType::Error,
                     extra_params.clone(),
                     Some(FinishReason::Error),
@@ -575,18 +632,25 @@ impl AiChatTrait for OpenAIChat {
         if response.is_error {
             let status_code = response
                 .raw_response
-                .map(|r| r.status().to_string())
-                .unwrap_or("N/A".to_string()); // No HTTP response received
+                .as_ref()
+                .map(|r| r.status().as_u16())
+                .unwrap_or(500); // Default to 500 if no status
 
             let err = AiError::ApiRequestFailed {
                 status_code,
                 provider: model_detail.name.clone(),
                 details: response.content.clone(),
             };
-            // log::error!("{} API returned an error: {}", provider_name_for_error, err);
+
+            let error_payload = JsonErrorPayload {
+                status: status_code,
+                message: &err.to_string(),
+            };
+            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                err.to_string(),
+                chunk,
                 MessageType::Error,
                 extra_params,
                 Some(FinishReason::Error),
@@ -607,13 +671,20 @@ impl AiChatTrait for OpenAIChat {
             // This case occurs when the request fails in a way that a response object isn't available,
             // but it wasn't caught by the initial network error mapping. The content field contains the error details.
             let err = AiError::ApiRequestFailed {
-                status_code: "N/A".to_string(),
+                status_code: 0, // N/A for network errors before HTTP response
                 provider: model_detail.name.clone(),
                 details: response.content.clone(),
             };
+
+            let error_payload = JsonErrorPayload {
+                status: 500,
+                message: &err.to_string(),
+            };
+            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                err.to_string(),
+                chunk,
                 MessageType::Error,
                 extra_params,
                 Some(FinishReason::Error),

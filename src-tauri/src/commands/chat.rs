@@ -44,6 +44,7 @@
 //! - Then add new states to the `ChatState`::new method.
 //! - Finally, add the new AI provider to the `init_chats!` macro.
 
+use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatState,
 };
@@ -52,6 +53,7 @@ use crate::ai::traits::chat::{MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
 use crate::constants::{DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
 use crate::db::MainStore;
+use crate::error::{AppError, Result};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::tools::MCP_TOOL_NAME_SPLIT;
 
@@ -157,7 +159,7 @@ fn prepare_messages_with_system_context(mut messages: Vec<Value>, has_tools: boo
 pub fn setup_chat_proxy(
     main_state: Arc<std::sync::RwLock<MainStore>>,
     metadata: &mut Option<Value>,
-) -> Result<(), String> {
+) -> crate::error::Result<()> {
     // If the proxy type is http, get the proxy server and username/password from the config
     if let Some(md) = metadata.as_mut() {
         // metadata is Value::Object
@@ -180,18 +182,14 @@ pub fn setup_chat_proxy(
         // 如果代理类型是"bySetting"，从配置中获取
         // if proxy_type is "bySetting", get proxy type from config
         if proxy_type == "bySetting" {
-            let config_store = main_state.read().map_err(|e| {
-                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
-            })?;
+            let config_store = main_state.read()?;
             proxy_type = config_store.get_config("proxy_type", "none".to_string());
             if let Some(md_obj) = md.as_object_mut() {
                 md_obj.insert("proxyType".to_string(), json!(proxy_type));
             }
         }
         if proxy_type == "http" {
-            let config_store = main_state.read().map_err(|e| {
-                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string()
-            })?;
+            let config_store = main_state.read()?;
             let proxy_server = config_store.get_config("proxy_server", String::new());
             if !proxy_server.is_empty() {
                 if let Some(obj) = md.as_object_mut() {
@@ -218,7 +216,7 @@ pub async fn list_models(
     api_url: Option<&str>,
     api_key: Option<&str>,
     metadata: Option<Value>,
-) -> Result<Vec<ModelDetails>, String> {
+) -> Result<Vec<ModelDetails>> {
     let mut metadata_val = metadata.unwrap_or_else(|| json!({}));
     if metadata_val["proxyType"].is_null() {
         metadata_val["proxyType"] = json!("bySetting");
@@ -266,18 +264,26 @@ pub async fn chat_completion(
     network_enabled: Option<bool>,
     mcp_enabled: Option<bool>,
     metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
-) -> Result<(), String> {
+) -> Result<()> {
     if provider_id < 1 {
-        return Err(t!("chat.empty_provider_id").to_string());
+        return Err(AppError::Ai(AiError::InitFailed(
+            t!("chat.empty_provider_id").to_string(),
+        )));
     }
     if model.is_empty() {
-        return Err(t!("chat.empty_model").to_string());
+        return Err(AppError::Ai(AiError::InitFailed(
+            t!("chat.empty_model").to_string(),
+        )));
     }
     if chat_id.is_empty() {
-        return Err(t!("chat.empty_chat_id").to_string());
+        return Err(AppError::Ai(AiError::InitFailed(
+            t!("chat.empty_chat_id").to_string(),
+        )));
     }
     if messages.is_empty() {
-        return Err(t!("chat.empty_messages").to_string());
+        return Err(AppError::Ai(AiError::InitFailed(
+            t!("chat.empty_messages").to_string(),
+        )));
     }
 
     // Ensure the channel for this window is created/retrieved.
@@ -286,7 +292,7 @@ pub async fn chat_completion(
         .channels
         .get_or_create_channel(window.clone())
         .await
-        .map_err(|e| format!("Failed to get or create window channel: {}", e))?;
+        .map_err(|e| AiError::FailedToGetOrCreateWindowChannel(e.to_string()))?;
 
     // Prepare final_metadata: ensure windowLabel is present.
     // Frontend JS sends metadata with `windowLabel`.
@@ -308,11 +314,7 @@ pub async fn chat_completion(
         .unwrap_or(true);
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
-        let mut available_tools = chat_state
-            .tool_manager
-            .get_tool_calling_spec(None)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut available_tools = chat_state.tool_manager.get_tool_calling_spec(None).await?;
         if !network_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
@@ -367,11 +369,12 @@ pub async fn stop_chat(
     state: State<'_, Arc<ChatState>>,
     api_protocol: String,
     chat_id: &str,
-) -> Result<(), String> {
-    let protocol: ChatProtocol = api_protocol
-        .clone()
-        .try_into()
-        .map_err(|e: String| format!("Invalid API protocol: {}", e))?;
+) -> Result<()> {
+    let protocol: ChatProtocol = api_protocol.clone().try_into().map_err(|_| {
+        AiError::InitFailed(
+            t!("chat.invalid_api_protocol", protocll = api_protocol.clone()).to_string(),
+        )
+    })?;
     let mut chats = state.chats.lock().await;
 
     // Find the specific chat instance
@@ -394,7 +397,9 @@ pub async fn stop_chat(
             return Ok(());
         }
     }
-    Err(t!("chat.chat_not_found").to_string())
+    Err(AppError::Ai(AiError::InitFailed(
+        t!("chat.chat_not_found").to_string(),
+    )))
 }
 
 /// Detects the language of a given text and returns the corresponding language code.
@@ -405,18 +410,19 @@ pub async fn stop_chat(
 /// # Returns
 /// A `Result` containing the language code or an error message.
 #[tauri::command]
-pub fn detect_language(text: &str) -> Result<Value, String> {
+pub fn detect_language(text: &str) -> Result<Value> {
     let detected_lang = detect(text);
 
     if let Some(info) = detected_lang {
-        let languages = get_available_lang()
-            .map_err(|e| t!("chat.failed_to_get_available_languages", error = e).to_string())?;
-        let lang_code = lang_to_iso_639_1(&info.lang().code()).map_err(|e| {
-            t!(
+        let languages = get_available_lang().map_err(|e| AppError::General {
+            message: t!("chat.failed_to_get_available_languages", error = e).to_string(),
+        })?;
+        let lang_code = lang_to_iso_639_1(&info.lang().code()).map_err(|e| AppError::General {
+            message: t!(
                 "chat.failed_to_convert_language_code",
                 error = e.to_string()
             )
-            .to_string()
+            .to_string(),
         })?;
 
         if let Some(lang_name) = languages.get(lang_code) {
@@ -425,7 +431,9 @@ pub fn detect_language(text: &str) -> Result<Value, String> {
             Ok(json!({ "lang": info.lang().name().to_string(), "code": lang_code }))
         }
     } else {
-        Err(t!("chat.failed_to_detect_language").to_string())
+        Err(AppError::General {
+            message: t!("chat.failed_to_detect_language").to_string(),
+        })
     }
 }
 

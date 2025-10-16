@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use rust_i18n::t;
 use std::{
     collections::HashMap,
     fmt::{self, Display},
@@ -7,6 +8,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::ccproxy::errors::CCProxyError;
 
 /// Represents a target backend model for a proxy alias.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -112,7 +115,7 @@ impl Display for ChatProtocol {
 }
 
 impl FromStr for ChatProtocol {
-    type Err = String;
+    type Err = CCProxyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -121,7 +124,9 @@ impl FromStr for ChatProtocol {
             "gemini" => Ok(ChatProtocol::Gemini),
             "ollama" => Ok(ChatProtocol::Ollama),
             "huggingface" => Ok(ChatProtocol::HuggingFace),
-            _ => Err(format!("Invalid AiProtocol: {}", s)),
+            _ => Err(CCProxyError::InvalidProtocolError(
+                t!("chat.invalid_api_protocol", protocol = s).to_string(),
+            )),
         }
     }
 }
@@ -129,6 +134,6 @@ impl FromStr for ChatProtocol {
 impl TryFrom<String> for ChatProtocol {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
+        value.parse().map_err(|e: CCProxyError| e.to_string())
     }
 }

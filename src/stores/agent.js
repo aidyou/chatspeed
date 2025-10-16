@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 
@@ -66,7 +66,7 @@ const _transformFromBackend = (backendAgent) => {
  */
 const _transformToBackend = (frontendAgent) => {
   const stringifyModel = (modelObj) => {
-    if (modelObj && modelObj.id && modelObj.model) {
+    if (modelObj?.id && modelObj.model) {
       return JSON.stringify(modelObj);
     }
     return '';
@@ -99,9 +99,14 @@ export const useAgentStore = defineStore('agent', () => {
   const error = ref(null);
 
   const _handleError = (err, message = 'Agent Store Error') => {
-    error.value = err.message || String(err);
     loading.value = false;
-    console.error(`${message}:`, error.value);
+    if (err instanceof FrontendAppError) {
+      error.value = err.toFormattedString();
+      console.error(`${message}:`, error.value, err.originalError);
+    } else {
+      error.value = err.message || String(err);
+      console.error(`${message}:`, error.value);
+    }
     throw err;
   };
 
@@ -112,7 +117,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading.value = true;
     error.value = null;
     try {
-      const result = await invoke('get_all_agents');
+      const result = await invokeWrapper('get_all_agents');
       agents.value = (result || []).map(_transformFromBackend);
     } catch (err) {
       _handleError(err, 'Failed to fetch agents');
@@ -128,7 +133,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading.value = true;
     error.value = null;
     try {
-      const result = await invoke('get_available_tools');
+      const result = await invokeWrapper('get_available_tools');
       availableTools.value = result || [];
     } catch (err) {
       _handleError(err, 'Failed to fetch available tools');
@@ -146,7 +151,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading.value = true;
     error.value = null;
     try {
-      const agentData = await invoke('get_agent', { id });
+      const agentData = await invokeWrapper('get_agent', { id });
       return _transformFromBackend(agentData);
     } catch (err) {
       _handleError(err, `Failed to fetch agent ${id}`);
@@ -166,7 +171,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       const agentPayload = _transformToBackend(payload);
       const command = agentPayload.id ? 'update_agent' : 'add_agent';
-      await invoke(command, { agentPayload });
+      await invokeWrapper(command, { agentPayload });
       await fetchAgents(); // Refresh the list
     } catch (err) {
       _handleError(err, 'Failed to save agent');
@@ -183,7 +188,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading.value = true;
     error.value = null;
     try {
-      await invoke('delete_agent', { id });
+      await invokeWrapper('delete_agent', { id });
       const index = agents.value.findIndex(a => a.id === id);
       if (index !== -1) {
         agents.value.splice(index, 1);
@@ -222,7 +227,7 @@ export const useAgentStore = defineStore('agent', () => {
     error.value = null;
     try {
       const agentIds = orderedAgents.map(a => a.id);
-      await invoke('update_agent_order', { agentIds });
+      await invokeWrapper('update_agent_order', { agentIds });
       agents.value = [...orderedAgents]; // Update local state to reflect new order
     } catch (err) {
       _handleError(err, 'Failed to update agent order');

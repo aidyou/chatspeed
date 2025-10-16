@@ -6,6 +6,7 @@ use tauri::{command, AppHandle, State, Wry};
 use crate::{
     ai::interaction::chat_completion::ChatState,
     constants::DEFAULT_WEB_SEARCH_TOOL,
+    error::{AppError, Result},
     scraper::{
         engine::run as run_scraper,
         types::{ContentOptions, ScrapeRequest},
@@ -17,10 +18,10 @@ pub async fn test_scrape(
     app_handle: AppHandle<Wry>,
     chat_state: State<'_, Arc<ChatState>>,
     request_data: serde_json::Value, // Changed to accept a JSON object
-) -> Result<String, String> {
-    let request_type = request_data["type"]
-        .as_str()
-        .ok_or("Missing 'type' in request data")?;
+) -> Result<String> {
+    let request_type = request_data["type"].as_str().ok_or(AppError::General {
+        message: "Missing 'type' in request data".to_string(),
+    })?;
 
     match request_type {
         "content" | "normal" => {
@@ -31,7 +32,9 @@ pub async fn test_scrape(
 
             let url = request_data["url"]
                 .as_str()
-                .ok_or("Missing 'url' for content request")?
+                .ok_or(AppError::General {
+                    message: "Missing 'url' for content request".to_string(),
+                })?
                 .to_string();
             let content_format = request_data["format"]
                 .as_str()
@@ -58,7 +61,9 @@ pub async fn test_scrape(
             run_scraper(app_handle, request)
                 .await
                 .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
-                .map_err(|e| e.to_string())
+                .map_err(|e| AppError::General {
+                    message: e.to_string(),
+                })
         }
         "search" => {
             log::debug!(
@@ -67,11 +72,15 @@ pub async fn test_scrape(
             );
             let provider = request_data["provider"]
                 .as_str()
-                .ok_or("Missing 'provider' for search request")?
+                .ok_or(AppError::General {
+                    message: "Missing 'provider' for search request".to_string(),
+                })?
                 .to_string();
             let query = request_data["query"]
                 .as_str()
-                .ok_or("Missing 'query' for search request")?
+                .ok_or(AppError::General {
+                    message: "Missing 'query' for search request".to_string(),
+                })?
                 .to_string();
             let page = request_data["page"].as_u64().map(|p| p as u32);
             let number = request_data["number"].as_u64().map(|n| n as u32);
@@ -92,8 +101,14 @@ pub async fn test_scrape(
                 )
                 .await
                 .map(|results| serde_json::to_string_pretty(&results).unwrap_or_default())
-                .map_err(|e| e.to_string())
+                .map_err(|e| AppError::General {
+                    message: e.to_string(),
+                })
         }
-        _ => return Err("Invalid request type".to_string()),
+        _ => {
+            return Err(AppError::General {
+                message: "Invalid request type".to_string(),
+            })
+        }
     }
 }

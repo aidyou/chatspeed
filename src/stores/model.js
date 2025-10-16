@@ -1,15 +1,14 @@
+import i18n from '@/i18n/index.js';
 import { defineStore } from 'pinia';
-import { ref, computed, nextTick } from 'vue';
-import i18n from '@/i18n/index.js'
+import { computed, nextTick, ref } from 'vue';
 
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { invoke } from '@tauri-apps/api/core'
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
-import { csGetStorage, csSetStorage } from '@/libs/util'
-import { csStorageKey } from '@/config/config'
-import { getModelLogo } from '@/libs/logo'
-import { isEmpty } from '@/libs/util'
-import { sendSyncState } from '@/libs/sync'
+import { csStorageKey } from '@/config/config';
+import { getModelLogo } from '@/libs/logo';
+import { sendSyncState } from '@/libs/sync';
+import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
 
 /**
  * @typedef {Object} ModelInfo
@@ -103,7 +102,7 @@ export const useModelStore = defineStore('modelProvider', () => {
       return
     }
     isModelLoading = true
-    invoke('get_all_ai_models')
+    invokeWrapper('get_all_ai_models')
       .then((result) => {
         if (isEmpty(result)) {
           providers.value = [];
@@ -119,7 +118,11 @@ export const useModelStore = defineStore('modelProvider', () => {
         initDefaultModel();
       })
       .catch((error) => {
-        console.error('Failed to update model store:', error);
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to update model store: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Failed to update model store:', error);
+        }
       })
       .finally(() => {
         isModelLoading = false
@@ -211,9 +214,9 @@ export const useModelStore = defineStore('modelProvider', () => {
     }
     return new Promise((resolve, reject) => {
       const command = formData.id ? 'update_ai_model' : 'add_ai_model'
-      invoke(command, formData)
-        .then((modelData) => {
-          const processedModel = processModelLogo(modelData)
+      invokeWrapper(command, formData)
+        .then((updatedModel) => {
+          const processedModel = processModelLogo(updatedModel)
           if (formData.id) {
             const modelIndex = providers.value.findIndex(m => m.id === formData.id)
             if (modelIndex !== -1) {
@@ -226,7 +229,7 @@ export const useModelStore = defineStore('modelProvider', () => {
 
           // Update default model
           if (formData.id === defaultModelProvider.value.id) {
-            setDefaultModelProvider(modelData)
+            setDefaultModelProvider(updatedModel)
           }
 
           nextTick(() => {
@@ -236,7 +239,11 @@ export const useModelStore = defineStore('modelProvider', () => {
           resolve(i18n.global.t(`settings.model.${formData.id ? 'updateSuccess' : 'addSuccess'}`))
         })
         .catch((err) => {
-          console.error(`${command} error:`, err)
+          if (err instanceof FrontendAppError) {
+            console.error(`${command} error: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error(`${command} error:`, err);
+          }
           reject(err)
         })
     })
@@ -249,7 +256,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    */
   const deleteModelProvider = (id) => {
     return new Promise((resolve, reject) => {
-      invoke('delete_ai_model', { id })
+      invokeWrapper('delete_ai_model', { id })
         .then(() => {
           const index = providers.value.findIndex(m => m.id === id);
           if (index !== -1) {
@@ -261,7 +268,11 @@ export const useModelStore = defineStore('modelProvider', () => {
           resolve()
         })
         .catch((err) => {
-          console.error('delete_ai_model error', err)
+          if (err instanceof FrontendAppError) {
+            console.error(`delete_ai_model error: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error('delete_ai_model error:', err);
+          }
           reject(err)
         })
     })
@@ -273,7 +284,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    */
   const updateModelProviderOrder = () => {
     return new Promise((resolve, reject) => {
-      invoke('update_ai_model_order', { modelIds: providers.value.map(model => model.id) })
+      invokeWrapper('update_ai_model_order', { modelIds: providers.value.map(model => model.id) })
         .then(() => {
           nextTick(() => {
             sendSyncState('model', label)
@@ -281,7 +292,11 @@ export const useModelStore = defineStore('modelProvider', () => {
           resolve()
         })
         .catch(err => {
-          console.error('settings.model.updateOrderFailed', err)
+          if (err instanceof FrontendAppError) {
+            console.error(`settings.model.updateOrderFailed: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error('settings.model.updateOrderFailed:', err);
+          }
           reject(err)
         })
     })
@@ -293,13 +308,19 @@ export const useModelStore = defineStore('modelProvider', () => {
    */
   const listModels = (apiProtocol, apiUrl, apiKey, metadata) => {
     return new Promise((resolve, reject) => {
-      invoke('list_models', { apiProtocol, apiUrl, apiKey, metadata })
+      console.log('Type of invokeWrapper:', typeof invokeWrapper);
+      invokeWrapper('list_models', { apiProtocol, apiUrl, apiKey, metadata })
         .then((models) => {
           console.log(models)
           resolve(models)
         })
         .catch(err => {
-          console.error('list_models error', err)
+          if (err instanceof FrontendAppError) {
+            console.log(err)
+            console.error(`list_models error: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error('list_models error:', err);
+          }
           reject(err)
         })
     })

@@ -1,11 +1,13 @@
 use rust_i18n::t;
+use serde::Serialize;
 use thiserror::Error;
 
 /// Workflow error types
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WorkflowError {
     /// Cancelled error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.cancelled", details = .0))]
     Cancelled(String),
 
     /// Circular dependency error
@@ -13,56 +15,50 @@ pub enum WorkflowError {
     CircularDependency(String),
 
     /// Configuration error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.config", details = .0))]
     Config(String),
 
     /// Context error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.context", details = .0))]
     Context(String),
 
     /// Execution error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.execution", details = .0))]
     Execution(String),
 
     /// Max retries exceeded
     #[error("{}", t!("tools.max_retries_exceeded", item = .0))]
-    // Parameter name 'item' might be more generic
     MaxRetriesExceeded(String),
 
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.initialization", details = .0))]
     Initialization(String),
 
     /// Invalid state error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.invalid_state", details = .0))]
     InvalidState(String),
 
     /// Invalid graph error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.invalid_graph", details = .0))]
     InvalidGraph(String),
 
     /// IO error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.io", details = .0))]
     Io(String),
 
     /// Serialization error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.serialization", details = .0))]
     Serialization(String),
 
     /// Store error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.store", details = .0))]
     Store(String),
 
-    /// Timeout error
-    // #[error("{}", t!("workflow.timeout", operation = .0))]
-    // Parameter name 'operation' might be more generic
-    // Timeout(String),
-
     /// Validation error
-    #[error("{}", t!("workflow.validation", msg = .0))]
+    #[error("{}", t!("workflow.validation", details = .0))]
     Validation(String),
 
     /// Other error
-    #[error("{0}")]
+    #[error("{}", t!("workflow.error.other", details = .0))]
     Other(String),
 }
 
@@ -80,48 +76,10 @@ impl WorkflowError {
     }
 }
 
-impl From<std::io::Error> for WorkflowError {
-    fn from(err: std::io::Error) -> Self {
-        // Construct the full message here
-        WorkflowError::Io(t!("workflow.io_error_details", details = err.to_string()).to_string())
-    }
-}
-
-impl From<serde_json::Error> for WorkflowError {
-    fn from(err: serde_json::Error) -> Self {
-        // Construct the full message here
-        WorkflowError::Serialization(
-            t!(
-                "workflow.serialization_error_details",
-                details = err.to_string()
-            )
-            .to_string(),
-        )
-    }
-}
-
-// This From<String> implementation can be too broad and might hide more specific errors.
-// It's often better to require more explicit error wrapping.
-// Changed to WorkflowError::Other to signify a less specific origin.
-impl From<String> for WorkflowError {
-    fn from(err: String) -> Self {
-        WorkflowError::Other(err)
-    }
-}
-
-// Implement the From trait for a specific type instead of using a generic implementation
-// This avoids conflicts with the standard library's impl<T> From<T> for T
-impl From<Box<dyn std::error::Error + Send + Sync>> for WorkflowError {
-    fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
-        WorkflowError::Other(err.to_string()) // .to_string() is usually preferred over debug format
-    }
-}
-
 impl From<crate::tools::ToolError> for WorkflowError {
     fn from(err: crate::tools::ToolError) -> Self {
         match err {
             crate::tools::ToolError::Config(msg) => WorkflowError::Config(msg),
-            crate::tools::ToolError::Execution(msg) => WorkflowError::Execution(msg),
             crate::tools::ToolError::Initialization(msg) => WorkflowError::Initialization(msg),
             crate::tools::ToolError::FunctionNotFound(name) => {
                 WorkflowError::Execution(format!("Function not found: {}", name))
@@ -129,7 +87,19 @@ impl From<crate::tools::ToolError> for WorkflowError {
             crate::tools::ToolError::FunctionAlreadyExists(name) => {
                 WorkflowError::Execution(format!("Function already exists: {}", name))
             }
-            crate::tools::ToolError::FunctionParamError(msg) => WorkflowError::Validation(msg),
+            crate::tools::ToolError::InvalidParams(msg) => WorkflowError::Validation(msg),
+            crate::tools::ToolError::Timeout(msg) => {
+                WorkflowError::Execution(format!("Timeout: {}", msg))
+            }
+            crate::tools::ToolError::NetworkError(msg) => {
+                WorkflowError::Execution(format!("Network Error: {}", msg))
+            }
+            crate::tools::ToolError::IoError(msg) => WorkflowError::Io(msg),
+            crate::tools::ToolError::AuthError(msg) => {
+                WorkflowError::Execution(format!("Auth Error: {}", msg))
+            }
+            crate::tools::ToolError::ExecutionFailed(msg) => WorkflowError::Execution(msg),
+            crate::tools::ToolError::Fatal(msg) => WorkflowError::Execution(msg),
             crate::tools::ToolError::McpServerNotFound(name) => {
                 WorkflowError::Execution(format!("MCP server not found: {}", name))
             }

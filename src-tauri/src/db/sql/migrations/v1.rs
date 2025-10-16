@@ -29,7 +29,7 @@ pub const INIT_SQL: &[(&str, &str)] = &[
             api_protocol TEXT NOT NULL,
             base_url TEXT NOT NULL,
             api_key TEXT NOT NULL,
-            max_tokens INTEGER NOT NULL DEFAULT 4096,
+            max_tokens INTEGER NOT NULL DEFAULT 2048,
             temperature REAL NOT NULL DEFAULT 1.0,
             top_p REAL NOT NULL DEFAULT 1.0,
             top_k INTEGER NOT NULL DEFAULT 40,

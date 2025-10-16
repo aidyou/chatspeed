@@ -221,6 +221,7 @@ pub async fn handle_chat_completion(
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
 ) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
+    let message_id = get_msg_id();
 
     let log_org_to_file = if let Ok(store) = main_store_arc.read() {
         store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
@@ -235,7 +236,7 @@ pub async fn handle_chat_completion(
 
     if log_org_to_file {
         // Log the raw request body
-        log::info!(target: "ccproxy_logger", "{} Origin Request Body: \n{}\n----------------\n", &protocol_string, String::from_utf8_lossy(&client_request_body));
+        log::info!(target: "ccproxy_logger", "message id:{}\n{} Origin Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
     let proxy_model = if let (Some(provider_id), Some(model_id)) = (
@@ -547,7 +548,7 @@ pub async fn handle_chat_completion(
         crate::ccproxy::utils::token_estimator::estimate_tokens(&full_prompt_text);
 
     let sse_status = Arc::new(RwLock::new(SseStatus::new(
-        get_msg_id(),
+        message_id,
         proxy_alias.clone(),
         tool_compat_mode,
         estimated_input_tokens,

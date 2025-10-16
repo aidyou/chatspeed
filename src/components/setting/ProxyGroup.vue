@@ -15,8 +15,8 @@
       </div>
 
       <div class="list">
-        <template v-if="proxyGroupStore.list.length > 0">
-          <div v-for="group in proxyGroupStore.list" :key="group.id" class="item">
+        <template v-if="sortedProxyGroupList.length > 0">
+          <div v-for="group in sortedProxyGroupList" :key="group.id" class="item">
             <div class="label">
               <Avatar :size="36" :text="group.name" />
               <div class="label-text">
@@ -26,6 +26,15 @@
             </div>
 
             <div class="value">
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.copyGroup')"
+                :hide-after="0"
+                :enterable="false">
+                <span class="icon" @click="openCopyDialog(group)">
+                  <cs name="copy" size="16px" color="secondary" />
+                </span>
+              </el-tooltip>
               <el-tooltip
                 placement="top"
                 :content="$t('settings.proxyGroup.editGroup')"
@@ -121,7 +130,9 @@
                   value="user" />
               </el-select>
             </el-form-item>
-            <el-form-item :label="$t('settings.proxyGroup.form.modelInjectionCondition')" prop="metadata.model_injection_condition">
+            <el-form-item
+              :label="$t('settings.proxyGroup.form.modelInjectionCondition')"
+              prop="metadata.model_injection_condition">
               <el-input
                 v-model="currentGroup.metadata.modelInjectionCondition"
                 type="textarea"
@@ -202,7 +213,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { ElMessageBox } from 'element-plus'
@@ -234,10 +245,53 @@ onMounted(() => {
   proxyGroupStore.getList()
 })
 
+const sortedProxyGroupList = computed(() => {
+  return [...proxyGroupStore.list].sort((a, b) => {
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  })
+})
+
 const openAddDialog = () => {
   isEditing.value = false
   currentGroup.value = initialGroupState()
   dialogVisible.value = true
+}
+
+const openCopyDialog = group => {
+  isEditing.value = false
+  const { id, ...groupWithoutId } = group
+  const newGroupName = generateUniqueName(group.name)
+  currentGroup.value = {
+    ...groupWithoutId,
+    id: null,
+    name: newGroupName
+  }
+  if (!currentGroup.value.metadata) {
+    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '' }
+  }
+  if (!currentGroup.value.metadata.modelInjectionCondition) {
+    currentGroup.value.metadata.modelInjectionCondition = ''
+  }
+  console.log('Copied group:', currentGroup.value)
+  dialogVisible.value = true
+}
+
+const generateUniqueName = baseName => {
+  const existingNames = proxyGroupStore.list.map(g => g.name)
+
+  if (!existingNames.includes(baseName)) {
+    return baseName
+  }
+
+  let counter = 2
+  let newName = `${baseName}${counter}`
+
+  while (existingNames.includes(newName)) {
+    counter++
+    newName = `${baseName}${counter}`
+  }
+
+  return newName
 }
 
 const openEditDialog = group => {
@@ -280,7 +334,19 @@ const handleGroupConfigSubmit = async () => {
         }
         dialogVisible.value = false
       } catch (error) {
-        showMessage(t('settings.proxyGroup.saveFailed', { error: error.message || error }), 'error')
+        if (error instanceof FrontendAppError) {
+          showMessage(
+            t('settings.proxyGroup.saveFailed', { error: error.toFormattedString() }),
+            'error'
+          )
+          console.error('Error saving proxy group:', error.originalError)
+        } else {
+          showMessage(
+            t('settings.proxyGroup.saveFailed', { error: error.message || String(error) }),
+            'error'
+          )
+          console.error('Error saving proxy group:', error)
+        }
       } finally {
         formLoading.value = false
       }
@@ -303,10 +369,19 @@ const handleDeleteGroup = id => {
         await proxyGroupStore.remove(id)
         showMessage(t('settings.proxyGroup.deleteSuccess'), 'success')
       } catch (error) {
-        showMessage(
-          t('settings.proxyGroup.deleteFailed', { error: error.message || error }),
-          'error'
-        )
+        if (error instanceof FrontendAppError) {
+          showMessage(
+            t('settings.proxyGroup.deleteFailed', { error: error.toFormattedString() }),
+            'error'
+          )
+          console.error('Error deleting proxy group:', error.originalError)
+        } else {
+          showMessage(
+            t('settings.proxyGroup.deleteFailed', { error: error.message || String(error) }),
+            'error'
+          )
+          console.error('Error deleting proxy group:', error)
+        }
       }
     })
     .catch(() => {})

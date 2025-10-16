@@ -1,10 +1,10 @@
-import { invoke } from '@tauri-apps/api/core';
+import i18n from '@/i18n';
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import i18n from '@/i18n';
 
-import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
 import { csStorageKey } from '@/config/config';
+import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
 
 let isConversationLoading = false
 
@@ -23,14 +23,18 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     isConversationLoading = true
-    invoke('get_all_conversations')
+    invokeWrapper('get_all_conversations')
       .then((result) => {
         console.log('conversations', result);
         // Assuming result is an array of conversations
         conversations.value = isEmpty(result) ? [] : [...result];
       })
       .catch((error) => {
-        console.error('Error loading conversations:', error);
+        if (error instanceof FrontendAppError) {
+          console.error(`Error loading conversations: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error loading conversations:', error);
+        }
       })
       .finally(() => {
         isConversationLoading = false
@@ -51,7 +55,11 @@ export const useChatStore = defineStore('chat', () => {
           setCurrentConversationId(conversation.id)
           resolve(conversation.id)
         }).catch((error) => {
-          console.error('Error getting current conversation ID:', error)
+          if (error instanceof FrontendAppError) {
+            console.error(`Error getting current conversation ID: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Error getting current conversation ID:', error);
+          }
           reject(error)
         })
       }
@@ -81,8 +89,8 @@ export const useChatStore = defineStore('chat', () => {
           }
         })
       }
-      const title = i18n.global.t(`chat.conversation`) + ' ' + (maxId + 1);
-      invoke('add_conversation', { title }).then((conversationId) => {
+      const title = `${i18n.global.t(`chat.conversation`)} ${maxId + 1}`;
+      invokeWrapper('add_conversation', { title }).then((conversationId) => {
         if (conversationId) {
           setCurrentConversationId(conversationId)
           const conversation = { id: conversationId, title, isFavorite: false, createdAt: new Date().toLocaleString() }
@@ -92,9 +100,15 @@ export const useChatStore = defineStore('chat', () => {
           messages.value.length = 0
 
           resolve(conversation)
+        } else {
+          reject(new Error('Failed to create conversation: No ID returned'))
         }
       }).catch((error) => {
-        console.error('Error creating conversation:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error creating conversation: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error creating conversation:', error);
+        }
         reject(error)
       })
     });
@@ -109,7 +123,7 @@ export const useChatStore = defineStore('chat', () => {
    */
   const updateConversation = (id, title, isFavorite) => {
     return new Promise((resolve, reject) => {
-      invoke('update_conversation', { id, title: title || null, isFavorite: isFavorite || null }).then(() => {
+      invokeWrapper('update_conversation', { id, title: title || null, isFavorite: isFavorite || null }).then(() => {
         const conversationToUpdate = conversations.value.find(conversation => conversation.id === id);
         if (conversationToUpdate) {
           if (title) {
@@ -121,7 +135,11 @@ export const useChatStore = defineStore('chat', () => {
         }
         resolve()
       }).catch((error) => {
-        console.error('Error updating conversation favorite:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error updating conversation favorite: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error updating conversation favorite:', error);
+        }
         reject(error)
       })
     })
@@ -134,12 +152,16 @@ export const useChatStore = defineStore('chat', () => {
    */
   const deleteConversation = (id) => {
     return new Promise((resolve, reject) => {
-      invoke('delete_conversation', { id }).then(() => {
+      invokeWrapper('delete_conversation', { id }).then(() => {
         conversations.value = conversations.value.filter((conversation) => conversation.id !== id)
         setCurrentConversationId(conversations.value[0]?.id || 0)
         resolve()
       }).catch((error) => {
-        console.error('Error deleting conversation:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error deleting conversation: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error deleting conversation:', error);
+        }
         reject(error)
       })
     })
@@ -158,11 +180,15 @@ export const useChatStore = defineStore('chat', () => {
     isMessagesLoading = true
     messages.value.length = 0
     return new Promise((resolve, reject) => {
-      invoke('get_messages_for_conversation', { conversationId, windowLabel }).then(() => {
+      invokeWrapper('get_messages_for_conversation', { conversationId, windowLabel }).then(() => {
         console.log('loadMessages', windowLabel)
         resolve()
       }).catch((error) => {
-        console.error('Error loading messages:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error loading messages: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error loading messages:', error);
+        }
         reject(error)
       })
         .finally(() => {
@@ -201,7 +227,7 @@ export const useChatStore = defineStore('chat', () => {
           return resolve(messageId)
         }
       }
-      invoke('add_message', { conversationId, role, content, metadata })
+      invokeWrapper('add_message', { conversationId, role, content, metadata })
         .then((messageId) => {
           messages.value = [...messages.value, {
             id: messageId,
@@ -213,7 +239,11 @@ export const useChatStore = defineStore('chat', () => {
           resolve(messageId)
         })
         .catch((error) => {
-          console.error('Error adding message:', error)
+          if (error instanceof FrontendAppError) {
+            console.error(`Error adding message: ${error.toFormattedString()}`, error.originalError);
+          } else {
+            console.error('Error adding message:', error);
+          }
           reject(error)
         })
     })
@@ -227,11 +257,15 @@ export const useChatStore = defineStore('chat', () => {
   const deleteMessage = (id) => {
     console.debug('delete message', id)
     return new Promise((resolve, reject) => {
-      invoke('delete_message', { id }).then(() => {
+      invokeWrapper('delete_message', { id }).then(() => {
         messages.value = messages.value.filter((message) => !id.includes(message.id))
         resolve()
       }).catch((error) => {
-        console.error('Error deleting message:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error deleting message: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error deleting message:', error);
+        }
         reject(error)
       })
     })
@@ -246,11 +280,15 @@ export const useChatStore = defineStore('chat', () => {
       if (lastMessage.metadata?.contextCleared) return resolve()
 
       lastMessage.metadata = { ...lastMessage?.metadata, contextCleared: true }
-      invoke('update_message_metadata', { id: lastMessage.id, metadata: lastMessage.metadata }).then(() => {
+      invokeWrapper('update_message_metadata', { id: lastMessage.id, metadata: lastMessage.metadata }).then(() => {
         lastMessage.metadata.contextCleared = true
         resolve()
       }).catch((error) => {
-        console.error('Error clearing context:', error)
+        if (error instanceof FrontendAppError) {
+          console.error(`Error clearing context: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error clearing context:', error);
+        }
         reject(error)
       })
     })

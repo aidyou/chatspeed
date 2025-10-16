@@ -1,6 +1,6 @@
 use crate::ccproxy::adapter::unified::SseStatus;
 use crate::ccproxy::get_tool_id;
-use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_START};
+use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_RESULT_SUFFIX_REMINDER, TOOL_TAG_END, TOOL_TAG_START};
 use crate::ccproxy::{adapter::backend::update_message_block, types::ChatProtocol};
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
@@ -217,25 +217,15 @@ impl GeminiBackendAdapter {
 
                             // On stream finish, process any remaining buffers
                             if let Ok(mut status) = sse_status.write() {
-                                if !status.tool_compat_buffer.is_empty()
-                                    || !status.tool_compat_fragment_buffer.is_empty()
-                                {
-                                    self.flush_tool_compat_buffer(&mut status, &mut unified_chunks);
+                                // Use the common function to handle incomplete tags
+                                crate::ccproxy::adapter::backend::common::auto_complete_and_process_tool_tag(&mut status, &mut unified_chunks);
 
-                                    // Output remaining content as text
-                                    if !status.tool_compat_buffer.is_empty()
-                                        || !status.tool_compat_fragment_buffer.is_empty()
-                                    {
-                                        unified_chunks.push(UnifiedStreamChunk::Text {
-                                            delta: format!(
-                                                "{}{}",
-                                                status.tool_compat_buffer,
-                                                status.tool_compat_fragment_buffer
-                                            ),
-                                        });
-                                        status.tool_compat_buffer.clear();
-                                        status.tool_compat_fragment_buffer.clear();
-                                    }
+                                // After attempting to complete and process tags, send any remaining text.
+                                if !status.tool_compat_buffer.is_empty() {
+                                    unified_chunks.push(UnifiedStreamChunk::Text {
+                                        delta: status.tool_compat_buffer.clone(),
+                                    });
+                                    status.tool_compat_buffer.clear();
                                 }
                             }
 
@@ -269,7 +259,7 @@ impl GeminiBackendAdapter {
         );
 
         // Handle remaining buffer content
-        self.handle_remaining_buffer_content(status, unified_chunks);
+        // self.handle_remaining_buffer_content(status, unified_chunks);
     }
 
     /// Handle remaining content in buffer that's not part of tool calls
@@ -475,6 +465,23 @@ impl BackendAdapter for GeminiBackendAdapter {
                     }],
                 });
             }
+
+            // Append reminder to the last tool result message to prevent duplicate replies
+            if let Some(last_message) = processed_messages.last_mut() {
+                if last_message.role.as_deref() == Some("user") {
+                    if let Some(part) = last_message.parts.get_mut(0) {
+                        if let Some(text) = &mut part.text {
+                            // Check if this user message contains a tool result.
+                            // This indicates it's an auto-generated message, not a real user query.
+                            if text.contains("<cs:tool_result") {
+                                text.push_str("\n");
+                                text.push_str(TOOL_RESULT_SUFFIX_REMINDER);
+                            }
+                        }
+                    }
+                }
+            }
+
             gemini_contents = processed_messages;
         } else {
             // Standard processing for non-tool-compatibility mode.

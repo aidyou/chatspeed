@@ -5,6 +5,7 @@ mod commands;
 mod constants;
 mod db;
 mod environment;
+pub mod error;
 mod http;
 mod libs;
 mod logger;
@@ -21,7 +22,6 @@ mod workflow;
 #[cfg(test)]
 pub mod test;
 
-use anyhow::anyhow;
 use log::{error, warn};
 use rust_i18n::{i18n, set_locale, t};
 use std::sync::atomic::AtomicBool;
@@ -35,6 +35,8 @@ use std::time::Instant;
 use commands::updater::install_and_restart;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
+
+use crate::error::AppError;
 
 // use commands::toolbar::*;
 use ai::interaction::chat_completion::ChatState;
@@ -103,7 +105,7 @@ static HIDE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
 static MOVE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
 static LAST_MOVE: StdMutex<Option<Instant>> = StdMutex::new(None);
 
-pub async fn run() -> Result<()> {
+pub async fn run() -> crate::error::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -449,7 +451,10 @@ pub async fn run() -> Result<()> {
                     }
                 }
             }
-            _ => {}
+            _ => {
+                log::debug!("Unhandled window event for '{}'", window.label());
+                return;
+            }
         })
 
         // Setup the application with necessary configurations and state management
@@ -474,17 +479,15 @@ pub async fn run() -> Result<()> {
                 let app_local_data_dir = app
                     .path()
                     .app_data_dir()
-                    .expect(t!("db.failed_to_get_app_data_dir").to_string().as_str());
+                    .map_err(|e| db::StoreError::IoError(t!("db.failed_to_get_app_data_dir", error = e.to_string()).to_string()))?;
                 std::fs::create_dir_all(&app_local_data_dir)
-                    .map_err(|e| db::StoreError::StringError(e.to_string()))?;
+                    .map_err(|e| db::StoreError::IoError(e.to_string()))?;
                 app_local_data_dir.join("chatspeed.db")
             };
+
             let main_store = Arc::new(RwLock::new(MainStore::new(db_path).map_err(|e| {
                 error!("Create main store error: {}", e);
-                anyhow!(t!(
-                    "main.failed_to_create_main_store",
-                    error = e.to_string()
-                ))
+                AppError::Db(db::StoreError::IoError(t!("main.failed_to_create_main_store", error = e.to_string()).to_string()))
             })?));
             // Add MainStore to the app's managed state for shared access
             app.manage(main_store.clone());
@@ -503,7 +506,8 @@ pub async fn run() -> Result<()> {
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
                 let _ = register_desktop_shortcut(&app.handle()).map_err(|e|{
-                    log::error!("Error on register dasktop shortcut, error:{:?}", e)
+                    log::error!("Error on register dasktop shortcut, error:{:?}", e);
+                    AppError::General{message:e.to_string()}
                 });
 
                 // initialize text monitor
@@ -527,6 +531,7 @@ pub async fn run() -> Result<()> {
                     .await
                     .map_err(|e| {
                         log::error!("Failed to register available tools: {}", e);
+                        AppError::Tool(e)
                     });
             });
             app.manage(chat_state.clone());
@@ -552,7 +557,7 @@ pub async fn run() -> Result<()> {
             // Start the HTTP server using Tauri's asynchronous runtime
             let chat_state_for_http = chat_state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_http_server(&handle, main_store_clone, chat_state_for_http).await {
+                if let Err(e) = start_http_server(&handle, main_store_clone, chat_state_for_http).await.map_err(|e| AppError::Http(crate::http::error::HttpError::StartUp(e.to_string()))) {
                     error!("Failed to start HTTP server: {}", e);
                 }
             });
@@ -574,7 +579,7 @@ pub async fn run() -> Result<()> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
 
                     loop {
-                        if let Err(e) = update_manager_clone.check_and_download_update().await {
+                        if let Err(e) = update_manager_clone.check_and_download_update().await.map_err(|e| AppError::Updater(e)) {
                             log::error!("Failed to check for updates: {}", e);
                         }
 
@@ -586,7 +591,7 @@ pub async fn run() -> Result<()> {
 
             // create tray with delay
             let app_handle_clone = app.app_handle().clone();
-            if let Err(e) = create_tray(&app_handle_clone, None) {
+            if let Err(e) = create_tray(&app_handle_clone, None).map_err(|e| AppError::General{message:e.to_string()}) {
                 error!("Failed to create tray: {}", e);
             }
 
@@ -604,10 +609,7 @@ pub async fn run() -> Result<()> {
             Ok(())
         })
         // Run the Tauri application with the generated context
-        .run(tauri::generate_context!())
-        // Handle potential errors during the application run
-        .expect(&t!("main.failed_to_start_up_application"));
-
+        .run(tauri::generate_context!()).map_err(|e| AppError::General{message:e.to_string()})?;
     Ok(())
 }
 

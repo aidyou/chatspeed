@@ -1,8 +1,10 @@
 use rust_i18n::t;
+use serde::Serialize;
 use thiserror::Error;
 
 /// HTTP module error types
-#[derive(Debug, Error)]
+#[derive(Error, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HttpError {
     /// Request error
     #[error("{0}")]
@@ -14,8 +16,17 @@ pub enum HttpError {
     #[error("{0}")]
     Config(String),
     /// IO error
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Io(String),
+    /// Other error
+    #[error("{}", t!("http.server_startup_failed", error = _0).to_string())]
+    StartUp(String),
+}
+
+impl From<std::io::Error> for HttpError {
+    fn from(err: std::io::Error) -> Self {
+        HttpError::Io(err.to_string())
+    }
 }
 
 impl From<reqwest::Error> for HttpError {
@@ -27,14 +38,7 @@ impl From<reqwest::Error> for HttpError {
         } else if err.is_builder() {
             HttpError::Config(t!("http.client_build_failed", error = err.to_string()).to_string())
         } else {
-            HttpError::Request(
-                t!(
-                    "http.request_failed",
-                    error = err.to_string(),
-                    status = err.status().unwrap_or_default()
-                )
-                .to_string(),
-            )
+            HttpError::Request(err.to_string())
         }
     }
 }

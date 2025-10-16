@@ -6,6 +6,10 @@
     "haveNoModel": "您尚未添加任何模型，请从设置中心添加"
   },
   "chat": {
+    "errorOnSearchNotes": "搜索笔记失败：{error}",
+    "errorOnOpenSettingWindow": "打开设置窗口失败：{error}",
+    "errorOnGetNote": "获取笔记失败：{error}",
+    "errorOnGetNotes": "获取笔记列表失败：{error}",
     "confirmDeleteConversation": "确定要删除这个对话吗？",
     "confirmDeleteMessage": "确定要删除这个消息吗？",
     "collapseSidebar": "折叠侧边栏 (Cmd/Ctrl+B)",
@@ -359,6 +363,12 @@
       "deleteSuccess": "模型删除成功",
       "deleteTitle": "删除模型",
       "disabled": "是否禁用",
+      "disable": "禁用",
+      "enable": "启用",
+      "enableSuccess": "模型 “{name}” 已启用。",
+      "disableSuccess": "模型 “{name}” 已禁用。",
+      "enableFailed": "启用模型 “{name}” 失败: {error}",
+      "disableFailed": "禁用模型 “{name}” 失败: {error}",
       "documentation": "文档",
       "edit": "编辑模型",
       "frequencyPenalty": "频率惩罚",
@@ -506,6 +516,7 @@
       "addNow": "立即添加",
       "addSuccess": "分组添加成功！",
       "addTitle": "添加分组",
+      "copyGroup": "复制分组",
       "deleteConfirmText": "确定要删除分组 \"{name}\" 吗？",
       "deleteConfirmTitle": "确认删除",
       "deleteFailed": "分组删除失败: {error}",
@@ -599,7 +610,10 @@
         "writing": "写作"
       },
       "updateSuccess": "技能已更新",
-      "useSystemRole": "使用系统角色"
+      "useSystemRole": "使用系统角色",
+      "deleteFailed": "删除技能失败",
+      "saveFailed": "保存技能失败",
+      "updateOrderFailed": "更新技能顺序失败"
     },
     "type": {
       "about": "关于",

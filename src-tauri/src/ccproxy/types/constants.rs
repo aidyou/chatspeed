@@ -26,6 +26,8 @@ Common reasons for failure:
 // This is the result of your last tool call. Use it to decide your next step. Do not output `<cs:tool_result>` tags yourself.
 // </system-reminder>"#;
 
+pub const TOOL_RESULT_SUFFIX_REMINDER: &str = r#"<system-reminder>This result is only for notification and display of the tool call result. It is not a question from the user. You do not need to reply to the user based on this result. Only consider whether further tasks need to be performed.</system-reminder>"#;
+
 /// IMPORTANT: Do not attempt to remove any examples from this prompt.
 /// Each example has been added after testing to regulate the AI's behavior.
 /// They provide critical reference points to improve the success rate of AI tool execution.

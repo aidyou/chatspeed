@@ -1,5 +1,21 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.18 Release Notes
+
+Chatspeed v1.1.18 further enhances application startup performance and user experience, especially on the Windows platform. By optimizing the environment initialization process, it resolves startup freezes and unexpected command line window pop-ups, and corrects the accuracy of shortcut descriptions in the release notes.
+
+### 🔧 Technical Optimizations
+
+- **Optimized Environment Initialization, Resolved Startup Freezes and Panic**: Refactored the environment initialization process to be asynchronous, resolving potential startup freezes and the "runtime within a runtime" panic on Windows.
+- **Error Unification**: Unified the error handling approach across the application to ensure consistency and readability of error messages.
+
+### 🐞 Bug Fixes
+
+- **Fixed Windows Startup Command Line Popup**: Applied `CREATE_NO_WINDOW | DETACHED_PROCESS` flags to child processes executing shell commands during Windows environment initialization, completely eliminating unexpected command line window pop-ups during startup.
+- **Corrected Shortcut Description in Release Notes**: Corrected the description of main window positioning shortcuts in the release notes, clarifying that they only support horizontal movement (left and right).
+- **ccproxy Fix**: Fixed an issue in the ccproxy module where duplicate content might appear during streaming output in tool compatibility mode.
+- **Conversation Fix**: Fixed an issue where conversation list tool call parameter parsing errors caused the list to fail to load.
+
 # Chatspeed v1.1.17 Release Notes
 
 Chatspeed v1.1.17 focuses on enhancing cross-platform stability and user experience by addressing critical bugs across Windows and Linux environments, optimizing environment variable loading, and resolving UI state management issues in key settings components. This release also incorporates all features and fixes from the unreleased v1.1.16, including new window positioning shortcuts and unified custom event formats.

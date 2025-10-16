@@ -25,9 +25,10 @@
 //! ```
 
 use crate::db::{MainStore, Note, NoteTag};
-use rust_i18n::t;
 use std::sync::{Arc, RwLock};
 use tauri::{command, State};
+
+use crate::error::{AppError, Result};
 
 /// Add a new note
 ///
@@ -67,11 +68,8 @@ pub fn add_note(
     message_id: Option<i64>,
     tags: Vec<&str>,
     metadata: Option<serde_json::Value>,
-) -> Result<(), String> {
-    dbg!(&metadata);
-    let mut main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+) -> Result<()> {
+    let mut main_store = state.write()?;
     main_store
         .add_note(
             &title,
@@ -81,7 +79,7 @@ pub fn add_note(
             tags,
             metadata,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(AppError::Db)?;
 
     Ok(())
 }
@@ -106,11 +104,9 @@ pub fn add_note(
 /// console.log(tags);
 /// ```
 #[command]
-pub fn get_tags(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.get_tags().map_err(|e| e.to_string())
+pub fn get_tags(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>> {
+    let main_store = state.read()?;
+    main_store.get_tags().map_err(AppError::Db)
 }
 
 /// Get notes by tag ID
@@ -134,14 +130,9 @@ pub fn get_tags(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>, St
 /// console.log(notes);
 /// ```
 #[command]
-pub fn get_notes(
-    state: State<Arc<RwLock<MainStore>>>,
-    tag_id: Option<i64>,
-) -> Result<Vec<Note>, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.get_notes(tag_id).map_err(|e| e.to_string())
+pub fn get_notes(state: State<Arc<RwLock<MainStore>>>, tag_id: Option<i64>) -> Result<Vec<Note>> {
+    let main_store = state.read()?;
+    main_store.get_notes(tag_id).map_err(AppError::Db)
 }
 
 /// Get a note by ID
@@ -165,11 +156,9 @@ pub fn get_notes(
 /// console.log(note);
 /// ```
 #[command]
-pub fn get_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<Note, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.get_note(id).map_err(|e| e.to_string())
+pub fn get_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<Note> {
+    let main_store = state.read()?;
+    main_store.get_note(id).map_err(AppError::Db)
 }
 
 /// Delete a note
@@ -193,11 +182,9 @@ pub fn get_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<Note, S
 /// console.log('Note deleted successfully');
 /// ```
 #[command]
-pub fn delete_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), String> {
-    let mut main_store = state
-        .write()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.delete_note(id).map_err(|e| e.to_string())
+pub fn delete_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+    let mut main_store = state.write()?;
+    main_store.delete_note(id).map_err(AppError::Db)
 }
 
 /// Search notes
@@ -221,9 +208,7 @@ pub fn delete_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<(), 
 /// console.log('Found matching notes:', notes);
 /// ```
 #[command]
-pub fn search_notes(state: State<Arc<RwLock<MainStore>>>, kw: &str) -> Result<Vec<Note>, String> {
-    let main_store = state
-        .read()
-        .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-    main_store.search_notes(kw).map_err(|e| e.to_string())
+pub fn search_notes(state: State<Arc<RwLock<MainStore>>>, kw: &str) -> Result<Vec<Note>> {
+    let main_store = state.read()?;
+    main_store.search_notes(kw).map_err(AppError::Db)
 }

@@ -174,7 +174,7 @@ impl WebSearch {
             Value::String(s) => {
                 let s = s.trim();
                 if s.is_empty() {
-                    return Err(ToolError::FunctionParamError(
+                    return Err(ToolError::InvalidParams(
                         t!("tools.keyword_must_be_non_empty").to_string(),
                     ));
                 }
@@ -186,14 +186,14 @@ impl WebSearch {
                     .filter_map(|v| v.as_str().map(|s| format!("\"{}\"", s))) // warp double quotes to each kw
                     .collect();
                 if keywords.is_empty() {
-                    return Err(ToolError::FunctionParamError(
+                    return Err(ToolError::InvalidParams(
                         t!("tools.keyword_must_be_non_empty").to_string(),
                     ));
                 }
                 let joined_keywords = keywords.join(" "); // join with space
                 Ok(joined_keywords)
             }
-            _ => Err(ToolError::FunctionParamError(
+            _ => Err(ToolError::InvalidParams(
                 t!("tools.keyword_must_be_non_empty").to_string(),
             )),
         }
@@ -434,13 +434,10 @@ impl ToolDefinition for WebSearch {
                 "page": current_page,
             });
 
-            let raw_results = match searcher.search(&search_params).await {
-                Ok(res) => res,
-                Err(e) => {
-                    log::error!("Failed to fetch search page {}: {}", current_page, e);
-                    break; // Stop if searching fails
-                }
-            };
+            let raw_results = searcher.search(&search_params).await.map_err(|e| {
+                log::error!("Failed to fetch search page {}: {}", current_page, e);
+                ToolError::ExecutionFailed(e.to_string())
+            })?;
 
             if raw_results.is_empty() {
                 break; // No more results from the search engine

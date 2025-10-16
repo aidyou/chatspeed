@@ -823,7 +823,7 @@ impl ToolManager {
                 self.mcp_status_event_sender
                     .send((name.to_string(), McpStatus::Error(e.to_string())))
                     .ok();
-                Err(ToolError::Execution(e.to_string()))
+                Err(ToolError::ExecutionFailed(e.to_string()))
             }
         }
     }
@@ -983,7 +983,7 @@ impl ToolManager {
             .call(tool_name, params.clone())
             .await
             .map_err(|e| {
-                ToolError::Execution(
+                ToolError::ExecutionFailed(
                     t!(
                         "mcp.client.failed_to_call_tool",
                         server_name = mcp_name,
@@ -1040,7 +1040,7 @@ impl ToolManager {
             .split_once(MCP_TOOL_NAME_SPLIT)
             .filter(|(server_part, tool_part)| !server_part.is_empty() && !tool_part.is_empty())
             .ok_or_else(|| {
-                ToolError::Execution(
+                ToolError::InvalidParams(
                     t!("mcp.client.invalid_tool_name", name = name_with_split).to_string(),
                 )
             })?;

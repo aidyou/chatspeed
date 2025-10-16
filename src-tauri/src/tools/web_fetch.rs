@@ -86,19 +86,19 @@ impl ToolDefinition for WebFetch {
     async fn call(&self, params: Value) -> NativeToolResult {
         // Get the URL from parameters
         let url = params["url"].as_str().ok_or_else(|| {
-            ToolError::FunctionParamError(t!("tools.url_must_be_string").to_string())
+            ToolError::InvalidParams(t!("tools.url_must_be_string").to_string())
         })?;
 
         // Check if URL is empty
         if url.is_empty() {
-            return Err(ToolError::FunctionParamError(
+            return Err(ToolError::InvalidParams(
                 t!("tools.url_must_not_be_empty").to_string(),
             ));
         }
 
         // Validate URL format
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(ToolError::FunctionParamError(
+            return Err(ToolError::InvalidParams(
                 t!("tools.url_invalid", url = url).to_string(),
             ));
         }
@@ -109,7 +109,7 @@ impl ToolDefinition for WebFetch {
             .iter()
             .any(|ext| url_lower.ends_with(ext))
         {
-            return Err(ToolError::FunctionParamError(
+            return Err(ToolError::InvalidParams(
                 format!("This tool cannot process multimedia files. URL ends with a restricted extension: {}. Focus on HTML pages and text-based content.", url)
             ));
         }
@@ -128,58 +128,52 @@ impl ToolDefinition for WebFetch {
             keep_link,
             keep_image,
         });
-        // Create scraper instance
-        let result = engine::run(self.app_handle.clone(), request)
-            .await
-            .map_err(|e| {
-                ToolError::Execution(
-                    t!(
-                        "tools.web_scraper_failed",
-                        url = url,
-                        details = e.to_string()
-                    )
-                    .to_string(),
+        
+        // Execute the scraper engine and propagate errors directly
+        let content = engine::run(self.app_handle.clone(), request).await.map_err(|e| {
+            ToolError::ExecutionFailed(
+                t!(
+                    "tools.web_scraper_failed",
+                    url = url,
+                    details = e.to_string()
                 )
-            });
+                .to_string(),
+            )
+        })?;
 
-        match result {
-            Ok(content) => {
-                let format_webpage = |content: &str| -> String {
-                    format!(
-                        "<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n</webpage>",
-                        &url, content
-                    )
-                };
+        let format_webpage = |content: &str| -> String {
+            format!(
+                "<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n</webpage>",
+                &url, content
+            )
+        };
 
-                let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<system-reminder>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</system-reminder>", &url);
+        let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<system-reminder>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</system-reminder>", &url);
 
-                let content_formated = if content.is_empty() {
-                    empty_prompt
-                } else {
-                    let web_content = serde_json::from_str::<Value>(&content)
-                        .ok()
-                        .and_then(|json| {
-                            json.get("content")
-                                .and_then(|v| v.as_str())
-                                .map(|x| x.to_string())
-                        })
-                        .unwrap_or(content.clone());
+        let content_formated = if content.is_empty() {
+            empty_prompt
+        } else {
+            let web_content = serde_json::from_str::<Value>(&content)
+                .ok()
+                .and_then(|json| {
+                    json.get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|x| x.to_string())
+                })
+                .unwrap_or(content.clone());
 
-                    if web_content.is_empty() {
-                        empty_prompt
-                    } else {
-                        format_webpage(&web_content)
-                    }
-                };
-
-                // Return the scraped content as JSON
-                Ok(ToolCallResult::success(
-                    Some(content_formated),
-                    Some(json!({"url": url,"content":content})),
-                ))
+            if web_content.is_empty() {
+                empty_prompt
+            } else {
+                format_webpage(&web_content)
             }
-            Err(e) => Ok(ToolCallResult::error(e.to_string())),
-        }
+        };
+
+        // Return the scraped content as JSON
+        Ok(ToolCallResult::success(
+            Some(content_formated),
+            Some(json!({"url": url,"content":content})),
+        ))
     }
 }
 

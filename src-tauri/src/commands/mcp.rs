@@ -20,7 +20,9 @@
 use crate::{
     ai::{interaction::chat_completion::ChatState, traits::chat::MCPToolDeclaration},
     db::{MainStore, Mcp},
+    error::{AppError, Result},
     mcp::client::{McpProtocolType, McpServerConfig},
+    mcp::McpError,
 };
 use rust_i18n::t;
 use std::{
@@ -53,12 +55,10 @@ use tauri::State;
 pub async fn list_mcp_servers(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
-) -> Result<Vec<Mcp>, String> {
+) -> Result<Vec<Mcp>> {
     // First, get the MCPs from the main_store.
     let mut mcps = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let store_guard = main_store.read()?;
         store_guard.config.get_mcps()
     };
 
@@ -86,23 +86,31 @@ pub async fn list_mcp_servers(
 ///
 /// # Returns
 /// * `Result<(), String>` - An error message if the form is invalid, or `Ok(())` if the form is valid.
-fn check_form(name: &str, config: &McpServerConfig) -> Result<(), String> {
+fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
     if name.is_empty() || config.name.is_empty() {
-        return Err(t!("mcp.config.name_must_be_non_empty").to_string());
+        return Err(AppError::Mcp(McpError::ClientConfigError(
+            t!("mcp.config.name_must_be_non_empty").to_string(),
+        )));
     }
 
     if config.protocol_type == McpProtocolType::Sse
         && config.url.clone().unwrap_or_default().is_empty()
     {
-        return Err(t!("mcp.config.sse_url_must_be_non_empty").to_string());
+        return Err(AppError::Mcp(McpError::ClientConfigError(
+            t!("mcp.config.sse_url_must_be_non_empty").to_string(),
+        )));
     }
 
     if config.protocol_type == McpProtocolType::Stdio {
         if config.command.clone().unwrap_or_default().is_empty() {
-            return Err(t!("mcp.config.stdio_command_must_be_non_empty").to_string());
+            return Err(AppError::Mcp(McpError::ClientConfigError(
+                t!("mcp.config.stdio_command_must_be_non_empty").to_string(),
+            )));
         }
         if config.args.clone().unwrap_or_default().is_empty() {
-            return Err(t!("mcp.config.stdio_args_must_be_non_empty").to_string());
+            return Err(AppError::Mcp(McpError::ClientConfigError(
+                t!("mcp.config.stdio_args_must_be_non_empty").to_string(),
+            )));
         }
     }
 
@@ -153,16 +161,12 @@ pub async fn add_mcp_server(
     description: String,
     config: McpServerConfig,
     disabled: bool,
-) -> Result<Mcp, String> {
+) -> Result<Mcp> {
     check_form(&name, &config)?;
 
     let mcp_data = {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard
-            .add_mcp(name, description, config.clone(), disabled)
-            .map_err(|e| e.to_string())?
+        let mut store_guard = main_store.write()?;
+        store_guard.add_mcp(name, description, config.clone(), disabled)?
     };
 
     if !mcp_data.disabled {
@@ -239,26 +243,17 @@ pub async fn update_mcp_server(
     description: &str,
     config: McpServerConfig,
     disabled: bool,
-) -> Result<Mcp, String> {
+) -> Result<Mcp> {
     check_form(&name, &config)?;
 
     {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard
-            .update_mcp(id, name, description, config.clone(), disabled)
-            .map_err(|e| e.to_string())?;
+        let mut store_guard = main_store.write()?;
+        store_guard.update_mcp(id, name, description, config.clone(), disabled)?;
     }
 
     let updated_mcp = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard
-            .config
-            .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?
+        let store_guard = main_store.read()?;
+        store_guard.config.get_mcp_by_id(id)?
     };
 
     {
@@ -321,23 +316,16 @@ pub async fn delete_mcp_server(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<()> {
     let mcp_name = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mcp = store_guard
-            .config
-            .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
+        let store_guard = main_store.read()?;
+        let mcp = store_guard.config.get_mcp_by_id(id)?;
         mcp.name.clone()
     };
 
     {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard.delete_mcp(id).map_err(|e| e.to_string())?;
+        let mut store_guard = main_store.write()?;
+        store_guard.delete_mcp(id)?;
     }
 
     let tool_manager = chat_state.tool_manager.clone();
@@ -385,23 +373,23 @@ pub async fn enable_mcp_server(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<()> {
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
-            return Err(t!("mcp.op_in_progress_error").to_string());
+            return Err(AppError::Mcp(McpError::StateChangeFailed(
+                t!("mcp.op_in_progress_error").to_string(),
+            )));
         }
     }
 
     let server_info = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let store_guard = main_store.read()?;
         store_guard
             .config
             .get_mcp_by_id(id)
             .map(|mcp| (mcp.config.clone(), !mcp.disabled))
-            .map_err(|e| e.to_string())
+            .map_err(|e| AppError::Db(e))
     };
 
     let mcp_config = match server_info {
@@ -434,12 +422,8 @@ pub async fn enable_mcp_server(
     }
 
     {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard
-            .change_mcp_status(id, false)
-            .map_err(|e| e.to_string())?;
+        let mut store_guard = main_store.write()?;
+        store_guard.change_mcp_status(id, false)?;
     }
 
     let tool_manager = chat_state.tool_manager.clone();
@@ -500,23 +484,23 @@ pub async fn disable_mcp_server(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<()> {
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
-            return Err(t!("mcp.op_in_progress_error").to_string());
+            return Err(AppError::Mcp(McpError::StateChangeFailed(
+                t!("mcp.op_in_progress_error").to_string(),
+            )));
         }
     }
 
     let server_info = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let store_guard = main_store.read()?;
         store_guard
             .config
             .get_mcp_by_id(id)
             .map(|mcp| (mcp.name.clone(), mcp.disabled))
-            .map_err(|e| e.to_string())
+            .map_err(AppError::Db)
     };
 
     let mcp_name = match server_info {
@@ -544,12 +528,8 @@ pub async fn disable_mcp_server(
     };
 
     {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        store_guard
-            .change_mcp_status(id, true)
-            .map_err(|e| e.to_string())?;
+        let mut store_guard = main_store.write()?;
+        store_guard.change_mcp_status(id, true)?;
     }
 
     let tool_manager = chat_state.tool_manager.clone();
@@ -585,23 +565,23 @@ pub async fn restart_mcp_server(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<()> {
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
-            return Err(t!("mcp.op_in_progress_error").to_string());
+            return Err(AppError::Mcp(McpError::StateChangeFailed(
+                t!("mcp.op_in_progress_error").to_string(),
+            )));
         }
     }
 
     let server_info = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let store_guard = main_store.read()?;
         store_guard
             .config
             .get_mcp_by_id(id)
             .map(|mcp| (mcp.name.clone(), mcp.disabled))
-            .map_err(|e| e.to_string())
+            .map_err(AppError::Db)
     };
 
     let server_name = match server_info {
@@ -613,9 +593,9 @@ pub async fn restart_mcp_server(
                     .lock()
                     .await
                     .remove(&id);
-                return Err(
-                    "Cannot restart a disabled MCP server. Please enable it first.".to_string(),
-                );
+                return Err(AppError::Mcp(McpError::StateChangeFailed(
+                    t!("mcp.error.cannot_restart_disabled_server").to_string(),
+                )));
             }
             name
         }
@@ -643,9 +623,11 @@ pub async fn restart_mcp_server(
         }
 
         let config_to_start: Option<McpServerConfig> = {
-            let store_guard = main_store_clone
-                .read()
-                .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string());
+            let store_guard = main_store_clone.read().map_err(|e| {
+                AppError::Db(crate::db::StoreError::LockError(
+                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                ))
+            });
             match store_guard {
                 Ok(guard) => match guard.config.get_mcp_by_id(id) {
                     Ok(mcp) => {
@@ -703,23 +685,23 @@ pub async fn refresh_mcp_server(
     chat_state: State<'_, Arc<ChatState>>,
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<()> {
     {
         let mut ops = chat_state.tool_manager.ops_in_progress.lock().await;
         if !ops.insert(id) {
-            return Err(t!("mcp.op_in_progress_error").to_string());
+            return Err(AppError::Mcp(McpError::StateChangeFailed(
+                t!("mcp.op_in_progress_error").to_string(),
+            )));
         }
     }
 
     let server_info = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
+        let store_guard = main_store.read()?;
         store_guard
             .config
             .get_mcp_by_id(id)
             .map(|mcp| (mcp.name.clone(), mcp.disabled))
-            .map_err(|e| e.to_string())
+            .map_err(AppError::Db)
     };
 
     let server_name = match server_info {
@@ -731,7 +713,9 @@ pub async fn refresh_mcp_server(
                     .lock()
                     .await
                     .remove(&id);
-                return Err("Cannot refresh a disabled MCP server.".to_string());
+                return Err(AppError::Mcp(McpError::StateChangeFailed(
+                    t!("mcp.error.cannot_refresh_disabled_server").to_string(),
+                )));
             }
             name
         }
@@ -789,24 +773,19 @@ pub async fn get_mcp_server_tools(
     main_store: State<'_, Arc<RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
-) -> Result<Vec<MCPToolDeclaration>, String> {
+) -> Result<Vec<MCPToolDeclaration>> {
     let mcp_name = {
-        let store_guard = main_store
-            .read()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mcp = store_guard
-            .config
-            .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
+        let store_guard = main_store.read()?;
+        let mcp = store_guard.config.get_mcp_by_id(id)?;
         mcp.name.clone()
     };
 
-    chat_state
+    let tools_result = chat_state
         .tool_manager
         .clone()
         .get_mcp_server_tools(&mcp_name)
-        .await
-        .map_err(|e| e.to_string())
+        .await;
+    tools_result.map_err(|e| AppError::Mcp(McpError::NotFound(e.to_string())))
 }
 
 #[tauri::command]
@@ -816,15 +795,10 @@ pub async fn update_mcp_tool_status(
     id: i64,
     tool_name: &str,
     disabled: bool,
-) -> Result<Mcp, String> {
+) -> Result<Mcp> {
     let mcp = {
-        let mut store_guard = main_store
-            .write()
-            .map_err(|e| t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())?;
-        let mut mcp = store_guard
-            .config
-            .get_mcp_by_id(id)
-            .map_err(|e| e.to_string())?;
+        let mut store_guard = main_store.write()?;
+        let mut mcp = store_guard.config.get_mcp_by_id(id)?;
 
         let disabled_tools = mcp.config.disabled_tools.get_or_insert_with(HashSet::new);
         if disabled {
@@ -833,22 +807,20 @@ pub async fn update_mcp_tool_status(
             disabled_tools.remove(tool_name);
         }
 
-        store_guard
-            .update_mcp(
-                id,
-                &mcp.name,
-                &mcp.description,
-                mcp.config.clone(),
-                mcp.disabled,
-            )
-            .map_err(|e| e.to_string())?
+        store_guard.update_mcp(
+            id,
+            &mcp.name,
+            &mcp.description,
+            mcp.config.clone(),
+            mcp.disabled,
+        )?
     };
 
-    chat_state
+    let disable_result = chat_state
         .tool_manager
         .disable_mcp_tool(mcp.name.as_str(), tool_name, disabled)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+    disable_result.map_err(|e| AppError::Mcp(McpError::General(e.to_string())))?;
 
     Ok(mcp)
 }

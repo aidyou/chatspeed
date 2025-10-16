@@ -1,12 +1,11 @@
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ElMessage } from 'element-plus'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { relaunch } from '@tauri-apps/plugin-process';
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { invoke } from '@tauri-apps/api/core'
 
 import { csStorageKey } from '@/config/config'
-import { csGetStorage, csSetStorage, csRemoveStorage } from '@/libs/util'
+import { csGetStorage, csRemoveStorage, csSetStorage } from '@/libs/util'
 
 /**
  * Store for managing application update state and operations.
@@ -41,7 +40,7 @@ export const useUpdateStore = defineStore('update', () => {
       downloadProgress.value = Math.max(0, Math.min(100, progress))
     }
     downloadError.value = ''
-    console.log('Download progress:', downloadProgress.value + '%')
+    console.log('Download progress:', `${downloadProgress.value}%`)
   }
 
   const handleUpdateReady = () => {
@@ -56,11 +55,16 @@ export const useUpdateStore = defineStore('update', () => {
   const restartApp = async () => {
     console.log('User requested to restart and install the update.')
     try {
-      await invoke('install_and_restart')
+      await invokeWrapper('install_and_restart')
       // The backend will restart the app, so no need to call relaunch()
     } catch (error) {
-      console.error('Failed to restart application:', error)
-      ElMessage.error(`更新失败: ${error.message || '未知错误'}`)
+      if (error instanceof FrontendAppError) {
+        console.error(`Failed to restart application: ${error.toFormattedString()}`, error.originalError);
+        ElMessage.error(`${error.toFormattedString()}`);
+      } else {
+        console.error('Failed to restart application:', error)
+        ElMessage.error(`${error.message || 'Unknown error'}`)
+      }
     }
   }
 

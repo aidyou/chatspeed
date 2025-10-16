@@ -21,7 +21,7 @@ import { useDark, usePreferredDark } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { setI18nLanguage } from '@/i18n'
 
-import { invoke } from '@tauri-apps/api/core'
+import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { listen } from '@tauri-apps/api/event'
 
@@ -237,8 +237,15 @@ const handleShortcut = async event => {
   if (event.metaKey || event.ctrlKey) {
     if (event.code === 'Comma') {
       // Invoke the command to open the settings window for model configuration
-      invoke('open_setting_window', { settingType: 'general' }).catch(error => {
-        console.error('Failed to open settings window:', error)
+      invokeWrapper('open_setting_window', { settingType: 'general' }).catch(error => {
+        if (error instanceof FrontendAppError) {
+          console.error(
+            `Failed to open settings window: ` + error.toFormattedString(),
+            error.originalError
+          )
+        } else {
+          console.error('Failed to open settings window:', error)
+        }
       })
     }
 
@@ -253,7 +260,14 @@ const handleShortcut = async event => {
         const isFocused = await currentWindow.isFocused()
         if (isFocused) {
           currentWindow.close().catch(error => {
-            console.error('Failed to close window:', error)
+            if (error instanceof FrontendAppError) {
+              console.error(
+                `Failed to close window: ` + error.toFormattedString(),
+                error.originalError
+              )
+            } else {
+              console.error('Failed to close window:', error)
+            }
           })
         }
       }

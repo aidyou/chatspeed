@@ -398,7 +398,16 @@ const updateSkill = () => {
           skillDialogVisible.value = false
         })
         .catch(err => {
-          showMessage(err, 'error')
+          if (err instanceof FrontendAppError) {
+            showMessage(t('settings.skill.saveFailed', { error: err.toFormattedString() }), 'error')
+            console.error(`Error updating skill: ${err.toFormattedString()}`, err.originalError)
+          } else {
+            showMessage(
+              t('settings.skill.saveFailed', { error: err.message || String(err) }),
+              'error'
+            )
+            console.error('Error updating skill:', err)
+          }
         })
     } else {
       console.log('error submit!')
@@ -424,7 +433,16 @@ const deleteSkill = id => {
         showMessage(t('settings.skill.deleteSuccess'), 'success')
       })
       .catch(err => {
-        showMessage(err, 'error')
+        if (err instanceof FrontendAppError) {
+          showMessage(t('settings.skill.deleteFailed', { error: err.toFormattedString() }), 'error')
+          console.error(`Error deleting skill: ${err.toFormattedString()}`, err.originalError)
+        } else {
+          showMessage(
+            t('settings.skill.deleteFailed', { error: err.message || String(err) }),
+            'error'
+          )
+          console.error('Error deleting skill:', err)
+        }
       })
   })
 }
@@ -434,7 +452,22 @@ const deleteSkill = id => {
  */
 const onDragEnd = () => {
   skillStore.updateSkillOrder().catch(err => {
-    console.error('settings.skill.updateOrderFailed', err)
+    if (err instanceof FrontendAppError) {
+      console.error(
+        `settings.skill.updateOrderFailed: ${err.toFormattedString()}`,
+        err.originalError
+      )
+      showMessage(
+        t('settings.skill.updateOrderFailed', { error: err.toFormattedString() }),
+        'error'
+      )
+    } else {
+      console.error('settings.skill.updateOrderFailed', err)
+      showMessage(
+        t('settings.skill.updateOrderFailed', { error: err.message || String(err) }),
+        'error'
+      )
+    }
   })
 }
 
@@ -476,8 +509,18 @@ const showPresetSkills = async () => {
     presetSkills.value =
       data.prompts[settingStore.settings.interfaceLanguage] || data.prompts['English']
   } catch (error) {
-    console.error('Failed to load preset skills:', error)
-    ElMessage.error(t('settings.skill.loadPresetError'))
+    if (error instanceof FrontendAppError) {
+      console.error(
+        `Failed to load preset skills: ${error.toFormattedString()}`,
+        error.originalError
+      )
+      ElMessage.error(t('settings.skill.loadPresetError', { error: error.toFormattedString() }))
+    } else {
+      console.error('Failed to load preset skills:', error)
+      ElMessage.error(
+        t('settings.skill.loadPresetError', { error: error.message || String(error) })
+      )
+    }
   }
 }
 
@@ -513,7 +556,16 @@ const importSkill = skill => {
       showMessage(t('settings.skill.importSuccess'), 'success')
     })
     .catch(err => {
-      showMessage(t('settings.skill.importFailed', { error: err }), 'error')
+      if (err instanceof FrontendAppError) {
+        showMessage(t('settings.skill.importFailed', { error: err.toFormattedString() }), 'error')
+        console.error(`Error importing skill: ${err.toFormattedString()}`, err.originalError)
+      } else {
+        showMessage(
+          t('settings.skill.importFailed', { error: err.message || String(err) }),
+          'error'
+        )
+        console.error('Error importing skill:', err)
+      }
     })
 }
 

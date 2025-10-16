@@ -7,6 +7,7 @@ use crate::mcp::server::handler::McpProxyHandler;
 use axum::Router;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use crate::mcp::server::persistent_session::PersistentSessionManager;
+use crate::mcp::McpError;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -48,7 +49,11 @@ pub fn create_http_service(
 
     // The session manager needs an Arc'd version of the factory.
     let session_manager = PersistentSessionManager::new(Arc::new(service_factory.clone()))
-        .expect("Failed to initialize persistent session manager. Check permissions for the store directory.");
+        .map_err(|e| {
+            log::error!("Failed to initialize persistent session manager: {}", e);
+            McpError::ServerInitializationError(e.to_string())
+        })
+        .expect("Failed to initialize persistent session manager. This should be handled by map_err.");
 
     // The streamable service itself takes the un-Arc'd closure.
     StreamableHttpService::new(

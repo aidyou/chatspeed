@@ -134,7 +134,7 @@ impl DbBackup {
         // Open source database
         let source = Connection::open(source_path).map_err(|e| {
             error!("Failed to open source database: {}", e);
-            StoreError::DatabaseError(
+            StoreError::IoError(
                 t!(
                     "db.failed_to_open_source_db",
                     path = source_path.display(),
@@ -147,7 +147,7 @@ impl DbBackup {
         // Open destination database
         let mut dest = Connection::open(dest_path).map_err(|e| {
             error!("Failed to open destination database: {}", e);
-            StoreError::DatabaseError(
+            StoreError::IoError(
                 t!(
                     "db.failed_to_open_dest_db",
                     path = dest_path.display(),
@@ -160,7 +160,7 @@ impl DbBackup {
         // Perform copy operation
         let backup = backup::Backup::new(&source, &mut dest).map_err(|e| {
             error!("Failed to initialize backup: {}", e);
-            StoreError::DatabaseError(
+            StoreError::Query(
                 t!("db.failed_to_init_backup_process", error = e.to_string()).to_string(),
             )
         })?;
@@ -178,9 +178,7 @@ impl DbBackup {
                 Ok(StepResult::Busy) | Ok(StepResult::Locked) => {
                     retry_count += 1;
                     if retry_count > 10 {
-                        return Err(StoreError::DatabaseError(
-                            t!("db.backup_busy_locked").to_string(),
-                        ));
+                        return Err(StoreError::Query(t!("db.backup_busy_locked").to_string()));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
@@ -205,7 +203,7 @@ impl DbBackup {
                 "Database copy incomplete: {} pages remaining out of {}",
                 progress.remaining, progress.pagecount
             );
-            return Err(StoreError::DatabaseError(
+            return Err(StoreError::Query(
                 t!("db.backup_copy_incomplete").to_string(),
             ));
         }

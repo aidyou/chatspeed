@@ -39,11 +39,13 @@ use tokio::{process::Command, sync::RwLock};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+use crate::mcp::client::types::McpClientInternal;
+use crate::mcp::client::util::find_executable_in_common_paths;
+use crate::mcp::McpError;
+
 use super::core::McpClientCore;
 use super::{
-    types::{McpClientInternal, McpStatus, StatusChangeCallback},
-    util::find_executable_in_common_paths,
-    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
+    McpClient, McpClientResult, McpProtocolType, McpServerConfig, McpStatus, StatusChangeCallback,
 };
 
 /// A client implementation for MCP (Model Context Protocol) using Stdio transport
@@ -64,12 +66,12 @@ impl StdioClient {
     /// - Args is empty
     pub fn new(config: McpServerConfig) -> McpClientResult<Self> {
         if config.command.as_deref().unwrap_or_default().is_empty() {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!("mcp.client.stdio_command_cant_be_empty").to_string(),
             ));
         }
         if config.protocol_type != McpProtocolType::Stdio {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!(
                     "mcp.client.config_mismatch",
                     client = "StdioClient",
@@ -79,7 +81,7 @@ impl StdioClient {
             ));
         }
         if config.args.as_ref().map(Vec::is_empty).unwrap_or(true) {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!("mcp.client.stdio_args_cant_be_empty").to_string(),
             ));
         }
@@ -126,7 +128,7 @@ impl McpClient for StdioClient {
             .as_ref()
             .cloned() // Clone the Option<String>
             .ok_or_else(|| {
-                McpClientError::ConfigError(
+                McpError::ClientConfigError(
                     // Use ok_or_else for lazy evaluation
                     t!("mcp.client.stdio_command_cant_be_empty").to_string(),
                 )
@@ -156,7 +158,10 @@ impl McpClient for StdioClient {
         #[cfg(windows)]
         let mut cmd = {
             let path = std::path::Path::new(&executable_to_run);
-            let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            let extension = path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("");
             let is_script = extension.eq_ignore_ascii_case("cmd")
                 || extension.eq_ignore_ascii_case("bat")
                 || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("npx");
@@ -180,7 +185,7 @@ impl McpClient for StdioClient {
             .args
             .as_ref()
             .ok_or_else(|| {
-                McpClientError::ConfigError(t!("mcp.client.stdio_args_cant_be_empty").into())
+                McpError::ClientConfigError(t!("mcp.client.stdio_args_cant_be_empty").into())
             })?
             .iter()
             .filter_map(|s| {
@@ -242,9 +247,9 @@ impl McpClient for StdioClient {
                     )
                     .to_string()
                 };
-                McpClientError::StartError(error_message)
+                McpError::ClientStartError(error_message)
             } else {
-                McpClientError::StartError(
+                McpError::ClientStartError(
                     t!(
                         "mcp.client.stdio_process_creation_failed",
                         command = original_cmd_str,
@@ -270,7 +275,7 @@ impl McpClient for StdioClient {
             // Optional: Wrap with t!
             let detailed_error = e.to_string();
             log::error!("Start StdioClient error: {}", detailed_error);
-            McpClientError::StartError(
+            McpError::ClientStartError(
                 t!(
                     "mcp.client.stdio_service_start_failed",
                     command = original_cmd_str, // Report based on original configured command
@@ -318,10 +323,10 @@ mod test {
     use rmcp::{transport::TokioChildProcess, ServiceExt};
     use tokio::process::Command;
 
-    use crate::mcp::client::{McpClient as _, McpClientError};
+    use crate::mcp::{client::McpClient as _, McpError};
 
     #[tokio::test]
-    async fn stdio_test() -> Result<(), McpClientError> {
+    async fn stdio_test() -> Result<(), McpError> {
         let config = crate::mcp::client::McpServerConfig {
             protocol_type: crate::mcp::client::McpProtocolType::Stdio,
             command: Some("npx".into()),

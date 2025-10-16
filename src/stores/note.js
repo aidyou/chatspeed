@@ -1,7 +1,7 @@
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import { sendSyncState } from '@/libs/sync'
 
@@ -22,7 +22,7 @@ export const useNoteStore = defineStore('note', () => {
    * Gets a list of all note tags.
    */
   const getTagList = () => {
-    invoke('get_tags').then(result => {
+    invokeWrapper('get_tags').then(result => {
       if (!result) {
         tags.value = []
         return
@@ -34,6 +34,12 @@ export const useNoteStore = defineStore('note', () => {
         notes: [],
       }))
       console.log(tags.value)
+    }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error getting tag list: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error getting tag list:', error);
+      }
     })
   }
 
@@ -47,13 +53,20 @@ export const useNoteStore = defineStore('note', () => {
    * @returns {Promise<void>} A promise that resolves when the note is created and state is synced.
    */
   const addNote = (title, content, conversationId, messageId, tags, metadata) => {
-    tags = tags.replace('，', ',').split(',').map(x => x.trim()).filter(x => x != '')
+    tags = tags.replace('，', ',').split(',').map(x => x.trim()).filter(x => x !== '')
     console.log(metadata)
-    return new Promise((resolve, reject) => invoke('add_note', { title, content, conversationId, messageId, tags, metadata })
+    return new Promise((resolve, reject) => invokeWrapper('add_note', { title, content, conversationId, messageId, tags, metadata })
       .then(() => {
         sendSyncState('note_update', label)
         resolve()
-      }).catch(reject))
+      }).catch(error => {
+        if (error instanceof FrontendAppError) {
+          console.error(`Error adding note: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Error adding note:', error);
+        }
+        reject(error)
+      }))
   }
 
   /**
@@ -61,8 +74,15 @@ export const useNoteStore = defineStore('note', () => {
    * @param {number} id - The ID of the note to retrieve.
    * @returns {Promise<Object>} A promise that resolves to the note object.
    */
-  const getNote = (id) => {
-    return invoke('get_note', { id })
+  const getNote = async (id) => {
+    return invokeWrapper('get_note', { id }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error getting note: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error getting note:', error);
+      }
+      throw error;
+    })
   }
 
   /**
@@ -70,8 +90,15 @@ export const useNoteStore = defineStore('note', () => {
    * @param {number} tagId - The ID of the tag to filter notes by.
    * @returns {Promise<Array>} A promise that resolves to an array of notes.
    */
-  const getNotes = (tagId) => {
-    return invoke('get_notes', { tagId })
+  const getNotes = async (tagId) => {
+    return invokeWrapper('get_notes', { tagId }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error getting notes: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error getting notes:', error);
+      }
+      throw error;
+    })
   }
 
   /**
@@ -79,8 +106,15 @@ export const useNoteStore = defineStore('note', () => {
    * @param {string} kw - The keyword to search for in note titles.
    * @returns {Promise<Array>} A promise that resolves to an array of matching notes.
    */
-  const searchNotes = (kw) => {
-    return invoke('search_notes', { kw })
+  const searchNotes = async (kw) => {
+    return invokeWrapper('search_notes', { kw }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error searching notes: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error searching notes:', error);
+      }
+      throw error;
+    })
   }
 
   /**
@@ -88,8 +122,15 @@ export const useNoteStore = defineStore('note', () => {
    * @param {number} id - The ID of the note to delete.
    * @returns {Promise<void>} A promise that resolves when the note is deleted.
    */
-  const deleteNote = (id) => {
-    return invoke('delete_note', { id })
+  const deleteNote = async (id) => {
+    return invokeWrapper('delete_note', { id }).catch(error => {
+      if (error instanceof FrontendAppError) {
+        console.error(`Error deleting note: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Error deleting note:', error);
+      }
+      throw error;
+    })
   }
 
   return {

@@ -1,12 +1,11 @@
+import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
-import { nextTick, ref, computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { invoke } from '@tauri-apps/api/core'
-
-import { isEmpty } from '@/libs/util'
-import { sendSyncState } from '@/libs/sync'
-import { useSettingStore } from '@/stores/setting'
+import { sendSyncState } from '@/libs/sync';
+import { isEmpty } from '@/libs/util';
+import { useSettingStore } from '@/stores/setting';
 
 /**
  * useSkillStore defines a store for managing AI skills.
@@ -66,7 +65,7 @@ export const useSkillStore = defineStore('skill', () => {
         }
 
         const command = formData.id ? 'update_ai_skill' : 'add_ai_skill'
-        invoke(command, processedFormData)
+        invokeWrapper(command, processedFormData)
           .then((updatedSkill) => {
             sendSyncState('skill', label);
 
@@ -84,7 +83,11 @@ export const useSkillStore = defineStore('skill', () => {
             resolve();
           })
           .catch(err => {
-            console.error(`${command} error:`, err);
+            if (err instanceof FrontendAppError) {
+              console.error(`${command} error: ${err.toFormattedString()}`, err.originalError);
+            } else {
+              console.error(`${command} error:`, err);
+            }
             reject(err);
           })
       } catch (err) {
@@ -102,7 +105,7 @@ export const useSkillStore = defineStore('skill', () => {
    */
   const deleteSkill = (id) => {
     return new Promise((resolve, reject) => {
-      invoke('delete_ai_skill', { id })
+      invokeWrapper('delete_ai_skill', { id })
         .then(() => {
           const index = skills.value.findIndex(s => s.id === id);
           if (index !== -1) {
@@ -112,7 +115,11 @@ export const useSkillStore = defineStore('skill', () => {
           resolve();
         })
         .catch((err) => {
-          console.error('deleteSkill error:', err);
+          if (err instanceof FrontendAppError) {
+            console.error(`deleteSkill error: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error('deleteSkill error:', err);
+          }
           reject(err);
         })
     })
@@ -125,13 +132,17 @@ export const useSkillStore = defineStore('skill', () => {
   const updateSkillOrder = () => {
     return new Promise((resolve, reject) => {
       const skillIds = skills.value.map(x => x.id);
-      invoke('update_ai_skill_order', { skillIds })
+      invokeWrapper('update_ai_skill_order', { skillIds })
         .then(() => {
           sendSyncState('skill', label);
           resolve();
         })
         .catch((err) => {
-          console.error('updateSkillOrder error:', err);
+          if (err instanceof FrontendAppError) {
+            console.error(`updateSkillOrder error: ${err.toFormattedString()}`, err.originalError);
+          } else {
+            console.error('updateSkillOrder error:', err);
+          }
           reject(err);
         })
     })
@@ -148,7 +159,7 @@ export const useSkillStore = defineStore('skill', () => {
       return
     }
     isSkillLoading = true
-    invoke('get_all_ai_skills')
+    invokeWrapper('get_all_ai_skills')
       .then((result) => {
         if (isEmpty(result)) {
           skills.value = [];
@@ -159,7 +170,11 @@ export const useSkillStore = defineStore('skill', () => {
         console.debug('skills', skills.value)
       })
       .catch((error) => {
-        console.error('Failed to update skill store:', error);
+        if (error instanceof FrontendAppError) {
+          console.error(`Failed to update skill store: ${error.toFormattedString()}`, error.originalError);
+        } else {
+          console.error('Failed to update skill store:', error);
+        }
       })
       .finally(() => {
         isSkillLoading = false

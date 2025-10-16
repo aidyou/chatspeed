@@ -28,7 +28,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
             [key, &value.to_string()],
@@ -79,7 +79,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let max_sort_index: i32 = conn
             .query_row(
                 "SELECT COALESCE(MAX(sort_index), -1) FROM ai_model",
@@ -172,7 +172,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -228,7 +228,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         for (index, id) in model_ids.iter().enumerate() {
             conn.execute(
                 "UPDATE ai_model SET sort_index = ? WHERE id = ?",
@@ -256,7 +256,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
         if let Ok(models) = Self::get_all_ai_models(&conn) {
             self.config.set_ai_models(models);
@@ -292,7 +292,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         // Get the current maximum sort_index
         let max_sort_index: i32 = conn.query_row(
             "SELECT COALESCE(MAX(sort_index), -1) FROM ai_skill",
@@ -381,7 +381,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -417,7 +417,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         for (index, id) in skill_ids.iter().enumerate() {
             conn.execute(
                 "UPDATE ai_skill SET sort_index = ? WHERE id = ?",
@@ -441,7 +441,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         return conn
             .query_row("SELECT logo FROM ai_skill WHERE id = ?", [id], |row| {
                 row.get::<_, String>(0)
@@ -482,7 +482,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
         if let Ok(skills) = Self::get_all_ai_skills(&conn) {
             self.config.set_ai_skills(skills);

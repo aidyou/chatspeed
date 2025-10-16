@@ -122,15 +122,15 @@ pub async fn openai_list_models(
         .await
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "OpenAI".to_string(),
-            status_code: "0".to_string(), // Network/Request failure, not an HTTP error
-            details: e,
+            status_code: 0, // Network/Request failure, not an HTTP error
+            details: e.to_string(),
         })?;
 
     if response.is_error || response.content.is_empty() {
         let status_code = response
             .raw_response
-            .map(|r| r.status().to_string())
-            .unwrap_or("500".to_string());
+            .map(|r| r.status().as_u16())
+            .unwrap_or(500); // Default to 500 if no status
         return Err(AiError::ApiRequestFailed {
             status_code,
             provider: "OpenAI".to_string(),
@@ -233,7 +233,7 @@ pub async fn claude_list_models(
             let err = AiError::ApiRequestFailed {
                 provider: "Claude".to_string(),
                 details: network_err.to_string(),
-                status_code: "0".to_string(),
+                status_code: 0, // Network/Request failure, not an HTTP error
             };
             log::error!("Claude list_models API request failed: {}", err);
             err
@@ -242,8 +242,8 @@ pub async fn claude_list_models(
     if response.is_error || response.content.is_empty() {
         let status_code = response
             .raw_response
-            .map(|r| r.status().to_string())
-            .unwrap_or("500".to_string());
+            .map(|r| r.status().as_u16())
+            .unwrap_or(500); // Default to 500 if no status
 
         let err = AiError::ApiRequestFailed {
             status_code,
@@ -333,14 +333,14 @@ pub async fn gemini_list_models(
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "Gemini".to_string(),
             details: e.to_string(),
-            status_code: "0".to_string(),
+            status_code: 0, // Network/Request failure, not an HTTP error
         })?;
 
     if response.is_error || response.content.is_empty() {
         let status_code = response
             .raw_response
-            .map(|r| r.status().to_string())
-            .unwrap_or("500".to_string());
+            .map(|r| r.status().as_u16())
+            .unwrap_or(500); // Default to 500 if no status
 
         return Err(AiError::ApiRequestFailed {
             status_code,

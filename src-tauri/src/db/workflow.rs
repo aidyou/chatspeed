@@ -103,7 +103,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         conn.execute(
             "INSERT INTO workflows (id, user_query, agent_id, status) VALUES (?1, ?2, ?3, 'running')",
@@ -120,13 +120,19 @@ impl MainStore {
     }
 
     /// Adds a message to a workflow and returns the created message.
-    pub fn add_workflow_message(&self, msg: &WorkflowMessage) -> Result<WorkflowMessage, StoreError> {
+    pub fn add_workflow_message(
+        &self,
+        msg: &WorkflowMessage,
+    ) -> Result<WorkflowMessage, StoreError> {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        let metadata = msg.metadata.as_ref().and_then(|v| serde_json::to_string(v).ok());
+        let metadata = msg
+            .metadata
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
 
         conn.execute(
             "INSERT INTO workflow_messages (session_id, role, message, metadata) VALUES (?1, ?2, ?3, ?4)",
@@ -138,7 +144,7 @@ impl MainStore {
         let new_msg = conn.query_row(
             "SELECT * FROM workflow_messages WHERE id = ?1",
             params![new_id],
-            |row| Ok(WorkflowMessage::from(row))
+            |row| Ok(WorkflowMessage::from(row)),
         )?;
 
         Ok(new_msg)
@@ -153,7 +159,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         conn.execute(
             "UPDATE workflows SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
@@ -168,7 +174,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let workflow: Workflow = conn
             .query_row(
@@ -193,7 +199,7 @@ impl MainStore {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| StoreError::FailedToLockMainStore(e.to_string()))?;
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let mut stmt = conn.prepare("SELECT * FROM workflows ORDER BY updated_at DESC")?;
         let workflows = stmt

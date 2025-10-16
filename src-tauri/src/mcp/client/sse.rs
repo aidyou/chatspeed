@@ -56,9 +56,9 @@ use tokio::sync::RwLock;
 
 use super::core::McpClientCore;
 use super::{
-    types::{McpClientInternal, McpStatus, StatusChangeCallback},
-    McpClient, McpClientError, McpClientResult, McpProtocolType, McpServerConfig,
+    McpClient, McpClientResult, McpProtocolType, McpServerConfig, McpStatus, StatusChangeCallback,
 };
+use crate::mcp::McpError;
 
 /// Handles connection lifecycle and provides methods for:
 /// - Establishing SSE connections
@@ -78,12 +78,12 @@ impl SseClient {
     /// `McpClientResult<Self>` - New client instance or validation error
     ///
     /// # Errors
-    /// Returns `McpClientError::ConfigError` if:
+    /// Returns `McpClientError::ClientConfigError` if:
     /// - Protocol type mismatch
     /// - URL is empty or not provided
     pub fn new(config: McpServerConfig) -> McpClientResult<Self> {
         if config.protocol_type != McpProtocolType::Sse {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!(
                     "mcp.client.config_mismatch",
                     client = "SseClient",
@@ -94,7 +94,7 @@ impl SseClient {
         }
 
         if config.url.as_deref().unwrap_or_default().is_empty() {
-            return Err(McpClientError::ConfigError(
+            return Err(McpError::ClientConfigError(
                 t!("mcp.client.sse_url_cant_be_empty").to_string(),
             ));
         }
@@ -113,7 +113,7 @@ impl SseClient {
     /// `McpClientResult<reqwest::Client>` - Configured HTTP client or error
     ///
     /// # Errors
-    /// Returns `McpClientError::ConfigError` if:
+    /// Returns `McpClientError::ClientConfigError` if:
     /// - Bearer token format is invalid
     /// - Proxy configuration is invalid
     async fn build_http_client_async(&self) -> McpClientResult<reqwest::Client> {
@@ -136,7 +136,7 @@ impl SseClient {
                 headers.insert(
                     header::AUTHORIZATION,
                     header::HeaderValue::from_str(&format!("Bearer {}", token))
-                        .map_err(|e| McpClientError::ConfigError(e.to_string()))?,
+                        .map_err(|e| McpError::ClientConfigError(e.to_string()))?,
                 );
 
                 client_builder = client_builder.default_headers(headers);
@@ -147,20 +147,20 @@ impl SseClient {
         if let Some(proxy) = current_config.proxy.as_ref() {
             if !proxy.trim().is_empty() {
                 let proxy = reqwest::Proxy::all(proxy)
-                    .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
+                    .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
                 client_builder = client_builder.proxy(proxy);
             }
         }
 
         let http_client = client_builder
             .build()
-            .map_err(|e| McpClientError::ConfigError(e.to_string()))?;
+            .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
         Ok(http_client)
     }
 }
 
 #[async_trait::async_trait]
-impl McpClientInternal for SseClient {
+impl super::types::McpClientInternal for SseClient {
     async fn set_status(&self, status: McpStatus) {
         self.core.set_status(status).await;
     }
@@ -193,7 +193,7 @@ impl McpClient for SseClient {
             Some(u) => u,
             None => {
                 let err_msg = t!("mcp.client.sse_url_cant_be_empty").to_string();
-                return Err(McpClientError::ConfigError(err_msg));
+                return Err(McpError::ClientConfigError(err_msg));
             }
         };
 
@@ -213,7 +213,7 @@ impl McpClient for SseClient {
         let transport = match transport_result {
             Ok(t) => t,
             Err(e) => {
-                return Err(McpClientError::StartError(
+                return Err(McpError::ClientStartError(
                     t!(
                         "mcp.client.sse_transport_start_failed",
                         url = url,
@@ -246,7 +246,7 @@ impl McpClient for SseClient {
                 // Optional: Wrap with t!
                 let detailed_error = e.to_string();
                 log::error!("Start SseClient error: {}", detailed_error);
-                return Err(McpClientError::StartError(
+                return Err(McpError::ClientStartError(
                     t!(
                         "mcp.client.sse_service_start_failed",
                         url = url,
@@ -298,12 +298,13 @@ impl McpClient for SseClient {
 
 #[cfg(test)]
 mod test {
-    use crate::mcp::client::{
-        sse::SseClient, McpClient as _, McpClientError, McpProtocolType, McpServerConfig,
+    use crate::mcp::{
+        client::{sse::SseClient, McpClient as _, McpProtocolType, McpServerConfig},
+        McpError,
     };
 
     #[tokio::test]
-    async fn sse_test() -> Result<(), McpClientError> {
+    async fn sse_test() -> Result<(), McpError> {
         let client = SseClient::new(McpServerConfig {
             protocol_type: McpProtocolType::Sse,
             url: Some("https://mcp.api-inference.modelscope.net/3527390d48954e/sse".to_string()),

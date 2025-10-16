@@ -688,9 +688,6 @@ impl OllamaBackendAdapter {
             if !status.message_start {
                 status.message_start = true;
                 // Ollama doesn't provide message ID in stream, generate one
-                if status.message_id.is_empty() {
-                    status.message_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-                }
                 unified_chunks.push(UnifiedStreamChunk::MessageStart {
                     id: status.message_id.clone(),
                     model: status.model_id.clone(),
@@ -813,33 +810,12 @@ impl OllamaBackendAdapter {
                 common::auto_complete_and_process_tool_tag(&mut status, unified_chunks);
             }
 
-            if !status.tool_compat_buffer.is_empty()
-                || !status.tool_compat_fragment_buffer.is_empty()
-            {
-                log::debug!("Flushing remaining buffers at stream end - buffer: {} chars, fragment: {} chars, in_tool_block: {}",
-                    status.tool_compat_buffer.len(),
-                    status.tool_compat_fragment_buffer.len(),
-                    status.in_tool_call_block
-                );
-
-                // First, try to flush and process any remaining tool calls
-                self.flush_tool_compat_buffer(&mut status, unified_chunks);
-
-                // If there's still content in the buffer after processing, output it as text
-                if !status.tool_compat_buffer.is_empty()
-                    || !status.tool_compat_fragment_buffer.is_empty()
-                {
-                    unified_chunks.push(UnifiedStreamChunk::Text {
-                        delta: format!(
-                            "{}{}",
-                            status.tool_compat_buffer, status.tool_compat_fragment_buffer
-                        ),
-                    });
-
-                    status.tool_compat_buffer.clear();
-                    status.tool_compat_fragment_buffer.clear();
-                    status.in_tool_call_block = false;
-                }
+            // After attempting to complete and process tags, send any remaining text.
+            if !status.tool_compat_buffer.is_empty() {
+                unified_chunks.push(UnifiedStreamChunk::Text {
+                    delta: status.tool_compat_buffer.clone(),
+                });
+                status.tool_compat_buffer.clear();
             }
         }
 
@@ -921,7 +897,7 @@ impl OllamaBackendAdapter {
         common::process_tool_calls_in_buffer(status, unified_chunks);
 
         // Handle remaining buffer content
-        self.handle_remaining_buffer_content(status, unified_chunks);
+        // self.handle_remaining_buffer_content(status, unified_chunks);
     }
 
     /// Process content in normal (non-tool compatibility) mode
@@ -973,6 +949,7 @@ impl OllamaBackendAdapter {
         }
     }
 
+    /*
     /// Handle remaining content in buffer that's not part of tool calls
     fn handle_remaining_buffer_content(
         &self,
@@ -1026,4 +1003,5 @@ impl OllamaBackendAdapter {
             }
         }
     }
+    */
 }
