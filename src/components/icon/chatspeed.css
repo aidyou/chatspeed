@@ -11,6 +11,18 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-running:before {
+  content: "\e65f";
+}
+
+.cs-completed:before {
+  content: "\ec58";
+}
+
+.cs-pending:before {
+  content: "\e657";
+}
+
 .cs-agent:before {
   content: "\e69b";
 }
