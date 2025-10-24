@@ -1,4 +1,4 @@
-use crate::db::sql::migrations::{v1, v2};
+use crate::db::sql::migrations::{v1, v2, v3};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -16,12 +16,11 @@ const MIGRATIONS: &[Migration] = &[
         description: "v2 migration: Add agents and workflows tables",
         sql: v2::MIGRATION_SQL,
     },
-    // TODO: uncomment when workflows are ready
-    // Migration {
-    //     version: 3,
-    //     description: "v3 migration: Add workflows table",
-    //     sql: v3::MIGRATION_SQL,
-    // },
+    Migration {
+        version: 3,
+        description: "v3 migration: Add workflows table",
+        sql: v3::MIGRATION_SQL,
+    },
 ];
 
 /// Executes a given set of SQL statements within a transaction and updates the db version.

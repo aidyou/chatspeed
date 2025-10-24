@@ -16,6 +16,9 @@ Chatspeed v1.1.18 further enhances application startup performance and user expe
 - **ccproxy Fix**: Fixed an issue in the ccproxy module where duplicate content might appear during streaming output in tool compatibility mode.
 - **Conversation Fix**: Fixed an issue where conversation list tool call parameter parsing errors caused the list to fail to load.
 
+---
+
+
 # Chatspeed v1.1.17 Release Notes
 
 Chatspeed v1.1.17 focuses on enhancing cross-platform stability and user experience by addressing critical bugs across Windows and Linux environments, optimizing environment variable loading, and resolving UI state management issues in key settings components. This release also incorporates all features and fixes from the unreleased v1.1.16, including new window positioning shortcuts and unified custom event formats.

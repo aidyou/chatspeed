@@ -7,6 +7,7 @@ use log::{error, warn};
 use rust_i18n::t;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
 use tauri::Emitter;
 use tauri::Listener;
 use tauri::LogicalSize;
@@ -17,10 +18,11 @@ use tauri::WebviewWindowBuilder;
 use tauri::Window;
 use tauri::{AppHandle, Manager};
 
-use crate::constants::ASSISTANT_ALWAYS_ON_TOP;
 use crate::constants::CFG_WINDOW_POSITION;
 use crate::constants::CFG_WINDOW_SIZE;
-use crate::constants::MAIN_WINDOW_ALWAYS_ON_TOP;
+use crate::constants::{
+    ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP, WORKFLOW_WINDOW_ALWAYS_ON_TOP,
+};
 use crate::db::MainStore;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -172,10 +174,11 @@ fn is_position_on_any_screen<R: tauri::Runtime>(
 }
 
 /// Helper to get the user's always-on-top preference for a given window label.
-fn get_user_always_on_top_preference(label: &str) -> bool {
+pub fn get_user_always_on_top_preference(label: &str) -> bool {
     match label {
         "main" => MAIN_WINDOW_ALWAYS_ON_TOP.load(Ordering::Relaxed),
         "assistant" => ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed),
+        "workflow" => WORKFLOW_WINDOW_ALWAYS_ON_TOP.load(Ordering::Relaxed),
         _ => false,
     }
 }
@@ -284,9 +287,9 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Toggles the visibility of the main window using the robust helper function.
-pub fn show_and_focus_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+/// Toggles the visibility of a window using the robust helper function.
+pub fn activate_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
         match (window.is_visible(), window.is_focused()) {
             (Ok(true), Ok(true)) => {
                 // If the window is visible and has focus, ignore it.
@@ -295,11 +298,37 @@ pub fn show_and_focus_main_window(app: &tauri::AppHandle) {
             _ => {
                 // In all other cases (hidden, minimized, or in the background),
                 // use the robust helper to bring it to the front.
-                show_and_focus_window(app, "main");
+                show_and_focus_window(app, label);
+            }
+        }
+        let _ = app.emit(
+            format!("cs://{}-focus-input", label).as_str(),
+            json!({ "windowLabel": label }),
+        );
+    } else {
+        log::warn!("Could not get a handle to window '{}' for toggling.", label);
+    }
+}
+
+pub fn toggle_window_activate(app: &tauri::AppHandle, label: &str, enabled_toggle: bool) {
+    if let Some(window) = app.get_webview_window(label) {
+        match (window.is_visible(), enabled_toggle) {
+            (Ok(true), true) => {
+                let _ = window.hide();
+                log::debug!("Main window is visible will be hidden.");
+            }
+            _ => {
+                // In all other cases (hidden, minimized, or in the background),
+                // use the robust helper to bring it to the front.
+                show_and_focus_window(app, label);
+                let _ = app.emit(
+                    format!("cs://{}-focus-input", label).as_str(),
+                    json!({ "windowLabel": label }),
+                );
             }
         }
     } else {
-        log::warn!("Could not get a handle to the main window for toggling.");
+        log::warn!("Could not get a handle to window '{}' for toggling.", label);
     }
 }
 
@@ -566,8 +595,10 @@ pub fn restore_window_config(
         );
         if window_label == "main" {
             PhysicalSize::new(800, 600) // Default size if current size cannot be obtained
-        } else {
+        } else if window_label == "assistant" {
             PhysicalSize::new(500, 600)
+        } else {
+            PhysicalSize::new(1024, 650)
         }
     });
 
@@ -581,6 +612,12 @@ pub fn restore_window_config(
         } else if window_label == "assistant" {
             c.get_config(
                 crate::constants::CFG_ASSISTANT_WINDOW_SIZE,
+                Some(WindowSize::default()),
+            )
+            .unwrap_or_default()
+        } else if window_label == "workflow" {
+            c.get_config(
+                crate::constants::CFG_WORKFLOW_WINDOW_SIZE,
                 Some(WindowSize::default()),
             )
             .unwrap_or_default()
@@ -612,14 +649,20 @@ pub fn restore_window_config(
             }
         }
 
-        // Restore the main window position only
-        if window_label != "main" {
+        // Restore window position for main and workflow windows
+        if window_label != "main" && window_label != "workflow" {
             return;
         }
 
         // restore window position
-        let window_position_config =
-            c.get_config(CFG_WINDOW_POSITION, MainWindowPosition::default()); // default 直接是 MainWindowPosition
+        let window_position_config = if window_label == "main" {
+            c.get_config(CFG_WINDOW_POSITION, MainWindowPosition::default())
+        } else {
+            c.get_config(
+                crate::constants::CFG_WORKFLOW_WINDOW_POSITION,
+                MainWindowPosition::default(),
+            )
+        };
         let saved_pos = window_position_config;
 
         #[cfg(debug_assertions)]

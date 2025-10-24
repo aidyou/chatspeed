@@ -3,7 +3,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum ToolError {
     /// Errors related to initial configuration or setup.
     #[error("{}", t!("tools.error.config", details = .0))]

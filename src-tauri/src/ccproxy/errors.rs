@@ -10,7 +10,7 @@ use thiserror::Error;
 
 /// Custom error types for the ccproxy module.
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum CCProxyError {
     /// The provided token is invalid.
     #[error("{}", t!("proxy.error.invalid_api_key"))]

@@ -5,11 +5,11 @@ import { marked } from 'marked'
 
 // Regular expressions
 const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g
-const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g
-const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g
-const REFERENCE_LINK_ALTERNATIVE_2_REGEX = /\[\[([0-9]+)\]\]/g
-const REFERENCE_BLOCK_REGEX = /`\[\^[0-9]+\]`/g
-const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g
+const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g //match [1,2,3](@ref)
+const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g //match [^1^]
+const REFERENCE_BLOCK_REGEX = /`\[\^[0-9]+\]`/g //match `[^1]`
+const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g //match [citation:1]
+const CS_REFERENCE_REGEX = /\[\[\d+\]\]/g //match [[1]]
 const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/ // just deal the first think tag
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g
 // const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
@@ -340,7 +340,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   // remove reminder
   content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
 
-  // 移除 ai 生成的不规范引用 [[1]](http://domain.com) -> [[1]]
+  // Remove AI-generated non-standard references [[1]](http://domain.com) -> [[1]]
   content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {
     return id
   })
@@ -356,21 +356,20 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
     return `[[${number.trim()}]]`
   })
-  // format refs [[1]] -> [[1]] (normalization)
-  content = content.replace(REFERENCE_LINK_ALTERNATIVE_2_REGEX, (_match, number) => {
-    return `[[${number.trim()}]]`
-  })
   // format refs [citation:1] -> [[1]]
   content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
+    return `[[${number.trim()}]]`
+  })
+  // format refs `[^1]` -> [[1]]
+  content = content.replace(REFERENCE_BLOCK_REGEX, (_match, number) => {
     return `[[${number.trim()}]]`
   })
 
   // Text like `[1]` needs to be replaced first; otherwise, the subsequent reference parsing will be converted to a code block by mk.
   const refBlocks = new Map()
   let refCounter = 0
-
   // Replace regular reference text with placeholders
-  content = content.replace(REFERENCE_BLOCK_REGEX, match => {
+  content = content.replace(CS_REFERENCE_REGEX, match => {
     const id = `___REF_${refCounter++}___`
     refBlocks.set(id, match)
     return id

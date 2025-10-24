@@ -40,7 +40,9 @@ use std::sync::atomic::Ordering;
 use rust_i18n::t;
 use serde_json::Value;
 // use tauri::utils::{config::WindowEffectsConfig, WindowEffect};
-use crate::constants::{ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP};
+use crate::constants::{
+    ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP, WORKFLOW_WINDOW_ALWAYS_ON_TOP,
+};
 use tauri::{command, Emitter, Manager}; //window::Color, WindowEvent,
 
 use crate::error::{AppError, Result};
@@ -263,7 +265,7 @@ pub async fn toggle_window_always_on_top(
     window_label: &str,
     new_state: bool,
 ) -> Result<bool> {
-    if window_label == "assistant" || window_label == "main" {
+    if window_label == "assistant" || window_label == "main" || window_label == "workflow" {
         let window = app
             .get_webview_window(window_label)
             .ok_or_else(|| AppError::General {
@@ -286,10 +288,11 @@ pub async fn toggle_window_always_on_top(
             })?;
 
         // Update global state
-        if window_label == "assistant" {
-            ASSISTANT_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed);
-        } else if window_label == "main" {
-            MAIN_WINDOW_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed);
+        match window_label {
+            "assistant" => ASSISTANT_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed),
+            "main" => MAIN_WINDOW_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed),
+            "workflow" => WORKFLOW_WINDOW_ALWAYS_ON_TOP.store(new_state, Ordering::Relaxed),
+            _ => {}
         }
     }
 
@@ -307,11 +310,7 @@ pub async fn toggle_window_always_on_top(
 /// - `bool` - The always on top state
 #[tauri::command]
 pub fn get_window_always_on_top(window_label: &str) -> bool {
-    match window_label {
-        "assistant" => ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed),
-        "main" => MAIN_WINDOW_ALWAYS_ON_TOP.load(Ordering::Relaxed),
-        _ => false,
-    }
+    crate::window::get_user_always_on_top_preference(window_label)
 }
 
 /// Quit the application

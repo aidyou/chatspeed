@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum McpError {
     // Client-side errors
     #[error("{}", t!("mcp.error.client_call_failed", error = _0))]

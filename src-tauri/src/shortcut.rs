@@ -1,7 +1,10 @@
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use rust_i18n::t;
@@ -17,11 +20,10 @@ use crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::db::MainStore;
 use crate::open_note_window;
-use crate::window::{show_and_focus_main_window, toggle_assistant_window};
-use crate::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT;
-use crate::DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT;
+use crate::window::toggle_window_activate;
+use crate::window::{activate_window, toggle_assistant_window};
 use crate::{
-    CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT,
+    constants::*, CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT,
     CFG_MAIN_WINDOW_VISIBLE_SHORTCUT, CFG_MOVE_WINDOW_LEFT_SHORTCUT,
     CFG_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
     DEFAULT_CENTER_WINDOW_SHORTCUT, DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT,
@@ -99,6 +101,14 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
             ),
         );
 
+        shortcuts.insert(
+            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+                DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            ),
+        );
+
         // Add new shortcuts here if needed
         // shortcuts.insert("new_window_shortcut".to_string(), c.get_config("new_window_shortcut", "default_value".to_string()));
     } else {
@@ -130,22 +140,73 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
             CFG_CENTER_WINDOW_SHORTCUT.to_string(),
             DEFAULT_CENTER_WINDOW_SHORTCUT.to_string(),
         );
+        shortcuts.insert(
+            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
     }
 
     shortcuts
 }
 
+lazy_static! {
+    static ref LAST_CALLS: Mutex<HashMap<String, Instant>> = Mutex::new(HashMap::new());
+}
+const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
+
 /// Executes the appropriate action for a given shortcut type
 ///
 /// # Arguments
 /// * `app` - Application handle for window management
-/// * `shortcut_type` - The type of shortcut that was triggered
+/// * `shortcut_key` - The type of shortcut that was triggered
 ///
 /// This function maps shortcut types to their corresponding window toggle actions
-fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
-    log::debug!("handle_shortcut: {}", shortcut_type);
-    match shortcut_type {
-        CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => show_and_focus_main_window(app),
+fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
+    let mut last_calls = match LAST_CALLS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("Shortcut debounce mutex poisoned, recovering.");
+            poisoned.into_inner()
+        }
+    };
+    let now = Instant::now();
+
+    if let Some(prev_call) = last_calls.get(shortcut_key) {
+        if now.duration_since(*prev_call) < DEBOUNCE_DURATION {
+            log::debug!("Debouncing shortcut: {}", shortcut_key);
+            return;
+        }
+    }
+
+    last_calls.insert(shortcut_key.to_string(), now);
+
+    log::debug!("handle_shortcut: {}", shortcut_key);
+    match shortcut_key {
+        CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => {
+            toggle_window_activate(app, "main", true);
+        }
+        CFG_MOVE_WINDOW_LEFT_SHORTCUT => {
+            if let Err(e) =
+                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "left")
+            {
+                log::error!("Failed to move window left: {}", e);
+            }
+            activate_window(app, "main");
+        }
+        CFG_MOVE_WINDOW_RIGHT_SHORTCUT => {
+            if let Err(e) =
+                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "right")
+            {
+                log::error!("Failed to move window right: {}", e);
+            }
+            activate_window(app, "main");
+        }
+        CFG_CENTER_WINDOW_SHORTCUT => {
+            if let Err(e) = crate::commands::window::center_window(app.clone(), "main") {
+                log::error!("Failed to center window: {}", e);
+            }
+            activate_window(app, "main");
+        }
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT => {
             toggle_assistant_window(app);
@@ -170,30 +231,8 @@ fn handle_shortcut(app: &AppHandle, shortcut_type: &str) {
                 }
             });
         }
-        CFG_MOVE_WINDOW_LEFT_SHORTCUT => {
-            if let Err(e) =
-                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "left")
-            {
-                log::error!("Failed to move window left: {}", e);
-            }
-            show_and_focus_main_window(app);
-            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
-        }
-        CFG_MOVE_WINDOW_RIGHT_SHORTCUT => {
-            if let Err(e) =
-                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "right")
-            {
-                log::error!("Failed to move window right: {}", e);
-            }
-            show_and_focus_main_window(app);
-            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
-        }
-        CFG_CENTER_WINDOW_SHORTCUT => {
-            if let Err(e) = crate::commands::window::center_window(app.clone(), "main") {
-                log::error!("Failed to center window: {}", e);
-            }
-            show_and_focus_main_window(app);
-            let _ = app.emit("cs://main-focus-input", json!({ "windowLabel": "main" }));
+        CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT => {
+            toggle_window_activate(app, "workflow", true);
         }
         _ => {}
     }

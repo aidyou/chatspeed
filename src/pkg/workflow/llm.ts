@@ -90,26 +90,29 @@ export async function callLLM(request: LLMRequest, handlers: LLMStreamHandlers):
 
               switch (payload.type) {
                 case LLMResponseType.Error: {
-                  let error: object = { status: 500, message: 'Unknown stream error' }
+                  let message = 'Unknown stream error'
+                  let status: number | undefined
+                  let details: unknown
+
                   if (typeof payload?.chunk === 'string') {
                     try {
                       const j = JSON.parse(payload.chunk)
-                      // Accommodate the new standard { "error": { "status": ..., "message": ... } }
-                      if (j.error && j.error.status && j.error.message) {
-                        error = {
-                          status: j.error.status,
-                          message: j.error.message
-                        }
-                      } else { // Fallback for older or different error structures
-                         error = {
-                           status: j.status || 500,
-                           message: j.details || j.error || j.message || 'Failed to parse error object'
-                         }
+                      // This aligns with the AppError structure from Rust
+                      message = j.message || 'Failed to parse error message'
+                      details = j.details
+
+                      if (j.module === 'Ai' && j.details?.kind === 'apiRequestFailed') {
+                        status = j.details.statusCode
                       }
                     } catch {
-                      error = { status: 500, message: payload.chunk || 'Unknown stream error' }
+                      message = payload.chunk
                     }
                   }
+                  // Create an error object that can hold custom properties
+                  const error = Object.assign(new Error(message), {
+                    status,
+                    details
+                  })
                   triggerRetryOrFailure(error)
                   break
                 }
@@ -173,32 +176,36 @@ export async function callLLM(request: LLMRequest, handlers: LLMStreamHandlers):
 
       // If the promise above resolves, it means success, so we can exit the loop.
       return
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.warn(`LLM call attempt ${attempt + 1} failed.`, error)
 
-      const status = error?.status
-      const isRetryable =
-        status === 429 || (error instanceof Error && error.message?.includes('NetworkError')) // Add other retryable conditions here
+      let status: number | undefined
+      if (typeof error === 'object' && error !== null && 'status' in error) {
+        const potentialStatus = (error as { status?: unknown }).status
+        if (typeof potentialStatus === 'number') {
+          status = potentialStatus
+        }
+      }
+
       const isFatal = status != null && [401, 403, 404, 410].includes(status)
 
       if (isFatal) {
         console.error(`Fatal error (${status}) received from LLM. Aborting.`)
-        if (handlers.onError)
+        if (handlers.onError) {
           handlers.onError(error instanceof Error ? error : new Error(String(error)))
+        }
         throw error // Re-throw the fatal error to stop the entire workflow
       }
 
-      if (isRetryable && attempt < maxRetries) {
-        const delay = initialDelay * Math.pow(2, attempt)
-        console.log(`Rate limit or network error. Retrying in ${delay}ms...`)
+      if (attempt < maxRetries) {
+        const delay = initialDelay * 2 ** attempt
+        console.log(`Retrying in ${delay}ms...`)
         await sleep(delay)
-      } else if (attempt >= maxRetries) {
-        console.error('LLM call failed after maximum retries.')
-        if (handlers.onError) handlers.onError(error)
-        throw new Error('LLM call failed after maximum retries.')
       } else {
-        // For non-retryable errors that are not fatal, fail immediately
-        if (handlers.onError) handlers.onError(error)
+        console.error('LLM call failed after maximum retries.')
+        if (handlers.onError) {
+          handlers.onError(error instanceof Error ? error : new Error(String(error)))
+        }
         throw error
       }
     }

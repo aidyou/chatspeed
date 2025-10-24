@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Represents errors that can occur in the configuration store.
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum StoreError {
     /// Error variant for already exists errors.
     #[error("{}", t!("db.already_exists", error = _0))]

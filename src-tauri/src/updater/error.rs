@@ -8,7 +8,7 @@ use thiserror::Error;
 
 /// Errors that can occur during the update process
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum UpdateError {
     /// Error parsing a version string.
     #[error("{}", t!("updater.errors.version_parse", version = version, error = error))]

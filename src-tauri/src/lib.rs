@@ -314,7 +314,7 @@ pub async fn run() -> crate::error::Result<()> {
                         }
                     }
                     // For these windows, we just hide them.
-                    "assistant" | "toolbar" => {
+                    "assistant" | "toolbar" | "workflow" => {
                         api.prevent_close();
                         // Only hide the window if it's currently visible.
                         if window.is_visible().unwrap_or(false) {
@@ -338,7 +338,7 @@ pub async fn run() -> crate::error::Result<()> {
                     return;
                 }
                 let window_label = window.label();
-                if window_label == "main" || window_label == "assistant" {
+                if window_label == "main" || window_label == "assistant" || window_label == "workflow" {
                     let config_state = window.state::<Arc<RwLock<MainStore>>>();
                     let window_size = get_saved_window_size(config_state.inner().clone(),window_label).unwrap_or_default();
                     if (window_size.width != size.width as f64
@@ -368,25 +368,24 @@ pub async fn run() -> crate::error::Result<()> {
 
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
-                    // This is important for restoring the window position on the next startup.
                     let config_store = &window.state::<Arc<RwLock<MainStore>>>();
-                    let old_pos = get_saved_window_position(config_store);
-                    let screen_name = get_screen_name(&window);
-
-                    if old_pos.map_or(true, |p| {
-                        screen_name != p.screen_name || position.x != p.x || position.y != p.y
-                    }) {
-                        let pos = MainWindowPosition {
-                            screen_name,
-                            x: position.x,
-                            y: position.y,
-                        };
-                        if let Ok(mut store) = config_store.write() {
-                            if let Err(e) = store.save_window_position(pos) {
-                                error!("Failed to set window position: {}", e);
-                            }
-                        }
-                    }
+                    save_window_position(
+                        window,
+                        config_store,
+                        position,
+                        get_saved_window_position,
+                        |store, pos| store.save_window_position(pos),
+                    );
+                } else if window.label() == "workflow" {
+                    // Save the workflow window position when it is moved.
+                    let config_store = &window.state::<Arc<RwLock<MainStore>>>();
+                    save_window_position(
+                        window,
+                        config_store,
+                        position,
+                        get_saved_workflow_window_position,
+                        |store, pos| store.save_workflow_window_position(pos),
+                    );
                 } else if window.label() == "assistant" {
                     constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
 
@@ -552,6 +551,10 @@ pub async fn run() -> crate::error::Result<()> {
                 restore_window_config(&assistant_window, main_store.clone());
             }
 
+            if let Some(workflow_window) = app.get_webview_window("workflow") {
+                restore_window_config(&workflow_window, main_store.clone());
+            }
+
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             // Start the HTTP server using Tauri's asynchronous runtime
@@ -627,8 +630,12 @@ fn get_saved_window_size(
     if let Ok(c) = config_store.read() {
         let key = if window_label == "main" {
             CFG_WINDOW_SIZE
-        } else {
+        } else if window_label == "assistant" {
             CFG_ASSISTANT_WINDOW_SIZE
+        } else if window_label == "workflow" {
+            CFG_WORKFLOW_WINDOW_SIZE
+        } else {
+            return None;
         };
         c.get_config(key, Some(WindowSize::default()))
     } else {
@@ -648,6 +655,63 @@ fn get_saved_window_position(config_store: &Arc<RwLock<MainStore>>) -> Option<Ma
         c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
     } else {
         None
+    }
+}
+
+/// Get the saved workflow window position from the configuration
+///
+/// # Arguments
+/// - `config_store`: A reference to the configuration store.
+///
+/// # Returns
+/// A tuple containing the saved window x and y positions.
+fn get_saved_workflow_window_position(
+    config_store: &Arc<RwLock<MainStore>>,
+) -> Option<MainWindowPosition> {
+    if let Ok(c) = config_store.read() {
+        c.get_config(
+            CFG_WORKFLOW_WINDOW_POSITION,
+            Some(MainWindowPosition::default()),
+        )
+    } else {
+        None
+    }
+}
+
+/// Helper function to save window position for main and workflow windows
+///
+/// # Arguments
+/// - `window`: The window whose position is being saved
+/// - `config_store`: The configuration store
+/// - `current_position`: The current position from the window event
+/// - `get_saved_pos`: Function to get the saved position for this window type
+/// - `save_pos`: Function to save the position for this window type
+fn save_window_position<F, G>(
+    window: &tauri::Window,
+    config_store: &Arc<RwLock<MainStore>>,
+    current_position: &tauri::PhysicalPosition<i32>,
+    get_saved_pos: F,
+    save_pos: G,
+) where
+    F: FnOnce(&Arc<RwLock<MainStore>>) -> Option<MainWindowPosition>,
+    G: FnOnce(&mut MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
+{
+    let old_pos = get_saved_pos(config_store);
+    let screen_name = get_screen_name(window);
+
+    if old_pos.map_or(true, |p| {
+        screen_name != p.screen_name || current_position.x != p.x || current_position.y != p.y
+    }) {
+        let pos = MainWindowPosition {
+            screen_name,
+            x: current_position.x,
+            y: current_position.y,
+        };
+        if let Ok(mut store) = config_store.write() {
+            if let Err(e) = save_pos(&mut store, pos) {
+                error!("Failed to save window position: {}", e);
+            }
+        }
     }
 }
 

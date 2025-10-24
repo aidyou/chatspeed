@@ -36,30 +36,36 @@ export async function invokeWrapper(command, payload = {}) {
       originalError: error
     }
 
-    // Attempt to parse the error string from Rust backend
+    // Handle both string and object format errors from Rust backend
+    let rustError = null
+
     if (typeof error === 'string') {
       try {
-        const rustError = JSON.parse(error)
-        if (rustError.module) {
-          parsedError.module = rustError.module
-          parsedError.message = rustError.message || String(error) // Prioritize top-level message
-          if (rustError.details) {
-            if (typeof rustError.details === 'object' && rustError.details !== null) {
-              // This is a structured error, e.g., { kind: '...', message: '...' }
-              parsedError.kind = rustError.details.kind || 'Unknown'
-              // The message from the inner error is often more specific
-              parsedError.message = rustError.details.message || parsedError.message
-            } else if (typeof rustError.details === 'string') {
-              // This is a simple string error, e.g., from General(String)
-              // The details string is the error message. The top-level message should be the same.
-              // We don't have a 'kind' here. We can use the module name as a fallback.
-              parsedError.kind = rustError.module
-            }
-          }
-        }
+        rustError = JSON.parse(error)
       } catch {
         // If JSON parsing fails, use the original error string as message
         parsedError.message = String(error)
+      }
+    } else if (typeof error === 'object' && error !== null) {
+      // Error is already an object
+      rustError = error
+    }
+
+    if (rustError?.module) {
+      parsedError.module = rustError.module
+      parsedError.message = rustError.message || String(error) // Prioritize top-level message
+      if (rustError.details) {
+        if (typeof rustError.details === 'object' && rustError.details !== null) {
+          // This is a structured error, e.g., { kind: '...', message: '...' }
+          parsedError.kind = rustError.details.kind || 'Unknown'
+          // The message from the inner error is often more specific
+          parsedError.message = rustError.details.message || parsedError.message
+        } else if (typeof rustError.details === 'string') {
+          // This is a simple string error, e.g., from General(String)
+          // The details string is the error message. The top-level message should be the same.
+          // We don't have a 'kind' here. We can use the module name as a fallback.
+          parsedError.kind = rustError.module
+        }
       }
     }
 

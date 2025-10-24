@@ -25,7 +25,7 @@
         <slot name="center"></slot>
         <el-tooltip
           placement="bottom"
-          v-if="updateStore.isUpdateReady"
+          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />

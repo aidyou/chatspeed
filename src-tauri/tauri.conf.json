@@ -88,6 +88,21 @@
         "transparent": true,
         "center": true,
         "create": false
+      },
+      {
+        "label": "workflow",
+        "title": "Workflow",
+        "url": "/workflow",
+        "width": 1024,
+        "minWidth": 800,
+        "height": 650,
+        "minHeight": 400,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "center": true,
+        "create": true
       }
     ],
     "withGlobalTauri": true,

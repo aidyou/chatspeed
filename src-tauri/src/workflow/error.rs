@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Workflow error types
 #[derive(Debug, Error, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum WorkflowError {
     /// Cancelled error
     #[error("{}", t!("workflow.error.cancelled", details = .0))]

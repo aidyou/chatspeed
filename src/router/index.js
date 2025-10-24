@@ -26,6 +26,11 @@ const routes = [
     name: "note",
     component: () => import("@/views/Note.vue"),
   },
+  {
+    path: "/workflow",
+    name: "workflow",
+    component: () => import("@/views/Workflow.vue"),
+  },
 ];
 
 const router = createRouter({

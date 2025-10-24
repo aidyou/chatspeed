@@ -334,19 +334,96 @@ impl ToolDefinition for WebSearch {
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        "Performs a web search to find information. This is the primary tool for answering questions about current events or topics beyond your knowledge cutoff.
+        r#"# Use this tool to perform **web searches** for information beyond the model’s knowledge cutoff or related to **current events**.
+It must provide **factual, multi-source validated** answers, especially for sensitive or analytical domains (e.g., finance, law, technology).
 
-**Workflow:**
-1.  **Search:** Use this tool to get a list of results (with titles, URLs, and snippets).
-2.  **Fetch:** Analyze the snippets to identify the most relevant URLs, then use the `WebFetch` tool to get the full page content for a deep understanding. DO NOT base answers on snippets alone.
+## Workflow
+1. **Understand Intent**
+    - Identify the user’s actual goal and domain.
+    - If the question is ambiguous, ask for clarification.
+    - Break down complex or multi-part questions into focused sub-queries.
 
-**Usage Guidelines:**
--  **Prioritize Sources:** When analyzing search results, give preference to authoritative sources like official websites, well-known news outlets, and academic institutions.
--  For time-sensitive queries (e.g., 'recent', 'latest'), use the `time_period` parameter.
+2. **Build the Query**
+    - Convert the intent into **targeted, keyword-based queries**.
+    - Use **composite keywords** for precision.
+    - Avoid overly broad queries; if results are irrelevant, narrow the scope.
+    - If too few results, broaden or use synonyms.
 
-**Error & Retry Strategy:**
--  **On Timeout:** If a search request times out, you may retry the exact same query up to 2 times.
--  **On No Results:** If a search returns no results, you **must** adjust your strategy. Do not simply repeat the same query. Instead, modify your keywords (make them broader or use different terms) or adjust the `time_period`. You should make up to 3 such modification attempts before concluding the information is unavailable."
+3. **Execute Search**
+    - Run the search and review snippets.
+    - Select **relevant and authoritative URLs**.
+    - Prefer results that match the **user’s query language**.
+    - If local-language results are insufficient, expand to English or other relevant languages.
+
+4. **Mandatory Fetch**
+    - You **MUST** use the `WebFetch` tool to retrieve **full-page content** from selected URLs **before generating any final answer**.
+    - Snippets are for evaluation only; **never base conclusions solely on snippets**.
+    - Validate that fetched pages contain **meaningful and relevant text** (not menus, ads, or redirects).
+    - For complex or uncertain topics, **fetch and cross-reference at least two reliable sources**.
+
+5. **Synthesize and Answer**
+    - Integrate verified information from fetched pages.
+    - Identify overlapping content, remove duplicates, and ensure consistency.
+    - When multiple sources disagree, follow the **multi-source verification rule** (see below).
+    - Present key findings clearly (e.g., bullet list, timeline, or table).
+    - Mention which sources were used (by site or domain).
+    - Never invent or alter factual data.
+
+## Domain-Specific Handling
+### 🧠 General Knowledge
+- Use authoritative and reputable sources (e.g., Wikipedia, official documentation, major media).
+- Cross-check at least two independent pages if the answer involves factual detail or statistics.
+
+### 💻 Programming & Technical Topics
+- Prioritize **official documentation**, **project repositories (GitHub, GitLab)**, and **recognized developer forums** (Stack Overflow, MDN, etc.).
+- Fetch full content before summarizing.
+- If multiple code examples conflict, favor the one:
+    1. From official documentation, or
+    2. With clear reasoning and verified context (not copy-paste snippets).
+- Never output incomplete or unverified code from snippets.
+
+### 💰 Finance & Market Data
+- Financial information must be **cross-validated from at least two independent authoritative sources**.
+- If the two sources disagree:
+    1. Fetch a **third** reliable source for verification.
+    2. If discrepancies persist, use the **most authoritative source** as the final reference.
+        - Example priority: **official exchanges > professional financial media > general websites**.
+- Always indicate data recency (e.g., “as of Oct 22, 2025”).
+- Never mix outdated data with current results.
+
+## Query Guidelines
+- **Keyword Optimization**
+    Focus on essential terms; remove filler words.
+
+- **Temporal Precision**
+    Convert relative time references (“today”, “yesterday”) into **specific calendar dates** based on the current date.
+    Example: “today’s news” → “news October 22, 2025”.
+
+- **Context Awareness**
+    - Adapt to the user’s **language and region**.
+    - For specialized fields (finance, science, law), include contextual keywords or trusted domains (e.g., `财经`, `site:eastmoney.com`).
+
+- **Recency Filter**
+    Use `time_period` (`day`, `week`, etc.) to focus on recent information.
+
+## Source Evaluation
+- Prioritize **official, reputable, or expert** sources.
+- Always cross-check multiple pages for factual accuracy.
+- Highlight discrepancies or uncertainty when sources conflict.
+- Present a balanced synthesis, not a single-source summary.
+
+## Error Handling
+- **Timeouts:** Retry the same query up to **2 times**.
+- **No Results:** Modify query (broaden or change keywords, adjust `time_period`) and retry up to **3 times**.
+- **Fetch Failures:**
+    - Retry up to **2 times** per URL.
+    - If all fetches fail, summarize available snippet data **with a disclaimer** that full content could not be retrieved.
+
+## Output Requirements
+- Present findings in **clear, structured form** (e.g., bullet list, table, or concise paragraphs).
+- Include **source domains** when possible.
+- Maintain **neutral, professional tone**.
+- Do not fabricate, speculate, or overstate conclusions."#
     }
 
     /// Returns the function calling spec.

@@ -2,13 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": [
-    "main",
-    "assistant",
-    "toolbar",
-    "settings",
-    "note"
-  ],
+  "windows": ["main", "assistant", "toolbar", "settings", "note", "workflow"],
   "permissions": [
     "autostart:allow-disable",
     "autostart:allow-enable",
@@ -53,25 +47,17 @@
   ],
   "plugins": {
     "fs": {
-      "scope": [
-        "**/*"
-      ]
+      "scope": ["**/*"]
     },
     "opener": {
-      "scope": [
-        "**/*"
-      ]
+      "scope": ["**/*"]
     }
   },
   "app": {
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APP/*",
-          "$APPDATA/*",
-          "$LOCALAPPDATA/*"
-        ]
+        "scope": ["$APP/*", "$APPDATA/*", "$LOCALAPPDATA/*"]
       },
       "csp": {
         "default-src": "'self' 'unsafe-inline' 'unsafe-eval' data: ipc: http://ipc.localhost asset: http://asset.localhost blob:",

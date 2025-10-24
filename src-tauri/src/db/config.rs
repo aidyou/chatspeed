@@ -507,8 +507,12 @@ impl MainStore {
     ) -> Result<(), StoreError> {
         let key = if window_label == "main" {
             crate::constants::CFG_WINDOW_SIZE
-        } else {
+        } else if window_label == "assistant" {
             crate::constants::CFG_ASSISTANT_WINDOW_SIZE
+        } else if window_label == "workflow" {
+            crate::constants::CFG_WORKFLOW_WINDOW_SIZE
+        } else {
+            return Ok(()); // Skip unknown window types
         };
         self.set_config(key, &serde_json::json!(size))?;
         Ok(())
@@ -524,6 +528,19 @@ impl MainStore {
     /// Returns a `StoreError` if the database operation fails.
     pub fn save_window_position(&mut self, pos: MainWindowPosition) -> Result<(), StoreError> {
         self.set_config(CFG_WINDOW_POSITION, &serde_json::json!(pos))?;
+        Ok(())
+    }
+
+    /// Saves the workflow window position to the configuration.
+    ///
+    /// # Arguments
+    /// * `pos` - The window position to save.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StoreError` if the database operation fails.
+    pub fn save_workflow_window_position(&mut self, pos: MainWindowPosition) -> Result<(), StoreError> {
+        self.set_config(crate::constants::CFG_WORKFLOW_WINDOW_POSITION, &serde_json::json!(pos))?;
         Ok(())
     }
 

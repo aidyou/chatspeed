@@ -35,7 +35,7 @@
 
       <div class="chat-main">
         <!-- side bar -->
-        <el-aside :width="sidebarWidth" class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <el-aside class="sidebar" :class="{ collapsed: sidebarCollapsed }" :width="sidebarWidth">
           <div class="sidebar-header upperLayer">
             <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true">
               <template #prefix>
@@ -2381,8 +2381,8 @@ const onTakeNote = message => {
             font-size: var(--cs-font-size-md) !important;
           }
 
-          &.cs-send {
-            color: var(--cs-text-color-primary);
+          &.cs-send:not(.disabled) {
+            color: var(--cs-color-primary);
           }
         }
 

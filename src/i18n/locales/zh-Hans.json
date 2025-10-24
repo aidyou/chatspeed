@@ -626,5 +626,10 @@
       "skill": "技能",
       "scraperTest": "爬虫测试"
     }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "待办事项"
+    }
   }
 }

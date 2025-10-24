@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// HTTP module error types
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum HttpError {
     /// Request error
     #[error("{0}")]

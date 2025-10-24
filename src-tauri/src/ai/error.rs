@@ -3,7 +3,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", content = "message", rename_all = "camelCase")]
 pub enum AiError {
     #[error("{}",t!("chat.error.api_request_failed",provider=provider,details=details,status_code=status_code))]
     ApiRequestFailed {

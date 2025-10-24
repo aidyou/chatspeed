@@ -8,6 +8,8 @@ use std::sync::Arc;
 pub const CFG_WINDOW_POSITION: &str = "window_position";
 pub const CFG_WINDOW_SIZE: &str = "window_size";
 pub const CFG_ASSISTANT_WINDOW_SIZE: &str = "assistant_window_size";
+pub const CFG_WORKFLOW_WINDOW_SIZE: &str = "workflow_window_size";
+pub const CFG_WORKFLOW_WINDOW_POSITION: &str = "workflow_window_position";
 
 pub const TRAY_ID: &str = "Chatspeed";
 
@@ -63,6 +65,12 @@ pub const CFG_CENTER_WINDOW_SHORTCUT: &str = "center_window_shortcut";
 pub const DEFAULT_CENTER_WINDOW_SHORTCUT: &str = "Alt+Shift+C";
 
 //======================================================
+// workflow window shortcuts
+//======================================================
+pub const CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT: &str = "workflow_window_visible_shortcut";
+pub const DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+W";
+
+//======================================================
 // end main window shortcuts
 //======================================================
 
@@ -73,6 +81,8 @@ pub const DEFAULT_THUMBNAIL_HEIGHT: u32 = 200;
 pub static ASSISTANT_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // main window always on top status
 pub static MAIN_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
+// workflow window always on top status
+pub static WORKFLOW_WINDOW_ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 // on mouse event status
 pub static ON_MOUSE_EVENT: AtomicBool = AtomicBool::new(false);
 

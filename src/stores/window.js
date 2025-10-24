@@ -67,8 +67,21 @@ export const useWindowStore = defineStore('window', () => {
     chatSidebarShow.value = value || false;
   };
 
+  // Reactive reference to control the visibility of the workflow sidebar, initialized from local storage
+  const workflowSidebarShow = ref(csGetStorage(csStorageKey.workflowSidebarShow, true));
+
+  /**
+   * Set the visibility of the workflow sidebar and update local storage
+   * @param {boolean} value - The new visibility state of the workflow sidebar
+   */
+  const setWorkflowSidebarShow = (value) => {
+    csSetStorage(csStorageKey.workflowSidebarShow, value);
+    workflowSidebarShow.value = value || false;
+  };
+
   const assistantAlwaysOnTop = ref(false)
   const mainWindowAlwaysOnTop = ref(false)
+  const workflowWindowAlwaysOnTop = ref(false)
 
   /**
    * Toggle window always on top state
@@ -108,6 +121,9 @@ export const useWindowStore = defineStore('window', () => {
             break;
           case 'main':
             mainWindowAlwaysOnTop.value = state;
+            break;
+          case 'workflow':
+            workflowWindowAlwaysOnTop.value = state;
             break;
         }
       })
@@ -152,6 +168,14 @@ export const useWindowStore = defineStore('window', () => {
     initWindowAlwaysOnTop('main')
   }
 
+  const toggleWorkflowWindowAlwaysOnTop = async () => {
+    workflowWindowAlwaysOnTop.value = await toggleWindowAlwaysOnTop('workflow', workflowWindowAlwaysOnTop.value)
+  }
+
+  const initWorkflowWindowAlwaysOnTop = () => {
+    initWindowAlwaysOnTop('workflow')
+  }
+
   const setMouseEventState = (state) => {
     invokeWrapper('set_mouse_event_state', { state, windowLabel })
       .catch(error => {
@@ -192,13 +216,19 @@ export const useWindowStore = defineStore('window', () => {
     headerMarginRight,
     chatSidebarShow,
     setChatSidebarShow,
+    workflowSidebarShow,
+    setWorkflowSidebarShow,
     assistantAlwaysOnTop,
     toggleAssistantAlwaysOnTop,
     initAssistantAlwaysOnTop,
     mainWindowAlwaysOnTop,
     initMainWindowAlwaysOnTop,
     toggleMainWindowAlwaysOnTop,
+    workflowWindowAlwaysOnTop,
+    initWorkflowWindowAlwaysOnTop,
+    toggleWorkflowWindowAlwaysOnTop,
     setMouseEventState,
     moveWindowToScreenEdge,
+    windowLabel,
   }
 })
