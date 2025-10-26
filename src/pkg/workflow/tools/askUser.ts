@@ -1,7 +1,7 @@
 import type { ToolDefinition } from '../types'
 
 export const askUserTool: ToolDefinition = {
-  id: 'ask_user',
+  id: 'TaskComplete',
   name: 'AskUser',
   description:
     'When you need more information from the user to proceed, use this tool to ask a question. The user will provide an answer.',

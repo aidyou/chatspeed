@@ -33,6 +33,10 @@
     "errorOnSendMessage": "Fehler beim Senden der Chatnachricht: {error}",
     "errorOnStopChat": "Fehler beim Beenden des Chats: {error}",
     "errorOnUpdateConversation": "Fehler beim Aktualisieren des Dialogs: {error}",
+    "errorOnGetNote": "Fehler beim Abrufen der Notiz: {error}",
+    "errorOnGetNotes": "Fehler beim Abrufen der Notizliste: {error}",
+    "errorOnOpenSettingWindow": "Fehler beim Öffnen des Einstellungsfensters: {error}",
+    "errorOnSearchNotes": "Fehler bei der Suche nach Notizen: {error}",
     "generatingDiagram": "Flussdiagramm wird generiert …",
     "generatingMindmap": "Mindmap wird generiert …",
     "goToChat": "Weiterfragen",
@@ -109,6 +113,7 @@
     "noData": "Keine Daten",
     "openUrlError": "Fehler beim Öffnen des Links",
     "pin": "Anheften",
+    "restart": "Neustart",
     "save": "Speichern",
     "search": "Suchen",
     "unpin": "Loslösen",
@@ -215,10 +220,12 @@
       "proxyType": "Proxy-Typ",
       "proxyUsername": "Proxy-Benutzername",
       "proxyUsernamePlaceholder": "Lass dieses Feld leer, wenn keine Authentifizierung erforderlich ist",
+      "restartRequired": "Neustart erforderlich",
       "restore": "Sicherung wiederherstellen",
       "restoreConfirm": "Möchtest du diese Sicherung wirklich wiederherstellen? Alle aktuellen Daten werden nach der Wiederherstellung überschrieben!",
       "restoreConfirmTitle": "Bestätigung der Wiederherstellung",
-      "restoreSuccess": "Wiederherstellung erfolgreich",
+      "restoreSuccess": "Datenbank erfolgreich wiederhergestellt, Sie müssen neu starten, damit die Änderungen wirksam werden!",
+      "restoring": "Wiederherstellung läuft",
       "runBackup": "Sicherung ausführen",
       "scraperConcurrencyCount": "Scraper-Nebenläufigkeit",
       "scraperConcurrencyCountTooltip": "Die Anzahl der gleichzeitigen Anfragen zum Scrapen von Webinhalten aus Suchergebnissen, empfohlen zwischen 5-10",
@@ -565,6 +572,7 @@
       "copy": "Fähigkeit kopieren",
       "delete": "Fähigkeit löschen",
       "deleteConfirm": "Möchtest du diese Fähigkeit wirklich löschen?",
+      "deleteFailed": "Fähigkeit löschen fehlgeschlagen",
       "deleteSuccess": "Fähigkeit erfolgreich gelöscht",
       "deleteTitle": "Fähigkeit löschen",
       "description": "Fähigkeitsbeschreibung",
@@ -585,10 +593,12 @@
       "promptInfo": "Fähigkeits-Prompt",
       "promptPlaceholder": "Bitte gib den Fähigkeits-Prompt ein\nFür Übersetzungsfähigkeiten:\n{from} steht für die Quellsprache\n{to} steht für die Zielsprache\n{content} steht für den zu übersetzenden Inhalt",
       "promptRequired": "Bitte gib den Fähigkeits-Prompt ein",
+      "saveFailed": "Fähigkeit speichern fehlgeschlagen",
       "selectIcon": "Bitte wähle ein Symbol aus",
       "selectSkill": "Fähigkeit auswählen",
       "selectType": "Bitte wähle einen Fähigkeitstyp aus",
       "toolsEnabled": "Werkzeugaufrufe zulassen",
+      "updateOrderFailed": "Aktualisierung der Fähigkeitenreihenfolge fehlgeschlagen",
       "updateSuccess": "Fähigkeit aktualisiert",
       "useSystemRole": "Systemrolle verwenden",
       "type": {
@@ -618,6 +628,11 @@
       "privacy": "Datenschutz",
       "skill": "Fähigkeit",
       "scraperTest": "Scraper-Test"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "To-do-Liste"
     }
   }
 }

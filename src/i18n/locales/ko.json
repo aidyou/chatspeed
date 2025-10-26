@@ -33,6 +33,10 @@
     "errorOnSendMessage": "채팅 메시지 전송 실패: {error}",
     "errorOnStopChat": "채팅 중단 실패: {error}",
     "errorOnUpdateConversation": "대화 업데이트 실패: {error}",
+    "errorOnGetNote": "지식 노트 가져오기 실패：{error}",
+    "errorOnGetNotes": "지식 노트 목록 가져오기 실패：{error}",
+    "errorOnOpenSettingWindow": "설정 창 열기 실패：{error}",
+    "errorOnSearchNotes": "지식 노트 검색 실패：{error}",
     "generatingDiagram": "플로우차트 생성 중...",
     "generatingMindmap": "마인드맵 생성 중...",
     "goToChat": "계속 질문하기",
@@ -109,6 +113,7 @@
     "noData": "데이터 없음",
     "openUrlError": "링크 열기 실패",
     "pin": "고정",
+    "restart": "재시작",
     "save": "저장",
     "search": "검색",
     "unpin": "고정 해제",
@@ -215,10 +220,12 @@
       "proxyType": "프록시 유형",
       "proxyUsername": "프록시 사용자 이름",
       "proxyUsernamePlaceholder": "인증이 필요 없으면 비워두세요.",
+      "restartRequired": "재시작 필요",
       "restore": "백업 복원",
       "restoreConfirm": "이 백업을 복원하시겠습니까? 복원하면 현재 모든 데이터가 덮어씌워집니다!",
       "restoreConfirmTitle": "백업 복원 확인",
-      "restoreSuccess": "복원 성공",
+      "restoreSuccess": "데이터베이스 복원이 성공적으로 완료되었습니다. 적용하려면 재시작이 필요합니다!",
+      "restoring": "복원 중",
       "runBackup": "백업 실행",
       "scraperConcurrencyCount": "스크래퍼 동시 실행 수",
       "scraperConcurrencyCountTooltip": "검색 결과의 웹 콘텐츠를 스크래핑하는 동시 요청 수, 5~10 사이를 권장합니다",
@@ -589,6 +596,9 @@
       "selectSkill": "스킬 선택",
       "selectType": "스킬 유형을 선택해주세요.",
       "toolsEnabled": "도구 호출 허용",
+      "deleteFailed": "스킬 삭제 실패",
+      "saveFailed": "스킬 저장 실패",
+      "updateOrderFailed": "스킬 순서 업데이트 실패",
       "updateSuccess": "스킬이 업데이트되었습니다.",
       "useSystemRole": "시스템 역할 사용",
       "type": {
@@ -618,6 +628,11 @@
       "privacy": "개인 정보 보호",
       "scraperTest": "스크래퍼 테스트",
       "skill": "스킬"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "할 일 목록"
     }
   }
 }

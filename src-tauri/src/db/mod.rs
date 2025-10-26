@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod backup;
+pub mod backup_crypto;
 pub mod chat;
 pub mod config;
 pub mod error;

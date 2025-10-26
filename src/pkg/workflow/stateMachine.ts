@@ -2,9 +2,26 @@
  * State machine for managing workflow lifecycle
  */
 
-import { EventEmitter } from 'node:events'
 import type { StateChangeEvent } from './types'
 import { WorkflowState } from './types'
+
+// Simple EventEmitter implementation for browser compatibility
+class EventEmitter {
+  private events: Record<string, Array<(data?: unknown) => void>> = {}
+
+  on(event: string, listener: (data?: unknown) => void): void {
+    if (!this.events[event]) {
+      this.events[event] = []
+    }
+    this.events[event].push(listener)
+  }
+
+  emit(event: string, data?: unknown): void {
+    if (this.events[event]) {
+      this.events[event].forEach(listener => listener(data))
+    }
+  }
+}
 
 export interface StateTransition {
   from: WorkflowState | WorkflowState[]

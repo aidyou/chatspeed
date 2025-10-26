@@ -33,6 +33,10 @@
     "errorOnSendMessage": "チャットメッセージの送信に失敗しました: {error}",
     "errorOnStopChat": "チャットの停止に失敗しました: {error}",
     "errorOnUpdateConversation": "会話の更新に失敗しました: {error}",
+    "errorOnGetNote": "智記の取得に失敗しました：{error}",
+    "errorOnGetNotes": "智記リストの取得に失敗しました：{error}",
+    "errorOnOpenSettingWindow": "設定ウィンドウのオープンに失敗しました：{error}",
+    "errorOnSearchNotes": "智記の検索に失敗しました：{error}",
     "generatingDiagram": "フローチャートを生成中…",
     "generatingMindmap": "マインドマップを生成中…",
     "goToChat": "続けて質問",
@@ -109,6 +113,7 @@
     "noData": "データなし",
     "openUrlError": "リンクを開けませんでした",
     "pin": "ピン留め",
+    "restart": "再起動",
     "save": "保存",
     "search": "検索",
     "unpin": "ピン留め解除",
@@ -215,10 +220,12 @@
       "proxyType": "プロキシタイプ",
       "proxyUsername": "プロキシユーザー名",
       "proxyUsernamePlaceholder": "認証が不要な場合は空白にしてください",
+      "restartRequired": "再起動が必要です",
       "restore": "バックアップを復元",
       "restoreConfirm": "このバックアップを復元してもよろしいですか？復元すると、現在のすべてのデータが上書きされます！",
       "restoreConfirmTitle": "バックアップ復元の確認",
-      "restoreSuccess": "復元が完了しました",
+      "restoreSuccess": "データベースの復元が完了しました。有効にするには再起動が必要です！",
+      "restoring": "復元中",
       "runBackup": "バックアップを実行",
       "scraperConcurrencyCount": "スクレイパーの並行数",
       "scraperConcurrencyCountTooltip": "検索結果のウェブコンテンツをスクレイプする際の並行リクエスト数、5～10を推奨",
@@ -559,6 +566,9 @@
       }
     },
     "skill": {
+      "deleteFailed": "スキルの削除に失敗しました",
+      "saveFailed": "スキルの保存に失敗しました",
+      "updateOrderFailed": "スキル順序の更新に失敗しました",
       "updateSuccess": "スキルを更新しました",
       "add": "スキルを追加",
       "addSuccess": "スキルを追加しました",
@@ -618,6 +628,11 @@
       "privacy": "プライバシー",
       "skill": "スキル",
       "scraperTest": "スクレイパーのテスト"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "TODOリスト"
     }
   }
 }

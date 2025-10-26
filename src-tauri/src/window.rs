@@ -415,10 +415,13 @@ pub async fn create_or_focus_setting_window(
         let mut height: f64 = 1024.0;
         let width = 700.0;
         if let Ok(Some(monitor)) = app_handle.primary_monitor() {
-            let logical_size = monitor.size().to_logical(monitor.scale_factor());
-            max_height = logical_size.height;
-            height = if logical_size.height < 1024.0 {
-                logical_size.height
+            let logical_size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+            // Reserve space for system UI (taskbar, menu bar, etc.) and window decorations
+            // Typically 100-150px for system UI + 30-50px for window decorations
+            let usable_height = logical_size.height - 120.0;
+            max_height = usable_height;
+            height = if usable_height < 1024.0 {
+                usable_height
             } else {
                 1024.0
             };

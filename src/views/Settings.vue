@@ -100,7 +100,7 @@ onMounted(async () => {
   const route = useRoute()
   const queryType = route.params.type
   if (queryType) {
-    const menuItem = menuItems.value.find((item) => item.id === queryType)
+    const menuItem = menuItems.value.find(item => item.id === queryType)
     if (menuItem) {
       settingType.value = menuItem.id
       settingLabel.value = menuItem.label
@@ -108,7 +108,7 @@ onMounted(async () => {
   }
   console.log('settingType', settingType.value, route.params.type)
 
-  unlistenFromRust = await listen('cs://settings-navigate', (event) => {
+  unlistenFromRust = await listen('cs://settings-navigate', event => {
     if (event.payload && event.payload.windowLabel === appWindow.label && event.payload.type) {
       switchSetting(event.payload.type)
     }
@@ -121,7 +121,7 @@ onUnmounted(() => {
   }
 })
 
-const switchSetting = (id) => {
+const switchSetting = id => {
   settingType.value = id
   settingLabel.value = t(`settings.type.${id}`)
 }

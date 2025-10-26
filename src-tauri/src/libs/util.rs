@@ -12,24 +12,24 @@ use url::form_urlencoded::{byte_serialize, parse};
 ///
 /// # Returns
 /// The formatted JSON string
-pub fn format_json_str(jstr: &str) -> String {
-    let mut formatted = jstr
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches(|c: char| c == '`' || c.is_whitespace())
-        .trim_end_matches(|c: char| c == '`' || c.is_whitespace())
-        .replace('\n', "")
-        .replace('\r', "")
-        .replace("    ", "")
-        .replace('\t', "");
-    if formatted.ends_with('}') && !formatted.starts_with('{') {
-        formatted = format!("{{{formatted}");
-    } else if formatted.starts_with('{') && !formatted.ends_with('}') {
-        formatted = format!("{formatted}}}");
-    }
+// pub fn format_json_str(jstr: &str) -> String {
+//     let mut formatted = jstr
+//         .trim()
+//         .trim_start_matches("```json")
+//         .trim_start_matches(|c: char| c == '`' || c.is_whitespace())
+//         .trim_end_matches(|c: char| c == '`' || c.is_whitespace())
+//         .replace('\n', "")
+//         .replace('\r', "")
+//         .replace("    ", "")
+//         .replace('\t', "");
+//     if formatted.ends_with('}') && !formatted.starts_with('{') {
+//         formatted = format!("{{{formatted}");
+//     } else if formatted.starts_with('{') && !formatted.ends_with('}') {
+//         formatted = format!("{formatted}}}");
+//     }
 
-    formatted
-}
+//     formatted
+// }
 
 /// URL encode a string
 ///

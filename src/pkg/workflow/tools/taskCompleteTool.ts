@@ -1,7 +1,7 @@
 import type { ToolDefinition } from '../types'
 
 export const taskCompleteTool: ToolDefinition = {
-  id: 'task_complete',
+  id: 'TaskComplete',
   name: 'TaskComplete',
   description:
     "Call this tool when you have fully addressed the user's request and the task is complete. Provide the final answer to the user in the `finalAnswer` parameter.",

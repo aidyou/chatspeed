@@ -713,14 +713,12 @@ fn upload_logo(image_path: String) -> Result<String> {
 pub async fn backup_setting(
     app: AppHandle,
     backup_dir: Option<String>,
-    backup_workflow_db: Option<bool>,
 ) -> Result<()> {
     let result = tokio::spawn(async move {
         DbBackup::new(
             &app,
             BackupConfig {
                 backup_dir,
-                backup_workflow_db,
             },
         )
         .and_then(|mut backup| backup.backup_to_directory())
@@ -738,11 +736,15 @@ pub async fn restore_setting(app: AppHandle, backup_dir: String) -> Result<()> {
     let result = tokio::spawn(async move {
         let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
         let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
+        let schema_dir = SCHEMA_DIR.read().clone();
+        let shared_dir = SHARED_DATA_DIR.read().clone();
+        let static_dir = HTTP_SERVER_DIR.read().clone();
+        let store_dir = STORE_DIR.read().clone();
+        let mcp_sessions_dir = store_dir.join("mcp_sessions");
         DbBackup::new(
             &app,
             BackupConfig {
                 backup_dir: Some(backup_dir.clone()),
-                backup_workflow_db: Some(true),
             },
         )
         .and_then(|db_backup| {
@@ -750,6 +752,10 @@ pub async fn restore_setting(app: AppHandle, backup_dir: String) -> Result<()> {
                 &Path::new(&backup_dir),
                 &Path::new(&*theme_dir),
                 &Path::new(&*upload_dir),
+                &Path::new(&mcp_sessions_dir),
+                &Path::new(&*schema_dir),
+                &Path::new(&*shared_dir),
+                &Path::new(&*static_dir),
             )
         })
     })
@@ -769,7 +775,6 @@ pub fn get_all_backups(app: AppHandle, backup_dir: Option<String>) -> Result<Vec
         &app,
         BackupConfig {
             backup_dir,
-            backup_workflow_db: Some(true),
         },
     )?;
 

@@ -84,7 +84,11 @@ fn convert_claude_content_block(
 /// This function is crucial for translating Claude-specific structures, especially
 /// the tool-calling message sequence, into a standardized format that backend
 /// adapters can understand.
-pub fn from_claude(req: ClaudeNativeRequest, tool_compat_mode: bool) -> Result<UnifiedRequest> {
+pub fn from_claude(
+    native_req: ClaudeNativeRequest,
+    tool_compat_mode: bool,
+) -> Result<UnifiedRequest> {
+    let mut req = native_req;
     // Validate Claude request parameters before proceeding.
     if let Err(e) = req.validate() {
         anyhow::bail!("Claude request validation failed: {}", e);

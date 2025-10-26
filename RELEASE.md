@@ -1,5 +1,26 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.19 Release Notes
+
+Chatspeed v1.1.19 is an important release focused on **system stability improvements** and **data security enhancements**. This update significantly improves troubleshooting efficiency through comprehensive optimization of error handling mechanisms. Additionally, it introduces streaming encryption technology to solve memory consumption issues when backing up large database files, ensuring stable system operation even when processing massive amounts of data. Furthermore, we have fixed multiple key issues affecting user experience, including chat interface parsing errors, new model compatibility, and cross-platform window display issues, providing you with a smoother and more reliable AI interaction experience.
+
+## 🔧 Technical Optimizations
+
+- **Error Serialization Optimization**: Unified and optimized error serialization mechanisms across all modules. Error messages now include specific message content for easier troubleshooting.
+- **Window Management Enhancement**: Improved window management mechanisms with debounced shortcut support and better error handling.
+- **Web Search Tool Enhancement**: Optimized the implementation of the WebSearch tool, improving the stability and performance of search functionality.
+- **Data Backup Optimization**: Optimized database backup logic with new database backup encryption.
+
+## 🐞 Bug Fixes
+
+- Optimized chat interface: Fixed reference parsing errors and resolved redundant chat content caused by incorrect parsing of step information provided by some vendors.
+- Added compatibility for claude-sonnet-4-5 model, supporting cases where `thinking.budget_tokens` is greater than or equal to `max_tokens`.
+- Optimized the maximum height of settings window to prevent it from exceeding screen display range.
+- Removed proxy settings for crawler webview on Windows platform. All platforms now rely on system proxy for webview creation, resolving potential issues with crawler windows on Windows 11.
+- Optimized data backup logic, removed support for old databases, and added backup support for mcp_sessions, schema, shared, static, and other directories.
+
+---
+
 # Chatspeed v1.1.18 Release Notes
 
 Chatspeed v1.1.18 further enhances application startup performance and user experience, especially on the Windows platform. By optimizing the environment initialization process, it resolves startup freezes and unexpected command line window pop-ups, and corrects the accuracy of shortcut descriptions in the release notes.

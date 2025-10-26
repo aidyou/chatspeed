@@ -10,6 +10,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             todo_list TEXT,
             status TEXT DEFAULT 'pending',
             agent_id TEXT REFERENCES agents(id),
+            metadata TEXT, -- Reserved field
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )"
@@ -28,7 +29,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             message TEXT NOT NULL,
             metadata TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES workflows(id)
+            FOREIGN KEY (session_id) REFERENCES workflows(id) ON DELETE CASCADE
         )"
     ),
     (

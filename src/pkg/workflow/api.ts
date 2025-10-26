@@ -3,6 +3,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import type { ToolExecutionResult } from './types'
 
 // =================================================
 //  Interfaces
@@ -55,6 +56,17 @@ export const getWorkflowSnapshot = (workflowId: string): Promise<WorkflowSnapsho
   return invoke('get_workflow_snapshot', { workflowId })
 }
 
+export const updateWorkflowTodoList = (workflowId: string, todoList: string): Promise<void> => {
+  return invoke('update_workflow_todo_list', { workflowId, todoList })
+}
+
 export const listWorkflows = (): Promise<Workflow[]> => {
   return invoke('list_workflows')
+}
+
+export const workflowCallTool = (
+  toolName: string,
+  args?: Record<string, unknown>
+): Promise<ToolExecutionResult> => {
+  return invoke('workflow_call_tool', { toolName, arguments: args })
 }

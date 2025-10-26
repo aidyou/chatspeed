@@ -13,7 +13,8 @@ export class FrontendAppError extends Error {
   }
 
   toFormattedString() {
-    return `[${this.module}:${this.kind}] ${this.message}`
+    const kindStr = this.kind ? `:${this.kind}` : ''
+    return `[${this.module}${kindStr}] ${this.message}`
   }
 }
 
@@ -57,7 +58,7 @@ export async function invokeWrapper(command, payload = {}) {
       if (rustError.details) {
         if (typeof rustError.details === 'object' && rustError.details !== null) {
           // This is a structured error, e.g., { kind: '...', message: '...' }
-          parsedError.kind = rustError.details.kind || 'Unknown'
+          parsedError.kind = rustError.details.kind || ''
           // The message from the inner error is often more specific
           parsedError.message = rustError.details.message || parsedError.message
         } else if (typeof rustError.details === 'string') {

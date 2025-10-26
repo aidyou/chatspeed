@@ -24,31 +24,46 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 
 const agentStore = useAgentStore()
 const agents = computed(() => agentStore.agents)
-const selectedAgent = ref(agents.value[0])
 
 const emit = defineEmits(['update:modelValue'])
 const props = defineProps({
+  modelValue: {
+    type: Object,
+    default: null
+  },
+  agent: {
+    type: Object,
+    default: null
+  },
   disabled: {
     type: Boolean,
     default: false
   }
 })
 
+// Use either the agent prop or modelValue prop, with agent taking precedence
+const selectedAgent = computed(() => {
+  if (props.agent) return props.agent
+  if (props.modelValue) return props.modelValue
+  return agents.value[0] || null
+})
+
 const selectAgent = agent => {
   if (props.disabled) return
-  selectedAgent.value = agent
   emit('update:modelValue', agent)
 }
 
-// Set initial value
-if (agents.value.length > 0) {
-  selectAgent(agents.value[0])
-}
+// Initialize with first agent if no agent is provided
+watch(agents, (newAgents) => {
+  if (newAgents.length > 0 && !props.agent && !props.modelValue) {
+    selectAgent(newAgents[0])
+  }
+}, { immediate: true })
 </script>
 
 <style lang="scss" scoped>

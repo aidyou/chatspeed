@@ -1,7 +1,7 @@
 use crate::db::{error::StoreError, ProxyGroup};
 
 use log::error;
-use rusqlite::{params, Connection, Result};
+use rusqlite::{Connection, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
@@ -468,423 +468,36 @@ impl MainStore {
         })
     }
 
-    /// Migrates data from separate chat and config databases to the unified database.
+    /// Checks if the unified database exists and creates it if necessary.
     ///
     /// # Arguments
     ///
-    /// * `_app` - A reference to the Tauri `AppHandle`.
+    /// * `db_path` - Path to the database directory
     ///
     /// # Errors
     ///
-    /// Returns a `StoreError` if any database operation fails during migration.
+    /// Returns a `StoreError` if any database operation fails.
     pub fn migrate_data<P: AsRef<Path>>(db_path: P) -> Result<(), StoreError> {
-        let chat_db_path = db_path.as_ref().join("chat.db");
-        let config_db_path = db_path.as_ref().join("config.db");
         let new_db_path = db_path.as_ref().join("chatspeed.db");
-        let backup_dir = db_path.as_ref().join("backup");
 
-        if !chat_db_path.exists() && !config_db_path.exists() {
-            log::info!(
-                "No old databases found, skipping migration: {:?}",
-                new_db_path
-            );
-            return Ok(());
-        }
-
-        // Create backup directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&backup_dir) {
-            error!(
-                "{}",
-                t!("db.failed_to_create_backup_dir", error = e.to_string())
-            );
-            return Err(StoreError::IoError(
-                t!("db.failed_to_create_backup_dir", error = e.to_string()).to_string(),
-            ));
-        }
-
-        // Create new database and initialize tables
-        let mut new_conn = Connection::open(&new_db_path).map_err(|e| {
-            StoreError::Query(
-                t!(
-                    "db.failed_to_create_new_database_at",
-                    path = new_db_path.display(),
-                    error = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
-        Self::init_db(&mut new_conn)?;
-
-        // Migrate chat data if old chat database exists
-        if chat_db_path.exists() {
-            log::info!("Starting chat database migration");
-            let chat_conn = Connection::open(&chat_db_path).map_err(|e| {
+        // Create new database and initialize tables if it doesn't exist
+        if !new_db_path.exists() {
+            let mut new_conn = Connection::open(&new_db_path).map_err(|e| {
                 StoreError::Query(
                     t!(
-                        "db.failed_to_open_chat_db_for_migration",
-                        path = chat_db_path.display(),
+                        "db.failed_to_create_new_database_at",
+                        path = new_db_path.display(),
                         error = e.to_string()
                     )
                     .to_string(),
                 )
             })?;
-
-            // Migrate conversations
-            let mut stmt = chat_conn
-                .prepare("SELECT id, title, created_at, is_favorite FROM conversations")
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_prepare_query_migration",
-                            query = "conversations from old chat.db",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            let conversations = stmt
-                .query_map(params![], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, bool>(3)?,
-                    ))
-                })
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_query_conversations_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            let tx = new_conn.transaction()?;
-            for conversation_result in conversations {
-                let (conv_id, title, created_at, is_favorite) =
-                    conversation_result.map_err(|e| {
-                        StoreError::Query(
-                            t!(
-                                "db.failed_to_read_conversation_migration",
-                                error = e.to_string()
-                            )
-                            .to_string(),
-                        )
-                    })?;
-
-                tx.execute(
-                    "INSERT INTO conversations (id, title, created_at, is_favorite) VALUES (?, ?, ?, ?)",
-                    params![conv_id, title, created_at, is_favorite],
-                ).map_err(|e| {
-                    StoreError::Query(
-                        t!("db.failed_to_insert_conversation_migration", error = e.to_string()).to_string(),
-                    )
-                })?;
-
-                // Migrate messages for this conversation
-                let mut msg_stmt = chat_conn.prepare(
-                    "SELECT id, role, content, timestamp, metadata FROM messages WHERE conversation_id = ?"
-                ).map_err(|e| {
-                    StoreError::Query(
-                        t!("db.failed_to_prepare_messages_query_migration", error = e.to_string()).to_string(),
-                    )
-                })?;
-
-                let messages = msg_stmt
-                    .query_map(params![conv_id], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, Option<String>>(4)?,
-                        ))
-                    })
-                    .map_err(|e| {
-                        StoreError::Query(
-                            t!(
-                                "db.failed_to_query_messages_migration",
-                                error = e.to_string()
-                            )
-                            .to_string(),
-                        )
-                    })?;
-
-                for message_result in messages {
-                    let (msg_id, role, content, timestamp, metadata) =
-                        message_result.map_err(|e| {
-                            StoreError::Query(
-                                t!("db.failed_to_read_message_migration", error = e.to_string())
-                                    .to_string(),
-                            )
-                        })?;
-
-                    tx.execute(
-                        "INSERT INTO messages (id, conversation_id, role, content, timestamp, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                        params![msg_id, conv_id, role, content, timestamp, metadata.unwrap_or_default()],
-                    ).map_err(|e| {
-                        StoreError::Query(
-                            t!("db.failed_to_insert_message_migration", error = e.to_string()).to_string(),
-                        )
-                    })?;
-                }
-            }
-            tx.commit()?;
-
-            // Explicitly close connections by dropping
-            drop(stmt);
-            drop(chat_conn);
-
-            // Move chat.db to backup with timestamp
-            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-            let backup_path = backup_dir.join(format!("chat_{}.db.bak", timestamp));
-            std::fs::rename(&chat_db_path, &backup_path).map_err(|e| {
-                StoreError::Query(
-                    t!(
-                        "db.failed_to_backup_old_chat_database",
-                        path = chat_db_path.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
-                )
-            })?;
-            log::info!("Chat database migrated and backed up to {:?}", backup_path);
+            Self::init_db(&mut new_conn)?;
+            log::info!("Created new unified database: {:?}", new_db_path);
+        } else {
+            log::info!("Unified database already exists: {:?}", new_db_path);
         }
 
-        // Migrate config data if old config database exists
-        if config_db_path.exists() {
-            log::info!("Starting config database migration");
-            let config_conn = Connection::open(&config_db_path).map_err(|e| {
-                StoreError::Query(
-                    t!(
-                        "db.failed_to_open_config_db_for_migration",
-                        path = config_db_path.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
-                )
-            })?;
-
-            // Migrate config settings
-            let mut stmt = config_conn
-                .prepare("SELECT key, value FROM config")
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_prepare_config_query_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            let configs = stmt
-                .query_map(params![], |row| {
-                    Ok((row.get::<_, String>("key")?, row.get::<_, String>("value")?))
-                })
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_query_configs_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            let tx = new_conn.transaction()?;
-            for config_result in configs {
-                let (key, value) = config_result.map_err(|e| {
-                    StoreError::Query(
-                        t!("db.failed_to_read_config_migration", error = e.to_string()).to_string(),
-                    )
-                })?;
-
-                tx.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?)",
-                    params![key, value],
-                )
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_insert_config_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-            }
-
-            // Migrate AI models
-            let mut stmt = config_conn.prepare(
-                "SELECT id, name, models, default_model, api_protocol, base_url, api_key, max_tokens, \
-                temperature, top_p, top_k, sort_index, is_default, disabled, is_official, official_id, metadata \
-                FROM ai_model"
-            ).map_err(|e| {
-                StoreError::Query(
-                    t!("db.failed_to_prepare_ai_model_query_migration", error = e.to_string()).to_string(),
-                )
-            })?;
-
-            let models = stmt
-                .query_map(params![], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i32>(7)?,
-                        row.get::<_, f32>(8)?,
-                        row.get::<_, f32>(9)?,
-                        row.get::<_, i32>(10)?,
-                        row.get::<_, i32>(11)?,
-                        row.get::<_, bool>(12)?,
-                        row.get::<_, bool>(13)?,
-                        row.get::<_, bool>(14)?,
-                        row.get::<_, String>(15)?,
-                        row.get::<_, Option<String>>(16)?,
-                    ))
-                })
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_query_ai_models_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            for model in models {
-                let (
-                    id,
-                    name,
-                    models_str,
-                    default_model,
-                    api_protocol,
-                    base_url,
-                    api_key,
-                    max_tokens,
-                    temperature,
-                    top_p,
-                    top_k,
-                    sort_index,
-                    is_default,
-                    disabled,
-                    is_official,
-                    official_id,
-                    metadata,
-                ) = model.map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_read_ai_model_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-                tx.execute(
-                    "INSERT INTO ai_model (id, name, models, default_model, api_protocol, base_url, api_key, \
-                    max_tokens, temperature, top_p, top_k, sort_index, is_default, disabled, is_official, official_id, metadata) \
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![id, name, models_str, default_model, api_protocol, base_url, api_key,
-                        max_tokens, temperature, top_p, top_k, sort_index, is_default, disabled,
-                        is_official, official_id, metadata.unwrap_or_default()],
-                ).map_err(|e| {
-                    StoreError::Query(
-                        t!("db.failed_to_insert_ai_model_migration", error = e.to_string()).to_string(),
-                    )
-                })?;
-            }
-
-            // Migrate AI skills
-            let mut stmt = config_conn.prepare(
-                "SELECT id, name, icon, logo, prompt, share_id, sort_index, disabled, metadata FROM ai_skill"
-            ).map_err(|e| {
-                StoreError::Query(
-                    t!("db.failed_to_prepare_ai_skill_query_migration", error = e.to_string()).to_string(),
-                )
-            })?;
-
-            let skills = stmt
-                .query_map(params![], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, i32>(6)?,
-                        row.get::<_, bool>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                    ))
-                })
-                .map_err(|e| {
-                    StoreError::Query(
-                        t!(
-                            "db.failed_to_query_ai_skills_migration",
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-
-            for skill in skills {
-                let (id, name, icon, logo, prompt, share_id, sort_index, disabled, metadata) =
-                    skill.map_err(|e| {
-                        StoreError::Query(
-                            t!(
-                                "db.failed_to_read_ai_skill_migration",
-                                error = e.to_string()
-                            )
-                            .to_string(),
-                        )
-                    })?;
-
-                tx.execute(
-                    "INSERT INTO ai_skill (id, name, icon, logo, prompt, share_id, sort_index, disabled, metadata) \
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![id, name, icon, logo, prompt, share_id.unwrap_or_default(), sort_index, disabled, metadata.unwrap_or_default()],
-                ).map_err(|e| {
-                    StoreError::Query(
-                        t!("db.failed_to_insert_ai_skill_migration", error = e.to_string()).to_string(),
-                    )
-                })?;
-            }
-
-            tx.commit()?;
-
-            // Explicitly close connections by dropping
-            drop(stmt);
-
-            // Move config.db to backup with timestamp
-            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-            let backup_path = backup_dir.join(format!("config_{}.db.bak", timestamp));
-            std::fs::rename(&config_db_path, &backup_path).map_err(|e| {
-                StoreError::Query(
-                    t!(
-                        "db.failed_to_backup_old_config_database",
-                        path = config_db_path.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
-                )
-            })?;
-            log::info!(
-                "Config database migrated and backed up to {:?}",
-                backup_path
-            );
-        }
-
-        log::info!("Database migration completed successfully");
         Ok(())
     }
 }

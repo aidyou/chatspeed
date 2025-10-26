@@ -214,7 +214,7 @@ pub async fn run() -> crate::error::Result<()> {
             center_window,
 
             // workflow
-            run_dag_workflow,
+            // run_dag_workflow,
             add_agent,
             update_agent,
             delete_agent,
@@ -222,11 +222,15 @@ pub async fn run() -> crate::error::Result<()> {
             get_all_agents,
             get_available_tools,
             workflow_chat_completion,
+            workflow_call_tool,
             create_workflow,
             add_workflow_message,
-            update_workflow_status,
+            delete_workflow,
             get_workflow_snapshot,
             list_workflows,
+            update_workflow_status,
+            update_workflow_title,
+            update_workflow_todo_list,
 
             // dev tools
             test_scrape,

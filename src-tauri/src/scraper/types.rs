@@ -72,14 +72,14 @@ impl Display for StrapeContentFormat {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "snake_case")]
-pub struct Fallback {
-    #[serde(default)]
-    pub selector: String,
-    #[serde(default)]
-    pub method: String,
-}
+// #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+// #[serde(rename_all = "snake_case")]
+// pub struct Fallback {
+//     #[serde(default)]
+//     pub selector: String,
+//     #[serde(default)]
+//     pub method: String,
+// }
 
 /// Represents a single field to be extracted from a webpage.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -96,13 +96,13 @@ pub struct Field {
     pub required: Option<bool>,
 }
 
-/// Represents a scraping event.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "snake_case")]
-pub struct Event {
-    pub event: String,
-    pub selector: String,
-}
+// /// Represents a scraping event.
+// #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+// #[serde(rename_all = "snake_case")]
+// pub struct Event {
+//     pub event: String,
+//     pub selector: String,
+// }
 
 /// Represents the set of selectors for a scraping target.
 #[derive(Serialize, Deserialize, Debug, Clone)]

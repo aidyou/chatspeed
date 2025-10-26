@@ -33,6 +33,10 @@
     "errorOnSendMessage": "Failed to send message: {error}",
     "errorOnStopChat": "Failed to stop chat: {error}",
     "errorOnUpdateConversation": "Failed to update conversation: {error}",
+    "errorOnGetNote": "Failed to get note: {error}",
+    "errorOnGetNotes": "Failed to get note list: {error}",
+    "errorOnOpenSettingWindow": "Failed to open setting window: {error}",
+    "errorOnSearchNotes": "Failed to search notes: {error}",
     "generatingDiagram": "Generating diagram...",
     "generatingMindmap": "Generating mind map...",
     "goToChat": "Continue Chatting",
@@ -109,6 +113,7 @@
     "noData": "No Data",
     "openUrlError": "Failed to open URL",
     "pin": "Pin",
+    "restart": "Restart",
     "save": "Save",
     "search": "Search",
     "unpin": "Unpin",
@@ -215,10 +220,12 @@
       "proxyType": "Proxy Type",
       "proxyUsername": "Proxy Username",
       "proxyUsernamePlaceholder": "Leave blank if no authentication is required",
+      "restartRequired": "Restart Required",
       "restore": "Restore Backup",
       "restoreConfirm": "Are you sure you want to restore this backup? All current data will be overwritten!",
       "restoreConfirmTitle": "Restore Backup Confirmation",
-      "restoreSuccess": "Restore successful",
+      "restoreSuccess": "Database restored successfully, you need to restart to take effect!",
+      "restoring": "Restoring",
       "runBackup": "Run Backup",
       "scraperConcurrencyCount": "Scraper Concurrency Count",
       "scraperConcurrencyCountTooltip": "The number of concurrent requests for scraping web content from search results, recommended between 5-10",
@@ -605,6 +612,9 @@
         "voiceRecognition": "Voice Recognition",
         "writing": "Writing"
       },
+      "deleteFailed": "Failed to delete skill",
+      "saveFailed": "Failed to save skill",
+      "updateOrderFailed": "Failed to update skill order",
       "updateSuccess": "Skill updated",
       "useSystemRole": "Use System Role"
     },
@@ -618,6 +628,11 @@
       "privacy": "Privacy",
       "skill": "Skill",
       "scraperTest": "Scraper Test"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "To-do List"
     }
   }
 }

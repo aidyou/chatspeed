@@ -150,25 +150,6 @@ impl MainStore {
         Ok(new_msg)
     }
 
-    /// Updates the status of a workflow.
-    pub fn update_workflow_status(
-        &self,
-        workflow_id: &str,
-        status: &str,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        conn.execute(
-            "UPDATE workflows SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![status, workflow_id],
-        )?;
-
-        Ok(())
-    }
-
     /// Gets a full snapshot of a workflow, including its messages.
     pub fn get_workflow_snapshot(&self, workflow_id: &str) -> Result<WorkflowSnapshot, StoreError> {
         let conn = self
@@ -207,5 +188,75 @@ impl MainStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(workflows)
+    }
+
+    /// Deletes a workflow and all its messages.
+    pub fn delete_workflow(&self, workflow_id: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        // The ON DELETE CASCADE constraint will automatically delete all related messages
+        conn.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+
+        Ok(())
+    }
+
+    /// Updates the status of a workflow.
+    pub fn update_workflow_status(
+        &self,
+        workflow_id: &str,
+        status: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE workflows SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![status, workflow_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Updates the title of a workflow.
+    pub fn update_workflow_title(
+        &self,
+        workflow_id: &str,
+        title: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE workflows SET title = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![title, workflow_id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Updates the todo list of a workflow.
+    pub fn update_workflow_todo_list(
+        &self,
+        workflow_id: &str,
+        todo_list: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE workflows SET todo_list = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![todo_list, workflow_id],
+        )?;
+
+        Ok(())
     }
 }

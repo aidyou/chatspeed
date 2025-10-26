@@ -1,9 +1,10 @@
+use crate::db::backup_crypto::{
+    decrypt_database_streaming, encrypt_database_streaming,
+};
 use crate::db::error::StoreError;
 use chrono::Local;
 use log::{error, info};
 use regex;
-use rusqlite::backup::StepResult;
-use rusqlite::{backup, Connection};
 use rust_i18n::t;
 use std::fs;
 use std::fs::File;
@@ -21,16 +22,12 @@ use tauri::Manager;
 pub struct BackupConfig {
     /// Directory path where backups will be stored
     pub backup_dir: Option<String>,
-    /// Whether to backup the chat database
-    pub backup_workflow_db: Option<bool>,
 }
 
 /// Manages database backup and restore operations.
 pub struct DbBackup {
     main_db_path: PathBuf,
-    workflow_db_path: PathBuf,
     backup_dir: PathBuf,
-    backup_workflow_db: bool,
 }
 
 impl DbBackup {
@@ -64,14 +61,13 @@ impl DbBackup {
             None | Some("") => app_dir.join("backup"),
             Some(dir) => PathBuf::from(dir),
         };
-        // let backup_dir = backup_dir.join(Local::now().format("%Y-%m-%d_%H-%M-%S").to_string());
 
         if !backup_dir.exists() {
             fs::create_dir_all(&backup_dir).map_err(|e| {
                 error!("Failed to create backup directory: {}", e);
                 StoreError::IoError(
                     t!(
-                        "db.failed_to_create_backup_dir_at",
+                        "db.backup.failed_to_create_backup_dir_at",
                         path = backup_dir.display(),
                         error = e.to_string()
                     )
@@ -82,15 +78,11 @@ impl DbBackup {
 
         Ok(Self {
             main_db_path: app_dir.join("chatspeed.db"),
-            workflow_db_path: app_dir.join("workflow.db"),
             backup_dir,
-            backup_workflow_db: config.backup_workflow_db.unwrap_or(true),
         })
     }
 
     /// Performs database backup operations.
-    ///
-    /// # Arguments
     ///
     /// # Returns
     ///
@@ -102,135 +94,63 @@ impl DbBackup {
     fn backup(&self) -> Result<Vec<PathBuf>, StoreError> {
         let mut backup_paths = Vec::new();
 
-        // Backup config database
-        let config_backup_path = self.backup_single_db(&self.main_db_path, "chatspeed")?;
-        backup_paths.push(config_backup_path);
-
-        // Backup chat database if requested
-        if self.backup_workflow_db && self.workflow_db_path.exists() {
-            let chat_backup_path = self.backup_single_db(&self.workflow_db_path, "workflow")?;
-            backup_paths.push(chat_backup_path);
-        }
+        // Backup main database
+        let main_backup_path = self.backup_single_db(&self.main_db_path, "chatspeed")?;
+        backup_paths.push(main_backup_path);
 
         Ok(backup_paths)
     }
 
-    /// Copies database from source to destination with progress tracking
-    ///
-    /// # Arguments
-    ///
-    /// * `source_path` - Path to the source database
-    /// * `dest_path` - Path to the destination database
-    /// * `db_type` - Type of database (for logging purposes)
-    ///
-    /// # Errors
-    ///
-    /// Returns a `StoreError` if the operation fails
-    fn copy_database(
-        source_path: &Path,
-        dest_path: &Path,
-        db_type: &str,
-    ) -> Result<(), StoreError> {
-        // Open source database
-        let source = Connection::open(source_path).map_err(|e| {
-            error!("Failed to open source database: {}", e);
-            StoreError::IoError(
-                t!(
-                    "db.failed_to_open_source_db",
-                    path = source_path.display(),
-                    error = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
-
-        // Open destination database
-        let mut dest = Connection::open(dest_path).map_err(|e| {
-            error!("Failed to open destination database: {}", e);
-            StoreError::IoError(
-                t!(
-                    "db.failed_to_open_dest_db",
-                    path = dest_path.display(),
-                    error = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
-
-        // Perform copy operation
-        let backup = backup::Backup::new(&source, &mut dest).map_err(|e| {
-            error!("Failed to initialize backup: {}", e);
-            StoreError::Query(
-                t!("db.failed_to_init_backup_process", error = e.to_string()).to_string(),
-            )
-        })?;
-
-        let mut retry_count = 0;
-        loop {
-            match backup.step(1000) {
-                Ok(StepResult::Done) => {
-                    info!(
-                        "Database copy completed from {:?} to {:?}",
-                        source_path, dest_path
-                    );
-                    break;
-                }
-                Ok(StepResult::Busy) | Ok(StepResult::Locked) => {
-                    retry_count += 1;
-                    if retry_count > 10 {
-                        return Err(StoreError::Query(t!("db.backup_busy_locked").to_string()));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    continue;
-                }
-                Ok(StepResult::More) | Ok(_) => {
-                    let progress = backup.progress();
-                    let percent = ((progress.pagecount - progress.remaining) as f64
-                        / progress.pagecount as f64
-                        * 100.0) as u32;
-                    info!("Progress for {}.db: {}%", db_type, percent);
-                }
-                Err(e) => {
-                    error!("Failed step: {}", e);
-                    return Err(StoreError::from(e));
-                }
-            }
-        }
-
-        let progress = backup.progress();
-        if progress.remaining > 0 {
-            error!(
-                "Database copy incomplete: {} pages remaining out of {}",
-                progress.remaining, progress.pagecount
-            );
-            return Err(StoreError::Query(
-                t!("db.backup_copy_incomplete").to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Backs up a single database file
+    /// Backs up a single database file with encryption
     fn backup_single_db(&self, db_path: &Path, db_type: &str) -> Result<PathBuf, StoreError> {
         let backup_path = self.backup_dir.join(format!("{}.db", db_type));
-        Self::copy_database(db_path, &backup_path, db_type)?;
+
+        // 获取备份目录名称（时间格式）
+        let backup_dir_name = self
+            .backup_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        // 使用流式加密数据库
+        encrypt_database_streaming(db_path, &backup_path, backup_dir_name)?;
+
         Ok(backup_path)
     }
 
-    /// Restores a single database from a backup file
+    /// Restores a single database from a backup file with decryption
     fn restore_single_db(&self, backup_path: &Path, target_path: &Path) -> Result<(), StoreError> {
         if !backup_path.exists() {
             return Err(StoreError::NotFound(
-                t!("db.backup_file_not_found", path = backup_path.display()).to_string(),
+                t!("db.backup.file_not_found", path = backup_path.display()).to_string(),
             ));
         }
 
-        let db_type = target_path
-            .file_stem()
-            .and_then(|s| s.to_str())
+        // 获取备份目录名称（时间格式）
+        let backup_dir_name = backup_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        Self::copy_database(backup_path, target_path, db_type)
+
+        // 使用流式解密数据库
+        let temp_file = target_path.with_extension("tmp");
+        decrypt_database_streaming(backup_path, &temp_file, backup_dir_name)?;
+
+        // 原子性替换原文件
+        fs::rename(&temp_file, target_path).map_err(|e| {
+            error!("Failed to rename temp database file: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_rename_temp_db",
+                    path = target_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+
+        Ok(())
     }
 
     /// Lists all database backup directories in the backup directory, sorted by modification time.
@@ -245,7 +165,7 @@ impl DbBackup {
     pub fn list_backups(&self) -> Result<Vec<PathBuf>, StoreError> {
         if !self.backup_dir.exists() {
             return Err(StoreError::IoError(
-                t!("db.backup_dir_not_found", path = self.backup_dir.display()).to_string(),
+                t!("db.backup.dir_not_found", path = self.backup_dir.display()).to_string(),
             ));
         }
 
@@ -253,7 +173,7 @@ impl DbBackup {
             .map_err(|e| {
                 StoreError::IoError(
                     t!(
-                        "db.failed_to_read_backup_dir",
+                        "db.backup.failed_to_read_backup_dir",
                         path = self.backup_dir.display(),
                         error = e.to_string()
                     )
@@ -312,7 +232,7 @@ impl DbBackup {
                 error!("Failed to create backup directory: {}", e);
                 StoreError::IoError(
                     t!(
-                        "db.failed_to_create_backup_dir_at",
+                        "db.backup.failed_to_create_backup_dir_at",
                         path = self.backup_dir.display(),
                         error = e.to_string()
                     )
@@ -326,7 +246,18 @@ impl DbBackup {
         // Backup user files
         let theme_dir = &*crate::HTTP_SERVER_THEME_DIR.read();
         let upload_dir = &*crate::HTTP_SERVER_UPLOAD_DIR.read();
-        self.backup_user_files(Path::new(&theme_dir), Path::new(&upload_dir))?;
+        let mcp_sessions_dir = &*crate::STORE_DIR.read().join("mcp_sessions");
+        let schema_dir = &*crate::SCHEMA_DIR.read();
+        let shared_dir = &*crate::SHARED_DATA_DIR.read();
+        let static_dir = &*crate::HTTP_SERVER_DIR.read();
+        self.backup_user_files(
+            Path::new(&theme_dir),
+            Path::new(&upload_dir),
+            Path::new(&mcp_sessions_dir),
+            Path::new(&schema_dir),
+            Path::new(&shared_dir),
+            Path::new(&static_dir),
+        )?;
 
         Ok(())
     }
@@ -338,6 +269,10 @@ impl DbBackup {
     /// * `backup_dir` - Path to the backup directory
     /// * `theme_dir` - Path to restore theme files
     /// * `upload_dir` - Path to restore uploaded files
+    /// * `mcp_sessions_dir` - Path to restore MCP sessions
+    /// * `schema_dir` - Path to restore schema files
+    /// * `shared_dir` - Path to restore shared files
+    /// * `static_dir` - Path to restore static files
     ///
     /// # Errors
     ///
@@ -347,34 +282,40 @@ impl DbBackup {
         backup_dir: &Path,
         theme_dir: &Path,
         upload_dir: &Path,
+        mcp_sessions_dir: &Path,
+        schema_dir: &Path,
+        shared_dir: &Path,
+        static_dir: &Path,
     ) -> Result<(), StoreError> {
         // Verify backup directory exists
         if !backup_dir.exists() || !backup_dir.is_dir() {
             return Err(StoreError::NotFound(
                 t!(
-                    "db.backup_dir_not_found_for_restore",
+                    "db.backup.dir_not_found_for_restore",
                     path = backup_dir.display()
                 )
                 .to_string(),
             ));
         }
 
-        // Check for config.db
-        let config_backup = backup_dir.join("chatspeed.db");
-        if config_backup.exists() {
-            self.restore_single_db(&config_backup, &self.main_db_path)?;
-        }
-
-        // Check for chat.db
-        let chat_backup = backup_dir.join("workflow.db");
-        if chat_backup.exists() {
-            self.restore_single_db(&chat_backup, &self.workflow_db_path)?;
+        // Check for chatspeed.db
+        let main_backup = backup_dir.join("chatspeed.db");
+        if main_backup.exists() {
+            self.restore_single_db(&main_backup, &self.main_db_path)?;
         }
 
         // Check for user_files.zip
         let user_files = backup_dir.join("user_files.zip");
         if user_files.exists() {
-            self.restore_user_files(&user_files, theme_dir, upload_dir)?;
+            self.restore_user_files(
+                &user_files,
+                theme_dir,
+                upload_dir,
+                mcp_sessions_dir,
+                schema_dir,
+                shared_dir,
+                static_dir,
+            )?;
         }
 
         Ok(())
@@ -387,6 +328,10 @@ impl DbBackup {
     /// * `zip_path` - Path to the backup zip file
     /// * `theme_dir` - Path to restore theme files
     /// * `upload_dir` - Path to restore uploaded files
+    /// * `mcp_sessions_dir` - Path to restore MCP sessions
+    /// * `schema_dir` - Path to restore schema files
+    /// * `shared_dir` - Path to restore shared files
+    /// * `static_dir` - Path to restore static files
     ///
     /// # Errors
     ///
@@ -396,12 +341,16 @@ impl DbBackup {
         zip_path: &Path,
         theme_dir: &Path,
         upload_dir: &Path,
+        mcp_sessions_dir: &Path,
+        schema_dir: &Path,
+        shared_dir: &Path,
+        static_dir: &Path,
     ) -> Result<(), StoreError> {
         let file = File::open(zip_path).map_err(|e| {
             error!("Failed to open zip file: {}", e);
             StoreError::IoError(
                 t!(
-                    "db.failed_to_open_zip",
+                    "db.backup.failed_to_open_zip",
                     path = zip_path.display(),
                     error = e.to_string()
                 )
@@ -412,7 +361,11 @@ impl DbBackup {
         let mut archive = ZipArchive::new(file).map_err(|e| {
             error!("Failed to read zip archive: {}", e);
             StoreError::IoError(
-                t!("db.failed_to_read_zip_archive", error = e.to_string()).to_string(),
+                t!(
+                    "db.backup.failed_to_read_zip_archive",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
         })?;
 
@@ -421,7 +374,7 @@ impl DbBackup {
             error!("Failed to create theme directory: {}", e);
             StoreError::IoError(
                 t!(
-                    "db.failed_to_create_theme_dir",
+                    "db.backup.failed_to_create_theme_dir",
                     path = theme_dir.display(),
                     error = e.to_string()
                 )
@@ -432,8 +385,52 @@ impl DbBackup {
             error!("Failed to create upload directory: {}", e);
             StoreError::IoError(
                 t!(
-                    "db.failed_to_create_upload_dir",
+                    "db.backup.failed_to_create_upload_dir",
                     path = upload_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        fs::create_dir_all(mcp_sessions_dir).map_err(|e| {
+            error!("Failed to create MCP sessions directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_mcp_sessions_dir",
+                    path = mcp_sessions_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        fs::create_dir_all(schema_dir).map_err(|e| {
+            error!("Failed to create schema directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_schema_dir",
+                    path = schema_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        fs::create_dir_all(shared_dir).map_err(|e| {
+            error!("Failed to create shared directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_shared_dir",
+                    path = shared_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        fs::create_dir_all(static_dir).map_err(|e| {
+            error!("Failed to create static directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_static_dir",
+                    path = static_dir.display(),
                     error = e.to_string()
                 )
                 .to_string(),
@@ -446,7 +443,7 @@ impl DbBackup {
                 error!("Failed to read zip entry: {}", e);
                 StoreError::IoError(
                     t!(
-                        "db.failed_to_read_zip_entry",
+                        "db.backup.failed_to_read_zip_entry",
                         index = i,
                         error = e.to_string()
                     )
@@ -463,7 +460,23 @@ impl DbBackup {
                     let rel_path = Path::new(name.trim_start_matches("uploads/"));
                     upload_dir.join(rel_path)
                 }
-                _ => continue, // Skip files not in themes/ or uploads/
+                name if name.starts_with("mcp_sessions/") => {
+                    let rel_path = Path::new(name.trim_start_matches("mcp_sessions/"));
+                    mcp_sessions_dir.join(rel_path)
+                }
+                name if name.starts_with("schema/") => {
+                    let rel_path = Path::new(name.trim_start_matches("schema/"));
+                    schema_dir.join(rel_path)
+                }
+                name if name.starts_with("shared/") => {
+                    let rel_path = Path::new(name.trim_start_matches("shared/"));
+                    shared_dir.join(rel_path)
+                }
+                name if name.starts_with("static/") => {
+                    let rel_path = Path::new(name.trim_start_matches("static/"));
+                    static_dir.join(rel_path)
+                }
+                _ => continue, // Skip files not in themes/, uploads/, mcp_sessions/, schema/, shared/ or static/
             };
 
             if file.name().ends_with('/') {
@@ -471,7 +484,7 @@ impl DbBackup {
                     error!("Failed to create directory {}: {}", outpath.display(), e);
                     StoreError::IoError(
                         t!(
-                            "db.failed_to_create_dir_from_zip",
+                            "db.backup.failed_to_create_dir_from_zip",
                             path = outpath.display(),
                             error = e.to_string()
                         )
@@ -484,7 +497,7 @@ impl DbBackup {
                         error!("Failed to create parent directory {}: {}", p.display(), e);
                         StoreError::IoError(
                             t!(
-                                "db.failed_to_create_parent_dir_from_zip",
+                                "db.backup.failed_to_create_parent_dir_from_zip",
                                 path = p.display(),
                                 error = e.to_string()
                             )
@@ -496,7 +509,7 @@ impl DbBackup {
                     error!("Failed to create file {}: {}", outpath.display(), e);
                     StoreError::IoError(
                         t!(
-                            "db.failed_to_create_file_from_zip",
+                            "db.backup.failed_to_create_file_from_zip",
                             path = outpath.display(),
                             error = e.to_string()
                         )
@@ -507,7 +520,7 @@ impl DbBackup {
                     error!("Failed to write file {}: {}", outpath.display(), e);
                     StoreError::IoError(
                         t!(
-                            "db.failed_to_write_file_from_zip",
+                            "db.backup.failed_to_write_file_from_zip",
                             path = outpath.display(),
                             error = e.to_string()
                         )
@@ -526,7 +539,7 @@ impl DbBackup {
                             error!("Failed to set permissions for {}: {}", outpath.display(), e);
                             StoreError::IoError(
                                 t!(
-                                    "db.failed_to_set_permissions_from_zip",
+                                    "db.backup.failed_to_set_permissions_from_zip",
                                     path = outpath.display(),
                                     error = e.to_string()
                                 )
@@ -542,12 +555,16 @@ impl DbBackup {
         Ok(())
     }
 
-    /// Creates a zip archive containing all files from theme and upload directories
+    /// Creates a zip archive containing all files from theme, upload, mcp_sessions, schema, shared and static directories
     ///
     /// # Arguments
     ///
     /// * `theme_dir` - Path to the theme directory
     /// * `upload_dir` - Path to the upload directory
+    /// * `mcp_sessions_dir` - Path to the MCP sessions directory
+    /// * `schema_dir` - Path to the schema directory
+    /// * `shared_dir` - Path to the shared directory
+    /// * `static_dir` - Path to the static directory
     ///
     /// # Returns
     ///
@@ -556,6 +573,10 @@ impl DbBackup {
         &self,
         theme_dir: &Path,
         upload_dir: &Path,
+        mcp_sessions_dir: &Path,
+        schema_dir: &Path,
+        shared_dir: &Path,
+        static_dir: &Path,
     ) -> Result<PathBuf, StoreError> {
         let output_path = self.backup_dir.join("user_files.zip");
 
@@ -563,7 +584,7 @@ impl DbBackup {
             error!("Failed to create zip file: {}", e);
             StoreError::IoError(
                 t!(
-                    "db.failed_to_create_zip_for_backup",
+                    "db.backup.failed_to_create_zip_for_backup",
                     path = output_path.display(),
                     error = e.to_string()
                 )
@@ -586,7 +607,7 @@ impl DbBackup {
                             error!("Failed to strip prefix: {}", e);
                             StoreError::IoError(
                                 t!(
-                                    "db.failed_to_strip_prefix_for_zip",
+                                    "db.backup.failed_to_strip_prefix_for_zip",
                                     base = base_path.display(),
                                     full = path.display(),
                                     error = e.to_string()
@@ -601,7 +622,7 @@ impl DbBackup {
                             error!("Failed to add file to zip: {}", e);
                             StoreError::IoError(
                                 t!(
-                                    "db.failed_to_add_file_to_zip",
+                                    "db.backup.failed_to_add_file_to_zip",
                                     path = zip_path,
                                     error = e.to_string()
                                 )
@@ -613,7 +634,7 @@ impl DbBackup {
                             error!("Failed to open file for zip: {}", e);
                             StoreError::IoError(
                                 t!(
-                                    "db.failed_to_open_file_for_zip",
+                                    "db.backup.failed_to_open_file_for_zip",
                                     path = path.display(),
                                     error = e.to_string()
                                 )
@@ -625,15 +646,19 @@ impl DbBackup {
                         file.read_to_end(&mut buffer).map_err(|e| {
                             error!("Failed to read file: {}", e);
                             StoreError::IoError(
-                                t!("db.failed_to_read_file_for_zip", error = e.to_string())
-                                    .to_string(),
+                                t!(
+                                    "db.backup.failed_to_read_file_for_zip",
+                                    error = e.to_string()
+                                )
+                                .to_string(),
                             )
                         })?;
 
                         zip.write_all(&buffer).map_err(|e| {
                             error!("Failed to write to zip: {}", e);
                             StoreError::IoError(
-                                t!("db.failed_to_write_to_zip", error = e.to_string()).to_string(),
+                                t!("db.backup.failed_to_write_to_zip", error = e.to_string())
+                                    .to_string(),
                             )
                         })?;
                     }
@@ -651,9 +676,31 @@ impl DbBackup {
             add_dir_to_zip(&mut zip, upload_dir, "uploads")?;
         }
 
+        // Add MCP sessions directory contents
+        if mcp_sessions_dir.exists() {
+            add_dir_to_zip(&mut zip, mcp_sessions_dir, "mcp_sessions")?;
+        }
+
+        // Add schema directory contents
+        if schema_dir.exists() {
+            add_dir_to_zip(&mut zip, schema_dir, "schema")?;
+        }
+
+        // Add shared directory contents
+        if shared_dir.exists() {
+            add_dir_to_zip(&mut zip, shared_dir, "shared")?;
+        }
+
+        // Add static directory contents
+        if static_dir.exists() {
+            add_dir_to_zip(&mut zip, static_dir, "static")?;
+        }
+
         zip.finish().map_err(|e| {
             error!("Failed to finish zip file: {}", e);
-            StoreError::IoError(t!("db.failed_to_finish_zip", error = e.to_string()).to_string())
+            StoreError::IoError(
+                t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+            )
         })?;
 
         info!("Created user files backup: {:?}", output_path.clone());

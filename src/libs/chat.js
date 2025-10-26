@@ -7,9 +7,7 @@ import { marked } from 'marked'
 const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g
 const REFERENCE_REGEX = /\[([0-9,\s]+)\]\(@ref\)/g //match [1,2,3](@ref)
 const REFERENCE_LINK_ALTERNATIVE_REGEX = /\[\^([0-9]+)\^]/g //match [^1^]
-const REFERENCE_BLOCK_REGEX = /`\[\^[0-9]+\]`/g //match `[^1]`
 const REFERENCE_CITATION_REGEX = /\[citation:(\d+)\]/g //match [citation:1]
-const CS_REFERENCE_REGEX = /\[\[\d+\]\]/g //match [[1]]
 const THINK_REGEX = /<think(\s+class="([^"]*)")?>([\s\S]+?)<\/think>/ // just deal the first think tag
 const LINE_BREAK_REGEX = /([^\n])\n(?!\n)/g
 // const BLOCK_CODE_REGEX = /\n*```([a-zA-Z\#]+\s+)?([\s\S]+?)```\n*/g;
@@ -330,16 +328,7 @@ export const htmlspecialchars = text => {
   return he.encode(text, { '&': false })
 }
 
-/**
- * modify parseMarkdown function
- */
-export const parseMarkdown = (content, reference, toolCalls) => {
-  content = content ? content.trim() : ''
-  if (!content) return ''
-
-  // remove reminder
-  content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
-
+export const formatReference = (content, reference) => {
   // Remove AI-generated non-standard references [[1]](http://domain.com) -> [[1]]
   content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {
     return id
@@ -360,37 +349,69 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
     return `[[${number.trim()}]]`
   })
-  // format refs `[^1]` -> [[1]]
-  content = content.replace(REFERENCE_BLOCK_REGEX, (_match, number) => {
-    return `[[${number.trim()}]]`
-  })
-
-  // Text like `[1]` needs to be replaced first; otherwise, the subsequent reference parsing will be converted to a code block by mk.
-  const refBlocks = new Map()
-  let refCounter = 0
-  // Replace regular reference text with placeholders
-  content = content.replace(CS_REFERENCE_REGEX, match => {
-    const id = `___REF_${refCounter++}___`
-    refBlocks.set(id, match)
-    return id
-  })
 
   if (Array.isArray(reference) && reference.length > 0) {
     reference.forEach(item => {
+      const title = item.title
+        .replace(/"/g, "'")
+        .replace(/\n+/g, '')
+        .replace(/([\\*_])/g, '\\$1')
+        .replace(/\|/g,'')
+        .trim()
       content = content.replace(
         new RegExp(`\\[\\[${item.id}\\]\\]`, 'g'),
-        `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
+        `<a href="${item.url}" class="reference-link l" title="${title}">${item.id}</a>`
       )
     })
-  } else {
-    //remove all reference blocks
-    content = content.replace(/\[\[\d+\]\]/g, '')
   }
+  // Remove all references without corresponding links
+  content = content.replace(/\[\[\d+\]\]/g, '')
 
-  // Replace placeholders back to original reference text
-  refBlocks.forEach((value, key) => {
-    content = content.replace(key, value)
+  return content
+}
+
+/**
+ * modify parseMarkdown function
+ */
+export const parseMarkdown = (content, reference, toolCalls) => {
+  content = content ? content.trim() : ''
+  if (!content) return ''
+
+  // remove reminder
+  content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
+
+  // Remove AI-generated non-standard references [[1]](http://domain.com) -> [[1]]
+  content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {
+    return id
   })
+  // // let refs = ''
+  // // format refs [1,2,3](@ref) -> [[1]][[2]][[3]]
+  // content = content.replace(REFERENCE_REGEX, (_match, numbers) => {
+  //   return numbers
+  //     .split(',')
+  //     .map(num => `[[${num.trim()}]]`)
+  //     .join('')
+  // })
+  // // format refs [^1^] -> [[1]]
+  // content = content.replace(REFERENCE_LINK_ALTERNATIVE_REGEX, (_match, number) => {
+  //   return `[[${number.trim()}]]`
+  // })
+  // // format refs [citation:1] -> [[1]]
+  // content = content.replace(REFERENCE_CITATION_REGEX, (_match, number) => {
+  //   return `[[${number.trim()}]]`
+  // })
+
+  // if (Array.isArray(reference) && reference.length > 0) {
+  //   reference.forEach(item => {
+  //     content = content.replace(
+  //       new RegExp(`\\[\\[${item.id}\\]\\]`, 'g'),
+  //       `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
+  //     )
+  //   })
+  // }
+  // // Remove all references without corresponding links
+  // content = content.replace(/\[\[\d+\]\]/g, '')
+  content = formatReference(content, reference)
 
   // Handle reasoning process similar to deepseek r1
   if (content.startsWith('<think')) {
@@ -556,18 +577,17 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       }
       break
     case 'reasoning':
+      chatState.step = ''
       chatState.reasoning += payload?.chunk || ''
       chatState.lastReasoningChunk = payload?.chunk || ''
       break
     case 'error':
+      chatState.step = ''
       refs.chatErrorMessage.value = parseErrorMsg(payload?.chunk)
       isDone = true
       break
-    case 'finished':
-      isDone = true
-      chatState.message += payload?.chunk || ''
-      break
     case 'text':
+      chatState.step = ''
       chatState.message += payload?.chunk || ''
       chatState.lastMessageChunk = payload?.chunk || ''
       // handle deepseek-r1 reasoning flag `<think></think>`
@@ -597,23 +617,13 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       }
       break
 
-    // case 'step':
-    //   refs.currentAssistantMessage.value = payload?.chunk || ''
-    //   return false
-    // case 'log':
-    //   chatState.log.push(payload?.chunk || '')
-    //   break
-    // case 'plan':
-    //   if (payload?.chunk) {
-    //     try {
-    //       const plan = JSON.parse(payload?.chunk || '[]')
-    //       chatState.plan = Array.isArray(plan) ? [...plan] : []
-    //     } catch (e) {
-    //       console.log('error on parse plan:', e)
-    //       console.log('chunk', payload?.chunk)
-    //     }
-    //   }
-    // break
+    case 'step':
+      chatState.step = payload?.chunk || ''
+      return false
+    case 'finished':
+      isDone = true
+      chatState.message += payload?.chunk || ''
+      break
     default:
       console.warn('Unknown message type:', payload?.type, payload?.chunk)
       break

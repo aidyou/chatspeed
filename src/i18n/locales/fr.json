@@ -33,6 +33,10 @@
     "errorOnSendMessage": "Échec de l'envoi du message : {error}",
     "errorOnStopChat": "Échec de l'arrêt de la conversation : {error}",
     "errorOnUpdateConversation": "Échec de la mise à jour de la conversation : {error}",
+    "errorOnGetNote": "Échec de l'obtention de la note : {error}",
+    "errorOnGetNotes": "Échec de l'obtention de la liste des notes : {error}",
+    "errorOnOpenSettingWindow": "Échec de l'ouverture de la fenêtre des paramètres : {error}",
+    "errorOnSearchNotes": "Échec de la recherche des notes : {error}",
     "generatingDiagram": "Génération du diagramme en cours...",
     "generatingMindmap": "Génération de la carte mentale en cours...",
     "goToChat": "Continuer la conversation",
@@ -109,6 +113,7 @@
     "noData": "Aucune donnée",
     "openUrlError": "Échec de l'ouverture de l'URL",
     "pin": "Épingler",
+    "restart": "Redémarrer",
     "save": "Enregistrer",
     "search": "Rechercher",
     "unpin": "Désépingler",
@@ -215,10 +220,12 @@
       "proxyType": "Type de proxy",
       "proxyUsername": "Nom d'utilisateur du proxy",
       "proxyUsernamePlaceholder": "Laisser vide si aucune authentification n'est requise",
+      "restartRequired": "Redémarrage requis",
       "restore": "Restaurer une sauvegarde",
       "restoreConfirm": "Êtes-vous sûr de vouloir restaurer cette sauvegarde ? Toutes les données actuelles seront écrasées !",
       "restoreConfirmTitle": "Confirmation de la restauration de la sauvegarde",
-      "restoreSuccess": "Restauration réussie",
+      "restoreSuccess": "Restauration de la base de données réussie, vous devez redémarrer pour que les changements prennent effet !",
+      "restoring": "Restauration en cours",
       "runBackup": "Effectuer une sauvegarde",
       "scraperConcurrencyCount": "Nombre de requêtes concurrentes du scraper",
       "scraperConcurrencyCountTooltip": "Le nombre de requêtes concurrentes pour scraper le contenu web des résultats de recherche, recommandé entre 5 et 10",
@@ -605,6 +612,9 @@
         "voiceRecognition": "Reconnaissance vocale",
         "writing": "Rédaction"
       },
+      "deleteFailed": "Échec de la suppression de la compétence",
+      "saveFailed": "Échec de l'enregistrement de la compétence",
+      "updateOrderFailed": "Échec de la mise à jour de l'ordre des compétences",
       "updateSuccess": "Compétence mise à jour",
       "useSystemRole": "Utiliser le rôle système"
     },
@@ -618,6 +628,11 @@
       "privacy": "Confidentialité",
       "skill": "Compétence",
       "scraperTest": "Test du scraper"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "Liste des tâches"
     }
   }
 }

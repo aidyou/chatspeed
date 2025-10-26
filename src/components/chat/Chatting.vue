@@ -48,13 +48,14 @@
       v-tools>
       <div v-html="parseMarkdown(content, [], [])"></div>
     </div>
+    <div v-if="step" class="step">{{ step }}</div>
     <span class="cs cs-spin-linear" v-if="isChatting">☯</span>
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
-import { parseMarkdown, htmlspecialchars, toolName } from '@/libs/chat'
+import { formatReference, parseMarkdown, htmlspecialchars, toolName } from '@/libs/chat'
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser.js'
 import i18n from '@/i18n/index.js'
 import { watch } from 'vue'
@@ -93,6 +94,10 @@ const props = defineProps({
   toolCalls: {
     type: Array,
     default: () => []
+  },
+  step: {
+    type: String,
+    default: ''
   }
 })
 
@@ -181,14 +186,20 @@ const createFinalBlocks = (blocks, toolCalls, references) => {
     }
 
     if (allReferences.length > 0) {
-      allReferences.forEach(item => {
-        const refRegex = new RegExp(`\[\[${item.id}\]\]`, 'g')
-        const refLink = `<a href="${item.url}" class="reference-link l" title="${item.title.replace(/"/g, "'").trim()}">${item.id}</a>`
-        newContent = newContent.replace(refRegex, refLink)
-      })
+      newContent = formatReference(newContent, allReferences)
     }
 
     return newContent
   })
 }
 </script>
+
+<style scoped>
+.step {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
+}
+</style>

@@ -37,6 +37,10 @@
     "errorOnSendMessage": "傳送聊天訊息失敗: {error}",
     "errorOnStopChat": "停止聊天失敗: {error}",
     "errorOnUpdateConversation": "更新對話失敗資訊: {error}",
+    "errorOnGetNote": "取得智記失敗：{error}",
+    "errorOnGetNotes": "取得智記列表失敗：{error}",
+    "errorOnOpenSettingWindow": "開啟設定視窗失敗：{error}",
+    "errorOnSearchNotes": "搜尋智記失敗：{error}",
     "generatingDiagram": "正在產生流程圖……",
     "generatingMindmap": "正在產生思維導圖……",
     "goToChat": "繼續提問",
@@ -109,6 +113,7 @@
     "noData": "無資料",
     "openUrlError": "開啟連結失敗",
     "pin": "置頂",
+    "restart": "重新啟動",
     "save": "儲存",
     "search": "搜尋",
     "unpin": "取消置頂",
@@ -215,10 +220,12 @@
       "proxyType": "代理類型",
       "proxyUsername": "代理使用者名稱",
       "proxyUsernamePlaceholder": "如無須驗證，留空即可",
+      "restartRequired": "需要重新啟動",
       "restore": "恢復備份",
       "restoreConfirm": "確定要恢復這個備份嗎？恢復後當前的所有資料將被覆蓋！",
       "restoreConfirmTitle": "恢復備份確認",
-      "restoreSuccess": "恢復成功",
+      "restoreSuccess": "數據庫恢復成功，您需重啟後生效！",
+      "restoring": "正在恢復",
       "runBackup": "執行備份",
       "scraperConcurrencyCount": "爬蟲並行數",
       "scraperConcurrencyCountTooltip": "爬取搜尋結果中網頁內容的並行數，建議5～10之間",
@@ -589,6 +596,9 @@
       "selectSkill": "選擇技能",
       "selectType": "請選擇技能類型",
       "toolsEnabled": "允許工具呼叫",
+      "deleteFailed": "技能刪除失敗",
+      "saveFailed": "技能儲存失敗",
+      "updateOrderFailed": "技能順序更新失敗",
       "updateSuccess": "技能已更新",
       "useSystemRole": "使用系統角色",
       "type": {
@@ -618,6 +628,11 @@
       "skill": "技能",
       "scraperTest": "爬蟲測試",
       "agent": "智能體"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "待辦事項"
     }
   }
 }

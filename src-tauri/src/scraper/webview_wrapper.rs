@@ -80,13 +80,14 @@ impl WebviewScraper {
         // in its place. Any subsequent fires of the same event will find `None` and do nothing,
         // preventing the panic while still achieving a "run once" behavior for the scrape operation.
         let tx_page_load_clone = tx_page_load.clone();
-        let page_loaded_id = webview.listen(format!("page_loaded_{}", window_label), move |_event| {
-            if let Ok(mut guard) = tx_page_load_clone.lock() {
-                if let Some(tx) = guard.take() {
-                    let _ = tx.send(());
+        let page_loaded_id =
+            webview.listen(format!("page_loaded_{}", window_label), move |_event| {
+                if let Ok(mut guard) = tx_page_load_clone.lock() {
+                    if let Some(tx) = guard.take() {
+                        let _ = tx.send(());
+                    }
                 }
-            }
-        });
+            });
 
         let tx_dom_content_loaded_clone = tx_dom_content_loaded.clone();
         let dom_content_loaded_id = webview.listen(
@@ -398,56 +399,16 @@ impl WebviewScraper {
         //     init_script.push_str(block_script);
         // }
 
-        #[allow(unused_mut)]
-        let mut webview_builder = WebviewWindowBuilder::new(
+        WebviewWindowBuilder::new(
             &self.app_handle,
             &window_label,
             WebviewUrl::External(url.parse()?),
         )
         .title("Chatspeed Web Scraper")
         .initialization_script(&init_script)
-        .visible(visible);
-
-        #[cfg(target_os = "windows")]
-        {
-            let main_store = self.app_handle.state::<Arc<std::sync::RwLock<MainStore>>>();
-            let mut browser_args = vec!["--mute-audio".to_string()];
-
-            if let Ok(store) = main_store.read() {
-                let proxy_type = store.get_config("proxy_type", String::new());
-                let proxy_server = store.get_config("proxy_server", String::new());
-                let proxy_username = store.get_config("proxy_username", String::new());
-                let proxy_password = store.get_config("proxy_password", String::new());
-
-                if proxy_type == "http"
-                    && !proxy_server.is_empty()
-                    && proxy_username.is_empty()
-                    && proxy_password.is_empty()
-                {
-                    browser_args.push(format!("--proxy-server={}", proxy_server));
-                } else if !proxy_server.is_empty() {
-                    log::warn!(
-                        "Scraper webview is skipping authenticated proxy settings as it is not supported. It will use system network settings instead."
-                    );
-                }
-            }
-
-            let args_string = browser_args.join(" ");
-            log::debug!(
-                "Applying browser arguments for scraper webview: {}",
-                args_string
-            );
-            webview_builder = webview_builder.additional_browser_args(&args_string);
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // Mute audio on non-Windows platforms
-            webview_builder = webview_builder.additional_browser_args("--mute-audio");
-        }
-
-        webview_builder
-            .build()
-            .map_err(|e| anyhow!("Failed to create webview window: {}", e))
+        .visible(visible)
+        .additional_browser_args("--mute-audio")
+        .build()
+        .map_err(|e| anyhow!("Failed to create webview window: {}", e))
     }
 }

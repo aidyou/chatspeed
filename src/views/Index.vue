@@ -234,6 +234,7 @@
               <div class="content-container" :class="{ chatting: isChatting }">
                 <chatting
                   :key="lastChatId"
+                  :step="chatState.step"
                   :content="chatState.lastMessageChunk"
                   :reference="chatState.reference"
                   :reasoning="chatState.lastReasoningChunk"
@@ -545,6 +546,7 @@ const isChatting = ref(false)
 const lastChatId = ref('')
 const titleChatId = ref('')
 const getDefaultChatState = reference => ({
+  step: '',
   message: '',
   lastMessageChunk: '',
   reference: reference ? [...reference] : [],

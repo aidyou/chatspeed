@@ -746,6 +746,7 @@ import { appDataDir } from '@tauri-apps/api/path'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { relaunch } from '@tauri-apps/plugin-process'
 
 import {
   getAvailableLanguages,
@@ -1261,38 +1262,61 @@ const startBackup = async () => {
   }
 }
 
-const onRestore = value => {
-  ElMessageBox.confirm(
-    t('settings.general.restoreConfirm'),
-    t('settings.general.restoreConfirmTitle'),
-    {
-      confirmButtonText: t('common.confirm'),
-      cancelButtonText: t('common.cancel')
+const onRestore = async value => {
+  try {
+    await ElMessageBox.confirm(
+      t('settings.general.restoreConfirm'),
+      t('settings.general.restoreConfirmTitle'),
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel')
+      }
+    )
+  } catch {
+    // User clicked cancel
+    restoreDir.value = ''
+    return
+  }
+
+  const loadingInstance = ElLoading.service({
+    lock: true,
+    text: t('settings.general.restoring'),
+    background: 'var(--cs-bg-color-opacity)'
+  })
+
+  try {
+    await invokeWrapper('restore_setting', { backupDir: value })
+    await settingStore.reloadConfig()
+
+    // Close loading before showing the next modal
+    loadingInstance.close()
+
+    // Show restart dialog
+    ElMessageBox.confirm(
+      t('settings.general.restoreSuccess'),
+      t('settings.general.restartRequired'), // Title
+      {
+        confirmButtonText: t('common.restart'),
+        showCancelButton: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+        showClose: false,
+        type: 'warning'
+      }
+    ).then(() => {
+      relaunch()
+    })
+  } catch (error) {
+    // Close loading before showing the error message
+    loadingInstance.close()
+    if (error instanceof FrontendAppError) {
+      showMessage(error.toFormattedString(), 'error')
+      console.error('Error restoring settings:', error.originalError)
+    } else {
+      showMessage(error.toString(), 'error')
+      console.error('Error restoring settings:', error)
     }
-  )
-    .then(() => {
-      invokeWrapper('restore_setting', { backupDir: value })
-        .then(() => {
-          settingStore.reloadConfig().then(() => {
-            sendSyncState('model', 'all')
-            sendSyncState('skill', 'all')
-            sendSyncState('setting_changed', 'all')
-            showMessage(t('settings.general.restoreSuccess'), 'success')
-          })
-        })
-        .catch(error => {
-          if (error instanceof FrontendAppError) {
-            showMessage(error.toFormattedString(), 'error')
-            console.error('Error restoring settings:', error.originalError)
-          } else {
-            showMessage(error.toString(), 'error')
-            console.error('Error restoring settings:', error)
-          }
-        })
-    })
-    .catch(() => {
-      restoreDir.value = ''
-    })
+  }
 }
 
 const getAllBackups = () => {

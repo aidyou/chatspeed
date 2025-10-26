@@ -49,8 +49,8 @@ export interface Workflow {
 export interface TodoItem {
   id: string
   title: string
-  description: string
-  status: 'pending' | 'in_progress' | 'completed'
+  description?: string
+  status: 'pending' | 'in_progress' | 'completed' | 'data_missing' | 'failed'
   dependencies?: string[]
   result?: unknown
 }

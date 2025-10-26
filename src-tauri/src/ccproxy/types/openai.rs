@@ -273,20 +273,20 @@ pub struct OpenAITopLogprob {
     pub bytes: Option<Vec<u8>>,
 }
 
-/// Server-Sent Events structure for OpenAI streaming responses
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SseEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<OpenAIUsage>, // Added usage field
-}
+// /// Server-Sent Events structure for OpenAI streaming responses
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// pub struct SseEvent {
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub id: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub event_type: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub data: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub retry: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub usage: Option<OpenAIUsage>, // Added usage field
+// }
 
 impl OpenAIChatCompletionRequest {
     /// Validate request parameters according to OpenAI API constraints

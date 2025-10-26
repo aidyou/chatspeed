@@ -1,5 +1,5 @@
 <template>
-  <div class="todo-list-container" v-if="items">
+  <div class="todo-list-container" v-if="items.length > 0">
     <div class="title" :class="{ collapsed: !todoListShow }" @click="todoListShow = !todoListShow">
       {{ t('workflow.todoList.title') }}
     </div>

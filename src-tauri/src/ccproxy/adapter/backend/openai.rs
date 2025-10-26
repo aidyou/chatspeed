@@ -1120,59 +1120,6 @@ impl OpenAIBackendAdapter {
 
         // Process tool calls in the buffer
         common::process_tool_calls_in_buffer(status, unified_chunks);
-
-        // Handle remaining buffer content
-        // self.handle_remaining_buffer_content(status, unified_chunks);
-    }
-
-    /// Handle remaining content in buffer that's not part of tool calls
-    fn handle_remaining_buffer_content(
-        &self,
-        status: &mut std::sync::RwLockWriteGuard<SseStatus>,
-        unified_chunks: &mut Vec<UnifiedStreamChunk>,
-    ) {
-        if !status.in_tool_call_block && !status.tool_compat_buffer.is_empty() {
-            // Take ownership of the buffer content
-            let current_buffer = std::mem::take(&mut status.tool_compat_buffer);
-
-            let tool_start = TOOL_TAG_START;
-            let tool_end = TOOL_TAG_END;
-
-            let mut partial_tag_len = 0;
-
-            // Check for a partial start tag at the end of the buffer
-            for i in (1..=std::cmp::min(current_buffer.len(), tool_start.len())).rev() {
-                if current_buffer.ends_with(&tool_start[..i]) {
-                    partial_tag_len = i;
-                    break;
-                }
-            }
-
-            // Also check for a partial end tag if no partial start tag was found
-            if partial_tag_len == 0 {
-                for i in (1..=std::cmp::min(current_buffer.len(), tool_end.len())).rev() {
-                    if current_buffer.ends_with(&tool_end[..i]) {
-                        partial_tag_len = i;
-                        break;
-                    }
-                }
-            }
-
-            let text_to_flush_len = current_buffer.len() - partial_tag_len;
-            if text_to_flush_len > 0 {
-                let text_to_flush_string = current_buffer[..text_to_flush_len].to_string();
-                let remaining_buffer_string = current_buffer[text_to_flush_len..].to_string();
-
-                status.estimated_output_tokens += estimate_tokens(&text_to_flush_string);
-                unified_chunks.push(UnifiedStreamChunk::Text {
-                    delta: text_to_flush_string,
-                });
-                status.tool_compat_buffer = remaining_buffer_string;
-            } else {
-                // If nothing was flushed, put the original buffer content back
-                status.tool_compat_buffer = current_buffer;
-            }
-        }
     }
 
     /// Process content in normal (non-tool compatibility) mode

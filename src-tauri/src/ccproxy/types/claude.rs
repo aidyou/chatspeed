@@ -328,7 +328,7 @@ where
 
 impl ClaudeNativeRequest {
     /// Validate request parameters according to Claude API constraints
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&mut self) -> Result<(), String> {
         // Validate temperature range (0.0 to 1.0)
         if let Some(temp) = self.temperature {
             if temp < 0.0 || temp > 1.0 {
@@ -356,12 +356,17 @@ impl ClaudeNativeRequest {
         }
 
         // Validate thinking budget_tokens if present
-        if let Some(ref thinking) = self.thinking {
+        if let Some(ref mut thinking) = self.thinking {
             if thinking.budget_tokens < 1024 {
-                return Err("thinking budget_tokens must be at least 1024".to_string());
+                thinking.budget_tokens = 1024.min(self.max_tokens - 1);
+                log::warn!("thinking budget_tokens must be at least 1024");
             }
             if thinking.budget_tokens >= self.max_tokens {
-                return Err("thinking budget_tokens must be less than max_tokens".to_string());
+                // 从 claude cli 的 claude-sonnet-4-5 已经支持 thinking.budget_tokens >= self.max_tokens
+                if !wildmatch::WildMatch::new("claude-*-4-5-*").matches(&self.model) {
+                    thinking.budget_tokens = (self.max_tokens - 1).max(0);
+                    log::warn!("thinking budget_tokens must be less than max_tokens");
+                }
             }
         }
 

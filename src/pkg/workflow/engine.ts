@@ -6,7 +6,8 @@ import {
   addWorkflowMessage,
   createWorkflow,
   getWorkflowSnapshot,
-  updateWorkflowStatus
+  updateWorkflowStatus,
+  workflowCallTool
 } from './api'
 import { callLLM } from './llm'
 import {
@@ -26,12 +27,13 @@ import { WorkflowStateMachine } from './stateMachine'
 import { ToolRegistry } from './toolRegistry'
 import { askUserTool } from './tools/askUser'
 import { taskCompleteTool } from './tools/taskCompleteTool'
-import { todoManagerTool } from './tools/todoManager'
+import { setTodoListWorkflowId, todoListTool } from './tools/todoList'
 import {
   type Agent,
   type ConversationContext,
   type OmitWorkflowMessage,
   type ParsedLLMResponse,
+  type StateChangeEvent,
   type WorkflowMessage,
   WorkflowState
 } from './types'
@@ -55,10 +57,13 @@ export class WorkflowEngine {
     this.stateMachine = new WorkflowStateMachine()
     this.sessionId = sessionId
 
+    // Set the workflow ID for the todo manager
+    setTodoListWorkflowId(sessionId)
+
     // Register all available tools
     this.toolRegistry = new ToolRegistry()
     this.toolRegistry.register(askUserTool)
-    this.toolRegistry.register(todoManagerTool)
+    this.toolRegistry.register(todoListTool)
     this.toolRegistry.register(taskCompleteTool)
 
     this.context = {
@@ -154,7 +159,8 @@ export class WorkflowEngine {
   }
 
   private setupEventHandlers(): void {
-    this.stateMachine.on('stateChanged', event => {
+    this.stateMachine.on('stateChanged', (data?: unknown) => {
+      const event = data as StateChangeEvent
       console.log(`Workflow state changed: ${event.payload.oldState} -> ${event.payload.newState}`)
       // Persist status change
       updateWorkflowStatus(this.sessionId, event.payload.newState).catch(console.error)
@@ -342,18 +348,23 @@ export class WorkflowEngine {
             return
           }
 
-          const tool = this.toolRegistry.get(toolName)
-          if (!tool) {
-            throw new Error(`Tool '${toolName}' not found in registry.`)
-          }
+          // Check if tool is in TypeScript registry first
+          const tsTool = this.toolRegistry.get(toolName)
 
-          const needsApproval =
-            tool.requiresApproval && !this.context.agent.autoApprove.includes(tool.id)
-          this.stateMachine.setContext({ currentAction: action })
+          if (tsTool) {
+            // TypeScript tool found
+            const needsApproval =
+              tsTool.requiresApproval && !this.context.agent.autoApprove.includes(tsTool.id)
+            this.stateMachine.setContext({ currentAction: action })
 
-          if (needsApproval) {
-            this.stateMachine.transition('NEED_APPROVAL')
+            if (needsApproval) {
+              this.stateMachine.transition('NEED_APPROVAL')
+            } else {
+              this.stateMachine.transition('EXECUTE_TOOL')
+            }
           } else {
+            // Try to execute as Rust tool via workflow_call_tool
+            this.stateMachine.setContext({ currentAction: action })
             this.stateMachine.transition('EXECUTE_TOOL')
           }
         },
@@ -385,12 +396,25 @@ export class WorkflowEngine {
     const { name, arguments: parameters } = currentAction
 
     try {
-      const result = await this.toolRegistry.execute({
-        toolId: name,
-        parameters
-      })
+      // First try to execute TypeScript tool
+      const tsTool = this.toolRegistry.get(name)
 
-      await this.handleToolResult(name, parameters, result)
+      if (tsTool) {
+        // TypeScript tool found, execute it
+        const result = await this.toolRegistry.execute({
+          toolId: name,
+          parameters
+        })
+        await this.handleToolResult(name, parameters, result)
+      } else {
+        // Try to execute as Rust tool via workflow_call_tool
+        try {
+          const result = await workflowCallTool(name, parameters)
+          await this.handleToolResult(name, parameters, result)
+        } catch (error) {
+          await this.handleToolResult(name, parameters, error)
+        }
+      }
     } catch (error) {
       await this.handleToolResult(name, parameters, error)
     }
@@ -452,11 +476,32 @@ export class WorkflowEngine {
         break
       }
 
-      case 'TodoManager':
+      case 'TodoList': {
         this.stepsSinceTodo = 0
         systemReminder = TODO_MANAGER_SUCCESS
+
+        // Check for failed status and stop workflow execution
+        const todoResult = result as { message: string; updated_todos?: any[] }
+        if (todoResult.updated_todos) {
+          const lastTodo = todoResult.updated_todos[todoResult.updated_todos.length - 1]
+          if (lastTodo?.status === 'failed') {
+            systemReminder += ' Task failed - workflow execution stopped.'
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'tool',
+              message: `Observation: ${JSON.stringify(result)}\n${systemReminder}`,
+              metadata: { tool: toolName, parameters, result }
+            } as OmitWorkflowMessage)
+            this.stateMachine.transition('ERROR_OCCURRED', {
+              error: `Task failed: ${lastTodo.title}`
+            })
+            return
+          }
+        }
+
         observationMessage = `Observation: ${JSON.stringify(result)}`
         break
+      }
 
       default:
         observationMessage = `Observation: ${JSON.stringify(result)}`

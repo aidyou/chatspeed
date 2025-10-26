@@ -33,6 +33,10 @@
     "errorOnSendMessage": "Error al enviar el mensaje: {error}",
     "errorOnStopChat": "Error al detener el chat: {error}",
     "errorOnUpdateConversation": "Error al actualizar la conversación: {error}",
+    "errorOnGetNote": "Error al obtener la nota: {error}",
+    "errorOnGetNotes": "Error al obtener la lista de notas: {error}",
+    "errorOnOpenSettingWindow": "Error al abrir la ventana de configuración: {error}",
+    "errorOnSearchNotes": "Error al buscar notas: {error}",
     "generatingDiagram": "Generando diagrama...",
     "generatingMindmap": "Generando mapa mental...",
     "goToChat": "Continuar preguntando",
@@ -109,6 +113,7 @@
     "noData": "Sin datos",
     "openUrlError": "Error al abrir la URL",
     "pin": "Fijar",
+    "restart": "Reiniciar",
     "save": "Guardar",
     "search": "Buscar",
     "unpin": "Desfijar",
@@ -215,10 +220,12 @@
       "proxyType": "Tipo de proxy",
       "proxyUsername": "Nombre de usuario del proxy",
       "proxyUsernamePlaceholder": "Déjalo en blanco si no se requiere autenticación",
+      "restartRequired": "Reinicio requerido",
       "restore": "Restaurar copia de seguridad",
       "restoreConfirm": "¿Estás seguro de que quieres restaurar esta copia de seguridad? ¡Todos los datos actuales se sobrescribirán!",
       "restoreConfirmTitle": "Confirmar restauración de la copia de seguridad",
-      "restoreSuccess": "Restauración exitosa",
+      "restoreSuccess": "Restauración de la base de datos exitosa, ¡debes reiniciar para que surta efecto!",
+      "restoring": "Restaurando",
       "runBackup": "Ejecutar copia de seguridad",
       "scraperConcurrencyCount": "Número de concurrencia del scraper",
       "scraperConcurrencyCountTooltip": "El número de solicitudes concurrentes para raspar el contenido web de los resultados de búsqueda, se recomienda entre 5 y 10",
@@ -589,6 +596,9 @@
       "selectSkill": "Seleccionar habilidad",
       "selectType": "Selecciona el tipo de habilidad",
       "toolsEnabled": "Permitir llamadas a herramientas",
+      "deleteFailed": "Error al eliminar la habilidad",
+      "saveFailed": "Error al guardar la habilidad",
+      "updateOrderFailed": "Error al actualizar el orden de las habilidades",
       "updateSuccess": "Habilidad actualizada",
       "useSystemRole": "Usar rol del sistema",
       "type": {
@@ -618,6 +628,11 @@
       "proxy": "Proxy",
       "scraperTest": "Prueba del scraper",
       "skill": "Habilidad"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "Lista de tareas"
     }
   }
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{command, AppHandle, State};
@@ -9,7 +10,7 @@ use crate::db::{Agent, MainStore, Workflow, WorkflowMessage, WorkflowSnapshot};
 use crate::error::{AppError, Result};
 use crate::libs::tsid::TsidGenerator;
 use crate::tools::MCP_TOOL_NAME_SPLIT;
-use crate::workflow::dag::WorkflowEngine;
+// use crate::workflow::dag::WorkflowEngine;
 
 // Initialize a global TSID generator
 lazy_static::lazy_static! {
@@ -65,18 +66,18 @@ pub async fn get_available_tools(
     Ok(frontend_tools)
 }
 
-#[command]
-pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> Result<()> {
-    let engine = WorkflowEngine::new(app_handle).await?;
+// #[command]
+// pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> Result<()> {
+//     let engine = WorkflowEngine::new(app_handle).await?;
 
-    let _ = engine.execute(workflow_config).await?;
+//     let _ = engine.execute(workflow_config).await?;
 
-    log::debug!(
-        "Workflow execution result: {:#?}",
-        engine.context.get_last_output().await
-    );
-    Ok(())
-}
+//     log::debug!(
+//         "Workflow execution result: {:#?}",
+//         engine.context.get_last_output().await
+//     );
+//     Ok(())
+// }
 
 /// Adds a new agent
 #[command]
@@ -173,6 +174,25 @@ pub async fn workflow_chat_completion(
     Ok(stream_id)
 }
 
+/// Executes a tool call for the workflow engine using the ChatState tool manager
+#[command]
+pub async fn workflow_call_tool(
+    chat_state: State<'_, Arc<ChatState>>,
+    tool_name: String,
+    arguments: Option<Value>,
+) -> Result<Value> {
+    let tool_manager = &chat_state.tool_manager;
+
+    // Parse arguments or use empty object
+    let args = arguments.unwrap_or_else(|| json!({}));
+
+    // Execute the tool call using the tool manager
+    match tool_manager.tool_call(&tool_name, args).await {
+        Ok(result) => Ok(result),
+        Err(e) => Err(AppError::Tool(e)),
+    }
+}
+
 // =================================================
 //  Workflow Database Commands
 // =================================================
@@ -233,6 +253,39 @@ pub async fn get_workflow_snapshot(
     store
         .get_workflow_snapshot(&workflow_id)
         .map_err(AppError::Db)
+}
+
+#[command]
+pub async fn update_workflow_title(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_id: String,
+    title: String,
+) -> Result<()> {
+    let store = main_store.read()?;
+    store
+        .update_workflow_title(&workflow_id, &title)
+        .map_err(AppError::Db)
+}
+
+#[command]
+pub async fn update_workflow_todo_list(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_id: String,
+    todo_list: String,
+) -> Result<()> {
+    let store = main_store.read()?;
+    store
+        .update_workflow_todo_list(&workflow_id, &todo_list)
+        .map_err(AppError::Db)
+}
+
+#[command]
+pub async fn delete_workflow(
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_id: String,
+) -> Result<()> {
+    let store = main_store.read()?;
+    store.delete_workflow(&workflow_id).map_err(AppError::Db)
 }
 
 #[command]

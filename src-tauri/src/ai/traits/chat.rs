@@ -1,5 +1,5 @@
 use super::stoppable::Stoppable;
-use crate::{ai::error::AiError, ccproxy::ChatProtocol, search::SearchResult};
+use crate::{ai::error::AiError, ccproxy::ChatProtocol};
 
 use async_trait::async_trait;
 use log::warn;
@@ -18,6 +18,7 @@ pub enum MessageType {
     Think,
     ToolCalls, // Assistant tool selection
     ToolResults,
+    Step,
 }
 
 impl Default for MessageType {
@@ -49,6 +50,7 @@ impl Display for MessageType {
             MessageType::Text => "text",
             MessageType::ToolCalls => "tool_calls",
             MessageType::ToolResults => "tool_results",
+            MessageType::Step => "step",
         };
         write!(f, "{}", s)
     }
@@ -64,6 +66,7 @@ impl MessageType {
             "text" => Some(MessageType::Text),
             "tool_calls" => Some(MessageType::ToolCalls),
             "tool_results" => Some(MessageType::ToolResults),
+            "step" => Some(MessageType::Step),
             _ => {
                 warn!(
                     "Unrecognized message type: '{}', will be handled by deserializer default.",
@@ -135,39 +138,39 @@ pub struct Usage {
     pub completion_tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatCompletionResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(unused)]
-    pub chat_id: Option<String>,
+// #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// #[serde(rename_all = "camelCase")]
+// pub struct ChatCompletionResult {
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     #[allow(unused)]
+//     pub chat_id: Option<String>,
 
-    /// content
-    pub content: String,
+//     /// content
+//     pub content: String,
 
-    /// reasoning
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(unused)]
-    pub reasoning: Option<String>,
+//     /// reasoning
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     #[allow(unused)]
+//     pub reasoning: Option<String>,
 
-    /// token usage
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(unused)]
-    pub usage: Option<Usage>,
+//     /// token usage
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     #[allow(unused)]
+//     pub usage: Option<Usage>,
 
-    /// reference
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(unused)]
-    pub reference: Option<Vec<SearchResult>>,
+//     /// reference
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     #[allow(unused)]
+//     pub reference: Option<Vec<SearchResult>>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(unused)]
-    pub tools: Option<Vec<ToolCallDeclaration>>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     #[allow(unused)]
+//     pub tools: Option<Vec<ToolCallDeclaration>>,
 
-    /// finish_reason
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<FinishReason>,
-}
+//     /// finish_reason
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub finish_reason: Option<FinishReason>,
+// }
 
 // =================================================
 // Tool definition start

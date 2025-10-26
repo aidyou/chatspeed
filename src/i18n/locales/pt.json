@@ -33,6 +33,10 @@
     "errorOnSendMessage": "Falha ao enviar mensagem: {error}",
     "errorOnStopChat": "Falha ao parar o chat: {error}",
     "errorOnUpdateConversation": "Falha ao atualizar a conversa: {error}",
+    "errorOnGetNote": "Falha ao obter anotação: {error}",
+    "errorOnGetNotes": "Falha ao obter lista de anotações: {error}",
+    "errorOnOpenSettingWindow": "Falha ao abrir janela de configurações: {error}",
+    "errorOnSearchNotes": "Falha ao pesquisar anotações: {error}",
     "generatingDiagram": "Gerando diagrama...",
     "generatingMindmap": "Gerando mapa mental...",
     "goToChat": "Continuar perguntando",
@@ -109,6 +113,7 @@
     "noData": "Sem dados",
     "openUrlError": "Falha ao abrir o link",
     "pin": "Fixar",
+    "restart": "Reiniciar",
     "save": "Salvar",
     "search": "Pesquisar",
     "unpin": "Desafixar",
@@ -215,10 +220,12 @@
       "proxyType": "Tipo de proxy",
       "proxyUsername": "Nome de usuário do proxy",
       "proxyUsernamePlaceholder": "Deixe em branco se não for necessária autenticação",
+      "restartRequired": "Reinicialização necessária",
       "restore": "Restaurar backup",
       "restoreConfirm": "Tem certeza de que deseja restaurar este backup? Todos os dados atuais serão substituídos!",
       "restoreConfirmTitle": "Confirmar restauração de backup",
-      "restoreSuccess": "Restauração realizada com sucesso",
+      "restoreSuccess": "Restauração do banco de dados concluída com sucesso, é necessário reiniciar para que entre em vigor!",
+      "restoring": "Restaurando",
       "runBackup": "Executar backup",
       "scraperConcurrencyCount": "Número de concorrência do scraper",
       "scraperConcurrencyCountTooltip": "O número de solicitações concorrentes para raspar o conteúdo da web dos resultados de pesquisa, recomendado entre 5 e 10",
@@ -589,6 +596,9 @@
       "selectSkill": "Selecionar habilidade",
       "selectType": "Selecione o tipo de habilidade",
       "toolsEnabled": "Permitir chamadas de ferramentas",
+      "deleteFailed": "Falha ao excluir habilidade",
+      "saveFailed": "Falha ao salvar habilidade",
+      "updateOrderFailed": "Falha ao atualizar ordem das habilidades",
       "updateSuccess": "Habilidade atualizada",
       "useSystemRole": "Usar função do sistema",
       "type": {
@@ -618,6 +628,11 @@
       "privacy": "Privacidade",
       "skill": "Habilidade",
       "scraperTest": "Teste do scraper"
+    }
+  },
+  "workflow": {
+    "todoList": {
+      "title": "Lista de tarefas"
     }
   }
 }

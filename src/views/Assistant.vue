@@ -175,6 +175,7 @@
               <chatting
                 ref="chatMessagesRef"
                 :key="lastChatId"
+                :step="chatState.step"
                 :content="chatState.lastMessageChunk"
                 :reference="chatState.reference"
                 :reasoning="chatState.lastReasoningChunk"
@@ -293,6 +294,7 @@ const chatErrorMessage = ref('')
 const isChatting = ref(false)
 const lastChatId = ref()
 const getDefaultChatState = () => ({
+  step: '',
   message: '',
   lastMessageChunk: '',
   reference: [],
