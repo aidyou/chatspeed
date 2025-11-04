@@ -1,6 +1,6 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
-# Chatspeed v1.1.20 Release Notes
+# Chatspeed v1.1.21 Release Notes
 Optimized window visibility logic; after the change, pressing the hotkey will only hide the window if it has focus, otherwise it will bring the window to the front.
 
 ## 🐞 Bug Fixes
