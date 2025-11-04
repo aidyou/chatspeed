@@ -264,10 +264,16 @@ pub async fn run() -> crate::error::Result<()> {
 
                             let window_clone = window.clone();
                             *timer = Some(spawn(async move {
+                                #[cfg(target_os = "macos")]
+                                let hide_duration = Duration::from_millis(10);
+
+                                #[cfg(not(target_os = "macos"))]
+                                let hide_duration = Duration::from_millis(200);
+
                                 // Wait for a short duration. This delay is the key to solving the race condition.
                                 // It allows the `mousedown` event from the frontend (which indicates a drag start)
                                 // to be processed and set the ON_MOUSE_EVENT flag before we check it.
-                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                tokio::time::sleep(hide_duration).await;
 
                                 // After the delay, we perform the definitive checks.
                                 let is_pinned =

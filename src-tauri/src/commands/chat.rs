@@ -288,7 +288,9 @@ pub async fn chat_completion(
 
     // Ensure the channel for this window is created/retrieved.
     // This is crucial for global_message_processor_loop to send UI updates.
-    let _window_sender = chat_state
+    //
+    // !!! DO NOT remove the following line !!!
+    let _ = chat_state
         .channels
         .get_or_create_channel(window.clone())
         .await

@@ -1,5 +1,13 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.20 Release Notes
+Optimized window visibility logic; after the change, pressing the hotkey will only hide the window if it has focus, otherwise it will bring the window to the front.
+
+## 🐞 Bug Fixes
+- Fixed an issue in model settings where the `baseUrl` input field became uneditable when switching API protocols.
+
+---
+
 # Chatspeed v1.1.19 Release Notes
 
 Chatspeed v1.1.19 is an important release focused on **system stability improvements** and **data security enhancements**. This update significantly improves troubleshooting efficiency through comprehensive optimization of error handling mechanisms. Additionally, it introduces streaming encryption technology to solve memory consumption issues when backing up large database files, ensuring stable system operation even when processing massive amounts of data. Furthermore, we have fixed multiple key issues affecting user experience, including chat interface parsing errors, new model compatibility, and cross-platform window display issues, providing you with a smoother and more reliable AI interaction experience.

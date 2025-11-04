@@ -312,20 +312,24 @@ pub fn activate_window(app: &tauri::AppHandle, label: &str) {
 
 pub fn toggle_window_activate(app: &tauri::AppHandle, label: &str, enabled_toggle: bool) {
     if let Some(window) = app.get_webview_window(label) {
-        match (window.is_visible(), enabled_toggle) {
-            (Ok(true), true) => {
-                let _ = window.hide();
-                log::debug!("Main window is visible will be hidden.");
-            }
-            _ => {
-                // In all other cases (hidden, minimized, or in the background),
-                // use the robust helper to bring it to the front.
-                show_and_focus_window(app, label);
-                let _ = app.emit(
-                    format!("cs://{}-focus-input", label).as_str(),
-                    json!({ "windowLabel": label }),
-                );
-            }
+        let is_visible = window.is_visible().unwrap_or(false);
+        let is_focused = window.is_focused().unwrap_or(false);
+
+        if enabled_toggle && is_visible && is_focused {
+            // Case: toggle is on, window is visible and focused. Action: hide.
+            let _ = window.hide();
+            log::debug!("Window '{}' is visible and focused, will be hidden.", label);
+        } else {
+            // All other cases:
+            // 1. enabled_toggle = false (show and focus)
+            // 2. enabled_toggle = true, window not visible (show and focus)
+            // 3. enabled_toggle = true, window visible but not focused (show and focus)
+            show_and_focus_window(app, label);
+            let _ = app.emit(
+                format!("cs://{}-focus-input", label).as_str(),
+                json!({ "windowLabel": label }),
+            );
+            log::debug!("Window '{}' will be shown and focused.", label);
         }
     } else {
         log::warn!("Could not get a handle to window '{}' for toggling.", label);

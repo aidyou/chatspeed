@@ -795,7 +795,7 @@ const editModel = async (id, model) => {
       console.log(key, model[key])
     })
     if (!modelForm.value.baseUrl) {
-      modelForm.value.baseUrl = baseUrlPlaceholder
+      modelForm.value.baseUrl = baseUrlPlaceholder.value
     }
 
     console.log(modelForm.value)
@@ -1029,7 +1029,7 @@ const onModelConfig = model => {
  */
 const onApiProtocolChange = () => {
   if (!editId.value) {
-    modelForm.value.baseUrl = baseUrlPlaceholder
+    modelForm.value.baseUrl = baseUrlPlaceholder.value
   }
 }
 

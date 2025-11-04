@@ -28,6 +28,7 @@ import { ToolRegistry } from './toolRegistry'
 import { askUserTool } from './tools/askUser'
 import { taskCompleteTool } from './tools/taskCompleteTool'
 import { setTodoListWorkflowId, todoListTool } from './tools/todoList'
+import { webAnalyticsTool, setWebAnalyticsContext } from './tools/webAnalytics'
 import {
   type Agent,
   type ConversationContext,
@@ -62,6 +63,11 @@ export class WorkflowEngine {
 
     // Register all available tools
     this.toolRegistry = new ToolRegistry()
+    
+    // Set up WebAnalytics context and register the tool
+    setWebAnalyticsContext({ providerId: agent.actModel.id, modelId: agent.actModel.model })
+    this.toolRegistry.register(webAnalyticsTool)
+    
     this.toolRegistry.register(askUserTool)
     this.toolRegistry.register(todoListTool)
     this.toolRegistry.register(taskCompleteTool)
