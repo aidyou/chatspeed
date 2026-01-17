@@ -26,6 +26,18 @@
             @sub-model-select="onSubModelSelect"
             @selection-complete="onSelectionComplete" />
 
+          <!-- sensitive filtering switch -->
+          <el-tooltip
+            :content="$t('chat.sensitiveFiltering')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top">
+            <cs
+              name="filter"
+              @click="onToggleSensitiveFiltering"
+              :class="{ active: sensitiveStore.config.enabled }" />
+          </el-tooltip>
+
           <!-- netowrk switch -->
           <el-tooltip
             :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
@@ -260,6 +272,7 @@ import { csStorageKey } from '@/config/config'
 import { useChatStore } from '@/stores/chat'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
+import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useSkillStore } from '@/stores/skill'
 
 import { getAvailableLanguages } from '@/i18n/langUtils'
@@ -272,6 +285,7 @@ const chatStore = useChatStore()
 const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const settingStore = useSettingStore()
+const sensitiveStore = useSensitiveStore()
 const windowStore = useWindowStore()
 const mcpStore = useMcpStore()
 
@@ -280,6 +294,14 @@ const mcpStore = useMcpStore()
 const networkEnabled = ref(csGetStorage(csStorageKey.assistNetworkEnabled, false))
 // MCP enabled state
 const mcpEnabled = ref(csGetStorage(csStorageKey.assistMcpEnabled, false))
+
+/**
+ * Toggle sensitive information filtering
+ */
+const onToggleSensitiveFiltering = () => {
+  sensitiveStore.config.enabled = !sensitiveStore.config.enabled
+  sensitiveStore.saveConfig()
+}
 
 const isAlwaysOnTop = computed(() => windowStore.assistantAlwaysOnTop)
 
@@ -323,6 +345,7 @@ const displayToLang = computed(() => {
 
 let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
+let unlistenSyncState = ref(null)
 
 // Do not remove this, it's useful when user does not set default model at assistant dialog
 const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
@@ -459,6 +482,7 @@ watch(
 
 onMounted(async () => {
   inputRef.value?.focus()
+  await sensitiveStore.fetchConfig()
 
   // set default model from local storage
   const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
@@ -509,6 +533,13 @@ onMounted(async () => {
     }
   })
 
+  // listen sync state event
+  unlistenSyncState.value = await listen('cs://sync-state', event => {
+    if (event?.payload?.type === 'sensitive_config_changed') {
+      sensitiveStore.config = { ...event.payload.metadata }
+    }
+  })
+
   windowStore.initAssistantAlwaysOnTop()
   document.addEventListener('keydown', onKeydown)
 })
@@ -523,6 +554,12 @@ onUnmounted(() => {
   if (unlistenPasteResponse.value) {
     unlistenPasteResponse.value()
   }
+
+  // unlisten sync state event
+  if (unlistenSyncState.value) {
+    unlistenSyncState.value()
+  }
+
   // if (focusListener.value) {
   //   focusListener.value()
   // }

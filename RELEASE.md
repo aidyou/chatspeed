@@ -1,9 +1,39 @@
 [简体中文](./RELEASE.zh-CN.md) ｜ English
 
+# Chatspeed v1.1.22 Release Notes
+
+This release introduces a major new feature: the **Intelligent Sensitive Information Filtering System**. We are committed to protecting your privacy while maintaining a seamless AI interaction experience. The system now automatically identifies and masks sensitive data before it ever leaves your local device.
+
+## ✨ Security & Privacy Enhancements
+
+- **Automated Data Masking**: Automatically detects and masks PII (Personally Identifiable Information) such as Names, IDs, Phone Numbers, Emails, IP Addresses, and Credit Cards before sending messages to AI providers.
+- **Deep Contract Context Recognition**:
+  - Added **Organization Recognition**: Identifies contract roles (Party A/B, Contractor, etc.) and corporate entities (Inc., Ltd., LLC, etc.).
+  - Added **Project Title Masking**: Recognizes and protects specific project or study names within documents.
+  - Added **Financial Data Protection**: Automatically masks contract amounts (including localized currency formats) and bank account/routing details.
+  - Added **Landline & Social IDs**: Supports international landline formats and social media handles (WeChat, WhatsApp, Telegram, etc.).
+- **Flexible List Management**:
+  - **Custom Blocklist**: Manually add specific keywords (e.g., project internal codenames) to be always filtered.
+  - **Allowlist**: Define exceptions (e.g., your public business email or localhost IP) that should never be masked.
+- **Local-First Security**: The entire filtering logic is executed in Rust on your local machine. Only sanitized data is stored in the database and sent to AI models.
+
+## 🔧 Interaction & UX Improvements
+
+- **Quick Toggle Button**: Added a `filter` icon in the chat and assistant header. Toggle filtering state with one click, with real-time sync across all windows.
+- **Full I18N Support**: The filtering system now supports 10 languages (EN, ZH, JA, KO, DE, FR, ES, PT, RU) for both UI and placeholders.
+
+## 🐞 Bug Fixes
+
+- **Code Cleanup**: Removed redundant exports and unused functions to improve system performance.
+
+---
+
 # Chatspeed v1.1.21 Release Notes
+
 Optimized window visibility logic; after the change, pressing the hotkey will only hide the window if it has focus, otherwise it will bring the window to the front.
 
 ## 🐞 Bug Fixes
+
 - Fixed an issue in model settings where the `baseUrl` input field became uneditable when switching API protocols.
 
 ---
@@ -47,7 +77,6 @@ Chatspeed v1.1.18 further enhances application startup performance and user expe
 
 ---
 
-
 # Chatspeed v1.1.17 Release Notes
 
 Chatspeed v1.1.17 focuses on enhancing cross-platform stability and user experience by addressing critical bugs across Windows and Linux environments, optimizing environment variable loading, and resolving UI state management issues in key settings components. This release also incorporates all features and fixes from the unreleased v1.1.16, including new window positioning shortcuts and unified custom event formats.
@@ -76,6 +105,7 @@ Chatspeed v1.1.17 focuses on enhancing cross-platform stability and user experie
 - **Fixed Ubuntu Window Display**: Fixed issue where window could not be shown via shortcut after being minimized on Ubuntu
 
 ### 🕰 In Progress
+
 Part of the ReAct logic has been completed, and development of this workflow module will continue
 
 # Chatspeed v1.1.15 Release Notes
@@ -83,6 +113,7 @@ Part of the ReAct logic has been completed, and development of this workflow mod
 v1.1.15 focuses on enhancing the user experience of tool calls and system stability, while optimizing the protocol conversion capabilities of the ccproxy module.
 
 ### ✨ Enhancements
+
 1. Optimized the tool call display interface, where multiple tool calls within the same conversation turn are now displayed as a single session
 2. Optimized message deletion, where deleting a message will remove all tool call information for the same conversation turn at once
 3. Optimized the conversation entry point, where all conversation errors are now notified to the frontend
@@ -91,15 +122,18 @@ v1.1.15 focuses on enhancing the user experience of tool calls and system stabil
 6. Added `ALT + ←/→` hotkeys to the main window for quickly moving the window to the bottom-left and bottom-right corners
 
 ### 🔧 Technical Optimizations
+
 7. Optimized the conversation history in the ccproxy module, preprocessing conversation records and tool call records before protocol conversion to make them as suitable as possible for various protocols
-8. Optimized the ccproxy module, now supporting `*` and `?` wildcards by defining model injection conditions
-9. Optimized database upgrade logic for better version update management in the future
+2. Optimized the ccproxy module, now supporting `*` and `?` wildcards by defining model injection conditions
+3. Optimized database upgrade logic for better version update management in the future
 
 ### 🐞 Bug Fixes
+
 10. Fixed tool call interruption issues caused by non-standard end flag sending in some models (e.g., gtp-oss), improving system compatibility
-11. Fixed an issue in the ccproxy module where tool structures were incorrect during complex scenarios when converting from gemini protocol to claude protocol
+2. Fixed an issue in the ccproxy module where tool structures were incorrect during complex scenarios when converting from gemini protocol to claude protocol
 
 ### 🕰 In Progress
+
 Part of the ReAct logic has been completed, and development of this workflow module will continue
 
 ---
@@ -109,14 +143,17 @@ Part of the ReAct logic has been completed, and development of this workflow mod
 This update primarily introduces **proxy alias wildcard support**, significantly enhancing the flexibility and convenience of model configuration. You can now use wildcards like `*` and `?` to define proxy aliases, adapting to changes in model names without frequent configuration modifications. Additionally, we have optimized the search scraper's filtering mechanism, fixed a bug where some tool calls in the chat interface could not be expanded, and optimized the model configuration process.
 
 ### ✨ Enhancements
+
 - Optimized the search scraper to automatically filter multimedia websites and files, providing more precise results as requested. The `WebSearch` tool's default number of results has also been adjusted to 5, with a maximum of 30, offering more flexible search control.
 - Added proxy alias wildcard support, now allowing `*` for multiple characters and `?` for single characters.
 
 ### 🔧 Technical Optimizations
+
 - Adjusted API documentation to adapt to the new MCP proxy.
 - Optimized the model configuration process by changing the import button from invisible to disabled when adjusting model settings, improving user experience.
 
 ### 🐞 Bug Fixes
+
 - Fixed a bug where some tool calls in the chat interface could not be expanded.
 
 ---
@@ -205,20 +242,20 @@ This update is dedicated to enhancing the visual experience and AI interaction e
 
 ### 🐞 Bug Fixes
 
--   **Fixed issue where tools become unavailable after MCP proxy restart**: Resolved a critical bug where the client's tool mapping was lost due to an MCP server restart, ensuring tool availability and session continuity after reconnection.
--   **Fixed multi-turn tool call failures**: Fixed an issue where tool calls failed in consecutive multi-turn conversations because the tool list was not passed correctly.
--   **Fixed Scraper freeze issue**: Resolved a problem where the built-in web scraper could become unresponsive after a period of use, improving long-term stability.
--   **Fixed tool call UI click event bug**: Fixed a bug where the click event on the tool call display component in the chat interface was not working.
--   **Fixed macOS window border issue**: Addressed an issue on the macOS platform where the application window would sometimes display an unexpected border, affecting aesthetics.
--   **Fixed tool call parameter type issue**: Fixed a bug in the proxy module's compatibility mode where integer types, after being parsed and stored, could be incorrectly converted to floating-point numbers on output.
--   **Resolved local Windows development build failures**: Fixed build failures in the local Windows (especially ARM64) development environment caused by `vcpkg` dependency linking issues. This unifies the build process across platforms and paves the way for CI/CD optimizations.
--   **Fixed Windows initialization pop-up**: Resolved an issue on Windows where the MCP module would unexpectedly open a command-line window during initialization due to executing an external command, optimizing the application's silent startup experience.
+- **Fixed issue where tools become unavailable after MCP proxy restart**: Resolved a critical bug where the client's tool mapping was lost due to an MCP server restart, ensuring tool availability and session continuity after reconnection.
+- **Fixed multi-turn tool call failures**: Fixed an issue where tool calls failed in consecutive multi-turn conversations because the tool list was not passed correctly.
+- **Fixed Scraper freeze issue**: Resolved a problem where the built-in web scraper could become unresponsive after a period of use, improving long-term stability.
+- **Fixed tool call UI click event bug**: Fixed a bug where the click event on the tool call display component in the chat interface was not working.
+- **Fixed macOS window border issue**: Addressed an issue on the macOS platform where the application window would sometimes display an unexpected border, affecting aesthetics.
+- **Fixed tool call parameter type issue**: Fixed a bug in the proxy module's compatibility mode where integer types, after being parsed and stored, could be incorrectly converted to floating-point numbers on output.
+- **Resolved local Windows development build failures**: Fixed build failures in the local Windows (especially ARM64) development environment caused by `vcpkg` dependency linking issues. This unifies the build process across platforms and paves the way for CI/CD optimizations.
+- **Fixed Windows initialization pop-up**: Resolved an issue on Windows where the MCP module would unexpectedly open a command-line window during initialization due to executing an external command, optimizing the application's silent startup experience.
 
 ### ✨ Enhancements
 
--   **Unified Cross-Platform Visual Experience**: Refactored the window's rounded corners and shadow effects to ensure a consistent and polished visual appearance across Windows, macOS, and Linux.
--   **Optimized `ccproxy` module**: Further optimized the tool compatibility mode and calling instructions in `ccproxy`, significantly reducing token consumption while maintaining usability, resulting in a smoother and more cost-effective workflow.
--   **Dependency Updates**: Upgraded project dependencies, including the core `rmcp` library from v0.5 to v0.6, for better performance and stability.
+- **Unified Cross-Platform Visual Experience**: Refactored the window's rounded corners and shadow effects to ensure a consistent and polished visual appearance across Windows, macOS, and Linux.
+- **Optimized `ccproxy` module**: Further optimized the tool compatibility mode and calling instructions in `ccproxy`, significantly reducing token consumption while maintaining usability, resulting in a smoother and more cost-effective workflow.
+- **Dependency Updates**: Upgraded project dependencies, including the core `rmcp` library from v0.5 to v0.6, for better performance and stability.
 
 ---
 
@@ -289,13 +326,13 @@ Version 1.1.2 focuses on optimizing tool-calling functionality and user experien
 
 ## ✨ New Features & Major Improvements
 
-1.  **New Tool Call Architecture**
+1. **New Tool Call Architecture**
     - Refactored the chat module to unify all models through ccproxy, enabling tool-calling capabilities for all models.
     - Simplified model settings by removing the previous "Tool-Calling Capability" switch; all supported models now have tool-calling enabled by default.
     - Optimized the parsing and display of tool calls, showing them and their results in real-time during AI conversations.
     - Added support for displaying complete tool call records in chat history.
 
-2.  **Improved UI**
+2. **Improved UI**
     - Added a network control switch, allowing users to easily enable or disable web search functionality.
     - Improved chat interface interaction; tool calls are now displayed as a separate component that can be expanded or collapsed to view parameters and results.
     - Optimized the model addition process, fixing an issue where the "Import Model" button might not be displayed.
@@ -324,10 +361,10 @@ v1.1.1 is a maintenance release focused on improving stability and fixing issues
 
 ## ✨ Enhancements
 
-1.  **Refactored the Core Tool-Parsing Engine**
+1. **Refactored the Core Tool-Parsing Engine**
     We have adjusted and introduced a new tool-parsing mechanism. The new engine is more compatible and robust, allowing it to better understand and process diverse output formats from the AI. This not only improves the parsing success rate but also lowers the "difficulty" for the AI to use tools.
 
-2.  **Unified & Enhanced Tool Compatibility Mode Across All Protocols**
+2. **Unified & Enhanced Tool Compatibility Mode Across All Protocols**
     Tool Compatibility Mode now covers all protocols, including Gemini and Claude. Regardless of the backend model used, you can now benefit from the smoother workflows and higher goal completion rates provided by our enhanced guidance.
 
 ## 🐞 Bug Fixes
@@ -344,14 +381,14 @@ Hello everyone! We are thrilled to announce the release of ChatSpeed v1.1.0. We'
 
 ## 🚀 New Features
 
-1.  **Powerful Search Engine Integration**
+1. **Powerful Search Engine Integration**
     - Now supports integration with major search engines via API keys, including **Google Search API**, **Tavily API**, and **Serper API**.
     - Additionally, built-in support for **Bing, DuckDuckGo, So.com, and Sougou** is included, providing you with diverse information sources.
 
-2.  **Web Content Scraping & Analysis**
+2. **Web Content Scraping & Analysis**
     - A new built-in web scraper has been added, capable of extracting text or Markdown content from a given URL, allowing the AI to fetch and analyze real-time web information.
 
-3.  **Flexible Prompt Injection**
+3. **Flexible Prompt Injection**
     - To better accommodate different models (especially those with weaker support for the `system` role), you can now choose to inject enhancement prompts into either the `system` role or the last `user` message, greatly improving compatibility.
 
 ## ✨ Enhancements

@@ -63,6 +63,7 @@ src-tauri/src/plugins
 .claude
 .trae
 .crush
+.gemini-clipboard/*
 
 test/
 work/

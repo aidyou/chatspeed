@@ -228,12 +228,21 @@ export const useChatStore = defineStore('chat', () => {
         }
       }
       invokeWrapper('add_message', { conversationId, role, content, metadata })
-        .then((messageId) => {
+        .then((result) => {
+          let messageId = result
+          let finalContent = content
+
+          // Check if result is an array [id, content] (new format with filtering)
+          if (Array.isArray(result) && result.length === 2) {
+            messageId = result[0]
+            finalContent = result[1]
+          }
+
           messages.value = [...messages.value, {
             id: messageId,
             conversationId,
             role,
-            content,
+            content: finalContent,
             metadata
           }]
           resolve(messageId)

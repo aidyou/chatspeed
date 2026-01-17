@@ -36,6 +36,9 @@ pub enum AppError {
     #[error(transparent)]
     Mcp(#[from] crate::mcp::McpError),
 
+    #[error(transparent)]
+    Sensitive(#[from] crate::sensitive::error::SensitiveError),
+
     #[error("{message}")]
     General { message: String },
 }

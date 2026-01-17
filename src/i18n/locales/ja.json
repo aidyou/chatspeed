@@ -64,6 +64,7 @@
     "reference": "{count} 件の資料を参考として引用",
     "resendMessage": "メッセージを再送信",
     "searchChat": "チャットを検索",
+    "sensitiveFiltering": "機密情報フィルタリング",
     "showFavoriteConversations": "お気に入りの会話のタイトルを表示",
     "takeNote": "智記に保存",
     "toolArgs": "引数",
@@ -251,6 +252,19 @@
       "workflowSettings": "ワークフロー設定",
       "sendMessageKey": "メッセージ送信キー",
       "sendMessageKeyTooltip": "メッセージを送信するためのデフォルトのキーはEnterです。習慣に合わせて調整できます",
+      "sensitiveFiltering": {
+        "title": "機密情報の処理",
+        "enable": "機密情報フィルタリングを有効にする",
+        "enableTooltip": "AI モデルにメッセージを送信する前に、機密情報（氏名、電話番号、ID、金額など）を自動的に識別してマスクします。元のデータはローカルデバイスに安全に保存されます。",
+        "common": "共通フィルター",
+        "commonTooltip": "メール、IP アドレス、クレジットカード、固定電話、ソーシャルメディア、プロジェクト、財務などの標準的なフィルターが含まれます。",
+        "blocklist": "カスタムブロックリスト",
+        "blocklistTooltip": "マスクする必要がある特定の単語やフレーズ（プロジェクトコード名、内部サーバー名など）を追加します。Enter キーを押して追加します。",
+        "allowlist": "許可リスト",
+        "allowlistTooltip": "フィルターに一致してもマスクすべきではない単語（公開ビジネスメール、localhost IP など）を追加します。Enter キーを押して追加します。",
+        "activeFilters": "有効なフィルター",
+        "placeholder": "単語を入力して Enter を押す"
+      },
       "proxyTypes": {
         "http": "HTTPプロキシ",
         "none": "プロキシを使用しない",

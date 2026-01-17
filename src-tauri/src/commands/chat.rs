@@ -51,10 +51,13 @@ use crate::ai::interaction::chat_completion::{
 use crate::ai::interaction::constants::{SYSTEM_PROMPT, TOOL_USAGE_GUIDANCE};
 use crate::ai::traits::chat::{MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
-use crate::constants::{DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
+use crate::constants::{
+    CFG_INTERFACE_LANGUAGE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL,
+};
 use crate::db::MainStore;
 use crate::error::{AppError, Result};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
+use crate::sensitive::manager::{FilterManager, SensitiveConfig};
 use crate::tools::MCP_TOOL_NAME_SPLIT;
 
 use chrono::{DateTime, Local};
@@ -242,6 +245,7 @@ pub async fn list_models(
 /// - `window` - The Tauri window instance, automatically injected by Tauri
 /// - `chat_state` - The state of the chat system, automatically injected by Tauri
 /// - `main_state` - The main application state, automatically injected by Tauri
+/// - `filter_manager` - The sensitive data filter manager, automatically injected by Tauri
 /// - `api_protocol` - The API provider to use for the chat.
 /// - `api_url` - The API URL to use for the chat.
 /// - `model` - The model to use for the chat.
@@ -257,6 +261,7 @@ pub async fn list_models(
 pub async fn chat_completion(
     window: tauri::Window,
     chat_state: State<'_, Arc<ChatState>>,
+    filter_manager: State<'_, FilterManager>,
     provider_id: i64,
     model: String,
     chat_id: String,
@@ -310,6 +315,74 @@ pub async fn chat_completion(
         Some(json!({"windowLabel": window.label()}))
     };
 
+    // Sensitive Data Filtering
+    let (sensitive_config, interface_lang): (SensitiveConfig, String) = {
+        let store = chat_state.main_store.read().map_err(|e| {
+            AppError::Db(crate::db::StoreError::IoError(e.to_string()))
+        })?;
+        (
+            store.get_config("sensitive_config", SensitiveConfig::default()),
+            store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string()),
+        )
+    };
+
+    let mut filtered_messages = messages;
+    if sensitive_config.enabled {
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "Sensitive data filtering enabled. Config: {:?}",
+            sensitive_config
+        );
+
+        for message in filtered_messages.iter_mut() {
+            if message.get("role").and_then(|r| r.as_str()) == Some("user") {
+                if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
+                    if !content.is_empty() {
+                        // Detect language
+                        let lang_info = detect(content);
+                        let detected_code = if let Some(ref info) = lang_info {
+                            lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
+                        } else {
+                            "en"
+                        };
+
+                        let langs = vec![detected_code, interface_lang.as_str()];
+
+                        #[cfg(debug_assertions)]
+                        log::debug!(
+                            "Detect language: {:?} -> {}. Interface lang: {}",
+                            lang_info,
+                            detected_code,
+                            interface_lang
+                        );
+
+                        let sanitized =
+                            filter_manager.filter_text(content, &langs, &sensitive_config);
+
+                        #[cfg(debug_assertions)]
+                        if content != sanitized {
+                            log::debug!(
+                                "Filtered content. Original len: {}, Sanitized len: {}",
+                                content.len(),
+                                sanitized.len()
+                            );
+                        } else {
+                            log::debug!("No sensitive data found in message.");
+                        }
+
+                        // Update content
+                        if let Some(obj) = message.as_object_mut() {
+                            obj.insert("content".to_string(), json!(sanitized));
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        #[cfg(debug_assertions)]
+        log::debug!("Sensitive data filtering disabled.");
+    }
+
     let tools_enabled_in_metadata = final_metadata
         .as_ref()
         .and_then(|md_val| md_val.get("toolsEnabled").and_then(Value::as_bool))
@@ -332,7 +405,7 @@ pub async fn chat_completion(
 
     // Prepare messages with system context
     let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
-    let prepared_messages = prepare_messages_with_system_context(messages, has_tools);
+    let prepared_messages = prepare_messages_with_system_context(filtered_messages, has_tools);
 
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", prepared_messages.len());

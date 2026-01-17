@@ -1,5 +1,4 @@
 pub mod chat;
-// pub mod chat_web_search;
 pub mod clipboard;
 pub mod constants;
 pub mod dev_tool;
@@ -9,6 +8,7 @@ pub mod mcp;
 pub mod message;
 pub mod note;
 pub mod proxy_group;
+pub mod sensitive;
 pub mod setting;
 pub mod types;
 pub mod updater;

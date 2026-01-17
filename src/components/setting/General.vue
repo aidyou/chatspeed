@@ -692,6 +692,107 @@
     </div>
   </div>
 
+  <!-- sensitive data settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.sensitiveFiltering.title') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.sensitiveFiltering.enable') }}
+            <small class="tooltip">{{
+              $t('settings.general.sensitiveFiltering.enableTooltip')
+            }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch v-model="sensitiveStore.config.enabled" @change="onSensitiveConfigChange" />
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.sensitiveFiltering.common') }}
+            <small class="tooltip">{{
+              $t('settings.general.sensitiveFiltering.commonTooltip')
+            }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch
+            v-model="sensitiveStore.config.common_enabled"
+            :disabled="!sensitiveStore.config.enabled"
+            @change="onSensitiveConfigChange" />
+        </div>
+      </div>
+
+      <div class="item" style="align-items: flex-start">
+        <div class="label" style="padding-top: 5px">
+          <div class="label-text">
+            {{ $t('settings.general.sensitiveFiltering.blocklist') }}
+            <small class="tooltip">{{
+              $t('settings.general.sensitiveFiltering.blocklistTooltip')
+            }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 100%">
+          <el-select
+            v-model="sensitiveStore.config.custom_blocklist"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
+            :disabled="!sensitiveStore.config.enabled"
+            @change="onSensitiveConfigChange"
+            style="width: 100%" />
+        </div>
+      </div>
+
+      <div class="item" style="align-items: flex-start">
+        <div class="label" style="padding-top: 5px">
+          <div class="label-text">
+            {{ $t('settings.general.sensitiveFiltering.allowlist') }}
+            <small class="tooltip">{{
+              $t('settings.general.sensitiveFiltering.allowlistTooltip')
+            }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 100%">
+          <el-select
+            v-model="sensitiveStore.config.allowlist"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
+            :disabled="!sensitiveStore.config.enabled"
+            @change="onSensitiveConfigChange"
+            style="width: 100%" />
+        </div>
+      </div>
+
+      <div class="item" v-if="sensitiveStore.supportedFilters.length > 0">
+        <div class="label">{{ $t('settings.general.sensitiveFiltering.activeFilters') }}</div>
+        <div class="value">
+          <el-space wrap>
+            <el-tag
+              v-for="f in sensitiveStore.supportedFilters"
+              :key="f"
+              size="small"
+              type="info"
+              :class="{ disabled: !sensitiveStore.config.enabled }">
+              {{ f }}
+            </el-tag>
+          </el-space>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- backup settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.backupSettings') }}</div>
@@ -738,13 +839,14 @@
   </div>
 </template>
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
 import { appDataDir } from '@tauri-apps/api/path'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { relaunch } from '@tauri-apps/plugin-process'
 
@@ -759,9 +861,11 @@ import { sendSyncState } from '@/libs/sync'
 
 const { t } = useI18n()
 import { useSettingStore } from '@/stores/setting'
+import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
 const modelStore = useModelStore()
 const settingStore = useSettingStore()
+const sensitiveStore = useSensitiveStore()
 // import { useSkillStore } from '@/stores/skill'
 // const skillStore = useSkillStore()
 
@@ -820,10 +924,26 @@ const proxyTypes = computed(() => ({
 // get all available languages
 const availableLanguages = getAvailableLanguages()
 const softwareLanguages = getSoftwareLanguages()
+const unlistenSyncState = ref(null)
 
 onMounted(async () => {
   defaultBackupDir.value = `${await appDataDir()}/backups`
   getAllBackups()
+  await sensitiveStore.fetchConfig()
+  await sensitiveStore.fetchSupportedFilters()
+
+  // listen sync state event
+  unlistenSyncState.value = await listen('cs://sync-state', event => {
+    if (event?.payload?.type === 'sensitive_config_changed') {
+      sensitiveStore.config = { ...event.payload.metadata }
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  if (unlistenSyncState.value) {
+    unlistenSyncState.value()
+  }
 })
 
 /**
@@ -1192,6 +1312,13 @@ const onAutoStartChange = async value => {
       showMessage(t('settings.general.autoStartChangeFailed', { error: error.toString() }), 'error')
     }
   }
+}
+
+// =================================================
+// Sensitive Data settings
+// =================================================
+const onSensitiveConfigChange = () => {
+  sensitiveStore.saveConfig()
 }
 
 // =================================================

@@ -36,6 +36,10 @@ use tauri::{command, Emitter, Manager, State};
 
 use crate::db::{Conversation, MainStore};
 use crate::error::{AppError, Result};
+use crate::sensitive::manager::{FilterManager, SensitiveConfig};
+use crate::constants::CFG_INTERFACE_LANGUAGE;
+use crate::libs::lang::lang_to_iso_639_1;
+use whatlang::detect;
 
 /// Get all conversations
 ///
@@ -247,15 +251,42 @@ pub fn get_messages_for_conversation(
 #[command]
 pub fn add_message(
     state: State<Arc<RwLock<MainStore>>>,
+    filter_manager: State<'_, FilterManager>,
     conversation_id: i64,
     role: String,
     content: String,
     metadata: Option<serde_json::Value>,
-) -> Result<i64> {
+) -> Result<(i64, String)> {
     let main_store = state.write()?;
-    main_store
-        .add_message(conversation_id, role, content, metadata)
-        .map_err(AppError::Db)
+
+    let mut final_content = content;
+    // Only filter user messages
+    if role == "user" {
+        let sensitive_config: SensitiveConfig =
+            main_store.get_config("sensitive_config", SensitiveConfig::default());
+
+        if sensitive_config.enabled {
+            let interface_lang: String =
+                main_store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string());
+
+            let lang_info = detect(&final_content);
+            let detected_code = if let Some(info) = lang_info {
+                lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
+            } else {
+                "en"
+            };
+            let languages = vec![detected_code, interface_lang.as_str()];
+
+            final_content =
+                filter_manager.filter_text(&final_content, &languages, &sensitive_config);
+        }
+    }
+
+    let id = main_store
+        .add_message(conversation_id, role, final_content.clone(), metadata)
+        .map_err(AppError::Db)?;
+
+    Ok((id, final_content))
 }
 
 /// Delete a message

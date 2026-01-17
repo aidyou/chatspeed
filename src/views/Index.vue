@@ -351,6 +351,17 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
+                    :content="$t('chat.sensitiveFiltering')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
+                    <label
+                      @click="onToggleSensitiveFiltering"
+                      :class="{ active: sensitiveStore.config.enabled }">
+                      <cs name="filter" class="small" />
+                    </label>
+                  </el-tooltip>
+                  <el-tooltip
                     :content="$t('chat.newConversaction')"
                     :hide-after="0"
                     :enterable="false"
@@ -472,6 +483,7 @@ import { useChatStore } from '@/stores/chat'
 import { useModelStore } from '@/stores/model'
 import { useNoteStore } from '@/stores/note'
 import { useSettingStore } from '@/stores/setting'
+import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from '@/stores/mcp'
 
@@ -486,6 +498,7 @@ const modelStore = useModelStore()
 const noteStore = useNoteStore()
 const windowStore = useWindowStore()
 const settingStore = useSettingStore()
+const sensitiveStore = useSensitiveStore()
 const mcpStore = useMcpStore()
 
 const mainWindowIsAlwaysOnTop = computed(() => windowStore.mainWindowAlwaysOnTop)
@@ -1455,6 +1468,11 @@ onMounted(async () => {
   })
 
   await listen('cs://sync-state', event => {
+    if (event?.payload?.type === 'sensitive_config_changed') {
+      sensitiveStore.config = { ...event.payload.metadata }
+      return
+    }
+
     if (event.payload.windowLabel !== settingStore.windowLabel) {
       return
     }
@@ -1479,6 +1497,8 @@ onMounted(async () => {
           chatErrorMessage.value = t('chat.errorOnLoadMessages', { error })
         })
       inputRef.value?.focus()
+    } else if (event?.payload?.type === 'sensitive_config_changed') {
+      sensitiveStore.config = { ...event.payload.metadata }
     }
   })
 
@@ -1489,6 +1509,7 @@ onMounted(async () => {
   cleanupObserver.value = setupObserver()
 
   windowStore.initMainWindowAlwaysOnTop()
+  sensitiveStore.fetchConfig()
   window.addEventListener('keydown', onGlobalKeyDown)
 })
 
@@ -1788,6 +1809,14 @@ const onSkillSelected = skill => {
   // clear the search keyword
   skillSearchKeyword.value = ''
 }
+/**
+ * Toggle sensitive information filtering
+ */
+const onToggleSensitiveFiltering = () => {
+  sensitiveStore.config.enabled = !sensitiveStore.config.enabled
+  sensitiveStore.saveConfig()
+}
+
 /**
  * Toggle the network enabled state
  */

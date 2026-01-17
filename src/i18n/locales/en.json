@@ -64,6 +64,7 @@
     "reference": "Referencing {count} documents",
     "resendMessage": "Resend Message",
     "searchChat": "Search Chat",
+    "sensitiveFiltering": "Sensitive Information Filtering",
     "showFavoriteConversations": "Show Favorite Conversations",
     "takeNote": "Save to Note",
     "toolArgs": "Arguments",
@@ -251,6 +252,19 @@
       "workflowSettings": "Workflow Settings",
       "sendMessageKey": "Send Message Key",
       "sendMessageKeyTooltip": "The default key for sending messages is Enter, you can adjust it according to your habits",
+      "sensitiveFiltering": {
+        "title": "Sensitive Data Filtering",
+        "enable": "Enable Filtering",
+        "enableTooltip": "Automatically identify and mask sensitive information (e.g., names, phones, IDs, amounts) before sending to AI models. Original data remains safe on your local device.",
+        "common": "Common Filters",
+        "commonTooltip": "Includes standard filters like Email, IP Address, Credit Cards, Landlines, Social Media, Projects, Financials, etc.",
+        "blocklist": "Custom Blocklist",
+        "blocklistTooltip": "Add specific words or phrases to be masked (e.g., project codenames, internal server names). Press Enter to add.",
+        "allowlist": "Allowlist",
+        "allowlistTooltip": "Add words that should NOT be masked even if they match a filter (e.g., your public email, localhost IP). Press Enter to add.",
+        "activeFilters": "Active Filters",
+        "placeholder": "Type word and press Enter"
+      },
       "proxyTypes": {
         "http": "HTTP Proxy",
         "none": "No Proxy",

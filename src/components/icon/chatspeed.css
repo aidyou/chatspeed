@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-filter:before {
+  content: "\e656";
+}
+
 .cs-running:before {
   content: "\e65f";
 }

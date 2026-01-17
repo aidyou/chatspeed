@@ -12,6 +12,7 @@ mod logger;
 mod mcp;
 mod scraper;
 mod search;
+mod sensitive;
 mod shortcut;
 mod tools;
 mod tray;
@@ -49,6 +50,7 @@ use commands::mcp::*;
 use commands::message::*;
 use commands::note::*;
 use commands::proxy_group::*;
+use commands::sensitive::*;
 use commands::setting::*;
 use commands::window::*;
 use commands::workflow::*;
@@ -152,6 +154,10 @@ pub async fn run() -> crate::error::Result<()> {
             get_all_backups,
             restore_setting,
             update_tray,
+            // sensitive
+            get_sensitive_config,
+            update_sensitive_config,
+            get_supported_filters,
             // clipboard
             read_clipboard,
             write_clipboard,
@@ -544,6 +550,9 @@ pub async fn run() -> crate::error::Result<()> {
                     });
             });
             app.manage(chat_state.clone());
+
+            // Initialize FilterManager
+            app.manage(crate::sensitive::manager::FilterManager::new());
 
             // Listen for the frontend to be ready before starting a workflow chat
             crate::workflow::helper::listen_for_workflow_ready(app.handle());
