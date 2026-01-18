@@ -48,6 +48,7 @@
   "resolutions": {
     "postcss": ">=8.4.31",
     "braces": ">=3.0.3",
-    "micromatch": ">=4.0.8"
+    "micromatch": ">=4.0.8",
+    "undici": ">=6.23.0"
   }
 }

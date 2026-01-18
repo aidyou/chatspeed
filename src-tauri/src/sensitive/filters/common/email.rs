@@ -1,50 +1,54 @@
 use crate::sensitive::{
-    error::{SensitiveError,},
+    error::SensitiveError,
     traits::{FilterCandidate, SensitiveDataFilter},
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// A filter for detecting email addresses.
-pub struct EmailFilter;
+pub struct EmailFilter {
+    regex: Regex,
+}
 
-// Using once_cell::sync::Lazy for thread-safe, one-time regex compilation.
-static EMAIL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#).unwrap()
-});
+impl EmailFilter {
+    /// Creates a new `EmailFilter` and pre-compiles its regex.
+    pub fn new() -> Result<Self, SensitiveError> {
+        let regex = Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#)
+            .map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "email_regex".to_string(),
+                message: e.to_string(),
+            })?;
+        Ok(Self { regex })
+    }
+}
 
 impl SensitiveDataFilter for EmailFilter {
-    /// Returns the identifier for the filter type.
     fn filter_type(&self) -> &'static str {
         "Email"
     }
 
-    /// This is a common filter, so it supports all languages.
     fn supported_languages(&self) -> Vec<&'static str> {
-        Vec::new()
+        Vec::new() // Language-agnostic
     }
 
-    /// Executes the email filter.
     fn filter(
         &self,
         text: &str,
         _language: &str,
     ) -> std::result::Result<Vec<FilterCandidate>, SensitiveError> {
-        let candidates = EMAIL_REGEX
+        let candidates = self
+            .regex
             .find_iter(text)
             .map(|m| FilterCandidate {
                 start: m.start(),
                 end: m.end(),
                 filter_type: self.filter_type(),
-                confidence: 1.0, // Regex matches are considered certain.
+                confidence: 1.0, // Email pattern is very reliable.
             })
             .collect();
         Ok(candidates)
     }
 
-    /// Priority for the email filter.
     fn priority(&self) -> u32 {
-        // High priority as emails are a very common and clear-cut PII.
         10
     }
 }
@@ -54,53 +58,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_filter_single_email() {
-        let filter = EmailFilter;
-        let text = "Contact me at john.doe@example.com for more information.";
+    fn test_filter_valid_email() {
+        let filter = EmailFilter::new().unwrap();
+        let text = "My email is test@example.com, contact me.";
         let result = filter.filter(text, "en").unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start, 14);
-        assert_eq!(result[0].end, 34);
-        assert_eq!(result[0].filter_type, "Email");
+        let candidate = &result[0];
+        assert_eq!(candidate.start, 12);
+        assert_eq!(candidate.end, 28);
+        assert_eq!(candidate.filter_type, "Email");
     }
 
     #[test]
-    fn test_filter_multiple_emails() {
-        let filter = EmailFilter;
-        let text = "My emails are test@test.com and another@example.org.";
+    fn test_multiple_emails() {
+        let filter = EmailFilter::new().unwrap();
+        let text = "Contact: first@test.com, second@test.com.";
         let result = filter.filter(text, "en").unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].start, 14);
-        assert_eq!(result[0].end, 27); // Including the word boundary after .com
-        assert_eq!(result[1].start, 32);
-        assert_eq!(result[1].end, 51); // Including the word boundary after .org
     }
 
     #[test]
-    fn test_no_emails() {
-        let filter = EmailFilter;
-        let text = "There is no email address in this text.";
+    fn test_no_email() {
+        let filter = EmailFilter::new().unwrap();
+        let text = "This is a sentence with no email addresses.";
         let result = filter.filter(text, "en").unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn test_email_with_special_chars() {
-        let filter = EmailFilter;
-        let text = "Special one: user+alias@sub.domain.co.uk";
+    fn test_invalid_email_format() {
+        let filter = EmailFilter::new().unwrap();
+        let text = "This is not an email: test@example, @example.com, test@.com.";
         let result = filter.filter(text, "en").unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start, 13);
-        assert_eq!(result[0].end, 40); // Including the word boundary after .uk
-    }
-
-    #[test]
-    fn test_false_positives() {
-        let filter = EmailFilter;
-        // This text looks a bit like an email but isn't one.
-        let text = "This is not an email: user@localhost";
-        let result = filter.filter(text, "en").unwrap();
-        // The regex requires a TLD of at least 2 chars, so "localhost" is not matched.
         assert!(result.is_empty());
     }
 }

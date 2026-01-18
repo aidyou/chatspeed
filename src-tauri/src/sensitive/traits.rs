@@ -12,11 +12,16 @@ pub struct FilterCandidate {
 
 /// The core trait for all sensitive data filters.
 pub trait SensitiveDataFilter {
-    /// Returns a unique identifier for the filter type.
+    /// Identifier for the filter.
     fn filter_type(&self) -> &'static str;
 
-    /// Returns a list of supported language codes (e.g., "en", "zh").
-    /// An empty vector indicates that the filter is language-agnostic.
+    /// Returns a list of all candidate types this filter can produce.
+    /// Default implementation returns just the [filter_type].
+    fn produced_types(&self) -> Vec<&'static str> {
+        vec![self.filter_type()]
+    }
+
+    /// List of supported languages. An empty vector means it's a common filter.
     fn supported_languages(&self) -> Vec<&'static str>;
 
     /// Executes the filter on the given text.

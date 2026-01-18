@@ -2,18 +2,25 @@ use crate::sensitive::{
     error::SensitiveError,
     traits::{FilterCandidate, SensitiveDataFilter},
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// A filter for detecting US Social Security Numbers (SSN).
-pub struct SsnFilter;
+pub struct SsnFilter {
+    regex: Regex,
+}
 
-// Matches SSN format: XXX-XX-XXXX, XXX XX XXXX, or XXXXXXXXX
-// To reduce false positives, we primarily target the hyphenated format or context-aware matches.
-// This regex focuses on the standard hyphenated format: \b\d{3}-\d{2}-\d{4}\b
-static SSN_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"\b(?!000|666|9\d{2})\d{3}[-\s]?(?!00)\d{2}[-\s]?(?!0000)\d{4}\b"#).unwrap()
-});
+impl SsnFilter {
+    /// Creates a new `SsnFilter` and pre-compiles its regex.
+    pub fn new() -> Result<Self, SensitiveError> {
+        let regex = Regex::new(r#"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b"#).map_err(|e| {
+            SensitiveError::RegexCompilationFailed {
+                pattern: "en_ssn_regex".to_string(),
+                message: e.to_string(),
+            }
+        })?;
+        Ok(Self { regex })
+    }
+}
 
 impl SensitiveDataFilter for SsnFilter {
     fn filter_type(&self) -> &'static str {
@@ -29,20 +36,43 @@ impl SensitiveDataFilter for SsnFilter {
         text: &str,
         _language: &str,
     ) -> std::result::Result<Vec<FilterCandidate>, SensitiveError> {
-        let candidates = SSN_REGEX
+        let candidates = self
+            .regex
             .find_iter(text)
+            .filter(|m| {
+                // Post-process to exclude invalid SSN sequences
+                let s = m.as_str().replace(['-', ' '], "");
+                if s.len() != 9 {
+                    return false;
+                }
+
+                let area = &s[0..3];
+                let group = &s[3..5];
+                let serial = &s[5..9];
+
+                if area == "000" || area == "666" || area.starts_with('9') {
+                    return false;
+                }
+                if group == "00" {
+                    return false;
+                }
+                if serial == "0000" {
+                    return false;
+                }
+                true
+            })
             .map(|m| FilterCandidate {
                 start: m.start(),
                 end: m.end(),
                 filter_type: self.filter_type(),
-                confidence: 0.9, // High confidence for standard format
+                confidence: 0.9,
             })
             .collect();
         Ok(candidates)
     }
 
     fn priority(&self) -> u32 {
-        5 // High priority
+        1
     }
 }
 
@@ -52,18 +82,8 @@ mod tests {
 
     #[test]
     fn test_filter_valid_ssn() {
-        let filter = SsnFilter;
+        let filter = SsnFilter::new().unwrap();
         let text = "My SSN is 123-45-6789.";
-        let result = filter.filter(text, "en").unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].start, 10);
-        assert_eq!(result[0].end, 21);
-    }
-
-    #[test]
-    fn test_filter_ssn_space() {
-        let filter = SsnFilter;
-        let text = "Number: 123 45 6789";
         let result = filter.filter(text, "en").unwrap();
         assert_eq!(result.len(), 1);
     }

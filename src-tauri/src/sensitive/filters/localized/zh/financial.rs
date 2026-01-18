@@ -2,31 +2,55 @@ use crate::sensitive::{
     error::SensitiveError,
     traits::{FilterCandidate, SensitiveDataFilter},
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// A filter for detecting Chinese Financial information (Amounts and Bank Accounts).
-pub struct FinancialFilter;
+pub struct FinancialFilter {
+    money_regex: Regex,
+    bank_account_regex: Regex,
+    bank_name_regex: Regex,
+}
 
-static MONEY_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // Matches patterns like "总费用为9万元整" or "支付金额是1000元"
-    // Added keywords like "合计", "共计" and connectors like "为", "是".
-    Regex::new(r#"(?i)(?:总费用|总金额|总款项|支付|即|共计|合计|报酬|金额|费用)(?:[:：]|为|是|合计|共计|\s)*([0-9.,]+[元万亿整]+(?:（[\u{4e00}-\u{9fa5}]+）)?)"#).unwrap()
-});
+impl FinancialFilter {
+    /// Creates a new `FinancialFilter` and pre-compiles its regexes.
+    pub fn new() -> Result<Self, SensitiveError> {
+        let money_regex = Regex::new(
+            r#"(?i)(?:总费用|总金额|总款项|支付|即|共计|合计|报酬|金额|费用)(?:[:：]|为|是|合计|共计|\s)*([0-9.,]+[元万亿整]+(?:（\p{Han}+）)?)"#,
+        )
+        .map_err(|e| SensitiveError::RegexCompilationFailed {
+            pattern: "zh_financial_money".to_string(),
+            message: e.to_string(),
+        })?;
 
-static BANK_ACCOUNT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // Matches "账号：1202 xxx6 ..."
-    Regex::new(r#"(?:账号|卡号|银行账号|账户)[:：]\s*([0-9\s-]{12,25})"#).unwrap()
-});
+        let bank_account_regex =
+            Regex::new(r#"(?:账号|卡号|银行账号|账户)[:：]\s*([0-9\s-]{12,25})"#).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "zh_financial_bank_account".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
 
-static BANK_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // Matches "开户行：xxx支行"
-    Regex::new(r#"(?:开户行|开户银行|收款行)[:：]\s*([\u{4e00}-\u{9fa5}]{4,25})"#).unwrap()
-});
+        let bank_name_regex = Regex::new(r#"(?:开户行|开户银行|收款行)[:：]\s*([\p{Han}]{4,25})"#)
+            .map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "zh_financial_bank_name".to_string(),
+                message: e.to_string(),
+            })?;
+
+        Ok(Self {
+            money_regex,
+            bank_account_regex,
+            bank_name_regex,
+        })
+    }
+}
 
 impl SensitiveDataFilter for FinancialFilter {
     fn filter_type(&self) -> &'static str {
         "ChineseFinancial"
+    }
+
+    fn produced_types(&self) -> Vec<&'static str> {
+        vec!["ChineseFinancial", "BankAccount", "BankName"]
     }
 
     fn supported_languages(&self) -> Vec<&'static str> {
@@ -40,8 +64,7 @@ impl SensitiveDataFilter for FinancialFilter {
     ) -> std::result::Result<Vec<FilterCandidate>, SensitiveError> {
         let mut candidates = Vec::new();
 
-        // 1. Filter Money
-        for cap in MONEY_REGEX.captures_iter(text) {
+        for cap in self.money_regex.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(FilterCandidate {
                     start: m.start(),
@@ -52,8 +75,7 @@ impl SensitiveDataFilter for FinancialFilter {
             }
         }
 
-        // 2. Filter Bank Accounts
-        for cap in BANK_ACCOUNT_REGEX.captures_iter(text) {
+        for cap in self.bank_account_regex.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(FilterCandidate {
                     start: m.start(),
@@ -64,8 +86,7 @@ impl SensitiveDataFilter for FinancialFilter {
             }
         }
 
-        // 3. Filter Bank Names
-        for cap in BANK_NAME_REGEX.captures_iter(text) {
+        for cap in self.bank_name_regex.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(FilterCandidate {
                     start: m.start(),
@@ -80,6 +101,6 @@ impl SensitiveDataFilter for FinancialFilter {
     }
 
     fn priority(&self) -> u32 {
-        10 // High priority
+        10
     }
 }

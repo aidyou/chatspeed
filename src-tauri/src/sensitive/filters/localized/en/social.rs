@@ -2,33 +2,34 @@ use crate::sensitive::{
     error::SensitiveError,
     traits::{FilterCandidate, SensitiveDataFilter},
 };
-use once_cell::sync::Lazy;
 use regex::Regex;
 
-/// A filter for detecting English/International Social Media handles.
-pub struct SocialFilter;
+pub struct SocialFilter {
+    regex: Regex,
+}
 
-static SOCIAL_HANDLE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // Matches common handles preceded by platform name.
-    // Includes: WeChat, WhatsApp, Telegram, Skype, Twitter, X, Instagram.
-    Regex::new(r#"(?i)(?:WeChat|WhatsApp|Telegram|Skype|Twitter|Instagram|ID)[:：]?\s*([a-zA-Z0-9_-]{4,32})"#).unwrap()
-});
+impl SocialFilter {
+    pub fn new() -> Result<Self, SensitiveError> {
+        let regex = Regex::new(r#"(?i)(?:WeChat|WhatsApp|Telegram|Skype|Twitter|Instagram|ID)[:：]?\s*([a-zA-Z0-9_-]{4,32})"#)
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_social_regex".to_string(), message: e.to_string() })?;
+        Ok(Self { regex })
+    }
+}
 
 impl SensitiveDataFilter for SocialFilter {
     fn filter_type(&self) -> &'static str {
         "EnglishSocial"
     }
-
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["en"]
     }
-
     fn filter(
         &self,
         text: &str,
         _language: &str,
     ) -> std::result::Result<Vec<FilterCandidate>, SensitiveError> {
-        let candidates = SOCIAL_HANDLE_REGEX
+        let candidates = self
+            .regex
             .captures_iter(text)
             .filter_map(|cap| cap.get(1))
             .map(|m| FilterCandidate {
@@ -40,7 +41,6 @@ impl SensitiveDataFilter for SocialFilter {
             .collect();
         Ok(candidates)
     }
-
     fn priority(&self) -> u32 {
         15
     }

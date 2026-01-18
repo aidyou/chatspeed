@@ -551,8 +551,14 @@ pub async fn run() -> crate::error::Result<()> {
             });
             app.manage(chat_state.clone());
 
-            // Initialize FilterManager
-            app.manage(crate::sensitive::manager::FilterManager::new());
+            // Initialize FilterManager with pre-compiled regexes
+            let filter_manager = crate::sensitive::manager::FilterManager::new().map_err(|e| {
+                error!("Failed to initialize FilterManager: {}", e);
+                AppError::General {
+                    message: format!("Sensitive Data Filter initialization failed: {}", e),
+                }
+            })?;
+            app.manage(filter_manager);
 
             // Listen for the frontend to be ready before starting a workflow chat
             crate::workflow::helper::listen_for_workflow_ready(app.handle());
