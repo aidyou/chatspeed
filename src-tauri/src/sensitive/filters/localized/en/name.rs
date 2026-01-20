@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::{Regex, RegexSet};
 
@@ -59,18 +59,26 @@ impl SensitiveDataFilter for NameFilter {
         for m in self.name_pattern.find_iter(text) {
             let mut confidence = 0.4;
 
-            let start = m.start();
+            let start = adjust_to_char_boundary(text, m.start());
             let context_start = start.saturating_sub(20);
-            let context_window = &text[context_start..start];
+            let adjusted_context_start = adjust_to_char_boundary(text, context_start);
+            // Ensure we don't create an invalid slice (end before start)
+            let safe_context_start = if adjusted_context_start <= start {
+                adjusted_context_start
+            } else {
+                0
+            };
+            let context_window = text.get(safe_context_start..start).unwrap_or("");
 
             if self.context_keywords.is_match(context_window) {
                 confidence += 0.5;
             }
 
             if confidence >= 0.8 {
+                let end = adjust_to_char_boundary(text, m.end());
                 candidates.push(FilterCandidate {
-                    start: m.start(),
-                    end: m.end(),
+                    start,
+                    end,
                     filter_type: self.filter_type(),
                     confidence,
                 });

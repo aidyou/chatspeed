@@ -108,7 +108,7 @@ static MOVE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
 static LAST_MOVE: StdMutex<Option<Instant>> = StdMutex::new(None);
 
 pub async fn run() -> crate::error::Result<()> {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None::<Vec<&str>>,
@@ -116,17 +116,23 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-            log::info!(
-                "Another instance was started with args: {:?} and cwd: {}. Focusing existing window.",
-                argv,
-                cwd
-            );
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    // Only enable single instance plugin in release builds
+    // This allows development and production versions to run simultaneously
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        log::info!(
+            "Another instance was started with args: {:?} and cwd: {}. Focusing existing window.",
+            argv,
+            cwd
+        );
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_process::init())
         // .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new())))) // move chat state register to setup scope
         // Initialize the shell plugin

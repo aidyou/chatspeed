@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::Regex;
 
@@ -12,7 +12,7 @@ pub struct IdCardFilter {
 impl IdCardFilter {
     /// Creates a new `IdCardFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let pattern = r#"\b(?:[1-9]\d{5}(?:18|19|20)\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3}[\dXx]|[1-9]\d{5}\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3})\b"#;
+        let pattern = r#"(?:[1-9]\d{5}(?:18|19|20)\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3}[\dXx]|[1-9]\d{5}\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3})"#;
         let regex = Regex::new(pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "id_card_regex".to_string(),
             message: e.to_string(),
@@ -38,11 +38,15 @@ impl SensitiveDataFilter for IdCardFilter {
         let candidates = self
             .regex
             .find_iter(text)
-            .map(|m| FilterCandidate {
-                start: m.start(),
-                end: m.end(),
-                filter_type: self.filter_type(),
-                confidence: 1.0,
+            .map(|m| {
+                let start = adjust_to_char_boundary(text, m.start());
+                let end = adjust_to_char_boundary(text, m.end());
+                FilterCandidate {
+                    start,
+                    end,
+                    filter_type: self.filter_type(),
+                    confidence: 1.0,
+                }
             })
             .collect();
         Ok(candidates)

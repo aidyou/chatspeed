@@ -6,13 +6,16 @@ use super::{
         },
         localized::{
             en::{
-                address::AddressFilter as EnAddressFilter, company::CompanyFilter as EnCompanyFilter,
-                financial::FinancialFilter as EnFinancialFilter, mobile::MobileFilter as EnMobileFilter,
-                name::NameFilter as EnNameFilter, project::ProjectFilter as EnProjectFilter,
-                social::SocialFilter as EnSocialFilter, ssn::SsnFilter,
+                address::AddressFilter as EnAddressFilter,
+                company::CompanyFilter as EnCompanyFilter,
+                financial::FinancialFilter as EnFinancialFilter,
+                mobile::MobileFilter as EnMobileFilter, name::NameFilter as EnNameFilter,
+                project::ProjectFilter as EnProjectFilter, social::SocialFilter as EnSocialFilter,
+                ssn::SsnFilter,
             },
             zh::{
-                address::AddressFilter as ZhAddressFilter, company::CompanyFilter as ZhCompanyFilter,
+                address::AddressFilter as ZhAddressFilter,
+                company::CompanyFilter as ZhCompanyFilter,
                 financial::FinancialFilter as ZhFinancialFilter, id_card::IdCardFilter,
                 landline::LandlineFilter, mobile::MobileFilter as ZhMobileFilter,
                 name::NameFilter as ZhNameFilter, project::ProjectFilter as ZhProjectFilter,
@@ -21,10 +24,10 @@ use super::{
         },
     },
     i18n_support::ReplacementTextCache,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
-use log::error;
 use crate::error::Result;
+use log::error;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct SensitiveConfig {
@@ -109,7 +112,9 @@ impl FilterManager {
                     continue;
                 }
                 for m in text.match_indices(allow_word) {
-                    ranges.push(m.0..m.0 + allow_word.len());
+                    let start = adjust_to_char_boundary(text, m.0);
+                    let end = adjust_to_char_boundary(text, m.0 + allow_word.len());
+                    ranges.push(start..end);
                 }
             }
             // Sort by start position
@@ -141,7 +146,8 @@ impl FilterManager {
                 continue;
             }
 
-            if supported_langs.is_empty() || supported_langs.iter().any(|sl| languages.contains(sl)) {
+            if supported_langs.is_empty() || supported_langs.iter().any(|sl| languages.contains(sl))
+            {
                 match filter.filter(text, primary_lang) {
                     Ok(mut candidates) => {
                         // Filter candidates by allowlist immediately using binary search
@@ -173,7 +179,9 @@ impl FilterManager {
                 continue;
             }
             for m in text.match_indices(block_word) {
-                let c_range = m.0..m.0 + block_word.len();
+                let start = adjust_to_char_boundary(text, m.0);
+                let end = adjust_to_char_boundary(text, m.0 + block_word.len());
+                let c_range = start..end;
                 // Custom blocks also respect allowlist
                 let is_allowed = if !allow_ranges.is_empty() {
                     let idx = allow_ranges.partition_point(|r| r.start < c_range.end);
@@ -184,8 +192,8 @@ impl FilterManager {
 
                 if !is_allowed {
                     all_candidates.push(FilterCandidate {
-                        start: m.0,
-                        end: m.0 + block_word.len(),
+                        start,
+                        end,
                         filter_type: "CustomBlock",
                         confidence: 1.0,
                     });
@@ -195,17 +203,38 @@ impl FilterManager {
 
         let final_candidates = Self::resolve_conflicts(all_candidates);
 
-        let mut sanitized_text = text.to_string();
-        for candidate in final_candidates.iter().rev() {
+        // Use cumulative offset method for replacement to avoid position changes after replacement
+        let mut result = String::with_capacity(text.len());
+        let mut last_end = 0;
+
+        for candidate in final_candidates {
             let placeholder = if candidate.filter_type == "CustomBlock" {
                 "[BLOCK]".to_string()
             } else {
                 replacement_cache.get(candidate.filter_type)
             };
-            sanitized_text.replace_range(candidate.start..candidate.end, &placeholder);
+
+            // Ensure indices are valid character boundaries
+            let start = adjust_to_char_boundary(text, candidate.start);
+            let end = adjust_to_char_boundary(text, candidate.end);
+
+            // Add text before the candidate
+            if start > last_end {
+                result.push_str(&text[last_end..start]);
+            }
+
+            // Add replacement text
+            result.push_str(&placeholder);
+
+            last_end = end;
         }
 
-        sanitized_text
+        // Add text after the last candidate
+        if last_end < text.len() {
+            result.push_str(&text[last_end..]);
+        }
+
+        result
     }
 
     /// Resolves conflicts among overlapping candidates.
@@ -218,11 +247,7 @@ impl FilterManager {
         candidates.sort_by(|a, b| {
             (b.end - b.start)
                 .cmp(&(a.end - a.start))
-                .then_with(|| {
-                    b.confidence
-                        .partial_cmp(&a.confidence)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .then_with(|| b.confidence.total_cmp(&a.confidence))
                 .then_with(|| find_priority(a.filter_type).cmp(&find_priority(b.filter_type)))
         });
 
@@ -288,5 +313,212 @@ fn find_priority(filter_type: &str) -> u32 {
         "ChineseName" => 60,
         "EnglishName" => 60,
         _ => 100,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sensitive::traits::FilterCandidate;
+
+    #[test]
+    fn test_filter_manager_creation() {
+        let manager = FilterManager::new();
+        assert!(manager.is_ok());
+    }
+
+    #[test]
+    fn test_filter_text_empty() {
+        let manager = FilterManager::new().unwrap();
+        let config = SensitiveConfig::default();
+        let result = manager.filter_text("", &["en"], &config);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_filter_text_no_sensitive_info() {
+        let manager = FilterManager::new().unwrap();
+        let config = SensitiveConfig::default();
+        let text = "This is a normal sentence without any sensitive information.";
+        let result = manager.filter_text(text, &["en"], &config);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_filter_text_multiple_replacements() {
+        let manager = FilterManager::new().unwrap();
+        let config = SensitiveConfig::default();
+        
+        // Text with multiple sensitive information that will be replaced with different length placeholders
+        let text = "Contact: phone 13812345678, email test@example.com, IP 192.168.1.1";
+        let result = manager.filter_text(text, &["zh", "en"], &config);
+        
+        // Should contain replacements but not panic
+        assert!(result.contains("[ChineseMobile]") || result.contains("[Email]") || result.contains("[IPAddress]"));
+        assert_ne!(result, text);
+    }
+
+    #[test]
+    fn test_filter_text_unicode_boundary() {
+        let manager = FilterManager::new().unwrap();
+        let config = SensitiveConfig::default();
+        
+        // Text with Unicode characters and sensitive info
+        let text = "中文测试📱手机号：13812345678，邮箱：test@example.com🎯";
+        let result = manager.filter_text(text, &["zh"], &config);
+        
+        // Should not panic with Unicode characters
+        assert!(result.len() > 0);
+    }
+
+    #[test]
+    fn test_filter_text_overlapping_matches() {
+        let manager = FilterManager::new().unwrap();
+        let config = SensitiveConfig::default();
+        
+        // Create a scenario with multiple detectable sensitive information
+        // Using email and phone which are reliably detected
+        let text = "Contact: test@example.com and phone: 13812345678";
+        let result = manager.filter_text(text, &["zh", "en"], &config);
+        
+        // Should contain replacements
+        assert!(result.contains("[Email]") || result.contains("[ChineseMobile]"));
+        // Original sensitive info should be replaced
+        assert!(!result.contains("test@example.com") || !result.contains("13812345678"));
+    }
+
+    #[test]
+    fn test_filter_text_with_allowlist() {
+        let manager = FilterManager::new().unwrap();
+        let mut config = SensitiveConfig::default();
+        
+        // Add an email to allowlist
+        config.allowlist.push("test@example.com".to_string());
+        
+        let text = "Allowed: test@example.com, Blocked: other@example.com";
+        let result = manager.filter_text(text, &["en"], &config);
+        
+        // Allowed email should remain, other should be replaced
+        assert!(result.contains("test@example.com"));
+        assert!(result.contains("[Email]"));
+    }
+
+    #[test]
+    fn test_filter_text_with_custom_blocklist() {
+        let manager = FilterManager::new().unwrap();
+        let mut config = SensitiveConfig::default();
+        
+        // Add custom blocklist
+        config.custom_blocklist.push("secret".to_string());
+        config.custom_blocklist.push("confidential".to_string());
+        
+        let text = "This is a secret document with confidential information.";
+        let result = manager.filter_text(text, &["en"], &config);
+        
+        // Custom blocklist words should be replaced
+        assert!(result.contains("[BLOCK]"));
+        assert!(!result.contains("secret"));
+        assert!(!result.contains("confidential"));
+    }
+
+    #[test]
+    fn test_filter_text_disabled() {
+        let manager = FilterManager::new().unwrap();
+        let mut config = SensitiveConfig::default();
+        config.enabled = false;
+        
+        let text = "Phone: 13812345678, Email: test@example.com";
+        let result = manager.filter_text(text, &["zh", "en"], &config);
+        
+        // When disabled, should return original text
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_filter_text_common_disabled() {
+        let manager = FilterManager::new().unwrap();
+        let mut config = SensitiveConfig::default();
+        config.common_enabled = false;
+        
+        // Test with only common filters (Email) and only localized filters (Chinese ID)
+        // Email is common filter (supported_languages is empty)
+        // Chinese ID is localized filter (supports zh)
+        let text = "Email: test@example.com";
+        let result = manager.filter_text(text, &["zh", "en"], &config);
+        
+        // When common_enabled = false, common filters should be disabled
+        // Email should NOT be replaced since it's a common filter
+        assert!(result.contains("test@example.com"));
+        
+        // Also test that localized filters still work when common filters are disabled
+        let text2 = "身份证：44010619990101123X";
+        let result2 = manager.filter_text(text2, &["zh"], &config);
+        // Chinese ID should still be detected (it's a localized filter, not common)
+        assert_ne!(result2, text2);
+    }
+
+    #[test]
+    fn test_resolve_conflicts_basic() {
+        let candidates = vec![
+            FilterCandidate {
+                start: 0,
+                end: 10,
+                filter_type: "Test1",
+                confidence: 0.9,
+            },
+            FilterCandidate {
+                start: 5,
+                end: 15,
+                filter_type: "Test2",
+                confidence: 0.8,
+            },
+            FilterCandidate {
+                start: 20,
+                end: 30,
+                filter_type: "Test3",
+                confidence: 0.7,
+            },
+        ];
+        
+        let resolved = FilterManager::resolve_conflicts(candidates);
+        
+        // Should resolve overlapping conflicts (0-10 and 5-15 overlap)
+        // The one with higher confidence (Test1) should win
+        assert_eq!(resolved.len(), 2); // One overlapping pair resolved to one, plus non-overlapping
+    }
+
+    #[test]
+    fn test_resolve_conflicts_same_confidence() {
+        let candidates = vec![
+            FilterCandidate {
+                start: 0,
+                end: 15, // Longer match
+                filter_type: "Test1",
+                confidence: 0.8,
+            },
+            FilterCandidate {
+                start: 5,
+                end: 10, // Shorter match
+                filter_type: "Test2",
+                confidence: 0.8, // Same confidence
+            },
+        ];
+        
+        let resolved = FilterManager::resolve_conflicts(candidates);
+        
+        // Longer match should win when confidence is equal
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].filter_type, "Test1");
+    }
+
+    #[test]
+    fn test_supported_filter_types() {
+        let manager = FilterManager::new().unwrap();
+        let types = manager.supported_filter_types();
+        
+        // Should return a non-empty list of filter types
+        assert!(!types.is_empty());
+        assert!(types.iter().any(|t| t.contains("Email")));
+        assert!(types.iter().any(|t| t.contains("Chinese")));
     }
 }

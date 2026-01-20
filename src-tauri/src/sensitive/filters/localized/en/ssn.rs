@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::Regex;
 
@@ -61,11 +61,15 @@ impl SensitiveDataFilter for SsnFilter {
                 }
                 true
             })
-            .map(|m| FilterCandidate {
-                start: m.start(),
-                end: m.end(),
-                filter_type: self.filter_type(),
-                confidence: 0.9,
+            .map(|m| {
+                let start = adjust_to_char_boundary(text, m.start());
+                let end = adjust_to_char_boundary(text, m.end());
+                FilterCandidate {
+                    start,
+                    end,
+                    filter_type: self.filter_type(),
+                    confidence: 0.9,
+                }
             })
             .collect();
         Ok(candidates)

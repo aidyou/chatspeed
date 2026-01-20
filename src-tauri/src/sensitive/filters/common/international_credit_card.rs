@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::Regex;
 
@@ -16,7 +16,7 @@ impl InternationalCreditCardFilter {
             r#"\b3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5}\b"#, // Amex
             r#"\b6(?:011|5\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // Discover
             r#"\b(?:30[0-5]|36\d|38\d)[-\s]?\d{4}[-\s]?\d{6}\b"#, // Diners Club
-            r#"\b(?:2131|1800|35\d{3})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // JCB
+            r#"\b(?:2131|1800|35(?:2[89]|[3-8][0-9]|90))[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // JCB
         ];
         let regex = Regex::new(&patterns.join("|")).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
@@ -45,11 +45,15 @@ impl SensitiveDataFilter for InternationalCreditCardFilter {
         let candidates = self
             .regex
             .find_iter(text)
-            .map(|m| FilterCandidate {
-                start: m.start(),
-                end: m.end(),
-                filter_type: self.filter_type(),
-                confidence: 1.0,
+            .map(|m| {
+                let start = adjust_to_char_boundary(text, m.start());
+                let end = adjust_to_char_boundary(text, m.end());
+                FilterCandidate {
+                    start,
+                    end,
+                    filter_type: self.filter_type(),
+                    confidence: 1.0,
+                }
             })
             .collect();
         Ok(candidates)

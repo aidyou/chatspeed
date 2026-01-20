@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::Regex;
 
@@ -12,7 +12,7 @@ pub struct MobileFilter {
 impl MobileFilter {
     /// Creates a new `MobileFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"\b1[3-9]\d{9}\b"#).map_err(|e| {
+        let regex = Regex::new(r#"1[3-9]\d{9}"#).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
                 pattern: "zh_mobile_regex".to_string(),
                 message: e.to_string(),
@@ -39,11 +39,15 @@ impl SensitiveDataFilter for MobileFilter {
         let candidates = self
             .regex
             .find_iter(text)
-            .map(|m| FilterCandidate {
-                start: m.start(),
-                end: m.end(),
-                filter_type: self.filter_type(),
-                confidence: 0.9,
+            .map(|m| {
+                let start = adjust_to_char_boundary(text, m.start());
+                let end = adjust_to_char_boundary(text, m.end());
+                FilterCandidate {
+                    start,
+                    end,
+                    filter_type: self.filter_type(),
+                    confidence: 0.9,
+                }
             })
             .collect();
         Ok(candidates)

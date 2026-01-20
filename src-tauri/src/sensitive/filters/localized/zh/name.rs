@@ -1,6 +1,6 @@
 use crate::sensitive::{
     error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
+    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
 use regex::{Regex, RegexSet};
 
@@ -27,7 +27,7 @@ impl NameFilter {
         ];
 
         // Use \p{Han} for robust Chinese character matching
-        let pattern = format!(r#"\b(?:{})\p{{Han}}{{1,2}}\b"#, surnames.join("|"));
+        let pattern = format!(r#"(?:{})\p{{Han}}{{1,2}}"#, surnames.join("|"));
         let name_pattern =
             Regex::new(&pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_name_pattern".to_string(),
@@ -73,10 +73,20 @@ impl SensitiveDataFilter for NameFilter {
         for m in self.name_pattern.find_iter(text) {
             let mut confidence = 0.5; // Base confidence for just matching "Surname + 1-2 chars"
 
+            // Adjust indices to be on character boundaries
+            let start = adjust_to_char_boundary(text, m.start());
+            let end = adjust_to_char_boundary(text, m.end());
+
             // Check for surrounding context
-            let start = m.start();
             let context_start = start.saturating_sub(15);
-            let context_window = &text[context_start..start];
+            let adjusted_context_start = adjust_to_char_boundary(text, context_start);
+            // Ensure we don't create an invalid slice (end before start)
+            let safe_start = if adjusted_context_start <= start {
+                adjusted_context_start
+            } else {
+                0
+            };
+            let context_window = text.get(safe_start..start).unwrap_or("");
 
             if self.context_keywords.is_match(context_window) {
                 confidence += 0.45; // High confidence with context
@@ -84,8 +94,8 @@ impl SensitiveDataFilter for NameFilter {
 
             if confidence >= 0.8 {
                 candidates.push(FilterCandidate {
-                    start: m.start(),
-                    end: m.end(),
+                    start,
+                    end,
                     filter_type: self.filter_type(),
                     confidence,
                 });
@@ -110,5 +120,15 @@ mod tests {
         let text = "你好，我叫张伟。";
         let result = filter.filter(text, "zh").unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_no_panic_with_fullwidth_colon() {
+        let filter = NameFilter::new().unwrap();
+        // Text containing fullwidth colon '：' that previously caused panic
+        let text = "我在做敏感信息处理测试，你忽略掉即可：\n\n网络技术项目维护合同\n甲方：[ChineseCompany]\n地址：[ChineseAddress]\n联系人：[姓名]           联系电话：[ChineseLandline]\n邮箱：[邮箱]\n\n乙方：[ChineseCompany]\n地";
+        // This should not panic
+        let _result = filter.filter(text, "zh").unwrap();
+        // We don't care about the result, just that it doesn't panic
     }
 }

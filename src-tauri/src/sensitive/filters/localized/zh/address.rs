@@ -1,5 +1,5 @@
 use crate::sensitive::error::SensitiveError;
-use crate::sensitive::traits::{FilterCandidate, SensitiveDataFilter};
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter};
 use regex::Regex;
 
 pub struct AddressFilter {
@@ -39,18 +39,22 @@ impl SensitiveDataFilter for AddressFilter {
         let mut candidates = Vec::new();
         for cap in self.context_regex.captures_iter(text) {
             if let Some(m) = cap.get(1) {
+                let start = adjust_to_char_boundary(text, m.start());
+                let end = adjust_to_char_boundary(text, m.end());
                 candidates.push(FilterCandidate {
-                    start: m.start(),
-                    end: m.end(),
+                    start,
+                    end,
                     filter_type: self.filter_type(),
                     confidence: 0.95,
                 });
             }
         }
         for m in self.pattern_regex.find_iter(text) {
+            let start = adjust_to_char_boundary(text, m.start());
+            let end = adjust_to_char_boundary(text, m.end());
             candidates.push(FilterCandidate {
-                start: m.start(),
-                end: m.end(),
+                start,
+                end,
                 filter_type: self.filter_type(),
                 confidence: 0.8,
             });
