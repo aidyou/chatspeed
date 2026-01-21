@@ -6,12 +6,10 @@ This release introduces a major new feature: the **Intelligent Sensitive Informa
 
 ## ✨ Security & Privacy Enhancements
 
-- **Automated Data Masking**: Automatically detects and masks PII (Personally Identifiable Information) such as Names, IDs, Phone Numbers, Emails, IP Addresses, and Credit Cards before sending messages to AI providers.
-- **Deep Contract Context Recognition**:
-  - Added **Organization Recognition**: Identifies contract roles (Party A/B, Contractor, etc.) and corporate entities (Inc., Ltd., LLC, etc.).
-  - Added **Project Title Masking**: Recognizes and protects specific project or study names within documents.
-  - Added **Financial Data Protection**: Automatically masks contract amounts (including localized currency formats) and bank account/routing details.
-  - Added **Landline & Social IDs**: Supports international landline formats and social media handles (WeChat, WhatsApp, Telegram, etc.).
+- **Automated Data Masking**: Automatically detects and masks universal PII such as Emails, IP Addresses, and Credit Cards before sending messages to AI providers.
+- **Deep Context Recognition (ZH & EN)**:
+  - **Chinese Context Optimization**: Specialized detection for Chinese Resident IDs, Mobile/Landline numbers, Social IDs (WeChat/QQ), Banking info, Chinese Names, Addresses, Company names, and Project titles.
+  - **English Context Optimization**: Specialized detection for SSNs, English Names, Addresses, Company names, and other English-specific sensitive data.
 - **Flexible List Management**:
   - **Custom Blocklist**: Manually add specific keywords (e.g., project internal codenames) to be always filtered.
   - **Allowlist**: Define exceptions (e.g., your public business email or localhost IP) that should never be masked.
@@ -20,7 +18,7 @@ This release introduces a major new feature: the **Intelligent Sensitive Informa
 ## 🔧 Interaction & UX Improvements
 
 - **Quick Toggle Button**: Added a `filter` icon in the chat and assistant header. Toggle filtering state with one click, with real-time sync across all windows.
-- **Full I18N Support**: The filtering system now supports 10 languages (EN, ZH, JA, KO, DE, FR, ES, PT, RU) for both UI and placeholders.
+- **Multi-language UI Support**: While deep detection is optimized for Chinese and English, the **replacement placeholders** and UI are localized for 10 languages (EN, ZH, JA, KO, DE, FR, ES, PT, RU).
 
 ## 🐞 Bug Fixes
 
