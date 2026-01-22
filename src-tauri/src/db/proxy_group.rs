@@ -66,6 +66,11 @@ impl MainStore {
     }
 
     pub fn proxy_group_add(&mut self, item: &ProxyGroup) -> Result<i64, StoreError> {
+        if item.name.to_lowercase() == "switch" {
+            return Err(StoreError::InvalidData(
+                "Name 'switch' is reserved for dynamic switching".to_string(),
+            ));
+        }
         let conn = self
             .conn
             .lock()
@@ -95,6 +100,11 @@ impl MainStore {
     }
 
     pub fn proxy_group_update(&mut self, item: &ProxyGroup) -> Result<(), StoreError> {
+        if item.name.to_lowercase() == "switch" {
+            return Err(StoreError::InvalidData(
+                "Name 'switch' is reserved for dynamic switching".to_string(),
+            ));
+        }
         let conn = self
             .conn
             .lock()
@@ -122,6 +132,88 @@ impl MainStore {
                 self.config.set_proxy_groups(pg);
             }
         }
+        Ok(())
+    }
+
+    pub fn proxy_group_batch_update(
+        &mut self,
+        ids: Vec<i64>,
+        prompt_injection: Option<String>,
+        prompt_text: Option<String>,
+        tool_filter: Option<String>,
+        injection_position: Option<String>,
+        injection_condition: Option<String>,
+        prompt_replace: Option<Value>,
+    ) -> Result<(), StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let tx = conn.transaction()?;
+
+        for id in ids {
+            // 1. Get current metadata to preserve other fields
+            let mut metadata: Value = tx.query_row(
+                &format!("SELECT metadata FROM {} WHERE id = ?1", PROXY_GROUP_TABLE),
+                params![id],
+                |row| {
+                    let s: Option<String> = row.get(0)?;
+                    Ok(s.and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or(serde_json::json!({})))
+                },
+            )?;
+
+            // 2. Update metadata fields if provided
+            if let Some(pos) = &injection_position {
+                metadata["promptInjectionPosition"] = serde_json::json!(pos);
+            }
+            if let Some(cond) = &injection_condition {
+                metadata["modelInjectionCondition"] = serde_json::json!(cond);
+            }
+            if let Some(replace) = &prompt_replace {
+                metadata["promptReplace"] = replace.clone();
+            }
+
+            // 3. Build dynamic update query
+            let mut updates = Vec::new();
+            let mut values: Vec<rusqlite::types::Value> = Vec::new();
+
+            if let Some(val) = &prompt_injection {
+                updates.push("prompt_injection = ?");
+                values.push(val.clone().into());
+            }
+            if let Some(val) = &prompt_text {
+                updates.push("prompt_text = ?");
+                values.push(val.clone().into());
+            }
+            if let Some(val) = &tool_filter {
+                updates.push("tool_filter = ?");
+                values.push(val.clone().into());
+            }
+
+            // Always update metadata as we merged it
+            updates.push("metadata = ?");
+            values.push(serde_json::to_string(&metadata).unwrap_or_default().into());
+
+            if !updates.is_empty() {
+                let sql = format!(
+                    "UPDATE {} SET {} WHERE id = ?",
+                    PROXY_GROUP_TABLE,
+                    updates.join(", ")
+                );
+                values.push(id.into());
+                tx.execute(&sql, rusqlite::params_from_iter(values))?;
+            }
+        }
+
+        tx.commit()?;
+
+        // Update cache
+        if let Ok(pg) = Self::proxy_group_list(&conn) {
+            self.config.set_proxy_groups(pg);
+        }
+
         Ok(())
     }
 

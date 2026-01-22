@@ -1,14 +1,16 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
 import { defineStore } from 'pinia'
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 
 export const useProxyGroupStore = defineStore('proxy_group', () => {
   const list = reactive([])
+  const activeGroup = ref('default')
 
   const getList = async () => {
     try {
       const items = await invokeWrapper('proxy_group_list')
       list.splice(0, list.length, ...items)
+      await getActiveGroup()
       return list
     } catch (error) {
       if (error instanceof FrontendAppError) {
@@ -17,6 +19,24 @@ export const useProxyGroupStore = defineStore('proxy_group', () => {
         console.error('Failed to list proxy groups:', error);
       }
       throw error;
+    }
+  }
+
+  const getActiveGroup = async () => {
+    try {
+      activeGroup.value = await invokeWrapper('get_active_proxy_group')
+    } catch (error) {
+      console.error('Failed to get active proxy group:', error)
+    }
+  }
+
+  const setActiveGroup = async name => {
+    try {
+      await invokeWrapper('set_active_proxy_group', { name })
+      activeGroup.value = name
+    } catch (error) {
+      console.error('Failed to set active proxy group:', error)
+      throw error
     }
   }
 
@@ -54,6 +74,20 @@ export const useProxyGroupStore = defineStore('proxy_group', () => {
     }
   }
 
+  const batchUpdate = async payload => {
+    try {
+      await invokeWrapper('proxy_group_batch_update', payload)
+      await getList() // Refresh the list after batch update
+    } catch (error) {
+      if (error instanceof FrontendAppError) {
+        console.error(`Failed to batch update proxy groups: ${error.toFormattedString()}`, error.originalError);
+      } else {
+        console.error('Failed to batch update proxy groups:', error);
+      }
+      throw error;
+    }
+  }
+
   const remove = async id => {
     try {
       await invokeWrapper('proxy_group_delete', { id })
@@ -73,9 +107,13 @@ export const useProxyGroupStore = defineStore('proxy_group', () => {
 
   return {
     list,
+    activeGroup,
     getList,
+    getActiveGroup,
+    setActiveGroup,
     add,
     update,
+    batchUpdate,
     remove
   }
 })

@@ -41,6 +41,8 @@ pub struct UnifiedRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frequency_penalty: Option<f32>, // Range: -2.0 to 2.0
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>, // Candidate count
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i32>, // For deterministic sampling
@@ -78,6 +80,7 @@ pub struct UnifiedRequest {
     pub prompt_enhance_text: Option<String>,
     pub combined_prompt: Option<String>,
     pub prompt_injection_position: Option<String>,
+    pub custom_params: Option<Value>,
 }
 
 impl UnifiedRequest {

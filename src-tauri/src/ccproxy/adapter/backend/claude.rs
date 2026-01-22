@@ -507,11 +507,17 @@ impl BackendAdapter for ClaudeBackendAdapter {
         if unified_request.tools.is_some() || unified_request.tool_choice.is_some() {
             request_builder = request_builder.header("anthropic-beta", "tools-2024-04-04");
         }
-        request_builder = request_builder.json(&claude_request);
+
+        let mut request_json = serde_json::to_value(&claude_request)?;
+
+        // Merge custom params from model config
+        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+
+        request_builder = request_builder.json(&request_json);
 
         if log_proxy_to_file {
             // Log the request to a file
-            log::info!(target: "ccproxy_logger","Claude Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&claude_request).unwrap_or_default());
+            log::info!(target: "ccproxy_logger","Claude Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
         // #[cfg(debug_assertions)]

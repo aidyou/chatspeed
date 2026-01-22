@@ -119,8 +119,12 @@
           </ul>
         </li>
         <li>
-          Data Security
+          Privacy & Security
           <ul>
+            <li>
+              <b>Sensitive Data Filtering:</b> Automatically detects and masks PII (Emails, IDs,
+              Phone numbers, etc.) locally before sending to AI, protecting your privacy.
+            </li>
             <li>Local encrypted storage</li>
             <li>Chat history archiving</li>
             <li>Database backup/restore</li>
@@ -251,8 +255,12 @@
           </ul>
         </li>
         <li>
-          数据管理
+          数据安全与隐私
           <ul>
+            <li>
+              <b>智能敏感信息处理:</b>
+              在消息发送前自动识别并掩盖身份证、手机号、银行卡等隐私信息，脱敏逻辑完全在本地执行。
+            </li>
             <li>本地加密存储</li>
             <li>对话历史归档管理</li>
             <li>数据库备份与恢复</li>

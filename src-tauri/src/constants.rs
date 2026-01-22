@@ -29,6 +29,7 @@ pub const CFG_AUTO_UPDATE: &str = "auto_update";
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
 pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
+pub const CFG_ACTIVE_PROXY_GROUP: &str = "active_proxy_group";
 pub const CFG_CCPROXY_PORT: &str = "chat_completion_proxy_port";
 pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11434;
 pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";

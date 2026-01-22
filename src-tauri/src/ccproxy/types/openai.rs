@@ -122,8 +122,11 @@ pub struct OpenAIChatCompletionChoice {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct OpenAIUsage {
+    #[serde(default)]
     pub prompt_tokens: u64,
+    #[serde(default)]
     pub completion_tokens: u64,
+    #[serde(default)]
     pub total_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,

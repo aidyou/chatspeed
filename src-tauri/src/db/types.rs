@@ -47,6 +47,8 @@ pub struct ModelConfig {
     pub reasoning: Option<bool>,
     #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
     pub function_call: Option<bool>,
+    #[serde(rename = "customParams", skip_serializing_if = "Option::is_none")]
+    pub custom_params: Option<Value>,
 }
 
 impl Default for ModelConfig {
@@ -57,6 +59,7 @@ impl Default for ModelConfig {
             group: String::new(),
             reasoning: Some(false),
             function_call: None,
+            custom_params: None,
         }
     }
 }

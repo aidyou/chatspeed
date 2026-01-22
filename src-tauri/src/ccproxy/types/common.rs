@@ -70,13 +70,21 @@ pub struct ProxyModel {
     pub model: String,
     pub api_key: String,
     pub model_metadata: Option<Value>,
+    pub custom_params: Option<Value>,
     pub prompt_injection: String,
     pub prompt_injection_position: Option<String>,
     pub prompt_text: String,
     pub tool_filter: HashMap<String, i8>,
+    pub prompt_replace: Vec<(String, String)>,
     // ratio of the temperature
     pub temperature: f32,
-    // pub max_context: usize,
+    // Base parameters from AiModel
+    pub max_tokens: i32,
+    pub presence_penalty: f32,
+    pub frequency_penalty: f32,
+    pub top_p: f32,
+    pub top_k: i32,
+    pub stop: Vec<String>,
 }
 
 //======================================================

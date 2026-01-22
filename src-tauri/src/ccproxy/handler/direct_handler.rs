@@ -26,6 +26,7 @@ pub async fn handle_direct_forward(
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
     log_to_file: bool,
 ) -> ProxyResult<Response> {
+    let message_id = crate::ccproxy::helper::get_msg_id();
     let http_client = ModelResolver::build_http_client(
         main_store_arc.clone(),
         proxy_model.model_metadata.clone(),
@@ -41,13 +42,32 @@ pub async fn handle_direct_forward(
 
     let mut reqwest_headers = reqwest::header::HeaderMap::new();
 
-    // Forward relevant headers from client
+    // 1. Add custom headers from model metadata (Default values)
+    let custom_headers = crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
+    for (k, v) in custom_headers {
+        let final_key = if k.to_lowercase().starts_with("cs-") {
+            &k[3..]
+        } else {
+            &k
+        };
+        if let (Ok(n), Ok(h)) = (ReqwestHeaderName::from_str(final_key), ReqwestHeaderValue::from_str(&v)) {
+            reqwest_headers.insert(n, h);
+        }
+    }
+
+    // 2. Forward relevant headers from client (Override values)
     for (name, value) in client_headers.iter() {
         let name_str = name.as_str().to_lowercase();
         if should_forward_header(&name_str) {
+            let final_name = if name_str.starts_with("cs-") {
+                &name_str[3..]
+            } else {
+                &name_str
+            };
+
             match ReqwestHeaderValue::from_bytes(value.as_bytes()) {
                 Ok(h) => {
-                    if let Ok(n) = ReqwestHeaderName::from_str(name.clone().as_str()) {
+                    if let Ok(n) = ReqwestHeaderName::from_str(final_name) {
                         reqwest_headers.insert(n, h);
                     }
                 }
@@ -382,6 +402,9 @@ fn enhance_direct_request_body(
             }
         }
     }
+
+    // Merge custom params from model config using global helper
+    crate::ai::util::merge_custom_params(&mut body, &proxy_model.custom_params);
 
     body
 }

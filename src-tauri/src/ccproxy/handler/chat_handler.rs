@@ -312,6 +312,28 @@ pub async fn handle_chat_completion(
         generate_action,
     )?;
 
+    unified_request.custom_params = proxy_model.custom_params.clone();
+
+    // --- Inject Engine Defaults if missing ---
+    if unified_request.max_tokens.is_none() && proxy_model.max_tokens > 0 {
+        unified_request.max_tokens = Some(proxy_model.max_tokens);
+    }
+    if unified_request.top_p.is_none() && proxy_model.top_p > 0.0 {
+        unified_request.top_p = Some(proxy_model.top_p);
+    }
+    if unified_request.top_k.is_none() && proxy_model.top_k > 0 {
+        unified_request.top_k = Some(proxy_model.top_k);
+    }
+    if unified_request.presence_penalty.is_none() && proxy_model.presence_penalty != 0.0 {
+        unified_request.presence_penalty = Some(proxy_model.presence_penalty);
+    }
+    if unified_request.frequency_penalty.is_none() && proxy_model.frequency_penalty != 0.0 {
+        unified_request.frequency_penalty = Some(proxy_model.frequency_penalty);
+    }
+    if unified_request.stop_sequences.is_none() && !proxy_model.stop.is_empty() {
+        unified_request.stop_sequences = Some(proxy_model.stop.clone());
+    }
+
     if proxy_model.temperature != 1.0 && unified_request.temperature.is_some() {
         unified_request.temperature =
             Some(proxy_model.temperature * unified_request.temperature.unwrap_or(0.0));
@@ -335,6 +357,17 @@ pub async fn handle_chat_completion(
         unified_request.prompt_injection = Some(proxy_model.prompt_injection.clone());
         unified_request.prompt_enhance_text = Some(proxy_model.prompt_text.clone());
         unified_request.prompt_injection_position = proxy_model.prompt_injection_position.clone();
+    }
+
+    // --- Apply Prompt Replacement (Metadata KV) ---
+    if !proxy_model.prompt_replace.is_empty() {
+        if let Some(system_prompt) = &mut unified_request.system_prompt {
+            for (key, value) in &proxy_model.prompt_replace {
+                if !key.is_empty() {
+                    *system_prompt = system_prompt.replace(key, value);
+                }
+            }
+        }
     }
 
     // 2. Use the already resolved proxy_model from above
@@ -375,7 +408,38 @@ pub async fn handle_chat_completion(
         .await
         .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-    // Set common headers
+    // 1. Add custom headers from model metadata (Default values)
+    let custom_headers =
+        crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
+    for (k, v) in custom_headers {
+        let final_key = if k.to_lowercase().starts_with("cs-") {
+            &k[3..]
+        } else {
+            &k
+        };
+        onward_request_builder = onward_request_builder.header(final_key, v);
+    }
+
+    // 2. Forward relevant headers from client (Override values)
+    for (name, value) in client_headers.iter() {
+        let name_str = name.as_str().to_lowercase();
+        if crate::ccproxy::helper::should_forward_header(&name_str) {
+            let final_name = if name_str.starts_with("cs-") {
+                &name_str[3..]
+            } else {
+                &name_str
+            };
+
+            if let (Ok(reqwest_name), Ok(reqwest_value)) = (
+                reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
+                reqwest::header::HeaderValue::from_bytes(value.as_ref()),
+            ) {
+                onward_request_builder = onward_request_builder.header(reqwest_name, reqwest_value);
+            }
+        }
+    }
+
+    // Set common headers (Force specific values)
     onward_request_builder = onward_request_builder.header("Content-Type", "application/json");
 
     // Set streaming request headers
@@ -391,8 +455,14 @@ pub async fn handle_chat_completion(
     for (name, value) in client_headers.iter() {
         let name_str = name.as_str().to_lowercase();
         if crate::ccproxy::helper::should_forward_header(&name_str) {
+            let final_name = if name_str.starts_with("cs-") {
+                &name_str[3..]
+            } else {
+                &name_str
+            };
+
             if let (Ok(reqwest_name), Ok(reqwest_value)) = (
-                reqwest::header::HeaderName::from_bytes(name.as_ref()),
+                reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
                 reqwest::header::HeaderValue::from_bytes(value.as_ref()),
             ) {
                 onward_request_builder = onward_request_builder.header(reqwest_name, reqwest_value);

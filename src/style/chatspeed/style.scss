@@ -126,7 +126,7 @@ system-reminder {
             margin-right: 0;
           }
 
-          &:hover {
+          &:not(.active):hover {
             background: var(--cs-active-bg-color);
           }
         }

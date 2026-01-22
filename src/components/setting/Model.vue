@@ -124,7 +124,6 @@
           <el-form-item :label="$t('settings.general.proxyType')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
               <el-radio
-                :label="proxyType.value"
                 :value="proxyType.value"
                 v-for="proxyType in proxyTypeOptions"
                 :key="proxyType.value"
@@ -343,6 +342,43 @@
               :autosize="{ minRows: 2, maxRows: 5 }"
               :placeholder="$t('settings.model.stopPlaceholder')" />
           </el-form-item>
+
+          <el-divider border-style="dashed" />
+
+          <div class="custom-headers-section">
+            <div class="header-title">
+              <span>{{ $t('settings.model.customHeaders') }}</span>
+              <el-tooltip :content="$t('settings.model.customHeadersTip')" placement="top">
+                <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
+              </el-tooltip>
+            </div>
+
+            <div
+              v-for="(header, index) in modelForm.customHeaders"
+              :key="index"
+              class="header-row"
+              style="display: flex; gap: 10px; margin-bottom: 10px">
+              <el-input
+                v-model="header.key"
+                :placeholder="$t('settings.model.headerKey')"
+                style="flex: 1" />
+              <el-input
+                v-model="header.value"
+                :placeholder="$t('settings.model.headerValue')"
+                style="flex: 2" />
+              <el-button
+                type="danger"
+                link
+                @click="removeCustomHeader(index)"
+                style="padding: 0; min-width: 24px">
+                <cs name="trash" size="16px" />
+              </el-button>
+            </div>
+
+            <el-button type="primary" plain size="small" @click="addCustomHeader" style="width: 100%">
+              <cs name="add" /> {{ $t('settings.model.addHeader') }}
+            </el-button>
+          </div>
         </el-tab-pane>
         <!-- /end additional info -->
       </el-tabs>
@@ -461,6 +497,48 @@
       <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
         <el-switch v-model="modelConfigForm.imageInput" />
       </el-form-item>
+
+      <el-divider border-style="dashed" />
+
+      <div class="custom-headers-section">
+        <div class="header-title">
+          <span>{{ $t('settings.model.customParams') }}</span>
+          <el-tooltip :content="$t('settings.model.customParamsTip')" placement="top">
+            <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
+          </el-tooltip>
+        </div>
+
+        <div
+          v-for="(param, index) in modelConfigForm.customParams"
+          :key="index"
+          class="header-row"
+          style="display: flex; gap: 10px; margin-bottom: 10px">
+          <el-input
+            v-model="param.key"
+            :placeholder="$t('settings.model.paramKey')"
+            style="flex: 1" />
+          <el-input
+            v-model="param.value"
+            :placeholder="$t('settings.model.paramValue')"
+            style="flex: 2" />
+          <el-button
+            type="danger"
+            link
+            @click="removeModelConfigParam(index)"
+            style="padding: 0; min-width: 24px">
+            <cs name="trash" size="16px" />
+          </el-button>
+        </div>
+
+        <el-button
+          type="primary"
+          plain
+          size="small"
+          @click="addModelConfigParam"
+          style="width: 100%">
+          <cs name="add" /> {{ $t('settings.model.addParam') }}
+        </el-button>
+      </div>
     </el-form>
     <template #footer>
       <div class="dialog-footer">
@@ -707,6 +785,7 @@ const defaultFormData = {
   proxyServer: '',
   proxyUsername: '',
   proxyPassword: '',
+  customHeaders: [],
   disabled: false
 }
 // Reactive object to hold the form data for the model
@@ -765,7 +844,8 @@ const createFromModel = srcModel => {
     proxyType: srcModel?.metadata?.proxyType,
     proxyServer: srcModel?.metadata?.proxyServer || '',
     proxyUsername: srcModel?.metadata?.proxyUsername || '',
-    proxyPassword: srcModel?.metadata?.proxyPassword || ''
+    proxyPassword: srcModel?.metadata?.proxyPassword || '',
+    customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
 /**
@@ -890,7 +970,8 @@ const updateModel = () => {
           proxyType: modelForm.value.proxyType || 'bySetting',
           proxyServer: modelForm.value.proxyServer.trim() || '',
           proxyUsername: modelForm.value.proxyUsername.trim() || '',
-          proxyPassword: modelForm.value.proxyPassword.trim() || ''
+          proxyPassword: modelForm.value.proxyPassword.trim() || '',
+          customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
       }
 
@@ -990,7 +1071,8 @@ const defaultModelConfig = {
   group: '',
   functionCall: false,
   reasoning: false,
-  imageInput: false
+  imageInput: false,
+  customParams: []
 }
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
@@ -1016,7 +1098,10 @@ const onModelConfig = model => {
   if (model) {
     prevModelConfigId.value = model.id
     model.group = model.group === t('settings.model.ungrouped') ? '' : model.group
-    modelConfigForm.value = { ...model }
+    modelConfigForm.value = {
+      ...model,
+      customParams: model.customParams || []
+    }
   } else {
     prevModelConfigId.value = ''
     modelConfigForm.value = { ...defaultModelConfig }
@@ -1049,15 +1134,31 @@ const updateModelConfig = () => {
   const idToUpdate = prevModelConfigId.value ?? modelConfigForm.value.id
   const index = modelForm.value.models.findIndex(item => item.id === idToUpdate)
 
+  const updatedModelConfig = {
+    ...modelConfigForm.value,
+    customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
+  }
+
   if (index !== -1) {
     if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {
       modelForm.value.defaultModel = modelConfigForm.value.id
     }
-    modelForm.value.models.splice(index, 1, { ...modelConfigForm.value })
+    modelForm.value.models.splice(index, 1, updatedModelConfig)
   } else {
-    modelForm.value.models.push({ ...modelConfigForm.value })
+    modelForm.value.models.push(updatedModelConfig)
   }
   modelConfigDialogVisible.value = false
+}
+
+const addModelConfigParam = () => {
+  if (!modelConfigForm.value.customParams) {
+    modelConfigForm.value.customParams = []
+  }
+  modelConfigForm.value.customParams.push({ key: '', value: '' })
+}
+
+const removeModelConfigParam = index => {
+  modelConfigForm.value.customParams.splice(index, 1)
 }
 /**
  * Remove the model config from the form and close the dialog
@@ -1073,6 +1174,17 @@ const removeModelConfig = id => {
         modelForm.value.models.length > 0 ? modelForm.value.models[0].id : ''
     }
   }
+}
+
+// =================================================
+// custom headers
+// =================================================
+const addCustomHeader = () => {
+  modelForm.value.customHeaders.push({ key: '', value: '' })
+}
+
+const removeCustomHeader = index => {
+  modelForm.value.customHeaders.splice(index, 1)
 }
 
 // =================================================
@@ -1490,5 +1602,24 @@ const importPresetModel = model => {
 
 .el-overlay-dialog {
   overflow: hidden;
+}
+
+.custom-headers-section {
+  padding: 0 var(--cs-space-sm);
+
+  .header-title {
+    font-size: 14px;
+    color: var(--el-text-color-regular);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+  }
+
+  .header-row {
+    .el-input__inner {
+      font-family: var(--cs-font-family-mono);
+      font-size: 12px;
+    }
+  }
 }
 </style>

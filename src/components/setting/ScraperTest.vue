@@ -14,9 +14,9 @@
         <div class="label">Scraper Type</div>
         <div class="value">
           <el-radio-group v-model="requestType">
-            <el-radio label="search">Search Result</el-radio>
-            <el-radio label="normal">Normal</el-radio>
-            <el-radio label="content">Extract Content</el-radio>
+            <el-radio value="search">Search Result</el-radio>
+            <el-radio value="normal">Normal</el-radio>
+            <el-radio value="content">Extract Content</el-radio>
           </el-radio-group>
         </div>
       </div>

@@ -1,6 +1,154 @@
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use uuid::Uuid;
+use rand::{distr::Alphanumeric, Rng};
 
 use crate::ai::network::ProxyType;
+
+/// Process custom headers with dynamic placeholders.
+///
+/// # Arguments
+/// * `metadata`: The metadata containing `customHeaders`.
+/// * `chat_id`: The current chat ID.
+///
+/// # Returns
+/// Returns a map of processed headers.
+pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMap<String, String> {
+    let mut processed = HashMap::new();
+
+    if let Some(custom_headers) = metadata.as_ref().and_then(|m| m.get("customHeaders")).and_then(Value::as_array) {
+        for header in custom_headers {
+            if let (Some(key), Some(value)) = (header.get("key").and_then(Value::as_str), header.get("value").and_then(Value::as_str)) {
+                if key.trim().is_empty() {
+                    continue;
+                }
+
+                let mut processed_value = value.to_string();
+
+                // Replace placeholders
+                if processed_value.contains("{UUID}") {
+                    processed_value = processed_value.replace("{UUID}", &Uuid::new_v4().to_string());
+                }
+
+                if processed_value.contains("{RANDOM}") {
+                    let random_str: String = rand::rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(8)
+                        .map(char::from)
+                        .collect();
+                    processed_value = processed_value.replace("{RANDOM}", &random_str);
+                }
+
+                if processed_value.contains("{CONV_ID}") {
+                    let conv_id = if chat_id.parse::<u64>().is_ok() {
+                        // If it's a numeric ID, convert to a deterministic UUID
+                        Uuid::new_v5(&Uuid::NAMESPACE_DNS, chat_id.as_bytes()).to_string()
+                    } else if chat_id.is_empty() {
+                        Uuid::new_v4().to_string()
+                    } else {
+                        chat_id.to_string()
+                    };
+                    processed_value = processed_value.replace("{CONV_ID}", &conv_id);
+                }
+
+                // Add cs- prefix to the key
+                let final_key = if key.to_lowercase().starts_with("cs-") {
+                    key.to_string()
+                } else {
+                    format!("cs-{}", key)
+                };
+
+                processed.insert(final_key, processed_value);
+            }
+        }
+    }
+
+    processed
+}
+/// Process custom body parameters from metadata.
+///
+/// # Arguments
+/// * `metadata`: The metadata containing `customParams`.
+///
+/// # Returns
+/// Returns a map of processed parameters.
+pub fn process_custom_params(metadata: &Option<Value>) -> HashMap<String, Value> {
+    let mut processed = HashMap::new();
+
+    if let Some(metadata_val) = metadata {
+        // Find the actual KV array
+        let params_array = if metadata_val.is_array() {
+            metadata_val.as_array()
+        } else if let Some(arr) = metadata_val.get("customParams").and_then(|v| v.as_array()) {
+            Some(arr)
+        } else {
+            None
+        };
+
+        if let Some(custom_params) = params_array {
+            for param in custom_params {
+                if let (Some(key), Some(value_val)) = (
+                    param.get("key").and_then(Value::as_str),
+                    param.get("value"),
+                ) {
+                    if key.trim().is_empty() {
+                        continue;
+                    }
+
+                    // Smart type conversion for values (consistent with proxy layer)
+                    let final_value = if let Some(s) = value_val.as_str() {
+                        match s.to_lowercase().as_str() {
+                            "true" => json!(true),
+                            "false" => json!(false),
+                            "" | "null" => Value::Null,
+                            _ => {
+                                if let Ok(n) = s.parse::<i64>() {
+                                    json!(n)
+                                } else if let Ok(f) = s.parse::<f64>() {
+                                    json!(f)
+                                } else {
+                                    json!(s)
+                                }
+                            }
+                        }
+                    } else {
+                        value_val.clone()
+                    };
+
+                    processed.insert(key.to_string(), final_value);
+                }
+            }
+        }
+    }
+
+    processed
+}
+
+/// Merge custom body parameters from metadata into a JSON object.
+///
+/// # Arguments
+/// * `body`: The target JSON object to merge into.
+/// * `custom_params`: The metadata containing `customParams` (array of KV).
+pub fn merge_custom_params(body: &mut Value, custom_params: &Option<Value>) {
+    let processed_params = process_custom_params(custom_params);
+    if let Some(obj) = body.as_object_mut() {
+        // Check if the current request is a streaming request
+        let is_stream = obj.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        for (k, v) in processed_params {
+            let mut final_val = v;
+
+            // Special fix for providers like ModelScope/Qwen:
+            // "parameter.enable_thinking must be set to false for non-streaming calls"
+            if k == "enable_thinking" && !is_stream && final_val.as_bool() == Some(true) {
+                log::debug!("Forcing enable_thinking to false for non-streaming request to avoid API error");
+                final_val = serde_json::json!(false);
+            }
+
+            obj.insert(k, final_val);
+        }
+    }
+}
 
 /// Get the metadata from the extra_params.
 ///

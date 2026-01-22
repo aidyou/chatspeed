@@ -188,7 +188,10 @@ pub async fn run() -> crate::error::Result<()> {
             proxy_group_list,
             proxy_group_add,
             proxy_group_update,
+            proxy_group_batch_update,
             proxy_group_delete,
+            set_active_proxy_group,
+            get_active_proxy_group,
             // message
             get_conversation_by_id,
             get_all_conversations,

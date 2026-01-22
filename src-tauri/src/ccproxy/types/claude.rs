@@ -150,7 +150,9 @@ pub struct ClaudeNativeResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ClaudeNativeUsage {
+    #[serde(default)]
     pub input_tokens: u64,
+    #[serde(default)]
     pub output_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_tokens: Option<u64>, // Input tokens used for cache creation

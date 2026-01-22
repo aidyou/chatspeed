@@ -1,30 +1,33 @@
-[简体中文](./RELEASE.zh-CN.md) ｜ English
+[简体中文](./RELEASE.zh-CN.md) ｜ [English](./RELEASE.md)
 
-# Chatspeed v1.1.22 Release Notes
+# Release Notes
 
-This release introduces a major new feature: the **Intelligent Sensitive Information Filtering System**. We are committed to protecting your privacy while maintaining a seamless AI interaction experience. The system now automatically identifies and masks sensitive data before it ever leaves your local device.
+## [1.1.23] - 2026-01-22
 
-## ✨ Security & Privacy Enhancements
+### 🚀 New Features
 
-- **Automated Data Masking**: Automatically detects and masks universal PII such as Emails, IP Addresses, and Credit Cards before sending messages to AI providers.
-- **Deep Context Recognition (ZH & EN)**:
-  - **Chinese Context Optimization**: Specialized detection for Chinese Resident IDs, Mobile/Landline numbers, Social IDs (WeChat/QQ), Banking info, Chinese Names, Addresses, Company names, and Project titles.
-  - **English Context Optimization**: Specialized detection for SSNs, English Names, Addresses, Company names, and other English-specific sensitive data.
-- **Flexible List Management**:
-  - **Custom Blocklist**: Manually add specific keywords (e.g., project internal codenames) to be always filtered.
-  - **Allowlist**: Define exceptions (e.g., your public business email or localhost IP) that should never be masked.
-- **Local-First Security**: The entire filtering logic is executed in Rust on your local machine. Only sanitized data is stored in the database and sent to AI models.
+- **Model-Specific Custom Body Parameters**: Added support for configuring custom JSON parameters (e.g., `enable_thinking`) at the specific model ID level.
+- **Dynamic Group Switching (`/switch`)**: Introduced a unified `/switch` route prefix that dynamically resolves requests based on the currently "Active" proxy group.
+- **System Prompt Keyword Replacement**: Implemented KV-based replacement rules in proxy groups to automatically correct System Prompts before forwarding.
+- **Proxy Group Batch Update**: Supports synchronizing prompt injection, text replacement, and tool filtering across multiple groups in one transaction.
 
-## 🔧 Interaction & UX Improvements
+### 🪄 Improvements
 
-- **Quick Toggle Button**: Added a `filter` icon in the chat and assistant header. Toggle filtering state with one click, with real-time sync across all windows.
-- **Multi-language UI Support**: While deep detection is optimized for Chinese and English, the **replacement placeholders** and UI are localized for 10 languages (EN, ZH, JA, KO, DE, FR, ES, PT, RU).
+- **Refined Parameter Injection Hierarchy**: Established a strict "Model Patch > User UI Intent > Engine Default" priority system.
+- **Smart Type Conversion**: Automatically converts string values like `"true"/"false"` to Booleans and numeric strings to Numbers for provider compatibility.
+- **UI Refactoring**: Upgraded the Proxy Group dialog to a tabbed layout, matching the AI Engine settings style and fixing button visibility issues.
+- **Enhanced Robustness**: `process_custom_params` now intelligently handles various nested data structures and edge cases.
 
-## 🐞 Bug Fixes
+### 🐞 Bug Fixes
 
-- **Code Cleanup**: Removed redundant exports and unused functions to improve system performance.
+- **ModelScope/Qwen Compatibility**: Automatically forces `enable_thinking` to `false` for non-streaming requests to prevent 400 Bad Request errors.
+- **UI State Persistence**: Fixed an issue where internal chat might lose real-time parameters (e.g., temperature, stop sequences) during protocol conversion.
+- **Element Plus Adaption**: Resolved deprecation warnings for `el-radio` component APIs.
+- **Security Hardening**: Removed HTML tags from i18n messages to eliminate XSS warnings.
 
 ---
+
+## [1.1.22] - 2026-01-21
 
 # Chatspeed v1.1.21 Release Notes
 
@@ -121,13 +124,13 @@ v1.1.15 focuses on enhancing the user experience of tool calls and system stabil
 
 ### 🔧 Technical Optimizations
 
-7. Optimized the conversation history in the ccproxy module, preprocessing conversation records and tool call records before protocol conversion to make them as suitable as possible for various protocols
+1. Optimized the conversation history in the ccproxy module, preprocessing conversation records and tool call records before protocol conversion to make them as suitable as possible for various protocols
 2. Optimized the ccproxy module, now supporting `*` and `?` wildcards by defining model injection conditions
 3. Optimized database upgrade logic for better version update management in the future
 
 ### 🐞 Bug Fixes
 
-10. Fixed tool call interruption issues caused by non-standard end flag sending in some models (e.g., gtp-oss), improving system compatibility
+1. Fixed tool call interruption issues caused by non-standard end flag sending in some models (e.g., gtp-oss), improving system compatibility
 2. Fixed an issue in the ccproxy module where tool structures were incorrect during complex scenarios when converting from gemini protocol to claude protocol
 
 ### 🕰 In Progress

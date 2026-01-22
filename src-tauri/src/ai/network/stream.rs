@@ -138,11 +138,7 @@ impl StreamParser {
                                     content: chunk_content,
                                     usage,
                                     // If tool_calls are present, they take precedence for msg_type
-                                    msg_type: if tool_calls.is_some() {
-                                        Some(MessageType::ToolResults)
-                                    } else {
-                                        chunk_msg_type
-                                    },
+                                    msg_type: chunk_msg_type,
                                     tool_calls,
                                     finish_reason: choice.finish_reason.clone(),
                                 });

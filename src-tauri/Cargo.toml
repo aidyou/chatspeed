@@ -98,7 +98,7 @@ tower-http                   = { version = "0.6.8", features = ["cors", "fs"] }
 unicode-script               = "0.5.8"
 unicode-segmentation         = "1.12.0"
 url                          = "2.5.8"
-uuid                         = { version = "1.19.0", features = ["v4", "serde"] }
+uuid                         = { version = "1.19.0", features = ["v4", "v5", "serde"] }
 walkdir                      = "2.5.0"
 whatlang                     = "0.16.4"
 wildmatch                    = "2.6.1"

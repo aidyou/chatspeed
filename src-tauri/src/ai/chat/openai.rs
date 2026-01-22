@@ -16,7 +16,7 @@ use crate::ai::traits::chat::{
     ChatResponse, FinishReason, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration,
 };
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
-use crate::ai::util::{init_extra_params, update_or_create_metadata};
+use crate::ai::util::{init_extra_params, process_custom_headers, update_or_create_metadata};
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
 use crate::db::ModelConfig;
 use crate::{
@@ -480,10 +480,12 @@ impl AiChatTrait for OpenAIChat {
                 err
             })?;
 
-        let params = init_extra_params(model_detail.metadata);
+        let params = init_extra_params(model_detail.metadata.clone());
 
         let url = crate::constants::get_static_var(&crate::constants::CHAT_COMPLETION_PROXY);
 
+        // Initialize the payload with essential fields.
+        // We delegate most parameter injection (max_tokens, temperature, etc.) to the CCProxy layer.
         let mut payload = json!({
             "model": model,
             "messages": messages,
@@ -586,17 +588,25 @@ impl AiChatTrait for OpenAIChat {
         }
 
         let internal_api_key = INTERNAL_CCPROXY_API_KEY.read().clone();
-        let headers = json!({
+        let mut headers_json = json!({
             "X-Provider-Id": provider_id.to_string(),
             "X-Model-Id": model,
             "X-Internal-Request": "true",
         });
 
+        // Add custom headers from model metadata
+        let custom_headers = process_custom_headers(&model_detail.metadata, &chat_id);
+        if let Some(headers_obj) = headers_json.as_object_mut() {
+            for (k, v) in custom_headers {
+                headers_obj.insert(k, json!(v));
+            }
+        }
+
         let config = ApiConfig::new(
             Some(url),
             Some(internal_api_key),
             crate::ai::network::ProxyType::None, // No proxy, as we are calling localhost
-            Some(headers),
+            Some(headers_json),
         );
 
         let endpoint = self.get_endpoint(&messages, &tools, &model_detail.models, model);

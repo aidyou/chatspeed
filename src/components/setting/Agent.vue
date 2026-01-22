@@ -89,10 +89,10 @@
           </el-form-item>
           <el-form-item :label="$t('settings.agent.agentType')" prop="agentType">
             <el-radio-group v-model="agentForm.agentType">
-              <el-radio-button label="autonomous">{{
+              <el-radio-button value="autonomous">{{
                 $t('settings.agent.autonomousMode')
               }}</el-radio-button>
-              <el-radio-button label="planning">{{
+              <el-radio-button value="planning">{{
                 $t('settings.agent.planningMode')
               }}</el-radio-button>
             </el-radio-group>

@@ -132,8 +132,35 @@ impl ModelResolver {
             .as_ref()
             .map_or(1.0, |g| g.temperature.unwrap_or(1.0));
 
+        let prompt_replace = group_config.as_ref().map_or(Vec::new(), |g| {
+            g.metadata
+                .as_ref()
+                .and_then(|m| m.get("promptReplace"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| {
+                            let key = item.get("key").and_then(|v| v.as_str())?;
+                            let value = item.get("value").and_then(|v| v.as_str())?;
+                            if key.is_empty() {
+                                None
+                            } else {
+                                Some((key.to_string(), value.to_string()))
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+
         // Ollama hasn't api key
         if ai_model_detail.api_protocol == ChatProtocol::Ollama.to_string() {
+            let custom_params = ai_model_detail
+                .models
+                .iter()
+                .find(|m| m.id == backend_target.model)
+                .and_then(|m| m.custom_params.clone());
+
             return Ok(ProxyModel {
                 provider: ai_model_detail.name.clone(),
                 chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
@@ -141,11 +168,40 @@ impl ModelResolver {
                 model: backend_target.model.clone(),
                 api_key: ai_model_detail.api_key.clone(),
                 model_metadata: ai_model_detail.metadata.clone(),
+                custom_params,
                 prompt_injection_position: Some(prompt_injection_position),
                 prompt_injection: prompt_injection,
                 prompt_text: prompt_text,
                 tool_filter: tool_filter,
+                prompt_replace,
                 temperature: temperature,
+                max_tokens: ai_model_detail.max_tokens,
+                presence_penalty: ai_model_detail
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("presencePenalty"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32,
+                frequency_penalty: ai_model_detail
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("frequencyPenalty"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32,
+                top_p: ai_model_detail.top_p,
+                top_k: ai_model_detail.top_k,
+                stop: ai_model_detail
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("stop"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| {
+                        s.lines()
+                            .map(|l| l.trim().to_string())
+                            .filter(|l| !l.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             });
         }
 
@@ -188,6 +244,12 @@ impl ModelResolver {
         let backend_chat_protocol = ChatProtocol::from_str(&ai_model_details.api_protocol)
             .map_err(|e| CCProxyError::InvalidProtocolError(e.to_string()))?;
 
+        let custom_params = ai_model_details
+            .models
+            .iter()
+            .find(|m| m.id == global_key.model_name)
+            .and_then(|m| m.custom_params.clone());
+
         Ok(ProxyModel {
             provider: ai_model_details.name.clone(),
             chat_protocol: backend_chat_protocol,
@@ -195,12 +257,40 @@ impl ModelResolver {
             model: global_key.model_name,
             api_key: global_key.key,
             model_metadata: ai_model_details.metadata.clone(),
+            custom_params,
             prompt_injection,
             prompt_injection_position: Some(prompt_injection_position),
             prompt_text,
             tool_filter,
             temperature,
-            // max_context,
+            max_tokens: ai_model_details.max_tokens,
+            presence_penalty: ai_model_details
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("presencePenalty"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32,
+            frequency_penalty: ai_model_details
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("frequencyPenalty"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32,
+            top_p: ai_model_details.top_p,
+            top_k: ai_model_details.top_k,
+            prompt_replace,
+            stop: ai_model_details
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("stop"))
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    s.lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -365,6 +455,12 @@ impl ModelResolver {
                 .unwrap_or_else(|| "".to_string()) // Fallback, though index should be valid.
         };
 
+        let custom_params = ai_model_detail
+            .models
+            .iter()
+            .find(|m| m.id == model_id)
+            .and_then(|m| m.custom_params.clone());
+
         Ok(ProxyModel {
             provider: ai_model_detail.name.clone(),
             chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
@@ -372,11 +468,40 @@ impl ModelResolver {
             model: model_id,
             api_key: selected_api_key,
             model_metadata: ai_model_detail.metadata.clone(),
+            custom_params,
             prompt_injection: "off".to_string(),
             prompt_injection_position: Some("system".to_string()),
             prompt_text: "".to_string(),
             tool_filter: HashMap::new(),
+            prompt_replace: Vec::new(),
             temperature: 1.0,
+            max_tokens: ai_model_detail.max_tokens,
+            presence_penalty: ai_model_detail
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("presencePenalty"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32,
+            frequency_penalty: ai_model_detail
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("frequencyPenalty"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32,
+            top_p: ai_model_detail.top_p,
+            top_k: ai_model_detail.top_k,
+            stop: ai_model_detail
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("stop"))
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    s.lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -454,6 +579,10 @@ pub fn should_forward_header(name_str: &str) -> bool {
             || name_str == "user-agent"
             || name_str == "accept-language"
             || name_str == "http-referer"
+            || name_str == "conversation-id"
+            || name_str == "session-id"
+            || name_str == "traceparent"
+            || name_str.starts_with("cs-")
             // Add other custom headers you want to forward, e.g., "x-custom-tenant-id"
             || (name_str.starts_with("x-") && !name_str.starts_with("x-api-"));
 }
