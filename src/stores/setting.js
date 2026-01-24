@@ -98,6 +98,8 @@ const defaultSettings = {
   serperApiKey: '',
   tavilyApiKey: '',
   websearchModel: { id: '', model: '' },
+  // vision model settings
+  visionModel: { id: '', model: '' },
   searchEngine: '',
   scraperConcurrencyCount: 5
 }

@@ -208,6 +208,40 @@
           </el-select>
         </div>
       </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.visionModel') }}
+            <small class="tooltip">{{ $t('settings.general.visionModelTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select
+            v-model="settings.visionModel.id"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onVisionModelIdChange">
+            <el-option
+              v-for="model in modelStore.providers"
+              :key="model.id"
+              :label="model.name"
+              :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select
+            v-model="settings.visionModel.model"
+            class="auto-width-select"
+            placement="bottom"
+            @change="onVisionModelModelChange">
+            <el-option
+              v-for="model in visionModelList"
+              :key="model.id"
+              :label="model.name || model.id"
+              :value="model.id">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
       <!-- <div class="item">
         <div class="label">
           <div class="label-text">
@@ -908,6 +942,13 @@ const conversationTitleGenModelList = computed(() => {
   return []
 })
 
+const visionModelList = computed(() => {
+  if (settingStore.settings.visionModel.id) {
+    return modelStore.getModelProviderById(settingStore.settings.visionModel.id)?.models || []
+  }
+  return []
+})
+
 const websearchModelList = computed(() => {
   if (settingStore.settings.websearchModel.id) {
     return modelStore.getModelProviderById(settingStore.settings.websearchModel.id)?.models || []
@@ -1146,6 +1187,24 @@ const onConversationTitleGenModelModelChange = value => {
  */
 const onSendMessageKeyChange = value => {
   setSetting('sendMessageKey', value || 'Enter')
+}
+
+/**
+ * Handles the change of vision model id
+ * @param {number} value - The value of vision model id
+ */
+const onVisionModelIdChange = value => {
+  settingStore.settings.visionModel = { id: value || 0, model: '' }
+  setSetting('visionModel', settingStore.settings.visionModel)
+}
+
+/**
+ * Handles the change of vision model
+ * @param {string} value - The value of vision model
+ */
+const onVisionModelModelChange = value => {
+  settingStore.settings.visionModel.model = value || ''
+  setSetting('visionModel', settingStore.settings.visionModel)
 }
 
 /**
