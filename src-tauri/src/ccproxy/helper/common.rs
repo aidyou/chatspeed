@@ -153,6 +153,17 @@ impl ModelResolver {
                 .unwrap_or_default()
         });
 
+        // Read tool_compat_mode from metadata
+        let tool_compat_mode_override = group_config
+            .as_ref()
+            .map(|g| {
+                g.metadata
+                    .as_ref()
+                    .and_then(|m| m.get("toolCompatMode"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or(None);
+
         // Ollama hasn't api key
         if ai_model_detail.api_protocol == ChatProtocol::Ollama.to_string() {
             let custom_params = ai_model_detail
@@ -173,7 +184,6 @@ impl ModelResolver {
                 prompt_injection: prompt_injection,
                 prompt_text: prompt_text,
                 tool_filter: tool_filter,
-                prompt_replace,
                 temperature: temperature,
                 max_tokens: ai_model_detail.max_tokens,
                 presence_penalty: ai_model_detail
@@ -190,6 +200,7 @@ impl ModelResolver {
                     .unwrap_or(0.0) as f32,
                 top_p: ai_model_detail.top_p,
                 top_k: ai_model_detail.top_k,
+                prompt_replace,
                 stop: ai_model_detail
                     .metadata
                     .as_ref()
@@ -202,6 +213,7 @@ impl ModelResolver {
                             .collect()
                     })
                     .unwrap_or_default(),
+                tool_compat_mode: tool_compat_mode_override.map(|s| s.to_string()),
             });
         }
 
@@ -291,6 +303,7 @@ impl ModelResolver {
                         .collect()
                 })
                 .unwrap_or_default(),
+            tool_compat_mode: tool_compat_mode_override.map(|s| s.to_string()),
         })
     }
 
@@ -502,6 +515,7 @@ impl ModelResolver {
                         .collect()
                 })
                 .unwrap_or_default(),
+            tool_compat_mode: None,
         })
     }
 

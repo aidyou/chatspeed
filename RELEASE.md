@@ -2,6 +2,18 @@
 
 # Release Notes
 
+## [1.1.24] - TBD
+
+### 🚀 New Features
+
+- **Tool Call Mode Configuration**: Added tool call mode settings in proxy groups with three modes:
+  - **URL Setting**: Automatically determines mode based on request path (e.g., `/compat_mode/`), preserving original behavior
+  - **Compat Mode**: Forces XML-based tool compatibility mode for models that don't support native tool calls
+  - **Native Call**: Forces native tool call format for optimal performance and compatibility
+- **Quick Mode Toggle**: Added tool mode toggle icon in proxy group list, supporting one-click cycling between three modes with real-time status display
+
+---
+
 ## [1.1.23] - 2026-01-22
 
 ### 🚀 New Features

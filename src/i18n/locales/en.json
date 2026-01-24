@@ -563,6 +563,13 @@
       "switchGuideTitle": "Dynamic Switching Guide",
       "switchGuideUrl": "Unified Access URL:",
       "title": "Proxy Group Management",
+      "toolCompatMode": "Tool Call Mode",
+      "toolCompatModeChanged": "Tool call mode changed to: {mode}",
+      "toolCompatModes": {
+        "auto": "URL Setting",
+        "compat": "Compat Mode",
+        "native": "Native Call"
+      },
       "updateConfirm": "Are you sure you want to update the {count} selected groups?",
       "updateSuccess": "Group updated successfully!",
       "form": {
@@ -585,6 +592,8 @@
         "promptTextPlaceholder": "Please enter the prompt text",
         "temperatureRatio": "Temperature Ratio",
         "temperatureRatioPlaceholder": "Actual temperature = request temperature * temperature ratio",
+        "toolCompatMode": "Tool Call Mode",
+        "toolCompatModePlaceholder": "Select tool call mode",
         "toolFilter": "Tool Filter",
         "toolFilterPlaceholder": "Please enter the tool names to filter, one per line"
       },

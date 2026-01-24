@@ -272,7 +272,15 @@ pub async fn handle_chat_completion(
     //======================================================
     // Direct send request to ai server
     //======================================================
-    if chat_protocol == proxy_model.chat_protocol && !tool_compat_mode {
+    // Determine final tool_compat_mode based on metadata override
+    let final_tool_compat_mode = match proxy_model.tool_compat_mode.as_deref() {
+        Some("compat") => true,
+        Some("native") => false,
+        Some("auto") | None => tool_compat_mode, // Use route parameter for auto mode
+        _ => tool_compat_mode, // Fallback to route parameter
+    };
+
+    if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                 let req: OpenAIChatCompletionRequest =
@@ -307,7 +315,7 @@ pub async fn handle_chat_completion(
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),
         client_request_body.clone(),
-        tool_compat_mode,
+        final_tool_compat_mode,
         route_model_alias,
         generate_action,
     )?;

@@ -36,6 +36,14 @@
             </div>
 
             <div class="value">
+              <el-tooltip placement="top" :hide-after="0" :enterable="false">
+                <template #content>
+                  {{ $t('settings.proxyGroup.toolCompatMode') }}: {{ $t(`settings.proxyGroup.toolCompatModes.${group.metadata?.toolCompatMode || 'auto'}`) }}
+                </template>
+                <span class="icon" @click="handleToggleToolCompatMode(group)">
+                  <cs :name="getToolCompatModeIcon(group.metadata?.toolCompatMode || 'auto')" size="16px" color="secondary" :active="(group.metadata?.toolCompatMode || 'auto') !== 'auto'" />
+                </span>
+              </el-tooltip>
               <el-tooltip placement="top" :content="$t('settings.proxyGroup.activateGroup')" :hide-after="0"
                 :enterable="false" v-if="proxyGroupStore.activeGroup !== group.name">
                 <span class="icon" @click="handleActivateGroup(group.name)">
@@ -99,6 +107,15 @@
                           </el-form-item>              <el-form-item :label="$t('settings.proxyGroup.form.description')" prop="description">
                 <el-input v-model="currentGroup.description" type="textarea" :rows="2"
                   :placeholder="$t('settings.proxyGroup.form.descriptionPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.proxyGroup.form.toolCompatMode')"
+                prop="metadata.toolCompatMode">
+                <el-select v-model="currentGroup.metadata.toolCompatMode"
+                  :placeholder="$t('settings.proxyGroup.form.toolCompatModePlaceholder')">
+                  <el-option :label="$t('settings.proxyGroup.toolCompatModes.auto')" value="auto" />
+                  <el-option :label="$t('settings.proxyGroup.toolCompatModes.compat')" value="compat" />
+                  <el-option :label="$t('settings.proxyGroup.toolCompatModes.native')" value="native" />
+                </el-select>
               </el-form-item>
               <el-form-item :label="$t('settings.proxyGroup.form.temperatureRatio')" prop="temperature">
                 <el-tooltip :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')" placement="top">
@@ -350,7 +367,8 @@ const initialGroupState = () => ({
     maxContext: 0,
     promptInjectionPosition: 'system',
     modelInjectionCondition: '',
-    promptReplace: []
+    promptReplace: [],
+    toolCompatMode: 'auto'
   },
   disabled: false
 })
@@ -390,13 +408,16 @@ const openCopyDialog = group => {
     name: newGroupName
   }
   if (!currentGroup.value.metadata) {
-    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [] }
+    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [], toolCompatMode: 'auto' }
   }
   if (!currentGroup.value.metadata.modelInjectionCondition) {
     currentGroup.value.metadata.modelInjectionCondition = ''
   }
   if (!currentGroup.value.metadata.promptReplace) {
     currentGroup.value.metadata.promptReplace = []
+  }
+  if (!currentGroup.value.metadata.toolCompatMode) {
+    currentGroup.value.metadata.toolCompatMode = 'auto'
   }
   console.log('Copied group:', currentGroup.value)
   activeTab.value = 'basic'
@@ -425,7 +446,7 @@ const openEditDialog = group => {
   isEditing.value = true
   currentGroup.value = { ...group }
   if (!currentGroup.value.metadata) {
-    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [] }
+    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [], toolCompatMode: 'auto' }
   }
   // 确保在编辑现有分组时包含modelInjectionCondition字段
   if (!currentGroup.value.metadata.modelInjectionCondition) {
@@ -433,6 +454,9 @@ const openEditDialog = group => {
   }
   if (!currentGroup.value.metadata.promptReplace) {
     currentGroup.value.metadata.promptReplace = []
+  }
+  if (!currentGroup.value.metadata.toolCompatMode) {
+    currentGroup.value.metadata.toolCompatMode = 'auto'
   }
   console.log(currentGroup.value)
   activeTab.value = 'basic'
@@ -628,6 +652,41 @@ const addBatchPromptReplace = () => {
 
 const removeBatchPromptReplace = index => {
   batchUpdateForm.value.promptReplace.splice(index, 1)
+}
+
+// =================================================
+// tool compatibility mode
+// =================================================
+const getToolCompatModeIcon = mode => {
+  switch (mode) {
+    case 'compat':
+      return 'xml'
+    case 'native':
+      return 'hammer'
+    case 'auto':
+    default:
+      return 'setting'
+  }
+}
+
+const handleToggleToolCompatMode = async group => {
+  const currentMode = group.metadata?.toolCompatMode || 'auto'
+  const modeMap = { auto: 'compat', compat: 'native', native: 'auto' }
+  const newMode = modeMap[currentMode]
+
+  try {
+    const updatedGroup = {
+      ...group,
+      metadata: {
+        ...group.metadata,
+        toolCompatMode: newMode
+      }
+    }
+    await proxyGroupStore.update(updatedGroup)
+    showMessage(t('settings.proxyGroup.toolCompatModeChanged', { mode: t(`settings.proxyGroup.toolCompatModes.${newMode}`) }), 'success')
+  } catch (error) {
+    showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
+  }
 }
 </script>
 

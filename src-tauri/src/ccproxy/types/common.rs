@@ -85,6 +85,8 @@ pub struct ProxyModel {
     pub top_p: f32,
     pub top_k: i32,
     pub stop: Vec<String>,
+    // Tool compatibility mode from metadata: "auto", "compat", "native"
+    pub tool_compat_mode: Option<String>,
 }
 
 //======================================================
