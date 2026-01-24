@@ -11,6 +11,12 @@
   - **Compat Mode**: Forces XML-based tool compatibility mode for models that don't support native tool calls
   - **Native Call**: Forces native tool call format for optimal performance and compatibility
 - **Quick Mode Toggle**: Added tool mode toggle icon in proxy group list, supporting one-click cycling between three modes with real-time status display
+- **Batch Update Template Loading**: Added "Load from Template" feature in batch update dialog, allowing quick configuration import from existing proxy groups
+
+### 🪄 Improvements
+
+- **Batch Update Dialog Optimization**: Increased dialog height and added scroll support to prevent form content from being obscured by buttons
+- **UI Alignment Fix**: Fixed vertical alignment between labels and checkboxes in batch update dialog
 
 ---
 

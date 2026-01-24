@@ -576,6 +576,7 @@
         "description": "Description",
         "descriptionPlaceholder": "Please enter a description",
         "disabled": "Disabled",
+        "loadFromTemplate": "Load from Template",
         "maxContext": "Max Context Length",
         "maxContextPlaceholder": "Please refer to the release information or interface information of each model, a value of 0 will not be set",
         "modelInjectionCondition": "Model Injection Condition",
@@ -595,7 +596,8 @@
         "toolCompatMode": "Tool Call Mode",
         "toolCompatModePlaceholder": "Select tool call mode",
         "toolFilter": "Tool Filter",
-        "toolFilterPlaceholder": "Please enter the tool names to filter, one per line"
+        "toolFilterPlaceholder": "Please enter the tool names to filter, one per line",
+        "selectTemplate": "Select a template group"
       },
       "promptInjection": {
         "off": "Off",

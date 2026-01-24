@@ -576,6 +576,7 @@
         "description": "描述",
         "descriptionPlaceholder": "请输入描述",
         "disabled": "禁用",
+        "loadFromTemplate": "从模板加载",
         "maxContext": "最大上下文长度",
         "maxContextPlaceholder": "请参考各模型的发布信息或者接口信息，0 值将不设置",
         "modelInjectionCondition": "模型注入条件",
@@ -595,7 +596,8 @@
         "toolCompatMode": "工具调用",
         "toolCompatModePlaceholder": "选择工具调用模式",
         "toolFilter": "工具过滤",
-        "toolFilterPlaceholder": "请输入要过滤的工具名称，每行一个"
+        "toolFilterPlaceholder": "请输入要过滤的工具名称，每行一个",
+        "selectTemplate": "选择模板分组"
       },
       "promptInjection": {
         "off": "关闭",

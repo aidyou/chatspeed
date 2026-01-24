@@ -201,7 +201,7 @@
       <!-- batch update dialog -->
       <el-dialog v-model="batchUpdateDialogVisible" :title="$t('settings.proxyGroup.batchUpdateTitle')" width="600px"
         align-center class="proxy-group-edit-dialog" :show-close="false" :close-on-click-modal="false"
-        :close-on-press-escape="false">
+        :close-on-press-escape="false" style="--el-dialog-margin-top: 5vh; min-height: 600px">
         <div class="form-container">
           <el-form :model="batchUpdateForm" label-width="auto" style="padding-top: 10px">
             <el-form-item :label="$t('settings.proxyGroup.selectGroups')">
@@ -214,6 +214,12 @@
             <el-divider border-style="dashed">{{ $t('settings.proxyGroup.selectFieldsToUpdate') }}</el-divider>
 
             <div class="tab-content-scroll" style="max-height: 400px">
+              <el-form-item :label="$t('settings.proxyGroup.form.loadFromTemplate')">
+                <el-select v-model="batchUpdateForm.templateGroupId" style="width: 100%" :placeholder="$t('settings.proxyGroup.form.selectTemplate')" @change="loadTemplate">
+                  <el-option v-for="item in sortedProxyGroupList" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+              </el-form-item>
+
               <el-form-item :label="$t('settings.proxyGroup.form.promptInjection')">
                 <el-row :gutter="10" style="width: 100%; align-items: center">
                   <el-col :span="2">
@@ -248,7 +254,7 @@
               <el-form-item :label="$t('settings.proxyGroup.form.modelInjectionCondition')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.modelInjectionCondition" style="margin-top: 8px" />
+                    <el-checkbox v-model="batchUpdateFields.modelInjectionCondition" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
                     <el-input v-model="batchUpdateForm.modelInjectionCondition"
@@ -261,7 +267,7 @@
               <el-form-item :label="$t('settings.proxyGroup.form.promptText')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.promptText" style="margin-top: 8px" />
+                    <el-checkbox v-model="batchUpdateFields.promptText" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
                     <el-input v-model="batchUpdateForm.promptText" :disabled="!batchUpdateFields.promptText"
@@ -273,7 +279,7 @@
               <el-form-item :label="$t('settings.proxyGroup.form.toolFilter')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.toolFilter" style="margin-top: 8px" />
+                    <el-checkbox v-model="batchUpdateFields.toolFilter" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
                     <el-input v-model="batchUpdateForm.toolFilter" :disabled="!batchUpdateFields.toolFilter"
@@ -285,7 +291,7 @@
               <el-form-item :label="$t('settings.proxyGroup.form.promptReplace')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.promptReplace" style="margin-top: 8px" />
+                    <el-checkbox v-model="batchUpdateFields.promptReplace" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
                     <div v-for="(item, index) in batchUpdateForm.promptReplace" :key="index" class="header-row"
@@ -571,6 +577,7 @@ const removePromptReplace = index => {
 const batchUpdateDialogVisible = ref(false)
 const batchUpdateForm = ref({
   selectedIds: [],
+  templateGroupId: null,
   promptInjection: 'enhance',
   promptInjectionPosition: 'system',
   modelInjectionCondition: '',
@@ -590,6 +597,7 @@ const batchUpdateFields = ref({
 const openBatchUpdateDialog = () => {
   batchUpdateForm.value = {
     selectedIds: [],
+    templateGroupId: null,
     promptInjection: 'enhance',
     promptInjectionPosition: 'system',
     modelInjectionCondition: '',
@@ -641,6 +649,22 @@ const handleBatchUpdateSubmit = async () => {
   } finally {
     formLoading.value = false
   }
+}
+
+const loadTemplate = () => {
+  if (!batchUpdateForm.value.templateGroupId) {
+    return
+  }
+  const templateGroup = sortedProxyGroupList.value.find(g => g.id === batchUpdateForm.value.templateGroupId)
+  if (!templateGroup) {
+    return
+  }
+  batchUpdateForm.value.promptInjection = templateGroup.promptInjection || 'off'
+  batchUpdateForm.value.promptInjectionPosition = templateGroup.metadata?.promptInjectionPosition || 'system'
+  batchUpdateForm.value.modelInjectionCondition = templateGroup.metadata?.modelInjectionCondition || ''
+  batchUpdateForm.value.promptText = templateGroup.promptText || ''
+  batchUpdateForm.value.toolFilter = templateGroup.toolFilter || ''
+  batchUpdateForm.value.promptReplace = templateGroup.metadata?.promptReplace ? JSON.parse(JSON.stringify(templateGroup.metadata.promptReplace)) : []
 }
 
 const addBatchPromptReplace = () => {
@@ -716,6 +740,12 @@ const handleToggleToolCompatMode = async group => {
   gap: var(--cs-space-lg);
 }
 
+.proxy-group-edit-dialog {
+  :deep(.el-form-item) {
+    align-items: flex-start;
+  }
+}
+
 .card {
   .title {
     display: flex;
@@ -778,7 +808,8 @@ const handleToggleToolCompatMode = async group => {
 }
 
 .form-container {
-  max-height: calc(70vh - 120px);
+  max-height: calc(80vh - 120px);
+  overflow-y: auto;
 }
 
 .proxy-group-tabs {
