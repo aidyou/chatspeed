@@ -2,58 +2,46 @@
   <div class="assistant-page" @click="selectGroupVisible = false">
     <header class="header">
       <div class="input-container">
-        <el-input
-          class="input upperLayer"
-          ref="inputRef"
-          v-model="inputMessage"
-          type="textarea"
-          :disabled="!canChat"
-          :autosize="{ minRows: 3, maxRows: 5 }"
-          :placeholder="$t('assistant.chatPlaceholder')"
-          @input="onInput"
-          @keydown.enter="onKeyEnter"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd" />
+        <!-- Attachments area -->
+        <div class="attachments-area" v-if="attachments.length > 0">
+          <div v-for="attachment in attachments" :key="attachment.id" class="attachment-item upperLayer">
+            <img v-if="attachment.type === 'image'" :src="attachment.url" class="attachment-preview" />
+            <cs v-else name="file" class="attachment-icon" />
+            <span class="attachment-name">{{ attachment.name }}</span>
+            <cs name="close" class="attachment-remove" @click="removeAttachment(attachment.id)" />
+          </div>
+        </div>
+
+        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
+          :autosize="{ minRows: 3, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
+          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd"
+          @paste="onPaste" />
 
         <div class="icons upperLayer" v-if="canChat">
           <!-- model selector -->
-          <ModelSelector
-            v-model="currentModelProvider"
-            position="top"
-            :useProviderAvatar="true"
-            :triggerSize="14"
-            @model-select="onModelSelect"
-            @sub-model-select="onSubModelSelect"
+          <ModelSelector v-model="currentModelProvider" position="top" :useProviderAvatar="true" :triggerSize="14"
+            @model-select="onModelSelect" @sub-model-select="onSubModelSelect"
             @selection-complete="onSelectionComplete" />
 
+          <!-- attachment button -->
+          <el-tooltip :content="$t('chat.addAttachment')" :hide-after="0" :enterable="false" placement="right">
+            <cs name="attachment" @click="onOpenFileDialog" />
+          </el-tooltip>
+
           <!-- sensitive filtering switch -->
-          <el-tooltip
-            :content="$t('chat.sensitiveFiltering')"
-            :hide-after="0"
-            :enterable="false"
-            placement="top">
-            <cs
-              name="filter"
-              @click="onToggleSensitiveFiltering"
-              :class="{ active: sensitiveStore.config.enabled }" />
+          <el-tooltip :content="$t('chat.sensitiveFiltering')" :hide-after="0" :enterable="false" placement="right">
+            <cs name="filter" @click="onToggleSensitiveFiltering" :class="{ active: sensitiveStore.config.enabled }" />
           </el-tooltip>
 
           <!-- netowrk switch -->
-          <el-tooltip
-            :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-            :hide-after="0"
-            :enterable="false"
-            placement="top">
+          <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)" :hide-after="0"
+            :enterable="false" placement="right">
             <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" />
           </el-tooltip>
 
           <!-- MCP switch -->
-          <el-tooltip
-            :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
-            :hide-after="0"
-            :enterable="false"
-            placement="top"
-            v-if="mcpServers.length > 0">
+          <el-tooltip :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)" :hide-after="0"
+            :enterable="false" placement="right" v-if="mcpServers.length > 0">
             <cs name="mcp" @click="onToggleMcp" :class="{ active: mcpEnabled }" />
           </el-tooltip>
         </div>
@@ -72,10 +60,7 @@
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                @click="fromLang = lang.code">
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
                 <span>{{ lang.icon }} {{ lang.name }}</span>
                 <cs name="check" class="active" v-if="lang.code === fromLang" />
               </el-dropdown-item>
@@ -93,10 +78,7 @@
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item
-                v-for="lang in availableLanguages"
-                :key="lang.code"
-                :checked="toLang === lang.code"
+              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 <span>{{ lang.icon }} {{ lang.name }}</span>
                 <cs name="check" class="active" v-if="lang.code === toLang" />
@@ -116,10 +98,7 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip
-          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
-          :hide-after="0"
-          :enterable="false"
+        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" :enterable="false"
           placement="bottom">
           <cs name="pin" />
         </el-tooltip>
@@ -158,19 +137,10 @@
     <main class="main" v-else :class="{ 'split-view': chatState.message || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="chatState.message || isChatting">
-        <el-tooltip
-          v-for="(skill, index) in skills"
-          :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description"
-          placement="top"
-          :hide-after="0"
-          :enterable="false"
-          :disabled="!skill.metadata.description"
-          transition="none">
-          <div
-            class="skill-item-compact"
-            :class="{ active: skillIndex === index }"
-            @click="onSelectSkill(index)">
+        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0" :enterable="false"
+          :disabled="!skill.metadata.description" transition="none">
+          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -184,26 +154,16 @@
         <div class="chat" v-if="chatState.message || isChatting">
           <div class="message">
             <div class="content-container">
-              <chatting
-                ref="chatMessagesRef"
-                :key="lastChatId"
-                :step="chatState.step"
-                :content="chatState.lastMessageChunk"
-                :reference="chatState.reference"
-                :reasoning="chatState.lastReasoningChunk"
-                :toolCalls="chatState.toolCall || []"
-                :is-reasoning="chatState.isReasoning"
-                :is-chatting="isChatting" />
+              <chatting ref="chatMessagesRef" :key="lastChatId" :step="chatState.step"
+                :content="chatState.lastMessageChunk" :reference="chatState.reference"
+                :reasoning="chatState.lastReasoningChunk" :toolCalls="chatState.toolCall || []"
+                :is-reasoning="chatState.isReasoning" :is-chatting="isChatting" />
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div
-            class="skill-item"
-            v-for="(skill, index) in skills"
-            :key="skill.id"
-            :class="{ active: skillIndex === index }"
-            @click="onSkillItemClick(index)">
+          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
+            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -215,30 +175,16 @@
     <footer class="footer" v-if="!isChatting && chatState.message">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip
-            :content="$t('chat.quoteMessage')"
-            :hide-after="0"
-            :enterable="false"
-            placement="top"
+          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" :enterable="false" placement="top"
             transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.resendMessage')"
-            :hide-after="0"
-            :enterable="false"
-            placement="top"
-            transition="none"
-            v-if="userMessage">
+          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" :enterable="false" placement="top"
+            transition="none" v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip
-            :content="$t('chat.goToChat')"
-            :hide-after="0"
-            :enterable="false"
-            placement="top"
-            transition="none"
-            v-if="userMessage">
+          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" :enterable="false" placement="top"
+            transition="none" v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
           <cs name="copy" @click="onCopyMessage()" class="icon-copy" />
@@ -246,6 +192,35 @@
       </div>
     </footer>
   </div>
+
+  <!-- File selection dialog -->
+
+  <el-dialog v-model="fileDialogVisible" :title="$t('chat.selectFile')" width="500px">
+
+    <el-upload drag :auto-upload="false" :on-change="onFileSelect" :show-file-list="false"
+      accept="image/*,.txt,.md,.json,.xml,.csv,.log,.php,.go,.rs,.js,.py,.ts,.css,.html,.htm,.pdf,.docx,.xlsx,.xls">
+
+      <div class="upload-area">
+
+        <cs name="upload" size="48px" />
+
+        <div class="upload-text">{{ $t('chat.dragOrClickToSelectFile') }}</div>
+
+        <div class="upload-hint">
+
+          {{ $t('chat.supportedImageFormats') }}<br />
+
+          {{ $t('chat.supportedOfficeFormats') }}<br />
+
+          {{ $t('chat.supportedTextFormats') }}
+
+        </div>
+
+      </div>
+
+    </el-upload>
+
+  </el-dialog>
 </template>
 
 <script setup>
@@ -266,6 +241,7 @@ import {
   handleChatMessage as handleChatMessageCommon
 } from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
+import { parseFileContent } from '@/libs/file-parser'
 import { sendSyncState } from '@/libs/sync'
 import { csStorageKey } from '@/config/config'
 
@@ -315,6 +291,10 @@ const userMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
 const lastChatId = ref()
+
+// Attachments
+const attachments = ref([])
+const fileDialogVisible = ref(false)
 const getDefaultChatState = () => ({
   step: '',
   message: '',
@@ -454,7 +434,7 @@ watch(
 /**
  * Scroll to bottom when assistant message changes
  */
-watch([() => chatState.value.message, () => chatState.value.reasoning], () => {
+watch([() => chatState.value.message, () => chatState.value.reasoning, () => chatState.value.step], () => {
   nextTick(() => {
     scrollToBottomIfNeeded()
   })
@@ -503,8 +483,11 @@ onMounted(async () => {
     if (event.payload?.metadata?.windowLabel !== settingStore.windowLabel) {
       return
     }
-    // console.log('chat_stream', event)
-    handleChatMessage(event.payload)
+
+    // Skip vision-related messages in the global UI listener
+    if (event.payload?.chatId === lastChatId.value) {
+      handleChatMessage(event.payload)
+    }
   })
 
   unlistenPasteResponse.value = await listen('cs://assistant-paste', async event => {
@@ -586,31 +569,177 @@ const proxyType = computed(() => {
  * Dispatch chat completion event to the backend
  */
 const dispatchChatCompletion = async () => {
-  if (!inputMessage.value?.trim() || !canChat.value) {
+  if ((!inputMessage.value?.trim() && attachments.value.length === 0) || !canChat.value) {
     return
   }
 
-  const metadata = {}
+  // 1. 备份数据
+  const backupMessage = inputMessage.value
+  const backupAttachments = [...attachments.value]
+  const rawUserMessage = inputMessage.value.trim()
+
+  let processedAttachmentMetadata = null
+  let visionAnalysisResult = ''
+
+  // 2. 立即初始化状态并清空输入
+  inputMessage.value = ''
+  attachments.value = []
+  chatErrorMessage.value = ''
+  isChatting.value = true
+  chatState.value = getDefaultChatState()
+
+  nextTick(() => {
+    resetScrollBehavior()
+    scrollToBottomIfNeeded()
+  })
+
+  // Handle attachments
+  if (backupAttachments.length > 0) {
+    chatState.value.step = t('chat.preparingAttachments')
+
+    // Prepare attachment metadata for storage
+    processedAttachmentMetadata = {
+      attachments: backupAttachments.map(a => ({
+        type: a.type,
+        name: a.name,
+        size: a.size,
+        url: a.url || null,
+        content: a.content || null
+      }))
+    }
+
+    const hasImageAttachments = backupAttachments.some(a => a.type === 'image')
+    const visionModel = settingStore.settings.visionModel
+
+    if (hasImageAttachments) {
+      if (!visionModel.id || !visionModel.model) {
+        // Rollback
+        inputMessage.value = backupMessage
+        attachments.value = backupAttachments
+        isChatting.value = false
+        showMessage(t('settings.general.visionModelRequired'), 'error')
+        return
+      }
+
+      chatState.value.step = t('chat.analyzingImages')
+
+      const imageAttachments = backupAttachments.filter(a => a.type === 'image')
+      const textAttachments = backupAttachments.filter(a => a.type === 'text')
+
+      const visionMessage = {
+        role: 'user',
+        content: [{ type: 'text', text: 'Please describe all the images in detail.' }]
+      }
+
+      for (const attachment of imageAttachments) {
+        visionMessage.content.push({ type: 'image_url', image_url: { url: attachment.url } })
+      }
+
+      if (textAttachments.length > 0) {
+        const textContent = textAttachments
+          .map(a => `[File: ${a.name}]:\n${a.content}`)
+          .join('\n\n')
+        visionMessage.content.push({ type: 'text', text: textContent })
+      }
+
+      try {
+        const visionLastChatId = Uuid()
+        const visionChatId = `vision_${visionLastChatId}`
+
+        const visionPromise = new Promise((resolve, reject) => {
+          let fullContent = ''
+          let finished = false
+          let unlistenFn = null
+
+          listen('chat_stream', (event) => {
+            const payload = event.payload
+            if (payload.chatId === visionChatId) {
+              if (payload.type === 'text' && payload.chunk) {
+                fullContent += payload.chunk
+              } else if (payload.type === 'finished') {
+                finished = true
+                resolve(fullContent)
+              } else if (payload.type === 'error') {
+                finished = true
+                reject(new Error(payload.chunk || 'Vision failed'))
+              }
+            }
+          }).then(fn => unlistenFn = fn)
+
+          setTimeout(() => {
+            if (!finished) {
+              if (unlistenFn) unlistenFn()
+              reject(new Error('Vision timeout'))
+            }
+          }, 60000)
+        })
+
+        await invokeWrapper('chat_completion', {
+          providerId: visionModel.id,
+          model: visionModel.model,
+          chatId: visionChatId,
+          messages: [visionMessage],
+          networkEnabled: false,
+          mcpEnabled: false,
+          stream: false,
+          toolsEnabled: false,
+          metadata: {}
+        })
+
+        visionAnalysisResult = await visionPromise
+      } catch (error) {
+        console.error('Error analyzing images:', error)
+        // 回退
+        inputMessage.value = backupMessage
+        attachments.value = backupAttachments
+        chatErrorMessage.value = t('chat.errorOnAddAttachment', { error: error.message })
+        isChatting.value = false
+        return
+      }
+    } else {
+      const textAttachments = backupAttachments.filter(a => a.type === 'text')
+      textAttachments.forEach(attachment => {
+        visionAnalysisResult += `\n\n[File: ${attachment.name}]:\n${attachment.content}`
+      })
+    }
+  }
+
+  // Construct final message
+  let finalMessageToSend = rawUserMessage
+  if (visionAnalysisResult) {
+    finalMessageToSend = `[Image Analysis]:\n${visionAnalysisResult}\n\n[User Question]: ${rawUserMessage}`
+  }
+
+  if (!finalMessageToSend) {
+    isChatting.value = false
+    return
+  }
+
+  const metadata = {
+    vision_analysis: visionAnalysisResult
+  }
+
   if (isTranslation.value) {
     metadata.sourceLang = fromLang.value
     metadata.targetLang = toLang.value
   }
-  let quotedMessage = buildUserMessage(inputMessage.value, quoteMessage.value)
+
+  if (processedAttachmentMetadata?.attachments?.length > 0) {
+    metadata.attachments = processedAttachmentMetadata.attachments
+  }
+
+  let quotedMessage = buildUserMessage(finalMessageToSend, quoteMessage.value)
   quoteMessage.value = ''
 
   const messages = await chatPreProcess(quotedMessage, [], currentSkill.value, metadata)
   if (isEmpty(messages)) {
-    console.log('chat messages is empty')
+    isChatting.value = false
     return
   }
 
-  userMessage.value = inputMessage.value
-  chatErrorMessage.value = ''
-  quoteMessage.value = ''
-  inputMessage.value = ''
+  chatState.value.step = t('chat.generatingResponse')
+  userMessage.value = rawUserMessage
   payloadMetadata.value = {}
-  isChatting.value = true
-  chatState.value = getDefaultChatState()
   lastChatId.value = Uuid()
 
   // reset scroll behavior
@@ -631,19 +760,10 @@ const dispatchChatCompletion = async () => {
       }
     })
   } catch (error) {
-    if (error instanceof FrontendAppError) {
-      chatErrorMessage.value = t('chat.errorOnSendMessage', { error: error.toFormattedString() })
-      console.error('error on sendMessage:', error.originalError)
-    } else {
-      chatErrorMessage.value = t('chat.errorOnSendMessage', {
-        error: error.message || String(error)
-      })
-      console.error('error on sendMessage:', error)
-    }
+    chatErrorMessage.value = t('chat.errorOnSendMessage', { error: String(error) })
     isChatting.value = false
   }
 }
-
 const payloadMetadata = ref({})
 /**
  * Handle chat message event
@@ -895,6 +1015,228 @@ const onCompositionEnd = () => {
   }, 100)
 }
 
+// =================================================
+// Attachment handling
+// =================================================
+
+/**
+ * Generate unique ID for attachment
+ */
+const generateAttachmentId = () => {
+  return `attachment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+}
+
+/**
+ * Add attachment
+ * @param {Object} attachment - Attachment object
+ */
+const addAttachment = attachment => {
+  attachments.value.push({
+    id: generateAttachmentId(),
+    ...attachment
+  })
+}
+
+/**
+ * Remove attachment
+ * @param {String} id - Attachment ID
+ */
+const removeAttachment = id => {
+  const index = attachments.value.findIndex(a => a.id === id)
+  if (index > -1) {
+    attachments.value.splice(index, 1)
+  }
+}
+
+/**
+ * Clear all attachments
+ */
+const clearAttachments = () => {
+  attachments.value = []
+}
+
+/**
+ * Handle paste event for images
+ * @param {ClipboardEvent} event - Paste event
+ */
+const onPaste = async event => {
+  const items = event.clipboardData?.items
+  if (!items) return
+
+  let hasImage = false
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.type.startsWith('image/')) {
+      hasImage = true
+      const file = item.getAsFile()
+      if (file) {
+        await handleImageFile(file)
+      }
+    }
+  }
+
+  if (hasImage) {
+    event.preventDefault()
+  }
+}
+
+/**
+ * Handle image file
+ * @param {File} file - Image file
+ */
+const handleImageFile = async file => {
+  try {
+    // Element Plus wraps the file, so we need to get the raw file
+    const rawFile = file.raw || file
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        addAttachment({
+          type: 'image',
+          name: rawFile.name,
+          url: e.target.result,
+          size: rawFile.size
+        })
+        resolve()
+      }
+      reader.onerror = (error) => {
+        console.error('FileReader error:', error)
+        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read image' }), 'error')
+        reject(error)
+      }
+      reader.readAsDataURL(rawFile)
+    })
+  } catch (error) {
+    console.error('Error handling image file:', error)
+    showMessage(t('chat.errorOnAddAttachment', { error: error.message }), 'error')
+  }
+}
+
+/**
+ * Handle text file
+ * @param {File} file - Text file
+ */
+const handleTextFile = async file => {
+  try {
+    const rawFile = file.raw || file
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        addAttachment({
+          type: 'text',
+          name: rawFile.name,
+          content: e.target.result,
+          size: rawFile.size
+        })
+        resolve()
+      }
+      reader.onerror = (error) => {
+        console.error('FileReader error:', error)
+        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read text file' }), 'error')
+        reject(error)
+      }
+      reader.readAsText(rawFile)
+    })
+  } catch (error) {
+    console.error('Error handling text file:', error)
+    showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }), 'error')
+  }
+}
+
+const originalAlwaysOnTopState = ref(false)
+const isTemporarilyPinned = ref(false)
+
+/**
+ * Open file dialog and temporarily pin window if needed
+ */
+const onOpenFileDialog = async () => {
+  originalAlwaysOnTopState.value = windowStore.assistantAlwaysOnTop
+
+  if (!originalAlwaysOnTopState.value) {
+    // Temporarily pin the window
+    try {
+      await invokeWrapper('toggle_window_always_on_top', {
+        windowLabel: 'assistant',
+        newState: true
+      })
+      windowStore.assistantAlwaysOnTop = true
+      isTemporarilyPinned.value = true
+    } catch (e) {
+      console.error('Failed to temporarily pin window:', e)
+    }
+  }
+
+  fileDialogVisible.value = true
+}
+
+/**
+ * Restore window pin state
+ */
+const restorePinState = async () => {
+  if (isTemporarilyPinned.value) {
+    try {
+      await invokeWrapper('toggle_window_always_on_top', {
+        windowLabel: 'assistant',
+        newState: originalAlwaysOnTopState.value
+      })
+      windowStore.assistantAlwaysOnTop = originalAlwaysOnTopState.value
+    } catch (e) {
+      console.error('Failed to restore window pin state:', e)
+    } finally {
+      isTemporarilyPinned.value = false
+    }
+  }
+}
+
+// Watch for dialog close (e.g. by clicking overlay) to restore pin state
+watch(fileDialogVisible, (val) => {
+  if (!val) {
+    restorePinState()
+  }
+})
+
+/**
+ * Handle file selection
+ * @param {File} file - Selected file
+ */
+const onFileSelect = async file => {
+  // Element Plus wraps the file, so we need to get the raw file
+  const rawFile = file.raw || file
+
+  const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp']
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']
+  const textExtensions = ['.txt', '.md', '.json', '.xml', '.csv', '.log', '.php', '.go', '.rs', '.js', '.py', '.ts', '.css', '.html', '.htm', '.pdf', '.docx', '.xlsx', '.xls']
+
+  const fileName = rawFile.name.toLowerCase()
+
+  // Hide dialog and restore pin state
+  fileDialogVisible.value = false
+
+  // Check if it's an image by MIME type or extension
+  if (imageTypes.includes(rawFile.type) || imageExtensions.some(ext => fileName.endsWith(ext))) {
+    handleImageFile(file)
+  } else if (textExtensions.some(ext => fileName.endsWith(ext))) {
+    try {
+      const content = await parseFileContent(rawFile)
+      if (content || content === "") {
+        addAttachment({
+          type: 'text',
+          name: rawFile.name,
+          content: content,
+          size: rawFile.size
+        })
+      }
+    } catch (error) {
+      console.error('Error parsing file:', error)
+      showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }), 'error')
+    }
+  } else {
+    showMessage(t('chat.unsupportedFileType'), 'error')
+  }
+}
+
 const onInput = () => {
   // When in split-view mode (indicated by a previous userMessage),
   // typing should not reset the view to the initial skill list.
@@ -1032,24 +1374,25 @@ const onAddModel = async () => {
 
     .input-container {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-direction: row-reverse;
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
 
       .icons {
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         flex-shrink: 0;
-        width: 24px;
-        height: 32px;
+        height: auto;
+        padding: var(--cs-space-xs) 0 0;
         cursor: pointer;
         border-radius: var(--cs-border-radius);
-        gap: var(--cs-space-xs);
+        gap: var(--cs-space-sm);
 
         .cs {
           color: var(--cs-text-color-secondary);
+          font-size: var(--cs-font-size-md);
 
           &:hover {
             color: var(--cs-color-primary);
@@ -1057,12 +1400,13 @@ const onAddModel = async () => {
         }
       }
 
-      .input > .el-textarea__inner {
+      .input>.el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
-        border-radius: var(--cs-border-radius-lg);
+        border-radius: var(--cs-border-radius-sm);
         resize: none !important;
         background-color: transparent;
+        padding: 0;
       }
     }
 
@@ -1319,6 +1663,81 @@ const onAddModel = async () => {
     justify-content: space-between;
     gap: var(--cs-space-sm);
   }
+}
+
+// =================================================
+// Attachments
+// =================================================
+
+.attachments-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cs-space-sm);
+  padding: var(--cs-space-sm);
+  background: var(--cs-bg-color-light);
+  border-radius: var(--cs-border-radius-sm);
+  margin-bottom: var(--cs-space-sm);
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  background: var(--cs-bg-color);
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-sm);
+  font-size: var(--cs-font-size-xs);
+}
+
+.attachment-preview {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--cs-border-radius-xs);
+}
+
+.attachment-icon {
+  font-size: 16px;
+  color: var(--cs-text-color-secondary);
+}
+
+.attachment-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cs-text-color-secondary);
+}
+
+.attachment-remove {
+  cursor: pointer;
+  color: var(--cs-text-color-secondary);
+  font-size: 12px;
+
+  &:hover {
+    color: var(--cs-color-danger);
+  }
+}
+
+.upload-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--cs-space-md);
+  padding: var(--cs-space-xl);
+}
+
+.upload-text {
+  font-size: var(--cs-font-size-base);
+  color: var(--cs-text-color);
+}
+
+.upload-hint {
+  font-size: var(--cs-font-size-xs);
+  color: var(--cs-text-color-secondary);
+  text-align: center;
+  line-height: 1.6;
 }
 
 .el-dropdown__popper .el-dropdown__list {

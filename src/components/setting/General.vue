@@ -7,16 +7,9 @@
           {{ $t('settings.general.language') }}
         </div>
         <div class="value">
-          <el-select
-            v-model="settings.interfaceLanguage"
-            class="auto-width-select"
-            placement="bottom"
+          <el-select v-model="settings.interfaceLanguage" class="auto-width-select" placement="bottom"
             @change="onInterfaceLanguageChange">
-            <el-option
-              v-for="lang in softwareLanguages"
-              :key="lang.code"
-              :label="lang.name"
-              :value="lang.code">
+            <el-option v-for="lang in softwareLanguages" :key="lang.code" :label="lang.name" :value="lang.code">
               <span>{{ lang.icon }}</span>
               <span>{{ lang.name }}</span>
             </el-option>
@@ -32,16 +25,9 @@
           </div>
         </div>
         <div class="value">
-          <el-select
-            v-model="settings.primaryLanguage"
-            class="auto-width-select"
-            placement="bottom"
+          <el-select v-model="settings.primaryLanguage" class="auto-width-select" placement="bottom"
             @change="onPrimaryLanguageChange">
-            <el-option
-              v-for="lang in availableLanguages"
-              :key="lang.code"
-              :label="lang.name"
-              :value="lang.code">
+            <el-option v-for="lang in availableLanguages" :key="lang.code" :label="lang.name" :value="lang.code">
               <span>{{ lang.icon }}</span>
               <span>{{ lang.name }}</span>
             </el-option>
@@ -57,16 +43,9 @@
           </div>
         </div>
         <div class="value">
-          <el-select
-            v-model="settings.secondaryLanguage"
-            class="auto-width-select"
-            placement="bottom"
+          <el-select v-model="settings.secondaryLanguage" class="auto-width-select" placement="bottom"
             @change="onSecondaryLanguageChange">
-            <el-option
-              v-for="lang in availableLanguages"
-              :key="lang.code"
-              :label="lang.name"
-              :value="lang.code">
+            <el-option v-for="lang in availableLanguages" :key="lang.code" :label="lang.name" :value="lang.code">
               <span>{{ lang.icon }}</span>
               <span>{{ lang.name }}</span>
             </el-option>
@@ -83,11 +62,7 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.theme') }}</div>
         <div class="value">
-          <el-select
-            v-model="settings.theme"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onThemeChange">
+          <el-select v-model="settings.theme" class="auto-width-select" placement="bottom" @change="onThemeChange">
             <el-option v-for="(label, theme) in themes" :key="theme" :label="label" :value="theme">
             </el-option>
           </el-select>
@@ -96,11 +71,7 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.codeLightTheme') }}</div>
         <div class="value">
-          <el-select
-            v-model="settings.codeLightTheme"
-            class="auto-width-select"
-            placement="bottom"
-            filterable
+          <el-select v-model="settings.codeLightTheme" class="auto-width-select" placement="bottom" filterable
             @change="onCodeLightThemeChange">
             <el-option v-for="theme in codeThemes.light" :key="theme" :label="theme" :value="theme">
             </el-option>
@@ -110,11 +81,7 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.codeDarkTheme') }}</div>
         <div class="value">
-          <el-select
-            v-model="settings.codeDarkTheme"
-            class="auto-width-select"
-            placement="bottom"
-            filterable
+          <el-select v-model="settings.codeDarkTheme" class="auto-width-select" placement="bottom" filterable
             @change="onCodeDarkThemeChange">
             <el-option v-for="theme in codeThemes.dark" :key="theme" :label="theme" :value="theme">
             </el-option>
@@ -147,11 +114,7 @@
           </div>
         </div>
         <div class="value" style="width: 200px">
-          <el-slider
-            v-model="settings.historyMessages"
-            :min="0"
-            :max="50"
-            @change="onHistoryMessagesChange" />
+          <el-slider v-model="settings.historyMessages" :min="0" :max="50" @change="onHistoryMessagesChange" />
         </div>
       </div>
       <div class="item">
@@ -160,31 +123,43 @@
             {{ $t('settings.general.conversationTitleGenModel') }}
             <small class="tooltip">{{
               $t('settings.general.conversationTitleGenModelTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value" style="width: 300px">
-          <el-select
-            v-model="settings.conversationTitleGenModel.id"
-            class="auto-width-select"
-            placement="bottom"
+          <el-select v-model="settings.conversationTitleGenModel.id" class="auto-width-select" placement="bottom"
+            clearable
             @change="onConversationTitleGenModelIdChange">
-            <el-option
-              v-for="model in modelStore.providers"
-              :key="model.id"
-              :label="model.name"
+            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select v-model="settings.conversationTitleGenModel.model" class="auto-width-select" placement="bottom"
+            clearable
+            @change="onConversationTitleGenModelModelChange">
+            <el-option v-for="model in conversationTitleGenModelList" :key="model.id" :label="model.name || model.id"
               :value="model.id">
             </el-option>
           </el-select>
-          <el-select
-            v-model="settings.conversationTitleGenModel.model"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onConversationTitleGenModelModelChange">
-            <el-option
-              v-for="model in conversationTitleGenModelList"
-              :key="model.id"
-              :label="model.name || model.id"
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.visionModel') }}
+            <small class="tooltip">{{ $t('settings.general.visionModelTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 300px">
+          <el-select v-model="settings.visionModel.id" class="auto-width-select" placement="bottom"
+            clearable
+            @change="onVisionModelIdChange">
+            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            </el-option>
+          </el-select>
+          <el-select v-model="settings.visionModel.model" class="auto-width-select" placement="bottom"
+            clearable
+            @change="onVisionModelModelChange">
+            <el-option v-for="model in visionModelList" :key="model.id" :label="model.name || model.id"
               :value="model.id">
             </el-option>
           </el-select>
@@ -208,41 +183,7 @@
           </el-select>
         </div>
       </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.visionModel') }}
-            <small class="tooltip">{{ $t('settings.general.visionModelTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value" style="width: 300px">
-          <el-select
-            v-model="settings.visionModel.id"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onVisionModelIdChange">
-            <el-option
-              v-for="model in modelStore.providers"
-              :key="model.id"
-              :label="model.name"
-              :value="model.id">
-            </el-option>
-          </el-select>
-          <el-select
-            v-model="settings.visionModel.model"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onVisionModelModelChange">
-            <el-option
-              v-for="model in visionModelList"
-              :key="model.id"
-              :label="model.name || model.id"
-              :value="model.id">
-            </el-option>
-          </el-select>
-        </div>
-      </div>
-      <!-- <div class="item">
+      <!--<div class="item">
         <div class="label">
           <div class="label-text">
             {{ $t('settings.general.websearchModel') }}
@@ -291,11 +232,7 @@
         </div>
         <div class="value" style="width: 45%">
           <el-select v-model="settings.searchEngine" @change="onSearchEngineChange">
-            <el-option
-              v-for="engine in searchEngines"
-              :key="engine"
-              :label="engine"
-              :value="engine" />
+            <el-option v-for="engine in searchEngines" :key="engine" :label="engine" :value="engine" />
           </el-select>
         </div>
       </div>
@@ -316,14 +253,11 @@
             {{ $t('settings.general.scraperConcurrencyCount') }}
             <small class="tooltip">{{
               $t('settings.general.scraperConcurrencyCountTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value" style="width: 45%">
-          <el-input
-            v-model="settings.scraperConcurrencyCount"
-            @input="scraperConcurrencyCountChange"
-            type="number" />
+          <el-input v-model="settings.scraperConcurrencyCount" @input="scraperConcurrencyCountChange" type="number" />
         </div>
       </div>
       <div class="item">
@@ -332,24 +266,16 @@
             {{ $t('settings.general.search.google') }}
             <el-space>
               <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
-              <a
-                class="small info"
-                href="javascript:"
-                @click="openUrl('https://programmablesearchengine.google.com/controlpanel/all')"
-                >{{ $t('settings.general.search.apply') }}</a
-              >
+              <a class="small info" href="javascript:"
+                @click="openUrl('https://programmablesearchengine.google.com/controlpanel/all')">{{
+                  $t('settings.general.search.apply') }}</a>
             </el-space>
           </div>
         </div>
         <div class="value" style="width: 400px">
-          <el-input
-            type="password"
-            v-model="settings.googleApiKey"
-            @input="onGoogleApiKeyChange"
+          <el-input type="password" v-model="settings.googleApiKey" @input="onGoogleApiKeyChange"
             :placeholder="$t('settings.general.search.googleApiKey')" />
-          <el-input
-            v-model="settings.googleSearchId"
-            @input="onGoogleSearchIdChange"
+          <el-input v-model="settings.googleSearchId" @input="onGoogleSearchIdChange"
             :placeholder="$t('settings.general.search.googleSearchId')" />
         </div>
       </div>
@@ -359,20 +285,13 @@
             {{ $t('settings.general.search.serper') }}
             <el-space>
               <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
-              <a
-                class="small info"
-                href="javascript:"
-                @click="openUrl('https://serper.dev/api-keys')"
-                >{{ $t('settings.general.search.apply') }}</a
-              >
+              <a class="small info" href="javascript:" @click="openUrl('https://serper.dev/api-keys')">{{
+                $t('settings.general.search.apply') }}</a>
             </el-space>
           </div>
         </div>
         <div class="value" style="width: 300px">
-          <el-input
-            type="password"
-            v-model="settings.serperApiKey"
-            @input="onSerperApiKeyChange"
+          <el-input type="password" v-model="settings.serperApiKey" @input="onSerperApiKeyChange"
             :placeholder="$t('settings.general.search.serperApiKey')" />
         </div>
       </div>
@@ -382,20 +301,13 @@
             {{ $t('settings.general.search.tavily') }}
             <el-space>
               <small class="tooltip">{{ $t('settings.general.search.clickHere') }}</small>
-              <a
-                class="small info"
-                href="javascript:"
-                @click="openUrl('https://app.tavily.com/home')"
-                >{{ $t('settings.general.search.apply') }}</a
-              >
+              <a class="small info" href="javascript:" @click="openUrl('https://app.tavily.com/home')">{{
+                $t('settings.general.search.apply') }}</a>
             </el-space>
           </div>
         </div>
         <div class="value" style="width: 300px">
-          <el-input
-            type="password"
-            v-model="settings.tavilyApiKey"
-            @input="onTavilyApiKeyChange"
+          <el-input type="password" v-model="settings.tavilyApiKey" @input="onTavilyApiKeyChange"
             :placeholder="$t('settings.general.search.tavilyApiKey')" />
         </div>
       </div>
@@ -484,10 +396,7 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.proxyType') }}</div>
         <div class="value">
-          <el-select
-            v-model="settings.proxyType"
-            class="auto-width-select"
-            placement="bottom"
+          <el-select v-model="settings.proxyType" class="auto-width-select" placement="bottom"
             @change="onProxyTypeChange">
             <el-option v-for="(label, type) in proxyTypes" :key="type" :label="label" :value="type">
             </el-option>
@@ -497,27 +406,21 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.proxyServer') }}</div>
         <div class="value">
-          <el-input
-            v-model="settings.proxyServer"
-            @change="onProxyServerChange"
+          <el-input v-model="settings.proxyServer" @change="onProxyServerChange"
             :placeholder="$t('settings.general.proxyServerPlaceholder')" />
         </div>
       </div>
       <div class="item">
         <div class="label">{{ $t('settings.general.proxyUsername') }}</div>
         <div class="value">
-          <el-input
-            v-model="settings.proxyUsername"
-            @change="onProxyUsernameChange"
+          <el-input v-model="settings.proxyUsername" @change="onProxyUsernameChange"
             :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
         </div>
       </div>
       <div class="item">
         <div class="label">{{ $t('settings.general.proxyPassword') }}</div>
         <div class="value">
-          <el-input
-            v-model="settings.proxyPassword"
-            @change="onProxyPasswordChange"
+          <el-input v-model="settings.proxyPassword" @change="onProxyPasswordChange"
             :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
         </div>
       </div>
@@ -531,17 +434,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.mainWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.mainWindowVisibleShortcut"
-              readonly
+            <el-input v-model="settings.mainWindowVisibleShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'mainWindowVisibleShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'mainWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('mainWindowVisibleShortcut')">
@@ -555,17 +452,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.noteWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.noteWindowVisibleShortcut"
-              readonly
+            <el-input v-model="settings.noteWindowVisibleShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'noteWindowVisibleShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'noteWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('noteWindowVisibleShortcut')">
@@ -579,17 +470,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.assistantWindowVisibleShortcut"
-              readonly
+            <el-input v-model="settings.assistantWindowVisibleShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('assistantWindowVisibleShortcut')">
@@ -603,18 +488,12 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleAndPasteShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.assistantWindowVisibleAndPasteShortcut"
-              readonly
+            <el-input v-model="settings.assistantWindowVisibleAndPasteShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
               @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleAndPasteShortcut')"
-              @focus="isCapturing = true"
-              @blur="isCapturing = false">
+              @focus="isCapturing = true" @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('assistantWindowVisibleAndPasteShortcut')">
                   {{ $t('common.clear') }}
@@ -627,17 +506,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.moveWindowLeftShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.moveWindowLeftShortcut"
-              readonly
+            <el-input v-model="settings.moveWindowLeftShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'moveWindowLeftShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'moveWindowLeftShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('moveWindowLeftShortcut')">
@@ -651,17 +524,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.moveWindowRightShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.moveWindowRightShortcut"
-              readonly
+            <el-input v-model="settings.moveWindowRightShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'moveWindowRightShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'moveWindowRightShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('moveWindowRightShortcut')">
@@ -675,17 +542,11 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.centerWindowShortcut') }}</div>
         <div class="value">
-          <el-tooltip
-            :content="$t('settings.general.pressKeysToSet')"
-            placement="top"
-            :hide-after="0"
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input
-              v-model="settings.centerWindowShortcut"
-              readonly
+            <el-input v-model="settings.centerWindowShortcut" readonly
               :placeholder="$t('settings.general.pressKeysToSet')"
-              @keydown.prevent="e => captureShortcut(e, 'centerWindowShortcut')"
-              @focus="isCapturing = true"
+              @keydown.prevent="e => captureShortcut(e, 'centerWindowShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
                 <el-button @click="clearShortcut('centerWindowShortcut')">
@@ -736,7 +597,7 @@
             {{ $t('settings.general.sensitiveFiltering.enable') }}
             <small class="tooltip">{{
               $t('settings.general.sensitiveFiltering.enableTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value">
@@ -750,13 +611,11 @@
             {{ $t('settings.general.sensitiveFiltering.common') }}
             <small class="tooltip">{{
               $t('settings.general.sensitiveFiltering.commonTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value">
-          <el-switch
-            v-model="sensitiveStore.config.common_enabled"
-            :disabled="!sensitiveStore.config.enabled"
+          <el-switch v-model="sensitiveStore.config.common_enabled" :disabled="!sensitiveStore.config.enabled"
             @change="onSensitiveConfigChange" />
         </div>
       </div>
@@ -767,21 +626,14 @@
             {{ $t('settings.general.sensitiveFiltering.blocklist') }}
             <small class="tooltip">{{
               $t('settings.general.sensitiveFiltering.blocklistTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value" style="width: 100%">
-          <el-select
-            v-model="sensitiveStore.config.custom_blocklist"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            :reserve-keyword="false"
+          <el-select v-model="sensitiveStore.config.custom_blocklist" multiple filterable allow-create
+            default-first-option :reserve-keyword="false"
             :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
-            :disabled="!sensitiveStore.config.enabled"
-            @change="onSensitiveConfigChange"
-            style="width: 100%" />
+            :disabled="!sensitiveStore.config.enabled" @change="onSensitiveConfigChange" style="width: 100%" />
         </div>
       </div>
 
@@ -791,21 +643,13 @@
             {{ $t('settings.general.sensitiveFiltering.allowlist') }}
             <small class="tooltip">{{
               $t('settings.general.sensitiveFiltering.allowlistTooltip')
-            }}</small>
+              }}</small>
           </div>
         </div>
         <div class="value" style="width: 100%">
-          <el-select
-            v-model="sensitiveStore.config.allowlist"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            :reserve-keyword="false"
-            :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
-            :disabled="!sensitiveStore.config.enabled"
-            @change="onSensitiveConfigChange"
-            style="width: 100%" />
+          <el-select v-model="sensitiveStore.config.allowlist" multiple filterable allow-create default-first-option
+            :reserve-keyword="false" :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
+            :disabled="!sensitiveStore.config.enabled" @change="onSensitiveConfigChange" style="width: 100%" />
         </div>
       </div>
 
@@ -813,11 +657,7 @@
         <div class="label">{{ $t('settings.general.sensitiveFiltering.activeFilters') }}</div>
         <div class="value">
           <el-space wrap>
-            <el-tag
-              v-for="f in sensitiveStore.supportedFilters"
-              :key="f"
-              size="small"
-              type="info"
+            <el-tag v-for="f in sensitiveStore.supportedFilters" :key="f" size="small" type="info"
               :class="{ disabled: !sensitiveStore.config.enabled }">
               {{ f }}
             </el-tag>
@@ -834,13 +674,8 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.backupDir') }}</div>
         <div class="value" style="width: 70%">
-          <el-input
-            v-model="settings.backupDir"
-            :readonly="true"
-            :clearable="true"
-            :placeholder="defaultBackupDir"
-            @change="onBackupDirChange"
-            @click="selectBackupDir" />
+          <el-input v-model="settings.backupDir" :readonly="true" :clearable="true" :placeholder="defaultBackupDir"
+            @change="onBackupDirChange" @click="selectBackupDir" />
         </div>
       </div>
       <div class="item">
@@ -854,17 +689,8 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.restore') }}</div>
         <div class="value">
-          <el-select
-            v-model="restoreDir"
-            class="auto-width-select"
-            placement="top"
-            filterable
-            @change="onRestore">
-            <el-option
-              v-for="backup in backups"
-              :key="backup.value"
-              :label="backup.label"
-              :value="backup.value">
+          <el-select v-model="restoreDir" class="auto-width-select" placement="top" filterable @change="onRestore">
+            <el-option v-for="backup in backups" :key="backup.value" :label="backup.label" :value="backup.value">
             </el-option>
           </el-select>
         </div>
@@ -1168,7 +994,7 @@ const onHistoryMessagesChange = value => {
  * @param {number} value - The value of conversation title generation model id
  */
 const onConversationTitleGenModelIdChange = value => {
-  settingStore.settings.conversationTitleGenModel = { id: value || 0, model: '' }
+  settingStore.settings.conversationTitleGenModel = { id: value || '', model: '' }
   setSetting('conversationTitleGenModel', settingStore.settings.conversationTitleGenModel)
 }
 
@@ -1194,7 +1020,7 @@ const onSendMessageKeyChange = value => {
  * @param {number} value - The value of vision model id
  */
 const onVisionModelIdChange = value => {
-  settingStore.settings.visionModel = { id: value || 0, model: '' }
+  settingStore.settings.visionModel = { id: value || '', model: '' }
   setSetting('visionModel', settingStore.settings.visionModel)
 }
 
@@ -1212,7 +1038,7 @@ const onVisionModelModelChange = value => {
  * @param {number} value - The value of web search model id
  */
 const onWebsearchModelIdChange = value => {
-  settingStore.settings.websearchModel = { id: value || 0, model: '' }
+  settingStore.settings.websearchModel = { id: value || '', model: '' }
   setSetting('websearchModel', settingStore.settings.websearchModel)
 }
 
@@ -1262,7 +1088,7 @@ const onTavilyApiKeyChange = value => {
 // =================================================
 
 const onWorkflowReasoningModelIdChange = value => {
-  settingStore.settings.workflowReasoningModel = { id: value || 0, model: '' }
+  settingStore.settings.workflowReasoningModel = { id: value || '', model: '' }
   setSetting('workflowReasoningModel', settingStore.settings.workflowReasoningModel)
 }
 
@@ -1281,7 +1107,7 @@ const onWorkflowReasoningModelModelChange = value => {
 }
 
 const onWorkflowGeneralModelIdChange = value => {
-  settingStore.settings.workflowGeneralModel = { id: value || 0, model: '' }
+  settingStore.settings.workflowGeneralModel = { id: value || '', model: '' }
   setSetting('workflowGeneralModel', settingStore.settings.workflowGeneralModel)
 }
 

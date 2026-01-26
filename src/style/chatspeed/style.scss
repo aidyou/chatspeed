@@ -921,3 +921,7 @@ system-reminder {
 .el-overlay {
   top: var(--cs-titlebar-height) !important;
 }
+
+.el-image-viewer__mask{
+  border-radius: var(--cs-border-radius-md);
+}

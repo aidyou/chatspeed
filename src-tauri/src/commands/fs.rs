@@ -5,8 +5,34 @@ use crate::HTTP_SERVER;
 use crate::HTTP_SERVER_TMP_DIR;
 use rust_i18n::t;
 use std::borrow::Cow;
+use std::fs;
 
 use crate::error::{AppError, Result};
+
+/// Read text file content
+///
+/// Reads the content of a text file.
+///
+/// # Arguments
+/// * `file_path` - Path to the text file
+///
+/// # Returns
+/// * `Result<String>` - File content or error message
+#[tauri::command]
+pub async fn read_text_file(file_path: &str) -> Result<String> {
+    log::debug!("Reading text file from path: {}", file_path);
+    
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| {
+            log::error!("Failed to read text file '{}': {}", file_path, e);
+            AppError::General {
+                message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+            }
+        })?;
+    
+    log::debug!("Successfully read text file, content length: {}", content.len());
+    Ok(content)
+}
 
 /// Read and process an image file
 ///

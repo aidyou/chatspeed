@@ -1,10 +1,6 @@
 <template>
   <div class="app-container" :class="[windowType, windowStore.os]">
-    <div
-      class="titlebar"
-      data-tauri-drag-region
-      @pointerdown="handleDragStart"
-      @pointerup="handleDragEnd" />
+    <div class="titlebar" data-tauri-drag-region @pointerdown="handleDragStart" @pointerup="handleDragEnd" />
     <router-view />
   </div>
 </template>

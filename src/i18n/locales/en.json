@@ -30,6 +30,9 @@
     "errorOnLoadMessages": "Failed to load messages: {error}",
     "errorOnMoveWindow": "Failed to move window: {error}",
     "errorOnSaveMessage": "Failed to save conversation information: {error}",
+    "preparingAttachments": "Preparing attachments...",
+    "analyzingImages": "Analyzing images...",
+    "generatingResponse": "Generating response...",
     "errorOnSendMessage": "Failed to send message: {error}",
     "errorOnStopChat": "Failed to stop chat: {error}",
     "errorOnUpdateConversation": "Failed to update conversation: {error}",
@@ -93,7 +96,15 @@
       "autoDetection": "Auto Detection"
     },
     "translationSkillPromptEmpty": "Prompt for translation skill cannot be empty",
-    "useSkills": "Use Skills"
+    "useSkills": "Use Skills",
+    "addAttachment": "Add Attachment",
+    "dragOrClickToSelectFile": "Drag file here or click to select",
+    "selectFile": "Select File",
+    "supportedImageFormats": "Images: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Documents: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Text: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Unsupported file type",
+    "errorOnAddAttachment": "Failed to add attachment: {error}"
   },
   "common": {
     "autoHide": "Auto-hide when window loses focus",
@@ -219,6 +230,7 @@
       "sendMessageKeyTooltip": "The key combination to send a message.",
       "visionModel": "Vision Model",
       "visionModelTooltip": "Select a vision model for image analysis. When sending images in chat, this model will be used to analyze the image content.",
+      "visionModelRequired": "Please configure a vision model in settings first to support image analysis.",
       "proxyPassword": "Proxy Password",
       "proxyPasswordPlaceholder": "Leave blank if no authentication is required",
       "proxyServer": "Proxy Server Address",

@@ -215,6 +215,7 @@ pub async fn run() -> crate::error::Result<()> {
             get_env,
             // fs
             image_preview,
+            read_text_file,
 
             // window
             open_setting_window,
@@ -476,7 +477,6 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             }
             _ => {
-                log::debug!("Unhandled window event for '{}'", window.label());
                 return;
             }
         })

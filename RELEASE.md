@@ -6,6 +6,13 @@
 
 ### 🚀 New Features
 
+- **Enhanced Attachment Support**: Now supports sending images and various office documents in chat:
+  - **Images**: Supported formats include JPG, PNG, GIF, WEBP, SVG, BMP. Supports direct pasting and drag-and-drop.
+  - **Office Documents**: Local parsing for PDF, DOCX, XLSX, and XLS formats.
+- **Local File Parsing**: All office document parsing (PDF/Word/Excel) is performed locally without relying on external networks or CDNs, ensuring stability even in offline or restricted network environments.
+- **Intelligent Vision Model Integration**:
+  - Automatically invokes the configured "Vision Model" to generate content descriptions or extract text when images/documents are sent.
+  - Description results are automatically prepended to the user's question as context, significantly enhancing the AI's multimodality comprehension.
 - **Tool Call Mode Configuration**: Added tool call mode settings in proxy groups with three modes:
   - **URL Setting**: Automatically determines mode based on request path (e.g., `/compat_mode/`), preserving original behavior
   - **Compat Mode**: Forces XML-based tool compatibility mode for models that don't support native tool calls
@@ -15,8 +22,26 @@
 
 ### 🪄 Improvements
 
+- **Immersive UI/UX Optimizations**:
+  - **Instant Feedback**: Clears the input area immediately upon sending and displays processing progress for a smoother interaction.
+  - **Visible Progress**: Displays real-time processing steps (e.g., "Analyzing images...", "Generating response...") at the bottom of the chat.
+  - **Auto-Scrolling**: The chat window now automatically scrolls to the bottom when progress steps are updated.
+  - **Image Preview**: Images in chat bubbles now support click-to-zoom; redundant attachment filenames have been removed.
+  - **Error Rollback**: If vision analysis or message storage fails, the system automatically restores backed-up text and attachments to the input area to prevent data loss.
+- **Assistant Window Interaction Improvements**:
+  - **Layout Refactoring**: Icons have been moved below the text box and arranged horizontally to fix crowding and tooltip overlap issues.
+  - **Smart Pinning**: Automatically enables "Always on Top" temporarily when selecting attachments, restoring the original state once the dialog is closed.
+- **Settings Optimization**: Added "Clear" buttons for Vision and Title Generation models and fixed a UI bug where cleared selections displayed as `0`.
+- **Enhanced Context Restoration**: In multi-turn dialogues, the system now automatically restores vision analysis results from history using XML tags, ensuring the AI maintains full background context even after switching models.
 - **Batch Update Dialog Optimization**: Increased dialog height and added scroll support to prevent form content from being obscured by buttons
 - **UI Alignment Fix**: Fixed vertical alignment between labels and checkboxes in batch update dialog
+
+### 🐞 Bug Fixes
+
+- **Synchronous Request Fix**: Improved the backend OpenAI protocol handler for non-streaming (synchronous) requests, resolving parsing errors in vision analysis scenarios.
+- **Resend Message Fix**: Resolved a logic error where resending a message could lead to sending empty content or losing context.
+- **Code Robustness**: Fixed a reference error in `Index.vue` caused by a missing `SkillItem` component import.
+- **Tooltip Opacity Fix**: Optimized global CSS variables to fix overlapping text caused by transparent Tooltip backgrounds.
 
 ---
 

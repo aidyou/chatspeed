@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-attachment:before {
+  content: "\e65b";
+}
+
 .cs-xml:before {
   content: "\ebc3";
 }

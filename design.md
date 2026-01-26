@@ -106,20 +106,18 @@ visionModel: {
 1. 用户在输入框中粘贴图片 (Ctrl+V / Cmd+V)
 2. 捕获 `paste` 事件
 3. 检查 clipboard data 中的图片
-4. 调用 Tauri 命令保存图片到临时目录
-5. 获取图片URL
-6. 添加到 attachments 数组
-7. 显示在附件区域
+4. 将图片转换为 base64 data URI 格式
+5. 添加到 attachments 数组
+6. 显示在附件区域
 
 ### 3.2 图片上传流程
 
 1. 点击附件按钮
 2. 打开文件选择对话框
 3. 用户选择图片文件
-4. 调用 Tauri 命令保存图片到临时目录
-5. 获取图片URL
-6. 添加到 attachments 数组
-7. 显示在附件区域
+4. 将图片转换为 base64 data URI 格式
+5. 添加到 attachments 数组
+6. 显示在附件区域
 
 ### 3.3 文本文件读取流程
 
@@ -204,7 +202,7 @@ pub async fn get_file_type(file_path: &str) -> Result<String>
     "imageAnalysis": "Image Analysis",
     "fileContent": "File Content",
     "supportedImageFormats": "Supported formats: JPG, PNG, GIF, WEBP, SVG, BMP",
-    "supportedTextFormats": "Supported formats: TXT, MD, JSON, XML, CSV, LOG",
+    "supportedTextFormats": "Supported formats: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML, HTM",
     "visionModel": "Vision Model",
     "visionModelPlaceholder": "Select a vision model for image analysis"
   }

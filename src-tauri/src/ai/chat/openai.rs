@@ -56,7 +56,20 @@ impl OpenAIChat {
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
         provider_name: String, // Added to correctly attribute errors
+        is_stream: bool, // Added to distinguish between stream and non-stream responses
     ) -> Result<String, AiError> {
+        // If not streaming, handle as non-streaming response
+        if !is_stream {
+            return self.handle_non_stream_response(
+                chat_id,
+                response,
+                callback,
+                metadata_option,
+                provider_name,
+            ).await;
+        }
+        
+        // Streaming response handling
         let mut full_response = String::new();
         let mut reasoning_content = String::new();
         let mut token_usage = TokenUsage::default();
@@ -254,6 +267,108 @@ impl OpenAIChat {
         Ok(json!({
             "reasoning": reasoning_content,
             "content": full_response
+        })
+        .to_string())
+    }
+
+    /// Handles non-streaming response
+    async fn handle_non_stream_response(
+        &self,
+        chat_id: String,
+        response: Response,
+        callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
+        metadata_option: Option<Value>,
+        provider_name: String,
+    ) -> Result<String, AiError> {
+        // Read response body as text
+        let response_text = response.text().await.map_err(|e| {
+            let err = AiError::ApiRequestFailed {
+                status_code: 500,
+                provider: provider_name.clone(),
+                details: format!("Failed to read response body: {}", e),
+            };
+            log::error!("{} response reading error: {}", provider_name, err);
+            err
+        })?;
+
+        // Parse the JSON response
+        let parsed: Value = serde_json::from_str(&response_text).map_err(|e| {
+            let err = AiError::ApiRequestFailed {
+                status_code: 500,
+                provider: provider_name.clone(),
+                details: format!("Failed to parse response: {}", e),
+            };
+            log::error!("{} response parsing error: {}", provider_name, err);
+            err
+        })?;
+
+        // Extract content from the response
+        let content = parsed["choices"]
+            .as_array()
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice["message"]["content"].as_str())
+            .unwrap_or("");
+
+        let reasoning_content = parsed["choices"]
+            .as_array()
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice["message"]["reasoning_content"].as_str())
+            .unwrap_or("");
+
+        // Extract token usage if available
+        let token_usage = if let Some(usage) = parsed.get("usage") {
+            TokenUsage {
+                total_tokens: usage["total_tokens"].as_u64().unwrap_or(0),
+                prompt_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0),
+                completion_tokens: usage["completion_tokens"].as_u64().unwrap_or(0),
+                tokens_per_second: 0.0,
+            }
+        } else {
+            TokenUsage::default()
+        };
+
+        // Send the content to callback
+        if !reasoning_content.is_empty() {
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                reasoning_content.to_string(),
+                MessageType::Reasoning,
+                metadata_option.clone(),
+                None,
+            ));
+        }
+
+        if !content.is_empty() {
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                content.to_string(),
+                MessageType::Text,
+                metadata_option.clone(),
+                None,
+            ));
+        }
+
+        // Send finished message
+        callback(ChatResponse::new_with_arc(
+            chat_id.clone(),
+            String::new(),
+            MessageType::Finished,
+            Some(update_or_create_metadata(
+                metadata_option,
+                TOKENS,
+                json!({
+                    TOKENS_TOTAL: token_usage.total_tokens,
+                    TOKENS_PROMPT: token_usage.prompt_tokens,
+                    TOKENS_COMPLETION: token_usage.completion_tokens,
+                    TOKENS_PER_SECOND: token_usage.tokens_per_second
+                }),
+            )),
+            Some(FinishReason::Complete),
+        ));
+
+        Ok(json!({
+            "reasoning": reasoning_content,
+            "content": content
         })
         .to_string())
     }
@@ -484,12 +599,21 @@ impl AiChatTrait for OpenAIChat {
 
         let url = crate::constants::get_static_var(&crate::constants::CHAT_COMPLETION_PROXY);
 
-        // Initialize the payload with essential fields.
-        // We delegate most parameter injection (max_tokens, temperature, etc.) to the CCProxy layer.
+        // Determine if stream is enabled.
+        // Priority: extra_params > model_metadata > default (true)
+        let stream_enabled = extra_params.as_ref()
+            .and_then(|v| v.get("stream"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| {
+                params.get("stream")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true)
+            });
+        
         let mut payload = json!({
             "model": model,
             "messages": messages,
-            "stream": params.get("stream").unwrap_or(&json!(true)),
+            "stream": stream_enabled,
         });
 
         // Add optional parameters if they exist and are not null
@@ -613,7 +737,7 @@ impl AiChatTrait for OpenAIChat {
 
         let response = self
             .client
-            .post_request(&config, endpoint, payload, true)
+            .post_request(&config, endpoint, payload, stream_enabled)
             .await
             .map_err(|e| {
                 let err = AiError::ApiRequestFailed {
@@ -675,6 +799,7 @@ impl AiChatTrait for OpenAIChat {
                 callback,
                 extra_params,
                 model_detail.name.clone(),
+                stream_enabled,
             )
             .await
         } else {

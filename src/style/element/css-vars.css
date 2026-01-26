@@ -53,6 +53,7 @@
     --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
     --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
     --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
+    --el-bg-color-overlay: var(--cs-color-white);
 }
 
 :root.light {
@@ -147,4 +148,5 @@
     --el-color-primary-light-7: rgba(var(--cs-color-primary-rgb), 0.2);
     --el-color-primary-light-8: rgba(var(--cs-color-primary-rgb), 0.1);
     --el-color-primary-light-9: rgba(var(--cs-color-primary-rgb), 0.05);
+    --el-bg-color-overlay: var(--cs-bg-color);
 }
