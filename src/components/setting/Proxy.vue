@@ -15,39 +15,47 @@
           </div>
           <template v-if="hasChatCompletionProxy">
             <div class="list" v-for="(groupProxies, groupName) in chatCompletionProxy" :key="groupName">
-              <div class="title">{{ groupName }}</div>
-              <div v-for="(proxyTargets, alias) in groupProxies" :key="alias" class="item">
-                <div class="label">
-                  <Avatar :size="36" :text="alias" />
-                  <div class="label-text">
-                    {{ alias }}
-                    <small>{{
-                      $t('settings.proxy.mapsToModels', { count: proxyTargets.length })
-                    }}</small>
+              <div class="title group-title" :class="{ 'active': expandedGroup === groupName }"
+                @click="toggleGroup(groupName)">
+                <span>{{ groupName }}</span>
+                <cs :name="expandedGroup === groupName ? 'caret-down' : 'caret-right'" size="12px" class="arrow" />
+              </div>
+              <el-collapse-transition>
+                <div class="group-content" v-show="expandedGroup === groupName">
+                  <div v-for="(proxyTargets, alias) in groupProxies" :key="alias" class="item">
+                    <div class="label">
+                      <Avatar :size="36" :text="alias" />
+                      <div class="label-text">
+                        {{ alias }}
+                        <small>{{
+                          $t('settings.proxy.mapsToModels', { count: proxyTargets.length })
+                          }}</small>
+                      </div>
+                    </div>
+
+                    <div class="value">
+                      <el-tooltip :content="$t('settings.proxy.copyProxyAlias')" placement="top" :hide-after="0"
+                        :enterable="false" transition="none">
+                        <span class="icon" @click="copyModelToClipboard(alias)">
+                          <cs name="copy" size="16px" color="secondary" />
+                        </span>
+                      </el-tooltip>
+                      <el-tooltip :content="$t('settings.proxy.editProxy')" placement="top" :hide-after="0"
+                        :enterable="false" transition="none">
+                        <span class="icon" @click="openEditDialog(groupName, alias, proxyTargets)">
+                          <cs name="edit" size="16px" color="secondary" />
+                        </span>
+                      </el-tooltip>
+                      <el-tooltip :content="$t('settings.proxy.deleteProxy')" placement="top" :hide-after="0"
+                        :enterable="false" transition="none">
+                        <span class="icon" @click="handleDeleteProxyConfirmation(groupName, alias)">
+                          <cs name="trash" size="16px" color="secondary" />
+                        </span>
+                      </el-tooltip>
+                    </div>
                   </div>
                 </div>
-
-                <div class="value">
-                  <el-tooltip :content="$t('settings.proxy.copyProxyAlias')" placement="top" :hide-after="0"
-                    :enterable="false" transition="none">
-                    <span class="icon" @click="copyModelToClipboard(alias)">
-                      <cs name="copy" size="16px" color="secondary" />
-                    </span>
-                  </el-tooltip>
-                  <el-tooltip :content="$t('settings.proxy.editProxy')" placement="top" :hide-after="0"
-                    :enterable="false" transition="none">
-                    <span class="icon" @click="openEditDialog(groupName, alias, proxyTargets)">
-                      <cs name="edit" size="16px" color="secondary" />
-                    </span>
-                  </el-tooltip>
-                  <el-tooltip :content="$t('settings.proxy.deleteProxy')" placement="top" :hide-after="0"
-                    :enterable="false" transition="none">
-                    <span class="icon" @click="handleDeleteProxyConfirmation(groupName, alias)">
-                      <cs name="trash" size="16px" color="secondary" />
-                    </span>
-                  </el-tooltip>
-                </div>
-              </div>
+              </el-collapse-transition>
             </div>
           </template>
           <div v-else class="list">
@@ -127,7 +135,7 @@
                   {{ $t('settings.proxy.settings.port') }}
                   <small class="important">{{
                     $t('settings.proxy.settings.portChangedRestartRequired')
-                  }}</small>
+                    }}</small>
                 </div>
               </div>
               <div class="value">
@@ -318,7 +326,8 @@ import {
   ElDivider,
   ElTabs,
   ElTabPane,
-  ElInputNumber
+  ElInputNumber,
+  ElCollapseTransition
 } from 'element-plus'
 import { showMessage, isEmpty } from '@/libs/util'
 import ProxyGroup from './ProxyGroup.vue'
@@ -342,6 +351,7 @@ const proxyFormRef = ref(null)
 const editingAliasName = ref('')
 const editingGroupName = ref('')
 const filterByChecked = ref(false)
+const expandedGroup = ref('')
 
 const initialProxyFormState = () => ({
   name: '',
@@ -374,6 +384,19 @@ const chatCompletionProxy = computed(() => {
       return obj
     }, {})
 })
+
+// Auto-expand first group
+watch(() => chatCompletionProxy.value, (newVal) => {
+  const keys = Object.keys(newVal)
+  if (!expandedGroup.value && keys.length > 0) {
+    expandedGroup.value = keys[0]
+  }
+}, { immediate: true })
+
+const toggleGroup = (name) => {
+  expandedGroup.value = expandedGroup.value === name ? '' : name
+}
+
 const hasChatCompletionProxy = computed(() => {
   return Object.values(chatCompletionProxy.value).some(proxy => Object.keys(proxy).length > 0)
 })
@@ -1033,6 +1056,36 @@ const genTableData = () => {
   :deep(.el-card__body) {
     // For el-card used within the dialog's model list
     padding: var(--cs-space-sm) var(--cs-space-md);
+  }
+
+  .group-title {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+    transition: color 0.2s;
+
+    &:not(.active) {
+      border-bottom: none;
+    }
+
+    &:hover {
+      color: var(--cs-color-primary);
+    }
+
+    .arrow {
+      opacity: 0.5;
+      transition: transform 0.2s;
+    }
+  }
+
+  .list {
+    margin-top: var(--cs-space-xs);
+
+    &:nth-child(2) {
+      margin-top: 0;
+    }
   }
 }
 

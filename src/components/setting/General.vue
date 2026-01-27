@@ -504,6 +504,24 @@
         </div>
       </div>
       <div class="item">
+        <div class="label">{{ $t('settings.general.proxySwitcherWindowVisibleShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input v-model="settings.proxySwitcherWindowVisibleShortcut" readonly
+              :placeholder="$t('settings.general.pressKeysToSet')"
+              @keydown.prevent="e => captureShortcut(e, 'proxySwitcherWindowVisibleShortcut')"
+              @focus="isCapturing = true" @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="clearShortcut('proxySwitcherWindowVisibleShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
         <div class="label">{{ $t('settings.general.moveWindowLeftShortcut') }}</div>
         <div class="value">
           <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"

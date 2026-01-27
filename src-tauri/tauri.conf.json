@@ -103,6 +103,20 @@
         "visible": false,
         "center": true,
         "create": true
+      },
+      {
+        "label": "proxy_switcher",
+        "title": "Proxy Switcher",
+        "url": "/proxy-switcher",
+        "width": 360,
+        "height": 420,
+        "titleBarStyle": "Transparent",
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "center": true,
+        "create": true
       }
     ],
     "withGlobalTauri": true,

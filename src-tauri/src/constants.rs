@@ -71,6 +71,9 @@ pub const DEFAULT_CENTER_WINDOW_SHORTCUT: &str = "Alt+Shift+C";
 pub const CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT: &str = "workflow_window_visible_shortcut";
 pub const DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+W";
 
+pub const CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT: &str = "proxy_switcher_window_visible_shortcut";
+pub const DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT: &str = "Alt+Shift+P";
+
 //======================================================
 // end main window shortcuts
 //======================================================

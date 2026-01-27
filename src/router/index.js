@@ -31,6 +31,11 @@ const routes = [
     name: "workflow",
     component: () => import("@/views/Workflow.vue"),
   },
+  {
+    path: "/proxy-switcher",
+    name: "proxy-switcher",
+    component: () => import("@/views/ProxySwitcher.vue"),
+  },
 ];
 
 const router = createRouter({

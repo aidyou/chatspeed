@@ -148,6 +148,11 @@
   "note": {
     "searchNotePlaceholder": "搜索智记"
   },
+  "proxySwitcher": {
+    "title": "代理切换",
+    "toolCompatMode": "工具模式",
+    "activate": "激活"
+  },
   "settings": {
     "agent": {
       "agentType": "智能体类型",
@@ -221,13 +226,10 @@
       "centerWindowShortcut": "主窗居中",
       "networkSettings": "网络设置",
       "noteWindowVisibleShortcut": "打开智记窗口",
+      "proxySwitcherWindowVisibleShortcut": "代理切换窗口",
       "pressKeysToSet": "请点击后按下快捷键组合……",
       "primaryLanguage": "第一语言",
       "primaryLanguageTooltip": "主要作为语言翻译自动识别失败时的首选项",
-      "secondaryLanguage": "第二语言",
-      "secondaryLanguageTooltip": "作为翻译的备选方案。",
-      "sendMessageKey": "发送消息快捷键",
-      "sendMessageKeyTooltip": "发送消息的快捷键组合。",
       "visionModel": "视觉模型",
       "visionModelTooltip": "选择用于图片分析的视觉模型。在聊天中发送图片时，将使用此模型分析图片内容。",
       "visionModelRequired": "请先在设置中配置视觉模型以支持图片分析",

@@ -148,6 +148,11 @@
   "note": {
     "searchNotePlaceholder": "Search Notes"
   },
+  "proxySwitcher": {
+    "title": "Proxy Switcher",
+    "toolCompatMode": "Tool Mode",
+    "activate": "Activate"
+  },
   "settings": {
     "agent": {
       "actModel": "Act Model",
@@ -221,13 +226,10 @@
       "centerWindowShortcut": "Main Center",
       "networkSettings": "Network Settings",
       "noteWindowVisibleShortcut": "Open Note Window",
+      "proxySwitcherWindowVisibleShortcut": "Proxy Switcher Window",
       "pressKeysToSet": "Click then press the shortcut key combination...",
       "primaryLanguage": "Primary Language",
       "primaryLanguageTooltip": "Mainly used as the first choice when language translation automatic recognition fails.",
-      "secondaryLanguage": "Secondary Language",
-      "secondaryLanguageTooltip": "Used as a fallback option for translation.",
-      "sendMessageKey": "Send Message Key",
-      "sendMessageKeyTooltip": "The key combination to send a message.",
       "visionModel": "Vision Model",
       "visionModelTooltip": "Select a vision model for image analysis. When sending images in chat, this model will be used to analyze the image content.",
       "visionModelRequired": "Please configure a vision model in settings first to support image analysis.",

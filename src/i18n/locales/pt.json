@@ -72,6 +72,17 @@
     "mcpDisabled": "Desativar ferramentas MCP",
     "mcpEnabled": "Ativar ferramentas MCP",
     "translationSkillPromptEmpty": "O prompt da habilidade de tradução não pode estar vazio",
+    "addAttachment": "Adicionar anexo",
+    "dragOrClickToSelectFile": "Arraste o arquivo para cá ou clique para selecionar",
+    "selectFile": "Selecionar arquivo",
+    "supportedImageFormats": "Formatos de imagem: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Documentos de escritório: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Formatos de texto: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Tipo de arquivo não suportado",
+    "errorOnAddAttachment": "Falha ao adicionar anexo: {error}",
+    "preparingAttachments": "Preparando anexos...",
+    "analyzingImages": "Analisando imagens...",
+    "generatingResponse": "Gerando resposta...",
     "useSkills": "Usar habilidades",
     "date": {
       "earlier": "Mais cedo",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "Pesquisar anotações"
+  },
+  "proxySwitcher": {
+    "title": "Alternador de proxy",
+    "toolCompatMode": "Modo de ferramenta",
+    "activate": "Ativar"
   },
   "settings": {
     "agent": {
@@ -210,9 +226,13 @@
       "centerWindowShortcut": "Centrar janela principal",
       "networkSettings": "Configurações de rede",
       "noteWindowVisibleShortcut": "Abrir janela de anotações",
+      "proxySwitcherWindowVisibleShortcut": "Janela do alternador de proxy",
       "pressKeysToSet": "Clique e depois pressione a combinação de teclas de atalho...",
       "primaryLanguage": "Idioma principal",
       "primaryLanguageTooltip": "Principalmente usado como primeira opção quando a identificação automática do idioma da tradução falha.",
+      "visionModel": "Modelo de Visão",
+      "visionModelTooltip": "Selecione um modelo de visão para análise de imagens. Ao enviar imagens no chat, este modelo será usado para analisar o conteúdo da imagem.",
+      "visionModelRequired": "Por favor, configure primeiro um modelo de visão nas configurações para suportar a análise de imagens.",
       "proxyPassword": "Senha do proxy",
       "proxyPasswordPlaceholder": "Deixe em branco se não for necessária autenticação",
       "proxyServer": "Endereço do servidor proxy",
@@ -563,12 +583,20 @@
       "switchGuideTitle": "Guia de troca dinâmica",
       "switchGuideUrl": "URL de acesso unificado:",
       "title": "Gerenciamento de grupos de proxy",
+      "toolCompatMode": "Chamada de ferramenta",
+      "toolCompatModeChanged": "Modo de chamada de ferramenta alterado para: {mode}",
+      "toolCompatModes": {
+        "auto": "Configuração de URL",
+        "compat": "Modo de compatibilidade",
+        "native": "Chamada nativa"
+      },
       "updateConfirm": "Tem certeza de que deseja atualizar os {count} grupos selecionados?",
       "updateSuccess": "¡Grupo atualizado com sucesso!",
       "form": {
         "description": "Descrição",
         "descriptionPlaceholder": "Insira uma descrição",
         "disabled": "Desativado",
+        "loadFromTemplate": "Carregar do modelo",
         "maxContext": "Comprimento máximo do contexto",
         "maxContextPlaceholder": "Consulte as informações de lançamento ou as informações da interface de cada modelo, um valor de 0 não será definido",
         "modelInjectionCondition": "Condição de injeção do modelo",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "Insira o texto do prompt",
         "temperatureRatio": "Relação de temperatura",
         "temperatureRatioPlaceholder": "Temperatura real = temperatura da solicitação * relação de temperatura",
+        "toolCompatMode": "Chamada de ferramenta",
+        "toolCompatModePlaceholder": "Selecionar modo de chamada de ferramenta",
         "toolFilter": "Filtro de ferramentas",
-        "toolFilterPlaceholder": "Insira os nomes das ferramentas a serem filtradas, um por linha"
+        "toolFilterPlaceholder": "Insira os nomes das ferramentas a serem filtradas, um por linha",
+        "selectTemplate": "Selecionar grupo de modelos"
       },
       "promptInjection": {
         "off": "Desligado",

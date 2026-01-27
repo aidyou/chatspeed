@@ -73,6 +73,17 @@
     "mcpEnabled": "MCP 도구 활성화",
     "translationSkillPromptEmpty": "번역 스킬의 프롬프트가 비어있습니다.",
     "useSkills": "스킬 사용",
+    "addAttachment": "첨부 파일 추가",
+    "dragOrClickToSelectFile": "파일을 여기로 드래그하거나 클릭하여 선택",
+    "selectFile": "파일 선택",
+    "supportedImageFormats": "이미지 형식: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "오피스 문서: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "텍스트 형식: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "지원되지 않는 파일 형식입니다",
+    "errorOnAddAttachment": "첨부 파일 추가 실패: {error}",
+    "preparingAttachments": "첨부 파일 준비 중...",
+    "analyzingImages": "이미지 분석 중...",
+    "generatingResponse": "응답 생성 중...",
     "date": {
       "earlier": "더 이전",
       "lastMonth": "지난달",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "지식 노트 검색"
+  },
+  "proxySwitcher": {
+    "title": "프록시 전환",
+    "toolCompatMode": "도구 모드",
+    "activate": "활성화"
   },
   "settings": {
     "agent": {
@@ -210,9 +226,13 @@
       "centerWindowShortcut": "메인 창 가운데로 이동",
       "networkSettings": "네트워크 설정",
       "noteWindowVisibleShortcut": "지식 노트 창 열기",
+      "proxySwitcherWindowVisibleShortcut": "프록시 전환 창",
       "pressKeysToSet": "클릭 후 단축키 조합을 눌러주세요...",
       "primaryLanguage": "기본 언어",
       "primaryLanguageTooltip": "주로 언어 번역 자동 인식 실패 시 우선적으로 사용됩니다.",
+      "visionModel": "비전 모델",
+      "visionModelTooltip": "이미지 분석용 비전 모델을 선택합니다. 채팅에서 이미지를 보낼 때 이 모델을 사용하여 이미지 내용을 분석합니다.",
+      "visionModelRequired": "이미지 분석을 지원하려면 먼저 설정에서 비전 모델을 구성하십시오.",
       "proxyPassword": "프록시 비밀번호",
       "proxyPasswordPlaceholder": "인증이 필요 없으면 비워두세요.",
       "proxyServer": "프록시 서버 주소",
@@ -563,12 +583,20 @@
       "switchGuideTitle": "동적 그룹 전환 안내",
       "switchGuideUrl": "통합 액세스 URL:",
       "title": "프록시 그룹 관리",
+      "toolCompatMode": "도구 호출",
+      "toolCompatModeChanged": "도구 호출 모드가 {mode}로 변경되었습니다",
+      "toolCompatModes": {
+        "auto": "URL 설정",
+        "compat": "호환 모드",
+        "native": "네이티브 호출"
+      },
       "updateConfirm": "선택한 {count}개의 그룹을 업데이트하시겠습니까?",
       "updateSuccess": "그룹이 성공적으로 업데이트되었습니다!",
       "form": {
         "description": "설명",
         "descriptionPlaceholder": "설명을 입력하세요",
         "disabled": "비활성화",
+        "loadFromTemplate": "템플릿에서 로드",
         "maxContext": "최대 컨텍스트 길이",
         "maxContextPlaceholder": "모델 사양 또는 API 정보를 참조하세요. 0은 설정하지 않음을 의미합니다",
         "modelInjectionCondition": "모델 주입 조건",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "프롬프트 텍스트를 입력하세요",
         "temperatureRatio": "온도 비율",
         "temperatureRatioPlaceholder": "실제 온도 = 요청 온도 * 온도 비율",
+        "toolCompatMode": "도구 호출",
+        "toolCompatModePlaceholder": "도구 호출 모드 선택",
         "toolFilter": "도구 필터링",
-        "toolFilterPlaceholder": "필터링할 도구 이름을 한 줄에 하나씩 입력하세요"
+        "toolFilterPlaceholder": "필터링할 도구 이름을 한 줄에 하나씩 입력하세요",
+        "selectTemplate": "템플릿 그룹 선택"
       },
       "promptInjection": {
         "off": "끄기",

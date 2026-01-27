@@ -72,6 +72,17 @@
     "mcpDisabled": "MCPツールを無効にする",
     "mcpEnabled": "MCPツールを有効にする",
     "translationSkillPromptEmpty": "翻訳スキルのプロンプトは必須です",
+    "addAttachment": "添付ファイルの追加",
+    "dragOrClickToSelectFile": "ファイルをここにドラッグするか、クリックして選択してください",
+    "selectFile": "ファイルを選択",
+    "supportedImageFormats": "画像形式：JPG、PNG、GIF、WEBP、SVG、BMP",
+    "supportedOfficeFormats": "オフィス文書：PDF、DOCX、XLSX、XLS",
+    "supportedTextFormats": "テキスト形式：TXT、MD、JSON、XML、CSV、LOG、PHP、GO、RS、JS、PY、TS、CSS、HTML",
+    "unsupportedFileType": "サポートされていないファイル形式です",
+    "errorOnAddAttachment": "添付ファイルの追加に失敗しました：{error}",
+    "preparingAttachments": "添付ファイルを準備中...",
+    "analyzingImages": "画像を分析中...",
+    "generatingResponse": "回答を生成中...",
     "useSkills": "スキルを使用",
     "date": {
       "earlier": "さらに前",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "智記を検索"
+  },
+  "proxySwitcher": {
+    "title": "プロキシ切り替え",
+    "toolCompatMode": "ツールモード",
+    "activate": "有効化"
   },
   "settings": {
     "agent": {
@@ -210,9 +226,13 @@
       "centerWindowShortcut": "メインウィンドウを中央に配置",
       "networkSettings": "ネットワーク設定",
       "noteWindowVisibleShortcut": "智記ウィンドウを開く",
+      "proxySwitcherWindowVisibleShortcut": "プロキシ切り替えウィンドウ",
       "pressKeysToSet": "クリックしてからショートカットキーの組み合わせを押してください...",
       "primaryLanguage": "第一言語",
       "primaryLanguageTooltip": "言語翻訳の自動識別が失敗した場合の優先言語として使用されます",
+      "visionModel": "ビジョンモデル",
+      "visionModelTooltip": "画像分析用のビジョンモデルを選択します。チャットで画像を送信すると、このモデルが画像内容を分析します。",
+      "visionModelRequired": "画像分析をサポートするには、まず設定でビジョンモデルを構成してください",
       "proxyPassword": "プロキシパスワード",
       "proxyPasswordPlaceholder": "認証が不要な場合は空白にしてください",
       "proxyServer": "プロキシサーバーアドレス",
@@ -563,12 +583,20 @@
       "switchGuideTitle": "動的グループ切り替えの説明",
       "switchGuideUrl": "アクセスアドレスの例：",
       "title": "プロキシグループ管理",
+      "toolCompatMode": "ツール呼び出し",
+      "toolCompatModeChanged": "ツール呼び出しが{mode}に変更されました",
+      "toolCompatModes": {
+        "auto": "URL設定",
+        "compat": "互換モード",
+        "native": "ネイティブ呼び出し"
+      },
       "updateConfirm": "選択した {count} 個のグループを更新してもよろしいですか？",
       "updateSuccess": "グループが正常に更新されました！",
       "form": {
         "description": "説明",
         "descriptionPlaceholder": "説明を入力してください",
         "disabled": "無効",
+        "loadFromTemplate": "テンプレートから読み込む",
         "maxContext": "最大コンテキスト長",
         "maxContextPlaceholder": "各モデルのリリース情報またはインターフェース情報を参照してください。0は設定しないことを意味します",
         "modelInjectionCondition": "モデル注入条件",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "プロンプトテキストを入力してください",
         "temperatureRatio": "温度比率",
         "temperatureRatioPlaceholder": "実際の温度 = リクエスト温度 * 温度比率",
+        "toolCompatMode": "ツール呼び出し",
+        "toolCompatModePlaceholder": "ツール呼び出しモードを選択",
         "toolFilter": "ツールフィルタリング",
-        "toolFilterPlaceholder": "フィルタリングするツール名を1行に1つずつ入力してください"
+        "toolFilterPlaceholder": "フィルタリングするツール名を1行に1つずつ入力してください",
+        "selectTemplate": "テンプレートグループを選択"
       },
       "promptInjection": {
         "off": "オフ",

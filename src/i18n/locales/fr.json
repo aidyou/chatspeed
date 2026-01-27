@@ -72,6 +72,17 @@
     "toolArgs": "Arguments",
     "toolResult": "Résultat",
     "translationSkillPromptEmpty": "L'invite de la compétence de traduction ne peut pas être vide.",
+    "addAttachment": "Ajouter une pièce jointe",
+    "dragOrClickToSelectFile": "Faites glisser le fichier ici ou cliquez pour sélectionner",
+    "selectFile": "Sélectionner un fichier",
+    "supportedImageFormats": "Formats d'image : JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Documents de bureau : PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Formats de texte : TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Type de fichier non pris en charge",
+    "errorOnAddAttachment": "Échec de l'ajout de la pièce jointe : {error}",
+    "preparingAttachments": "Préparation des pièces jointes...",
+    "analyzingImages": "Analyse des images...",
+    "generatingResponse": "Génération de la réponse...",
     "useSkills": "Utiliser les compétences",
     "date": {
       "earlier": "Plus tôt",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "Rechercher dans les notes"
+  },
+  "proxySwitcher": {
+    "title": "Sélecteur de proxy",
+    "toolCompatMode": "Mode outil",
+    "activate": "Activer"
   },
   "settings": {
     "agent": {
@@ -210,9 +226,13 @@
       "centerWindowShortcut": "Centrer la fenêtre principale",
       "networkSettings": "Paramètres réseau",
       "noteWindowVisibleShortcut": "Ouvrir la fenêtre des notes",
+      "proxySwitcherWindowVisibleShortcut": "Fenêtre du sélecteur de proxy",
       "pressKeysToSet": "Cliquez puis appuyez sur la combinaison de touches de raccourci...",
       "primaryLanguage": "Langue principale",
       "primaryLanguageTooltip": "Principalement utilisée comme premier choix en cas d'échec de la détection automatique de la langue.",
+      "visionModel": "Modèle de vision",
+      "visionModelTooltip": "Sélectionnez un modèle de vision pour l'analyse des images. Lors de l'envoi d'images dans le chat, ce modèle sera utilisé pour analyser le contenu de l'image.",
+      "visionModelRequired": "Veuillez d'abord configurer un modèle de vision dans les paramètres pour prendre en charge l'analyse d'images.",
       "proxyPassword": "Mot de passe du proxy",
       "proxyPasswordPlaceholder": "Laisser vide si aucune authentification n'est requise",
       "proxyServer": "Adresse du serveur proxy",
@@ -421,7 +441,7 @@
       "paramKey": "Nom du paramètre",
       "paramValue": "Valeur",
       "presencePenalty": "Pénalité de présence",
-      "presencePenaltyPlaceholder": "Ajuste la probabilité que le modèle répète des mots déjà apparus. Une valeur plus élevée rend la répétition moins probable. Mettre à 0 ou laisser vide pour désactiver.",
+      "presencePenaltyPlaceholder": "Ajuste la probabilité que le modèle répète des mots déjà apparus. Une valeur plus élevée rend la répétition moins probable. Mettre à 0 oder laisser vide pour désactiver.",
       "presetModels": "Modèles prédéfinis",
       "provider": "Fournisseur",
       "proxyServerRequired": "Veuillez entrer l'adresse du serveur proxy",
@@ -563,15 +583,23 @@
       "switchGuideTitle": "Guide de commutation dynamique",
       "switchGuideUrl": "URL d'accès unifié :",
       "title": "Gestion des groupes de proxy",
+      "toolCompatMode": "Appel d'outil",
+      "toolCompatModeChanged": "Mode d'appel d'outil changé en : {mode}",
+      "toolCompatModes": {
+        "auto": "Réglage URL",
+        "compat": "Mode de compatibilité",
+        "native": "Appel natif"
+      },
       "updateConfirm": "Voulez-vous mettre à jour les {count} groupes sélectionnés ?",
       "updateSuccess": "Groupe mis à jour avec succès !",
       "form": {
         "description": "Description",
         "descriptionPlaceholder": "Entrer une description",
         "disabled": "Désactivé",
+        "loadFromTemplate": "Charger du modèle",
         "maxContext": "Taille max du contexte",
         "maxContextPlaceholder": "Référez-vous aux specs du modèle, 0 pour non défini",
-        "modelInjectionCondition": "Condition d'injection",
+        "modelInjectionCondition": "Condition d'injection du modèle",
         "modelInjectionConditionPlaceholder": "Injecter si l'ID correspond (wildcards * et ? supportés)",
         "name": "Nom du groupe",
         "namePlaceholder": "Entrer le nom",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "Entrer le texte",
         "temperatureRatio": "Ratio de température",
         "temperatureRatioPlaceholder": "Temp réelle = Temp requête * Ratio",
+        "toolCompatMode": "Appel d'outil",
+        "toolCompatModePlaceholder": "Sélectionner le mode d'appel d'outil",
         "toolFilter": "Filtrage d'outils",
-        "toolFilterPlaceholder": "Noms des outils à filtrer, un par ligne"
+        "toolFilterPlaceholder": "Noms des outils à filtrer, un par ligne",
+        "selectTemplate": "Sélectionner un groupe de modèles"
       },
       "promptInjection": {
         "off": "Désactivé",
@@ -646,7 +677,7 @@
         "summarization": "Résumé",
         "textCompletion": "Complétion de texte",
         "translation": "Traduction",
-        "voiceRecognition": "Reconnaissance vocale",
+        "voiceRecognition": "Renaissance vocale",
         "writing": "Rédaction"
       },
       "deleteFailed": "Échec de la suppression de la compétence",

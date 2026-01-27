@@ -287,6 +287,36 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Toggles the visibility of the proxy switcher window.
+pub fn toggle_proxy_switcher_window(app: &tauri::AppHandle) {
+    let window_label = "proxy_switcher";
+    if let Some(window) = app.get_webview_window(window_label) {
+        match (window.is_visible(), window.is_focused()) {
+            (Ok(true), Ok(true)) => {
+                let _ = window.hide();
+            }
+            _ => {
+                // In all other cases (hidden, minimized, or in the background),
+                // use the robust helper to bring it to the front.
+                show_and_focus_window(app, window_label);
+            }
+        }
+    } else {
+        let _ = WebviewWindowBuilder::new(
+            app,
+            window_label,
+            tauri::WebviewUrl::App("/proxy-switcher".into()),
+        )
+        .decorations(false)
+        .transparent(true)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .inner_size(360.0, 420.0)
+        .center()
+        .build();
+    }
+}
+
 /// Toggles the visibility of a window using the robust helper function.
 pub fn activate_window(app: &tauri::AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {

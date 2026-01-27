@@ -72,6 +72,17 @@
     "mcpDisabled": "MCP-Werkzeuge deaktivieren",
     "mcpEnabled": "MCP-Werkzeuge aktivieren",
     "translationSkillPromptEmpty": "Der Prompt für die Übersetzungsfähigkeit darf nicht leer sein.",
+    "addAttachment": "Anhang hinzufügen",
+    "dragOrClickToSelectFile": "Datei hierher ziehen oder zum Auswählen klicken",
+    "selectFile": "Datei auswählen",
+    "supportedImageFormats": "Bildformate: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Bürodokumente: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Textformate: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Nicht unterstütztes Dateiformat",
+    "errorOnAddAttachment": "Fehler beim Hinzufügen des Anhangs: {error}",
+    "preparingAttachments": "Anhänge werden vorbereitet...",
+    "analyzingImages": "Bilder werden analysiert...",
+    "generatingResponse": "Antwort wird generiert...",
     "useSkills": "Fähigkeiten verwenden",
     "date": {
       "earlier": "Früher",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "Notiz durchsuchen"
+  },
+  "proxySwitcher": {
+    "title": "Proxy-Umschalter",
+    "toolCompatMode": "Tool-Modus",
+    "activate": "Aktivieren"
   },
   "settings": {
     "agent": {
@@ -223,9 +239,13 @@
       "centerWindowShortcut": "Hauptfenster zentrieren",
       "networkSettings": "Netzwerkeinstellungen",
       "noteWindowVisibleShortcut": "Notizfenster öffnen",
+      "proxySwitcherWindowVisibleShortcut": "Proxy-Umschalter-Fenster",
       "pressKeysToSet": "Klicken Sie und drücken Sie dann die Tastenkombination für die Verknüpfung...",
       "primaryLanguage": "Primärsprache",
       "primaryLanguageTooltip": "Wird hauptsächlich als Präferenz verwendet, wenn die automatische Erkennung der Sprachübersetzung fehlschlägt",
+      "visionModel": "Vision-Modell",
+      "visionModelTooltip": "Wählen Sie ein Vision-Modell für die Bildanalyse aus. Wenn Sie Bilder im Chat senden, analysiert dieses Modell den Bildinhalt.",
+      "visionModelRequired": "Bitte konfigurieren Sie zuerst ein Vision-Modell in den Einstellungen, um die Bildanalyse zu unterstützen",
       "proxyPassword": "Proxy-Passwort",
       "proxyPasswordPlaceholder": "Lass dieses Feld leer, wenn keine Authentifizierung erforderlich ist",
       "proxyServer": "Proxy-Server-Adresse",
@@ -356,7 +376,7 @@
         "placeholderError": "Die Konfiguration enthält nicht gesetzte Platzhalter, bitte setze tatsächliche Werte:",
         "typeRequired": "Servertyp darf nicht leer sein.",
         "urlPlaceholder": "URL enthält Platzhalter: {placeholders}",
-        "urlRequired": "SSE-Typ erfordert eine URL。"
+        "urlRequired": "SSE-Typ erfordert eine URL."
       }
     },
     "model": {
@@ -387,13 +407,13 @@
       "deleteTitle": "Modell löschen",
       "disable": "Deaktivieren",
       "disabled": "Deaktiviert?",
-      "disableFailed": "Deaktivierung des Modells „{name}“ fehlgeschlagen: {error}",
-      "disableSuccess": "Modell „{name}“ wurde deaktiviert.",
+      "disableFailed": "Deaktivierung des Modells \"{name}\" fehlgeschlagen: {error}",
+      "disableSuccess": "Modell \"{name}\" wurde deaktiviert.",
       "documentation": "Dokumentation",
       "edit": "Modell bearbeiten",
       "enable": "Aktivieren",
-      "enableFailed": "Aktivierung des Modells „{name}“ fehlgeschlagen: {error}",
-      "enableSuccess": "Modell „{name}“ wurde aktiviert.",
+      "enableFailed": "Aktivierung des Modells \"{name}\" fehlgeschlagen: {error}",
+      "enableSuccess": "Modell \"{name}\" wurde aktiviert.",
       "frequencyPenalty": "Frequenzstrafe",
       "frequencyPenaltyPlaceholder": "Passt die Häufigkeit an, mit der das Modell dieselben Wörter wiederholt. Ein höherer Wert führt zu weniger Wiederholungen. Bei 0 oder leer wird es nicht verwendet.",
       "functionCall": "Funktionsaufruf",
@@ -563,15 +583,23 @@
       "switchGuideTitle": "Leitfaden zum dynamischen Wechseln",
       "switchGuideUrl": "Einheitliche Zugriffs-URL:",
       "title": "Verwaltung der Proxy-Gruppen",
+      "toolCompatMode": "Werkzeugaufruf",
+      "toolCompatModeChanged": "Werkzeugaufruf wurde auf {mode} geändert",
+      "toolCompatModes": {
+        "auto": "URL-Einstellung",
+        "compat": "Kompatibilitätsmodus",
+        "native": "Nativer Aufruf"
+      },
       "updateConfirm": "Sind Sie sicher, dass Sie die {count} ausgewählten Gruppen aktualisieren möchten?",
       "updateSuccess": "Gruppe erfolgreich aktualisiert!",
       "form": {
         "description": "Beschreibung",
         "descriptionPlaceholder": "Beschreibung eingeben",
         "disabled": "Deaktiviert",
+        "loadFromTemplate": "Von Vorlage laden",
         "maxContext": "Maximale Kontextlänge",
         "maxContextPlaceholder": "Beziehen Sie sich auf Modellspezifikationen oder API-Infos, 0 bedeutet nicht festgelegt",
-        "modelInjectionCondition": "Injektionsbedingung",
+        "modelInjectionCondition": "Modell-Injektionsbedingung",
         "modelInjectionConditionPlaceholder": "Nur injizieren, wenn die Modell-ID übereinstimmt (Platzhalter * und ? unterstützt)",
         "name": "Gruppenname",
         "namePlaceholder": "Gruppenname eingeben",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "Prompt-Text eingeben",
         "temperatureRatio": "Temperaturverhältnis",
         "temperatureRatioPlaceholder": "Echte Temp = Anforderungs-Temp * Verhältnis",
+        "toolCompatMode": "Werkzeugaufruf",
+        "toolCompatModePlaceholder": "Werkzeugaufrufmodus auswählen",
         "toolFilter": "Werkzeugfilterung",
-        "toolFilterPlaceholder": "Geben Sie die zu filternden Werkzeugnamen ein, einen pro Zeile"
+        "toolFilterPlaceholder": "Geben Sie die zu filternden Werkzeugnamen ein, einen pro Zeile",
+        "selectTemplate": "Vorlagengruppe auswählen"
       },
       "promptInjection": {
         "off": "Aus",

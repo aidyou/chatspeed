@@ -72,6 +72,17 @@
     "mcpDisabled": "Deshabilitar herramientas MCP",
     "mcpEnabled": "Habilitar herramientas MCP",
     "translationSkillPromptEmpty": "El mensaje de la habilidad de traducción no puede estar vacío",
+    "addAttachment": "Añadir adjunto",
+    "dragOrClickToSelectFile": "Arrastra el archivo aquí o haz clic para seleccionar",
+    "selectFile": "Seleccionar archivo",
+    "supportedImageFormats": "Formatos de imagen: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Documentos de oficina: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Formatos de texto: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Tipo de archivo no compatible",
+    "errorOnAddAttachment": "Error al añadir el adjunto: {error}",
+    "preparingAttachments": "Preparando adjuntos...",
+    "analyzingImages": "Analizando imágenes...",
+    "generatingResponse": "Generando respuesta...",
     "useSkills": "Usar habilidades",
     "date": {
       "earlier": "Más temprano",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "Buscar en notas"
+  },
+  "proxySwitcher": {
+    "title": "Selector de proxy",
+    "toolCompatMode": "Modo de herramienta",
+    "activate": "Activar"
   },
   "settings": {
     "agent": {
@@ -202,7 +218,7 @@
       "sensitiveFiltering": {
         "title": "Filtrado de datos sensibles",
         "enable": "Habilitar filtrado de datos sensibles",
-        "enableTooltip": "Identifique y oculte automáticamente información confidencial (p. ej., nombres, teléfonos, ID, montos) antes de enviar mensajes a los modelos de IA. Los datos originales permanecen seguros en su dispositivo local.",
+        "enableTooltip": "Identifique y oculte automáticamente información confidencial (p. ej., nombres, teléfonos, ID, montos) antes de enviar mensajes a los modelos de IA. Los datos originales permanecem seguros en su dispositivo local.",
         "common": "Filtros comunes",
         "commonTooltip": "Incluye filtros estándar como correo electrónico, dirección IP, tarjetas de crédito, teléfonos fijos, redes sociales, proyectos, finanzas, etc.",
         "blocklist": "Lista de bloqueo personalizada",
@@ -223,9 +239,13 @@
       "centerWindowShortcut": "Centrar ventana principal",
       "networkSettings": "Configuración de red",
       "noteWindowVisibleShortcut": "Abrir ventana de notas",
+      "proxySwitcherWindowVisibleShortcut": "Ventana del selector de proxy",
       "pressKeysToSet": "Haz clic y luego presiona la combinación de teclas de acceso directo...",
       "primaryLanguage": "Idioma principal",
       "primaryLanguageTooltip": "Se utiliza principalmente como primera opción cuando falla la identificación automática del idioma de traducción.",
+      "visionModel": "Modelo de visión",
+      "visionModelTooltip": "Seleccione un modelo de visión para el análisis de imágenes. Al enviar imágenes en el chat, se utilizará este modelo para analizar el contenido de la imagen.",
+      "visionModelRequired": "Configure primero un modelo de visión en los ajustes para admitir el análisis de imágenes.",
       "proxyPassword": "Contraseña del proxy",
       "proxyPasswordPlaceholder": "Déjalo en blanco si no se requiere autenticación",
       "proxyServer": "Dirección del servidor proxy",
@@ -313,10 +333,10 @@
       "noServersFound": "No se encontraron servidores MCP.",
       "noTools": "No hay herramientas disponibles o aún no se han obtenido.",
       "operationFailed": "Operación fallida: {error}",
-      "presetTitle": "Seleccionar servidor MCP preestablecido",
       "restart": "Reiniciar",
       "restartFailed": "Error al reiniciar el servidor MCP \"{name}\": {error}",
       "restartSuccess": "El servidor MCP \"{name}\" ha sido reiniciado.",
+      "presetTitle": "Seleccionar servidor MCP preestablecido",
       "statusError": "Error de inicio: {error}",
       "statusRunning": "En ejecución",
       "statusStarting": "Iniciando",
@@ -333,7 +353,7 @@
         "description": "Descripción",
         "disabled": "Deshabilitar este servidor",
         "env": "Variables de entorno",
-        "envPlaceholder": "CLAVE1:VALOR1\nCLAVE2:VALOR2 (una por línea)",
+        "envPlaceholder": "CLAVE1:VALOR1\nCLÉ2:VALOR2 (una por línea)",
         "error": "Error al enviar el formulario, por favor, compruebe.",
         "name": "Nombre del servidor",
         "tabForm": "Editar formulario",
@@ -352,9 +372,9 @@
         "commandRequired": "El tipo Stdio requiere un comando.",
         "envPlaceholder": "Las variables de entorno contienen marcadores de posición: {placeholders}",
         "invalidName": "Nombre de MCP no válido: {name}",
-        "nameRequired": "El nombre del servidor не puede estar vacío.",
+        "nameRequired": "El nombre del servidor no puede estar vacío.",
         "placeholderError": "La configuración contiene marcadores de posición no establecidos, por favor establece valores reales:",
-        "typeRequired": "El tipo de servidor не puede estar vacío.",
+        "typeRequired": "El tipo de servidor no puede estar vacío.",
         "urlPlaceholder": "La URL contiene marcadores de posición: {placeholders}",
         "urlRequired": "El tipo SSE requiere una URL."
       }
@@ -563,15 +583,23 @@
       "switchGuideTitle": "Guía de cambio dinámico",
       "switchGuideUrl": "URL de acceso unificado:",
       "title": "Gestión de grupos de proxy",
+      "toolCompatMode": "Llamada de herramienta",
+      "toolCompatModeChanged": "Modo de llamada de herramienta cambiado a: {mode}",
+      "toolCompatModes": {
+        "auto": "Ajuste URL",
+        "compat": "Modo de compatibilidad",
+        "native": "Llamada nativa"
+      },
       "updateConfirm": "¿Estás seguro de que quieres actualizar los {count} grupos seleccionados?",
       "updateSuccess": "¡Grupo actualizado con éxito!",
       "form": {
         "description": "Descripción",
         "descriptionPlaceholder": "Introduce una descripción",
         "disabled": "Desactivado",
+        "loadFromTemplate": "Cargar de plantilla",
         "maxContext": "Longitud máx. del contexto",
         "maxContextPlaceholder": "Consulta las especificaciones del modelo, 0 para no establecido",
-        "modelInjectionCondition": "Condición de inyección",
+        "modelInjectionCondition": "Condición de inyección del modelo",
         "modelInjectionConditionPlaceholder": "Inyectar si el ID coincide (wildcards * y ? soportados)",
         "name": "Nombre del grupo",
         "namePlaceholder": "Introduce el nombre",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "Introduce el texto",
         "temperatureRatio": "Ratio de temperatura",
         "temperatureRatioPlaceholder": "Temp real = Temp solicitud * Ratio",
+        "toolCompatMode": "Llamada de herramienta",
+        "toolCompatModePlaceholder": "Seleccionar modo de llamada de herramienta",
         "toolFilter": "Filtrado de herramientas",
-        "toolFilterPlaceholder": "Nombres de herramientas a filtrar, uno por línea"
+        "toolFilterPlaceholder": "Nombres de herramientas a filtrar, uno por línea",
+        "selectTemplate": "Seleccionar grupo de plantillas"
       },
       "promptInjection": {
         "off": "Desactivado",

@@ -72,6 +72,17 @@
     "mcpDisabled": "Отключить инструменты MCP",
     "mcpEnabled": "Включить инструменты MCP",
     "translationSkillPromptEmpty": "Текст запроса для навыка перевода не может быть пустым",
+    "addAttachment": "Добавить вложение",
+    "dragOrClickToSelectFile": "Перетащите файл сюда или нажмите для выбора",
+    "selectFile": "Выбрать файл",
+    "supportedImageFormats": "Форматы изображений: JPG, PNG, GIF, WEBP, SVG, BMP",
+    "supportedOfficeFormats": "Офисные документы: PDF, DOCX, XLSX, XLS",
+    "supportedTextFormats": "Текстовые форматы: TXT, MD, JSON, XML, CSV, LOG, PHP, GO, RS, JS, PY, TS, CSS, HTML",
+    "unsupportedFileType": "Неподдерживаемый тип файла",
+    "errorOnAddAttachment": "Ошибка при добавлении вложения: {error}",
+    "preparingAttachments": "Подготовка вложений...",
+    "analyzingImages": "Анализ изображений...",
+    "generatingResponse": "Генерация ответа...",
     "useSkills": "Использовать навыки",
     "date": {
       "earlier": "Ранее",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "Поиск в заметках"
+  },
+  "proxySwitcher": {
+    "title": "Переключатель прокси",
+    "toolCompatMode": "Режим инструментов",
+    "activate": "Активировать"
   },
   "settings": {
     "agent": {
@@ -223,9 +239,13 @@
       "centerWindowShortcut": "Центрировать главное окно",
       "networkSettings": "Настройки сети",
       "noteWindowVisibleShortcut": "Открыть окно заметок",
+      "proxySwitcherWindowVisibleShortcut": "Окно переключения прокси",
       "pressKeysToSet": "Нажмите, затем введите комбинацию клавиш быстрого доступа...",
       "primaryLanguage": "Основной язык",
       "primaryLanguageTooltip": "Предпочтительный язык при автоматическом определении языка для перевода.",
+      "visionModel": "Модель зрения",
+      "visionModelTooltip": "Выберите модель зрения для анализа изображений. При отправке изображений в чате эта модель будет использоваться для анализа содержимого изображения.",
+      "visionModelRequired": "Пожалуйста, сначала настройте модель зрения в настройках, чтобы поддерживать анализ изображений.",
       "proxyPassword": "Пароль прокси",
       "proxyPasswordPlaceholder": "Оставьте пустым, если не требуется аутентификация",
       "proxyServer": "Адрес прокси-сервера",
@@ -563,12 +583,20 @@
       "switchGuideTitle": "Динамическое переключение",
       "switchGuideUrl": "Единый URL доступа:",
       "title": "Управление группами прокси",
+      "toolCompatMode": "Вызов инструментов",
+      "toolCompatModeChanged": "Режим вызова инструментов изменен на: {mode}",
+      "toolCompatModes": {
+        "auto": "Настройка URL",
+        "compat": "Режим совместимости",
+        "native": "Нативный вызов"
+      },
       "updateConfirm": "Вы уверены, что хотите обновить {count} выбранных групп?",
       "updateSuccess": "Группа успешно обновлена!",
       "form": {
         "description": "Описание",
         "descriptionPlaceholder": "Введите описание",
         "disabled": "Отключено",
+        "loadFromTemplate": "Загрузить из шаблона",
         "maxContext": "Максимальная длина контекста",
         "maxContextPlaceholder": "Пожалуйста, обратитесь к информации о выпуске или информации об интерфейсе каждой модели, значение 0 не будет установлено",
         "modelInjectionCondition": "Условие инъекции модели",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "Введите текст подсказки",
         "temperatureRatio": "Коэффициент температуры",
         "temperatureRatioPlaceholder": "Фактическая температура = температура запроса * коэффициент температуры",
+        "toolCompatMode": "Вызов инструментов",
+        "toolCompatModePlaceholder": "Выберите режим вызова инструментов",
         "toolFilter": "Фильтр инструментов",
-        "toolFilterPlaceholder": "Введите имена инструментов для фильтрации, по одному в строке"
+        "toolFilterPlaceholder": "Введите имена инструментов для фильтрации, по одному в строке",
+        "selectTemplate": "Выберите группу шаблонов"
       },
       "promptInjection": {
         "off": "Выключено",
@@ -633,6 +664,11 @@
       "selectSkill": "Выберите навык",
       "selectType": "Выберите тип навыка",
       "toolsEnabled": "Разрешить вызовы инструментов",
+      "deleteFailed": "Не удалось удалить навык",
+      "saveFailed": "Не удалось сохранить навык",
+      "updateOrderFailed": "Не удалось обновить порядок навыков",
+      "updateSuccess": "Навык обновлен",
+      "useSystemRole": "Использовать системную роль",
       "type": {
         "chat": "Чат",
         "coding": "Программирование",
@@ -648,12 +684,7 @@
         "translation": "Перевод",
         "voiceRecognition": "Распознавание голоса",
         "writing": "Написание текстов"
-      },
-      "deleteFailed": "Не удалось удалить навык",
-      "saveFailed": "Не удалось сохранить навык",
-      "updateOrderFailed": "Не удалось обновить порядок навыков",
-      "updateSuccess": "Навык обновлен",
-      "useSystemRole": "Использовать системную роль"
+      }
     },
     "type": {
       "about": "О программе",

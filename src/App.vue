@@ -29,6 +29,7 @@ import { useSkillStore } from '@/stores/skill'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
+import { useProxyGroupStore } from '@/stores/proxy_group'
 
 const router = useRouter()
 const settingStore = useSettingStore()
@@ -37,6 +38,7 @@ const modelStore = useModelStore()
 const skillStore = useSkillStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
+const proxyGroupStore = useProxyGroupStore()
 const listener = ref(null)
 
 const { settings } = storeToRefs(settingStore)
@@ -158,6 +160,8 @@ onMounted(async () => {
       skillStore.updateSkillStore()
     } else if (eventType === 'setting_changed') {
       settingStore.updateSettingStore(event.payload.setting)
+    } else if (eventType === 'proxy_group_changed' || eventType === 'proxy_group_updated') {
+      proxyGroupStore.getList()
     }
   })
 

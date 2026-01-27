@@ -21,13 +21,14 @@ use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::db::MainStore;
 use crate::open_note_window;
 use crate::window::toggle_window_activate;
-use crate::window::{activate_window, toggle_assistant_window};
+use crate::window::{activate_window, toggle_assistant_window, toggle_proxy_switcher_window};
 use crate::{
     constants::*, CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT,
     CFG_MAIN_WINDOW_VISIBLE_SHORTCUT, CFG_MOVE_WINDOW_LEFT_SHORTCUT,
-    CFG_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-    DEFAULT_CENTER_WINDOW_SHORTCUT, DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT,
-    DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT, DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT,
+    CFG_MOVE_WINDOW_RIGHT_SHORTCUT, CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+    DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, DEFAULT_CENTER_WINDOW_SHORTCUT,
+    DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT,
+    DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
 };
 
 /// Retrieves current shortcuts from the configuration store
@@ -109,6 +110,14 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
             ),
         );
 
+        shortcuts.insert(
+            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            c.get_config(
+                CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+                DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            ),
+        );
+
         // Add new shortcuts here if needed
         // shortcuts.insert("new_window_shortcut".to_string(), c.get_config("new_window_shortcut", "default_value".to_string()));
     } else {
@@ -143,6 +152,10 @@ fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<Str
         shortcuts.insert(
             CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
             DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        shortcuts.insert(
+            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
         );
     }
 
@@ -233,6 +246,9 @@ fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
         }
         CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT => {
             toggle_window_activate(app, "workflow", true);
+        }
+        CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT => {
+            toggle_proxy_switcher_window(app);
         }
         _ => {}
     }

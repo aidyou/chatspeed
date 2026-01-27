@@ -73,6 +73,17 @@
     "toolArgs": "參數",
     "toolResult": "結果",
     "translationSkillPromptEmpty": "翻譯技能的提示詞不能為空",
+    "addAttachment": "添加附件",
+    "dragOrClickToSelectFile": "拖拽文件到此處或點擊選擇",
+    "selectFile": "選擇文件",
+    "supportedImageFormats": "圖片格式：JPG、PNG、GIF、WEBP、SVG、BMP",
+    "supportedOfficeFormats": "辦公文檔：PDF、DOCX、XLSX、XLS",
+    "supportedTextFormats": "文本格式：TXT、MD、JSON、XML、CSV、LOG、PHP、GO、RS、JS、PY、TS、CSS、HTML",
+    "unsupportedFileType": "不支持的文件類型",
+    "errorOnAddAttachment": "添加附件失敗：{error}",
+    "preparingAttachments": "正在準備附件...",
+    "analyzingImages": "正在分析圖片...",
+    "generatingResponse": "正在生成回復...",
     "date": {
       "earlier": "更早",
       "lastMonth": "上個月",
@@ -136,6 +147,11 @@
   },
   "note": {
     "searchNotePlaceholder": "搜尋智記"
+  },
+  "proxySwitcher": {
+    "title": "代理切換",
+    "toolCompatMode": "工具模式",
+    "activate": "激活"
   },
   "settings": {
     "agent": {
@@ -209,10 +225,14 @@
       "moveWindowRightShortcut": "主窗右移",
       "centerWindowShortcut": "主窗居中",
       "networkSettings": "網路設定",
-      "noteWindowVisibleShortcut": "開啟智記視窗",
+      "noteWindowVisibleShortcut": "打開智記視窗",
+      "proxySwitcherWindowVisibleShortcut": "代理切換視窗",
       "pressKeysToSet": "請點擊後按下快捷鍵組合……",
       "primaryLanguage": "第一語言",
       "primaryLanguageTooltip": "主要作為語言翻譯自動識別失敗時的首選項",
+      "visionModel": "視覺模型",
+      "visionModelTooltip": "選擇用於圖片分析的視覺模型。在聊天中發送圖片時，將使用此模型分析圖片內容。",
+      "visionModelRequired": "請先在設置中配置視覺模型以支持圖片分析",
       "proxyPassword": "代理密碼",
       "proxyPasswordPlaceholder": "如無須驗證，留空即可",
       "proxyServer": "代理伺服器位址",
@@ -563,15 +583,23 @@
       "switchGuideTitle": "分組切換說明",
       "switchGuideUrl": "訪問地址示例：",
       "title": "代理分組管理",
+      "toolCompatMode": "工具調用",
+      "toolCompatModeChanged": "工具調用已更改為：{mode}",
+      "toolCompatModes": {
+        "auto": "URL設置",
+        "compat": "兼容模式",
+        "native": "原生調用"
+      },
       "updateConfirm": "確定要更新選中的 {count} 個分組嗎？",
       "updateSuccess": "分組更新成功！",
       "form": {
         "description": "描述",
         "descriptionPlaceholder": "請輸入描述",
         "disabled": "禁用",
+        "loadFromTemplate": "從模板加載",
         "maxContext": "最大上下文長度",
         "maxContextPlaceholder": "請參考各模型的發布信息或者接口信息，0 值將不設置",
-        "modelInjectionCondition": "模型注入條件",
+        "modelInjectionCondition": "模型注入条件",
         "modelInjectionConditionPlaceholder": "模型 id 匹配時才注入，留空不限，可以用 *匹配任意多個字符，用?匹配單個字符",
         "name": "分組名稱",
         "namePlaceholder": "請輸入分組名稱",
@@ -585,8 +613,11 @@
         "promptTextPlaceholder": "請輸入提示詞文本",
         "temperatureRatio": "溫度比例",
         "temperatureRatioPlaceholder": "真實溫度 = 請求溫度 * 溫度比例",
+        "toolCompatMode": "工具调用",
+        "toolCompatModePlaceholder": "選擇工具调用模式",
         "toolFilter": "工具過濾",
-        "toolFilterPlaceholder": "請輸入要過濾的工具名稱，每行一個"
+        "toolFilterPlaceholder": "請輸入要過濾的工具名稱，每行一個",
+        "selectTemplate": "選擇模板分組"
       },
       "promptInjection": {
         "off": "關閉",

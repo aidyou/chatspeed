@@ -2,10 +2,18 @@
 
 # Release Notes
 
-## [1.1.24] - TBD
+## [1.1.24] - 2026-01-27
 
 ### 🚀 New Features
 
+- **New Proxy Group Switcher Window**:
+  - **Instant Summon**: Added a global shortcut (default `Alt+Shift+P`) to quickly open a lightweight switcher panel
+  - **Native Interaction**: Supports Arrow keys (`↑`/`↓`) for navigation, `Enter` to activate, and `Esc` to close
+  - **Seamless UX**: Automatically hides on blur and includes built-in drag support for effortless placement
+  - **Full Support**: Comes with complete localized translations for all 8 languages and optimized startup shortcut registration
+- **Enhanced Proxy Server List**:
+  - **Accordion Layout**: Refactored the proxy list in Settings into an animated accordion view
+  - **Focus Management**: Implemented "Single-Open" logic to maintain focus and improved usability with localized updates for template loading and tool modes
 - **Enhanced Attachment Support**: Now supports sending images and various office documents in chat:
   - **Images**: Supported formats include JPG, PNG, GIF, WEBP, SVG, BMP. Supports direct pasting and drag-and-drop.
   - **Office Documents**: Local parsing for PDF, DOCX, XLSX, and XLS formats.
