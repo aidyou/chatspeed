@@ -94,6 +94,48 @@ export const chatPreProcess = async (inputMessage, historyMessages, skill, metad
 }
 
 /**
+ * Reconstructs user message content by appending attachment information from metadata
+ *
+ * @param {string} content - Original user message content
+ * @param {Object} metadata - Message metadata containing attachments/vision_analysis
+ * @returns {string} The reconstructed message content with context
+ */
+function reconstructUserMessage(content, metadata) {
+  if (!metadata) return content
+
+  let finalContent = content
+  let contextContent = ''
+
+  // 1. Handle vision analysis result
+  if (metadata.vision_analysis) {
+    contextContent += `[Previous Attachment Analysis]:\n${metadata.vision_analysis}\n`
+  }
+
+  // 2. Handle text attachments (if content exists in metadata)
+  if (metadata.attachments && Array.isArray(metadata.attachments)) {
+    const textAttachments = metadata.attachments.filter(
+      a => a.type === 'text' && a.content
+    )
+    
+    if (textAttachments.length > 0) {
+      const textContext = textAttachments
+        .map(a => `[File: ${a.name}]:\n${a.content}`)
+        .join('\n\n')
+      
+      if (contextContent) contextContent += '\n'
+      contextContent += textContext
+    }
+  }
+
+  // 3. Combine context and user question
+  if (contextContent) {
+    finalContent = `<context>\n${contextContent}\n</context>\n\nPlease answer the following question based on the context provided above:\n\nUser Question: ${content}`
+  }
+
+  return finalContent
+}
+
+/**
  * Converts history messages array to the format expected by AI
  * Performs deep copy to avoid modifying original messages
  * Handles tool calls by splitting them into separate assistant and tool messages
@@ -183,10 +225,11 @@ function buildHistoryMessages(historyMessages) {
           })
         }
       } else {
-        // User message - keep as is
+        // User message - reconstruct content with attachments if available
+        const reconstructedContent = reconstructUserMessage(message.content, message.metadata)
         acc.messages.unshift({
           role: message.role,
-          content: message.content
+          content: reconstructedContent
         })
       }
 

@@ -263,7 +263,8 @@ impl ServerHandler for McpProxyHandler {
         self.ensure_tool_map_loaded().await?;
 
         let tool_map_guard = self.tool_map.read().await;
-        let tool_ref = match tool_map_guard.get(request.name.as_ref()) {
+        let tool_name: &str = request.name.as_ref();
+        let tool_ref = match tool_map_guard.get(tool_name) {
             Some(tool) => tool.clone(),
             None => {
                 let error = json!({"error":t!("mcp.proxy.tool_not_found", tool_name = request.name).to_string()});

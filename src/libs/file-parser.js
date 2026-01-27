@@ -1,37 +1,62 @@
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// 重要：从本地 node_modules 引入 worker，Vite 会自动处理这个路径
-// 这保证了在断网或内网环境下 PDF 解析依然可用
+// Important: Import worker from local node_modules, Vite will handle this path automatically
+// This ensures PDF parsing works even in offline or intranet environments
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 /**
- * 解析 Excel 文件 (.xlsx, .xls)
- * 将每个 Sheet 转换为 CSV 字符串，这是 AI 最容易理解的结构化文本格式
+ * Parse Excel files (.xlsx, .xls)
+ * Convert each Sheet to CSV string, which is the most AI-friendly structured text format
  */
 export const parseExcel = async (file) => {
   const data = await file.arrayBuffer();
-  const workbook = XLSX.read(data);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(data);
   let fullText = "";
-  
-  workbook.SheetNames.forEach(sheetName => {
-    const worksheet = workbook.Sheets[sheetName];
-    // 使用 CSV 格式，因为它比 JSON 更省Token 且保留了结构感
-    const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+  workbook.eachSheet((worksheet, sheetId) => {
+    const sheetName = worksheet.name;
+    let csv = '';
+
+    worksheet.eachRow((row, rowNumber) => {
+      const values = [];
+      row.eachCell((cell, colNumber) => {
+        // Get cell value and convert to string
+        let cellValue = cell.value;
+        if (cellValue === null || cellValue === undefined) {
+          cellValue = '';
+        } else if (typeof cellValue === 'object') {
+          if (cellValue.result !== undefined) {
+            // Handle formula result
+            cellValue = cellValue.result;
+          } else {
+            // Handle other object types
+            cellValue = String(cellValue);
+          }
+        }
+
+        values.push(String(cellValue));
+      });
+
+      // Add row data to CSV string
+      csv += values.join(',') + '\n';
+    });
+
     if (csv.trim()) {
       fullText += `[Sheet: ${sheetName}]\n${csv}\n\n`;
     }
   });
-  
+
   return fullText.trim();
 };
 
 /**
- * 解析 Word 文件 (.docx)
- * Mammoth 专注于提取纯文本，忽略所有复杂的样式和图片，非常适合 AI 处理
+ * Parse Word files (.docx)
+ * Mammoth focuses on extracting plain text, ignoring all complex styles and images, making it ideal for AI processing
  */
 export const parseDocx = async (file) => {
   const arrayBuffer = await file.arrayBuffer();
@@ -40,8 +65,8 @@ export const parseDocx = async (file) => {
 };
 
 /**
- * 解析 PDF 文件
- * 遍历所有页面并提取文本内容
+ * Parse PDF files
+ * Iterate through all pages and extract text content
  */
 export const parsePdf = async (file) => {
   const data = await file.arrayBuffer();
@@ -52,7 +77,7 @@ export const parsePdf = async (file) => {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    // content.items 包含了页面上的文本片段
+    // content.items contains text fragments on the page
     const strings = content.items.map(item => item.str);
     fullText += strings.join(" ") + "\n";
   }
@@ -61,7 +86,7 @@ export const parsePdf = async (file) => {
 };
 
 /**
- * 通用文件解析分发器
+ * Universal file parsing dispatcher
  */
 export const parseFileContent = async (file) => {
   const fileName = file.name.toLowerCase();
@@ -73,7 +98,7 @@ export const parseFileContent = async (file) => {
   } else if (fileName.endsWith('.docx')) {
     return await parseDocx(file);
   } else {
-    // 对于不支持的复杂格式或普通文本，尝试直接读取
+    // For unsupported complex formats or plain text, try to read directly
     return await file.text();
   }
 };

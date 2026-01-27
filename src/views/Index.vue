@@ -1200,8 +1200,32 @@ const dispatchChatCompletion = async (messageId = null) => {
 
   // If resending a message, override the content from history
   if (messageId) {
-    dbUserMessage = chatStore.messages.find(m => m.id === messageId)?.content?.trim() || ''
-    finalMessageToSend = dbUserMessage
+    const originalMsg = chatStore.messages.find(m => m.id === messageId)
+    if (originalMsg) {
+      dbUserMessage = originalMsg.content?.trim() || ''
+      finalMessageToSend = dbUserMessage
+
+      // Restore vision analysis result from metadata
+      if (originalMsg.metadata?.vision_analysis) {
+        visionAnalysisResult = originalMsg.metadata.vision_analysis
+      } else if (originalMsg.metadata?.attachments?.length > 0) {
+        // Fallback: reconstruct context from text attachments if vision_analysis is missing
+        // This handles cases where only text files were attached or old data format
+        const textAttachments = originalMsg.metadata.attachments.filter(a => a.type === 'text' && a.content)
+        if (textAttachments.length > 0) {
+          visionAnalysisResult = textAttachments
+            .map(a => `[File: ${a.name}]:\n${a.content}`)
+            .join('\n\n')
+        }
+      }
+
+      // Restore attachment metadata so it persists in the new message entry
+      if (originalMsg.metadata?.attachments) {
+        processedAttachmentMetadata = {
+          attachments: originalMsg.metadata.attachments
+        }
+      }
+    }
   }
 
   if (visionAnalysisResult) {
@@ -1258,7 +1282,7 @@ const dispatchChatCompletion = async (messageId = null) => {
     .addChatMessage(
       chatStore.currentConversationId,
       'user',
-      rawUserMessage,
+      dbUserMessage,
       metadata,
       messageId
     )

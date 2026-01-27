@@ -18,7 +18,7 @@
     "@tauri-apps/plugin-process": "^2.3.0",
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@vue/shared": "^3.5.22",
-    "element-plus": "^2.11.5",
+    "element-plus": "^2.8.10",
     "he": "^1.2.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.25",
@@ -27,7 +27,7 @@
     "markmap-common": "^0.18",
     "markmap-lib": "^0.18",
     "markmap-view": "^0.18",
-    "mermaid": "^11.12.0",
+    "mermaid": "^11.12.2",
     "pdfjs-dist": "^5.4.530",
     "pinia": "^3.0.3",
     "sortablejs": "^1.15.6",
@@ -35,10 +35,10 @@
     "vue": "^3.5.22",
     "vue-i18n": "^11.1.12",
     "vue-router": "^4.6.3",
-    "xlsx": "^0.18.5"
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.1",
+    "@tauri-apps/cli": "^2.9.6",
     "@vitejs/plugin-vue": "^6.0.1",
     "sass-embedded": "^1.93.2",
     "typescript": "^5.9.3",
@@ -52,6 +52,8 @@
     "postcss": ">=8.4.31",
     "braces": ">=3.0.3",
     "micromatch": ">=4.0.8",
-    "undici": ">=6.23.0"
+    "undici": ">=6.23.0",
+    "lodash": ">=4.17.21",
+    "lodash-es": ">=4.17.21"
   }
 }
