@@ -550,7 +550,32 @@
       "tabs": {
         "groups": "代理分组",
         "servers": "代理服务",
-        "settings": "代理设置"
+        "settings": "代理设置",
+        "stats": "统计信息"
+      },
+      "stats": {
+        "title": "代理统计信息",
+        "last7Days": "最近7天",
+        "last30Days": "最近30天",
+        "last90Days": "最近90天",
+        "date": "日期",
+        "inputTokens": "输入",
+        "outputTokens": "输出",
+        "cacheTokens": "缓存",
+        "providers": "供应商",
+        "topProvider": "热门供应商",
+        "errors": "错误次数",
+        "providerDetail": "{date} 统计详情",
+        "provider": "供应商",
+        "protocol": "协议",
+        "toolCompat": "兼容模式",
+        "requests": "请求次数",
+        "yes": "是",
+        "no": "否",
+        "errorDetailTitle": "{date} 错误详情",
+        "statusCode": "状态码",
+        "errorMessage": "错误信息",
+        "count": "次数"
       },
       "validation": {
         "aliasRequired": "代理别名不能为空。",

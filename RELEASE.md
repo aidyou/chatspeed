@@ -2,6 +2,28 @@
 
 # Release Notes
 
+## [1.1.25] - 2026-01-27
+
+### 🚀 New Features
+
+- **New Proxy Statistics Feature**:
+  - **Full Data Monitoring**: The system now automatically records all requests passing through the proxy module, including the requested model, provider, client protocol, HTTP status code, and detailed error messages.
+  - **Precise Token Tracking**: Supports recording cumulative input, output, and cache token counts, providing users with a clear understanding of traffic consumption.
+  - **Dual-Mode Support**: Automatic statistics recording is implemented for both protocol conversion mode and direct forward mode.
+- **Brand New Statistics & Analytics UI**:
+  - **Visual Dashboard**: A new "Statistics" tab has been added to the Proxy Settings page, supporting daily usage summaries.
+  - **Multi-dimensional Drill-down**: Click on daily summaries to expand "Statistics Details," viewing granular distribution by provider, protocol, and tool mode.
+  - **Deep Error Tracking**: Click on error counts to view error code distribution and specific failure reasons for that date, facilitating rapid troubleshooting.
+  - **Smart Unit Conversion**: Token counts are automatically converted to "Ten Thousand" (万) or "Hundred Million" (亿) units for more intuitive display of large values.
+
+### 🪄 Improvements
+
+- **System Architecture Optimizations**:
+  - **Database Evolution**: Introduced V4 database migration logic, adding the `ccproxy_stats` table with indexes on key fields to ensure high-performance querying of massive statistical data.
+  - **Enhanced Robustness**: Optimized token capture logic during streaming transmissions to ensure the accuracy and completeness of statistical data.
+
+---
+
 ## [1.1.24] - 2026-01-27
 
 ### 🚀 New Features

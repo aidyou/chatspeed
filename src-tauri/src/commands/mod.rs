@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod ccproxy;
 pub mod clipboard;
 pub mod constants;
 pub mod dev_tool;
