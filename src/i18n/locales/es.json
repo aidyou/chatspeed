@@ -547,10 +547,40 @@
           "type": "Tipo de interfaz"
         }
       },
+      "stats": {
+        "backendModel": "Modelo backend",
+        "cacheTokens": "Caché",
+        "clientModel": "Alias de modelo",
+        "count": "Cantidad",
+        "dailyTokensTitle": "Tendencia de consumo diario de tokens",
+        "date": "Fecha",
+        "errorDetailTitle": "Detalles del error para {date}",
+        "errorDistTitle": "Distribución de códigos de error (no 200)",
+        "errorMessage": "Mensaje de error",
+        "errors": "Errores",
+        "inputTokens": "Entrada",
+        "last1Day": "Últimas 24 horas",
+        "last30Days": "Últimos 30 días",
+        "last7Days": "Últimos 7 días",
+        "last90Days": "Últimos 90 días",
+        "modelUsageTitle": "Distribución de uso de modelos backend",
+        "no": "No",
+        "outputTokens": "Salida",
+        "protocol": "Protocolo",
+        "provider": "Proveedor",
+        "providers": "Proveedores",
+        "requests": "Solicitudes",
+        "statusCode": "Código de estado",
+        "title": "Estadísticas del proxy",
+        "toolCompat": "Modo de compatibilidad",
+        "topProvider": "Modelo popular",
+        "yes": "Sí"
+      },
       "tabs": {
         "groups": "Grupos de proxy",
         "servers": "Servicios de proxy",
-        "settings": "Configuración del proxy"
+        "settings": "Configuración del proxy",
+        "stats": "Estadísticas"
       },
       "validation": {
         "aliasRequired": "El alias de proxy no puede estar vacío.",

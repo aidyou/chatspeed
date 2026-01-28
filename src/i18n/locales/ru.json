@@ -547,10 +547,40 @@
           "type": "Тип интерфейса"
         }
       },
+      "stats": {
+        "backendModel": "Внутренняя модель",
+        "cacheTokens": "Кэш",
+        "clientModel": "Псевдоним модели",
+        "count": "Кол-во",
+        "dailyTokensTitle": "Ежедневный тренд токенов",
+        "date": "Дата",
+        "errorDetailTitle": "Детали ошибки за {date}",
+        "errorDistTitle": "Распределение кодов ошибок (не 200)",
+        "errorMessage": "Сообщение об ошибке",
+        "errors": "Ошибки",
+        "inputTokens": "Ввод",
+        "last1Day": "За последние 24 часа",
+        "last30Days": "За последние 30 дней",
+        "last7Days": "За последние 7 дней",
+        "last90Days": "За последние 90 дней",
+        "modelUsageTitle": "Распределение использования внутренних моделей",
+        "no": "Нет",
+        "outputTokens": "Вывод",
+        "protocol": "Протокол",
+        "provider": "Провайдер",
+        "providers": "Провайдеры",
+        "requests": "Запросы",
+        "statusCode": "Код статуса",
+        "title": "Статистика прокси",
+        "toolCompat": "Режим совместимости",
+        "topProvider": "Популярная модель",
+        "yes": "Да"
+      },
       "tabs": {
         "groups": "Группы прокси",
         "servers": "Службы прокси",
-        "settings": "Настройки прокси"
+        "settings": "Настройки прокси",
+        "stats": "Статистика"
       },
       "validation": {
         "aliasRequired": "Псевдоним прокси не может быть пустым.",

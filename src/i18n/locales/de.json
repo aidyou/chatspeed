@@ -547,10 +547,40 @@
           "type": "Schnittstellentyp"
         }
       },
+      "stats": {
+        "backendModel": "Backend-Modell",
+        "cacheTokens": "Cache",
+        "clientModel": "Modellalias",
+        "count": "Anzahl",
+        "dailyTokensTitle": "Täglicher Token-Verbrauch",
+        "date": "Datum",
+        "errorDetailTitle": "Fehlerdetails für {date}",
+        "errorDistTitle": "Fehlerstatuscode-Verteilung (nicht 200)",
+        "errorMessage": "Fehlermeldung",
+        "errors": "Fehler",
+        "inputTokens": "Eingabe",
+        "last1Day": "Letzte 24 Stunden",
+        "last30Days": "Letzte 30 Tage",
+        "last7Days": "Letzte 7 Tage",
+        "last90Days": "Letzte 90 Tage",
+        "modelUsageTitle": "Backend-Modell-Nutzung",
+        "no": "Nein",
+        "outputTokens": "Ausgabe",
+        "protocol": "Protokoll",
+        "provider": "Anbieter",
+        "providers": "Anbieter",
+        "requests": "Anfragen",
+        "statusCode": "Statuscode",
+        "title": "Proxy-Statistiken",
+        "toolCompat": "Kompatibilitätsmodus",
+        "topProvider": "Top-Modell",
+        "yes": "Ja"
+      },
       "tabs": {
         "groups": "Proxy-Gruppen",
         "servers": "Proxy-Dienste",
-        "settings": "Proxy-Einstellungen"
+        "settings": "Proxy-Einstellungen",
+        "stats": "Statistiken"
       },
       "validation": {
         "aliasRequired": "Proxy-Alias darf nicht leer sein.",

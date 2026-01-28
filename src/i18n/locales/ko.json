@@ -547,10 +547,40 @@
           "type": "인터페이스 유형"
         }
       },
+      "stats": {
+        "backendModel": "백엔드 모델",
+        "cacheTokens": "캐시",
+        "clientModel": "모델 별칭",
+        "count": "횟수",
+        "dailyTokensTitle": "일일 토큰 사용 트렌드",
+        "date": "날짜",
+        "errorDetailTitle": "{date} 오류 상세 정보",
+        "errorDistTitle": "오류 상태 코드 분포 (200 제외)",
+        "errorMessage": "오류 메시지",
+        "errors": "오류 횟수",
+        "inputTokens": "입력",
+        "last1Day": "최근 24시간",
+        "last30Days": "최근 30일",
+        "last7Days": "최근 7일",
+        "last90Days": "최근 90일",
+        "modelUsageTitle": "백엔드 모델 사용 분포 (횟수 기준)",
+        "no": "아니요",
+        "outputTokens": "출력",
+        "protocol": "프로토콜",
+        "provider": "제공자",
+        "providers": "제공자",
+        "requests": "요청 횟수",
+        "statusCode": "상태 코드",
+        "title": "프록시 통계 정보",
+        "toolCompat": "호환 모드",
+        "topProvider": "인기 모델",
+        "yes": "예"
+      },
       "tabs": {
         "groups": "프록시 그룹",
         "servers": "프록시 서비스",
-        "settings": "프록시 설정"
+        "settings": "프록시 설정",
+        "stats": "통계 정보"
       },
       "validation": {
         "aliasRequired": "프록시 별칭은 비워 둘 수 없습니다.",

@@ -547,10 +547,40 @@
           "supportGroupAndCompat": "支援分組和相容模式"
         }
       },
+      "stats": {
+        "backendModel": "後端模型",
+        "cacheTokens": "緩存",
+        "clientModel": "模型別名",
+        "count": "次數",
+        "dailyTokensTitle": "每日 Token 消耗趨勢",
+        "date": "日期",
+        "errorDetailTitle": "{date} 錯誤詳情",
+        "errorDistTitle": "錯誤狀態碼分佈 (非 200)",
+        "errorMessage": "錯誤訊息",
+        "errors": "錯誤次數",
+        "inputTokens": "輸入",
+        "last1Day": "最近 24 小時",
+        "last30Days": "最近 30 天",
+        "last7Days": "最近 7 天",
+        "last90Days": "最近 90 天",
+        "modelUsageTitle": "後端模型使用分佈 (按次數)",
+        "no": "否",
+        "outputTokens": "輸出",
+        "protocol": "協議",
+        "provider": "供應商",
+        "providers": "供應商",
+        "requests": "請求次數",
+        "statusCode": "狀態碼",
+        "title": "代理統計資訊",
+        "toolCompat": "相容模式",
+        "topProvider": "熱門模型",
+        "yes": "是"
+      },
       "tabs": {
         "groups": "代理分組",
         "servers": "代理服務",
-        "settings": "代理設定"
+        "settings": "代理設定",
+        "stats": "統計資訊"
       },
       "validation": {
         "aliasRequired": "代理別名不可為空。",

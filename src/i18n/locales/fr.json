@@ -547,10 +547,40 @@
           "supportGroupAndCompat": "Prend en charge les groupes et le mode de compatibilité"
         }
       },
+      "stats": {
+        "backendModel": "Modèle backend",
+        "cacheTokens": "Cache",
+        "clientModel": "Alias de modèle",
+        "count": "Nombre",
+        "dailyTokensTitle": "Tendance d'utilisation quotidienne des tokens",
+        "date": "Date",
+        "errorDetailTitle": "Détails de l'erreur pour {date}",
+        "errorDistTitle": "Distribution des codes d'erreur (non-200)",
+        "errorMessage": "Message d'erreur",
+        "errors": "Erreurs",
+        "inputTokens": "Entrée",
+        "last1Day": "Dernières 24 heures",
+        "last30Days": "Derniers 30 jours",
+        "last7Days": "Derniers 7 jours",
+        "last90Days": "Derniers 90 jours",
+        "modelUsageTitle": "Distribution d'utilisation des modèles backend",
+        "no": "Non",
+        "outputTokens": "Sortie",
+        "protocol": "Protocole",
+        "provider": "Fournisseur",
+        "providers": "Fournisseurs",
+        "requests": "Requêtes",
+        "statusCode": "Code de statut",
+        "title": "Statistiques du proxy",
+        "toolCompat": "Mode de compatibilité",
+        "topProvider": "Modèle populaire",
+        "yes": "Oui"
+      },
       "tabs": {
         "groups": "Groupes de proxy",
         "servers": "Services de proxy",
-        "settings": "Paramètres du proxy"
+        "settings": "Paramètres du proxy",
+        "stats": "Statistiques"
       },
       "validation": {
         "aliasRequired": "L'alias de proxy ne peut pas être vide.",
