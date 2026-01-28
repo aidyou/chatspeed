@@ -12,6 +12,7 @@ mod proxy_group;
 mod sql;
 mod types;
 mod workflow;
+mod ccproxy;
 
 pub use agent::Agent;
 pub use backup::{BackupConfig, DbBackup};
@@ -20,5 +21,5 @@ pub use main_store::MainStore;
 pub use mcp::Mcp;
 pub use note::{Note, NoteTag};
 pub use proxy_group::ProxyGroup;
-pub use types::{AiModel, AiSkill, Conversation, ModelConfig};
+pub use types::{AiModel, AiSkill, CcproxyStat, Conversation, ModelConfig};
 pub use workflow::{Workflow, WorkflowMessage, WorkflowSnapshot};

@@ -28,7 +28,7 @@ use crate::ccproxy::{
     types::ollama::OllamaChatCompletionRequest,
 };
 use crate::constants::{CFG_CCPROXY_LOG_PROXY_TO_FILE, CFG_CCPROXY_LOG_TO_FILE};
-use crate::db::MainStore;
+use crate::db::{CcproxyStat, MainStore};
 
 fn get_proxy_alias_from_body(
     chat_protocol: &ChatProtocol,
@@ -277,7 +277,7 @@ pub async fn handle_chat_completion(
         Some("compat") => true,
         Some("native") => false,
         Some("auto") | None => tool_compat_mode, // Use route parameter for auto mode
-        _ => tool_compat_mode, // Fallback to route parameter
+        _ => tool_compat_mode,                   // Fallback to route parameter
     };
 
     if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
@@ -540,6 +540,24 @@ pub async fn handle_chat_completion(
             "code": status_code.as_u16().to_string()
         });
 
+        // Record error statistics
+        if let Ok(store) = main_store_arc.read() {
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: proxy_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider: proxy_model.provider.clone(),
+                protocol: chat_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(message_content),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                request_at: None,
+            });
+        }
+
         let mut response =
             (status_code, Json(json!({ "error": final_error_json }))).into_response();
 
@@ -635,11 +653,17 @@ pub async fn handle_chat_completion(
     if is_streaming_request {
         let res = handle_streamed_response(
             Arc::new(proxy_model.chat_protocol),
+            chat_protocol,
             target_response,
             backend_adapter,
             output_adapter,
             sse_status,
             log_org_to_file,
+            main_store_arc.clone(),
+            proxy_alias.clone(),
+            proxy_model.model.clone(),
+            proxy_model.provider.clone(),
+            final_tool_compat_mode,
         )
         .await?;
         Ok(res.into_response())
@@ -661,6 +685,36 @@ pub async fn handle_chat_completion(
             .adapt_response(backend_response)
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+
+        // Record success statistics
+        if let Ok(store) = main_store_arc.read() {
+            log::info!(
+                "Recording ccproxy stats for non-streaming response: model={}, provider={}",
+                &proxy_model.model,
+                &proxy_model.provider
+            );
+            let cache_tokens = unified_response
+                .usage
+                .cache_read_input_tokens
+                .or(unified_response.usage.prompt_cached_tokens)
+                .or(unified_response.usage.cached_content_tokens)
+                .unwrap_or(0);
+
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: proxy_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider: proxy_model.provider.clone(),
+                protocol: chat_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: 200,
+                error_message: None,
+                input_tokens: unified_response.usage.input_tokens as i64,
+                output_tokens: unified_response.usage.output_tokens as i64,
+                cache_tokens: cache_tokens as i64,
+                request_at: None,
+            });
+        }
 
         let response = output_adapter
             .adapt_response(unified_response, sse_status)

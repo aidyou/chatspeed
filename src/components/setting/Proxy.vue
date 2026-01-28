@@ -123,6 +123,10 @@
         <ProxyGroup />
       </el-tab-pane>
 
+      <el-tab-pane :label="$t('settings.proxy.tabs.stats')" name="stats">
+        <ProxyStats />
+      </el-tab-pane>
+
       <el-tab-pane :label="$t('settings.proxy.tabs.settings')" name="settings">
         <div class="card">
           <div class="title">
@@ -331,6 +335,7 @@ import {
 } from 'element-plus'
 import { showMessage, isEmpty } from '@/libs/util'
 import ProxyGroup from './ProxyGroup.vue'
+import ProxyStats from './ProxyStats.vue'
 // import Avatar from '@/components/common/Avatar.vue'
 
 const { t } = useI18n()
@@ -377,10 +382,20 @@ const baseUrl = computed(() => {
 
 const chatCompletionProxy = computed(() => {
   const proxy = settingStore.settings.chatCompletionProxy || {}
+  // Sort group names first
   return Object.keys(proxy)
     .sort((a, b) => a.localeCompare(b))
-    .reduce((obj, key) => {
-      obj[key] = proxy[key]
+    .reduce((obj, groupName) => {
+      const groupProxies = proxy[groupName] || {}
+      // Then sort aliases (keys) within each group
+      const sortedGroupProxies = Object.keys(groupProxies)
+        .sort((a, b) => a.localeCompare(b))
+        .reduce((acc, alias) => {
+          acc[alias] = groupProxies[alias]
+          return acc
+        }, {})
+
+      obj[groupName] = sortedGroupProxies
       return obj
     }, {})
 })

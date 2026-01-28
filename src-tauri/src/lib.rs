@@ -42,6 +42,7 @@ use crate::error::AppError;
 // use commands::toolbar::*;
 use ai::interaction::chat_completion::ChatState;
 use commands::chat::*;
+use commands::ccproxy::*;
 use commands::clipboard::*;
 use commands::dev_tool::*;
 use commands::env::*;
@@ -173,6 +174,12 @@ pub async fn run() -> crate::error::Result<()> {
             stop_chat,
             sync_state,
             detect_language,
+            // ccproxy stats
+            get_ccproxy_daily_stats,
+            get_ccproxy_provider_stats_by_date,
+            get_ccproxy_error_stats_by_date,
+            get_ccproxy_model_usage_stats,
+            get_ccproxy_error_distribution_stats,
             // mcp
             list_mcp_servers,
             add_mcp_server,

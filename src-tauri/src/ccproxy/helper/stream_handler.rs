@@ -14,16 +14,23 @@ use futures_util::{stream::iter, StreamExt};
 use http::StatusCode;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
+use crate::db::{MainStore, CcproxyStat};
 
 pub async fn handle_streamed_response(
-    chat_protocol: Arc<ChatProtocol>,
+    backend_protocol: Arc<ChatProtocol>,
+    client_protocol: ChatProtocol,
     target_response: reqwest::Response,
     backend_adapter: Arc<dyn BackendAdapter>,
     output_adapter: impl OutputAdapter + Send + Sync + 'static,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    client_model: String,
+    backend_model: String,
+    provider: String,
+    tool_compat_mode: bool,
 ) -> ProxyResult<Response> {
-    let stream_format = match chat_protocol.as_ref() {
+    let stream_format = match backend_protocol.as_ref() {
         ChatProtocol::Gemini => StreamFormat::Gemini,
         ChatProtocol::Claude => StreamFormat::Claude,
         _ => StreamFormat::OpenAI,
@@ -94,21 +101,31 @@ pub async fn handle_streamed_response(
         })
         .flat_map(iter);
 
-    let chat_protocol_outer = chat_protocol.clone();
     let output_adapter = Arc::new(output_adapter);
     let log_recorder_clone = log_recorder.clone();
     let byte_stream = unified_stream.then(move |unified_chunk| {
-        let chat_protocol_inner = chat_protocol_outer.clone();
+        let client_protocol_inner = client_protocol.clone();
         let output_adapter = output_adapter.clone();
         let sse_status = sse_status.clone();
         let inner_log_recorder = log_recorder_clone.clone();
+        let main_store_arc = main_store_arc.clone();
+        let client_model = client_model.clone();
+        let backend_model = backend_model.clone();
+        let provider = provider.clone();
+        let tool_compat_mode = tool_compat_mode;
         async move {
             if let Ok(mut log_recorder) = inner_log_recorder.lock() {
                 adapt_stream_chunk_to_log(
-                    chat_protocol_inner,
+                    client_protocol_inner,
                     &unified_chunk,
                     &mut log_recorder,
                     log_to_file,
+                    main_store_arc,
+                    client_model,
+                    backend_model,
+                    provider,
+                    tool_compat_mode,
+                    sse_status.clone(),
                 );
             }
 
@@ -176,10 +193,16 @@ pub async fn handle_streamed_response(
 }
 
 pub fn adapt_stream_chunk_to_log(
-    chat_protocol: Arc<ChatProtocol>,
+    client_protocol: ChatProtocol,
     chunk: &UnifiedStreamChunk,
     recorder: &mut StreamLogRecorder,
     log_to_file: bool,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    client_model: String,
+    backend_model: String,
+    provider: String,
+    tool_compat_mode: bool,
+    sse_status: Arc<RwLock<SseStatus>>,
 ) {
     match chunk {
         UnifiedStreamChunk::MessageStart { id, .. } => {
@@ -225,7 +248,42 @@ pub fn adapt_stream_chunk_to_log(
             recorder.output_tokens = Some(usage.output_tokens);
 
             if log_to_file {
-                log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", chat_protocol, serde_json::to_string_pretty(&recorder).unwrap_or_default());
+                log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
+            }
+
+            // Record statistics
+            if let Ok(store) = main_store_arc.read() {
+                log::info!("Recording ccproxy stats for streaming response finish: client_model={}, backend_model={}, provider={}", &client_model, &backend_model, &provider);
+                
+                let (est_input, est_output) = if let Ok(status) = sse_status.read() {
+                    (status.estimated_input_tokens, status.estimated_output_tokens)
+                }
+                else {
+                    (0.0, 0.0)
+                };
+
+                let final_input = if usage.input_tokens > 0 { usage.input_tokens } else { est_input.ceil() as u64 };
+                let final_output = if usage.output_tokens > 0 { usage.output_tokens } else { est_output.ceil() as u64 };
+
+                let cache_tokens = usage.cache_read_input_tokens
+                    .or(usage.prompt_cached_tokens)
+                    .or(usage.cached_content_tokens)
+                    .unwrap_or(0);
+
+                let _ = store.record_ccproxy_stat(CcproxyStat {
+                    id: None,
+                    client_model,
+                    backend_model,
+                    provider,
+                    protocol: client_protocol.to_string(),
+                    tool_compat_mode: if tool_compat_mode { 1 } else { 0 },
+                    status_code: 200,
+                    error_message: None,
+                    input_tokens: final_input as i64,
+                    output_tokens: final_output as i64,
+                    cache_tokens: cache_tokens as i64,
+                    request_at: None,
+                });
             }
         }
         _ => {}

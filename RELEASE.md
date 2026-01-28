@@ -2,6 +2,33 @@
 
 # Release Notes
 
+## [1.1.25] - 2026-01-27
+
+### 🚀 New Features
+
+- **New Proxy Statistics Feature**:
+  - **Comprehensive Data Monitoring**: The system now automatically records all requests passing through the proxy module, including Client Model Alias, actual Backend Model ID, provider, protocol, and HTTP status code.
+  - **Dual-Mode Persistence**: Statistics are captured for both protocol conversion and direct forward modes, including detailed error logs for failed requests.
+  - **Precise Token Tracking**: Supports cumulative input, output, and cache token counts. Implemented **intelligent estimation logic** based on character counts as a fallback when providers do not return usage data.
+- **Brand New Visual Analytics Dashboard**:
+  - **Advanced Charting**: Added Backend Model Distribution (Pie), Error Code Distribution (Pie), and Daily Token Trends (Stacked Column).
+  - **Interactive Dashboard**: A new "Statistics" tab in Proxy Settings supports daily summaries and multiple time ranges (Last 24h, 7d, 30d, 90d).
+  - **Detailed Drill-down**: Expand daily logs to view "Statistics Details," showing the mapping between model aliases and actual backend providers.
+  - **Rapid Error Diagnostics**: Click on error counts to instantly view the distribution of error codes and specific failure reasons for that date.
+
+### 🪄 Improvements
+
+- **UI/UX Interaction Enhancements**:
+  - **Instant Data Refresh**: Added a refresh button with `row-key` optimization to ensure statistical data and charts sync and re-render instantly.
+  - **Refined Scrolling**: Disabled horizontal overscroll bounce effects for a crisper feel. Fixed the expansion column to the left and optimized column widths with text-overflow tooltips.
+  - **Smart Unit Formatting**: Large token counts are now automatically converted to "Ten Thousand" (万) or "Hundred Million" (亿) with thousands separators.
+- **System Architecture & Robustness**:
+  - **Database Evolution**: Implemented V4 migration with the `ccproxy_stats` table and indexes on key fields like `request_at` and `provider` for high-performance queries.
+  - **Enhanced Error Defense**: Backend SQL queries now use `COALESCE` protection to eliminate type-parsing errors caused by malformed or missing data.
+  - **Memory Management**: Automatic destruction of chart instances upon component unmounting to prevent memory leaks.
+
+---
+
 ## [1.1.24] - 2026-01-27
 
 ### 🚀 New Features

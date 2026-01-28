@@ -36,6 +36,26 @@ pub struct Conversation {
 }
 
 // =================================================
+// ccproxy stats
+// =================================================
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CcproxyStat {
+    pub id: Option<i64>,
+    pub client_model: String,
+    pub backend_model: String,
+    pub provider: String,
+    pub protocol: String,
+    pub tool_compat_mode: i32,
+    pub status_code: i32,
+    pub error_message: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_tokens: i64,
+    pub request_at: Option<String>,
+}
+
+// =================================================
 // config
 // =================================================
 #[derive(Debug, Serialize, Deserialize, Clone)]

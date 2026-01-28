@@ -550,7 +550,31 @@
       "tabs": {
         "groups": "Proxy Groups",
         "servers": "Proxy Services",
-        "settings": "Proxy Settings"
+        "settings": "Proxy Settings",
+        "stats": "Statistics"
+      },
+      "stats": {
+        "title": "Proxy Statistics",
+        "last1Day": "Last 24 Hours",
+        "last7Days": "Last 7 Days",
+        "last30Days": "Last 30 Days",
+        "last90Days": "Last 90 Days",
+        "date": "Date",
+        "inputTokens": "Input Tokens",
+        "outputTokens": "Output Tokens",
+        "cacheTokens": "Cache Tokens",
+        "providers": "Providers",
+        "topProvider": "Top Provider",
+        "errors": "Errors",
+        "provider": "Provider",
+        "requests": "Requests",
+        "errorDetailTitle": "Error Details for {date}",
+        "statusCode": "Status Code",
+        "errorMessage": "Error Message",
+        "count": "Count",
+        "modelUsageTitle": "Backend Model Usage Distribution",
+        "errorDistTitle": "Error Code Distribution (non-200)",
+        "dailyTokensTitle": "Daily Token Usage Trend"
       },
       "validation": {
         "aliasRequired": "Proxy alias cannot be empty.",

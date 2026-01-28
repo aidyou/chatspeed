@@ -6,7 +6,8 @@ use crate::ccproxy::{
     types::ProxyModel,
     ChatProtocol,
 };
-use crate::db::MainStore;
+use crate::db::{CcproxyStat, MainStore};
+use crate::ccproxy::utils::token_estimator::estimate_tokens;
 
 use axum::body::Body;
 use axum::response::Response;
@@ -27,6 +28,10 @@ pub async fn handle_direct_forward(
     log_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = crate::ccproxy::helper::get_msg_id();
+    let provider_name = proxy_model.provider.clone();
+    let model_name = proxy_model.model.clone();
+    let chat_protocol_for_stat = proxy_model.chat_protocol.clone();
+
     let http_client = ModelResolver::build_http_client(
         main_store_arc.clone(),
         proxy_model.model_metadata.clone(),
@@ -43,14 +48,18 @@ pub async fn handle_direct_forward(
     let mut reqwest_headers = reqwest::header::HeaderMap::new();
 
     // 1. Add custom headers from model metadata (Default values)
-    let custom_headers = crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
+    let custom_headers =
+        crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
     for (k, v) in custom_headers {
         let final_key = if k.to_lowercase().starts_with("cs-") {
             &k[3..]
         } else {
             &k
         };
-        if let (Ok(n), Ok(h)) = (ReqwestHeaderName::from_str(final_key), ReqwestHeaderValue::from_str(&v)) {
+        if let (Ok(n), Ok(h)) = (
+            ReqwestHeaderName::from_str(final_key),
+            ReqwestHeaderValue::from_str(&v),
+        ) {
             reqwest_headers.insert(n, h);
         }
     }
@@ -134,48 +143,71 @@ pub async fn handle_direct_forward(
         );
     }
 
-    // Modify the request body to replace the model alias
-    let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
-        CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
-    })?;
-    body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
+            // Modify the request body to replace the model alias
 
-    if let Some(model_field) = body_json.get_mut("model") {
-        *model_field = Value::String(proxy_model.model.clone());
-    }
+            let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
 
-    let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
-        CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
-    })?;
+                CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
 
-    let onward_request_builder = http_client
-        .post(&full_url)
-        .headers(reqwest_headers)
-        .body(modified_body);
-
-    // Send request
-    let target_response = onward_request_builder
-        .send()
-        .await
-        .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
-
-    // Handle response
-    let status_code = target_response.status();
-    let response_headers = target_response.headers().clone();
-
-    if !status_code.is_success() {
-        let error_body_bytes = target_response.bytes().await.map_err(|e| {
-            CCProxyError::InternalError(
-                t!("network.response_read_error", error = e.to_string()).to_string(),
-            )
-        })?;
-        let mut response = Response::builder()
-            .status(status_code)
-            .body(Body::from(error_body_bytes))
-            .map_err(|e| {
-                CCProxyError::InternalError(format!("Failed to build error response: {}", e))
             })?;
 
+            
+
+            // Capture the original model alias before any transformations
+
+            let proxy_alias_for_stat = body_json.get("model")
+
+                .and_then(|v| v.as_str())
+
+                .unwrap_or("")
+
+                .to_string();
+
+        
+
+            // Estimate input tokens from request body
+
+        
+        let input_text_for_est = body_json.to_string();
+        let estimated_input_tokens = crate::ccproxy::utils::token_estimator::estimate_tokens(&input_text_for_est);
+    
+        body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
+    
+        if let Some(model_field) = body_json.get_mut("model") {
+            *model_field = Value::String(proxy_model.model.clone());
+        }
+    
+        let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
+            CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
+        })?;
+    
+        let onward_request_builder = http_client
+            .post(&full_url)
+            .headers(reqwest_headers)
+            .body(modified_body);
+    
+        // Send request
+        let target_response = onward_request_builder
+            .send()
+            .await
+            .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
+    
+        // Handle response
+        let status_code = target_response.status();
+        let response_headers = target_response.headers().clone();
+    
+        if !status_code.is_success() {
+            let error_body_bytes = target_response.bytes().await.map_err(|e| {
+                CCProxyError::InternalError(
+                    t!("network.response_read_error", error = e.to_string()).to_string(),
+                )
+            })?;
+            let mut response = Response::builder()
+                .status(status_code)
+                            .body(Body::from(error_body_bytes.clone()))
+                            .map_err(|e| {
+                                CCProxyError::InternalError(format!("Failed to build error response: {}", e))
+                            })?;
         for (name, value) in response_headers.iter() {
             if let Ok(axum_name) = http::header::HeaderName::from_bytes(name.as_ref()) {
                 if let Ok(axum_value) = http::header::HeaderValue::from_bytes(value.as_ref()) {
@@ -183,42 +215,81 @@ pub async fn handle_direct_forward(
                 }
             }
         }
+        
+        // Record error for non-streaming direct forward
+        if let Ok(store) = main_store_arc.read() {
+            let error_msg = String::from_utf8_lossy(&error_body_bytes).to_string();
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: proxy_alias_for_stat.clone(),
+                backend_model: model_name.clone(),
+                provider: provider_name.clone(),
+                protocol: chat_protocol_for_stat.to_string(),
+                tool_compat_mode: 0,
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(error_msg),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                request_at: None,
+            });
+        }
+        
         return Ok(response);
     }
-
-    let mut response_builder = Response::builder().status(status_code);
-
-    for (name, value) in response_headers.iter() {
-        response_builder = response_builder.header(name.as_str(), value.as_bytes());
-    }
-
-    if is_streaming_request {
-        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
-            format!("cid_{}", uuid::Uuid::new_v4().simple()),
-            proxy_model.model.clone(),
-        )));
-        let chat_protocol = proxy_model.chat_protocol.clone();
-        let log_recorder_clone = log_recorder.clone();
-
-        let stream = target_response.bytes_stream().map(move |chunk| {
-            let sse_status = Arc::new(RwLock::new(SseStatus::default()));
-            let log_recorder = log_recorder_clone.clone();
-            let chat_protocol = chat_protocol.clone();
-            chunk.map(move |bytes| {
-                if log_to_file {
-                    chunk_parser_and_log(
-                        &bytes,
-                        log_recorder.clone(),
-                        &chat_protocol,
-                        sse_status.clone(),
-                    );
-                }
-
-                bytes
-            })
-        });
-
-        let body = Body::from_stream(stream);
+    
+        let mut response_builder = Response::builder().status(status_code);
+    
+        for (name, value) in response_headers.iter() {
+            response_builder = response_builder.header(name.as_str(), value.as_bytes());
+        }
+    
+        if is_streaming_request {
+            let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
+                format!("cid_{}", uuid::Uuid::new_v4().simple()),
+                proxy_model.model.clone(),
+            )));
+            let chat_protocol = proxy_model.chat_protocol.clone();
+                    let log_recorder_clone = log_recorder.clone();
+                    let main_store_for_stream = main_store_arc.clone();
+                    let provider_for_stream = provider_name.clone();
+                    let client_model_for_stream = proxy_alias_for_stat.clone();
+                    let backend_model_for_stream = model_name.clone();
+                    let sse_status = Arc::new(RwLock::new(SseStatus::new(
+                        "".to_string(),
+                        "".to_string(),
+                        false,
+                        estimated_input_tokens,
+                    )));
+            
+                    let stream = target_response.bytes_stream().map(move |chunk| {
+                        let sse_status = sse_status.clone();
+                        let log_recorder = log_recorder_clone.clone();
+                        let chat_protocol = chat_protocol.clone();
+                        let main_store = main_store_for_stream.clone();
+                        let provider = provider_for_stream.clone();
+                        let client_model = client_model_for_stream.clone();
+                        let backend_model = backend_model_for_stream.clone();
+                        
+                        chunk.map(move |bytes| {
+                            // Always parse for statistics, but only log to file if enabled
+                            chunk_parser_and_log(
+                                &bytes,
+                                log_recorder.clone(),
+                                &chat_protocol,
+                                sse_status.clone(),
+                                log_to_file,
+                                main_store,
+                                provider,
+                                client_model,
+                                backend_model,
+                            );
+            
+                            bytes
+                        })
+                    });
+            
+            let body = Body::from_stream(stream);
         if let Ok(rsp) = response_builder.body(body) {
             Ok(rsp)
         } else {
@@ -231,8 +302,33 @@ pub async fn handle_direct_forward(
             .bytes()
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+
         if log_to_file {
             log::info!(target: "ccproxy_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
+        }
+
+        // Record statistics for non-streaming direct forward
+        if status_code.is_success() {
+            if let Ok(store) = main_store_arc.read() {
+                // For direct forward, we try a simple extraction of tokens from the JSON body
+                let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+                let (input, output, cache) = extract_usage_from_value(&body_json, &chat_protocol_for_stat);
+                
+                let _ = store.record_ccproxy_stat(CcproxyStat {
+                    id: None,
+                    client_model: proxy_alias_for_stat.clone(),
+                    backend_model: model_name.clone(),
+                    provider: provider_name.clone(),
+                    protocol: chat_protocol_for_stat.to_string(),
+                    tool_compat_mode: 0, // Direct forward is never in compat mode
+                    status_code: status_code.as_u16() as i32,
+                    error_message: None,
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_tokens: cache,
+                    request_at: None,
+                });
+            }
         }
 
         if let Ok(response) = response_builder.body(Body::from(body_bytes)) {
@@ -414,6 +510,11 @@ fn chunk_parser_and_log(
     log_recorder: Arc<Mutex<StreamLogRecorder>>,
     chat_protocol: &ChatProtocol,
     sse_status: Arc<RwLock<SseStatus>>,
+    log_to_file: bool,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    provider: String,
+    client_model: String,
+    backend_model: String,
 ) {
     let chunk_str = String::from_utf8_lossy(bytes);
     let mut is_finished = false;
@@ -422,6 +523,9 @@ fn chunk_parser_and_log(
         if line.starts_with("data:") {
             let data = &line["data:".len()..].trim();
             if data.is_empty() || *data == "[DONE]" {
+                if *data == "[DONE]" {
+                    is_finished = true;
+                }
                 continue;
             }
 
@@ -450,17 +554,25 @@ fn chunk_parser_and_log(
                         {
                             if let Some(text) = detlta.get("content").and_then(|c| c.as_str()) {
                                 if !text.is_empty() {
-                                    recorder.content.push_str(text.trim());
+                                    if let Ok(mut status) = sse_status.write() {
+                                        status.estimated_output_tokens += estimate_tokens(text);
+                                    }
+                                    if log_to_file {
+                                        recorder.content.push_str(text.trim());
+                                    }
                                 }
                             }
+                            // ... reasoning and tool_calls omitted for brevity but remain the same
 
                             if let Some(text) =
                                 detlta.get("reasoning_content").and_then(|c| c.as_str())
                             {
                                 if !text.is_empty() {
-                                    match recorder.thinking {
-                                        Some(ref mut reasoning) => reasoning.push_str(text),
-                                        None => recorder.thinking = Some(text.to_string()),
+                                    if log_to_file {
+                                        match recorder.thinking {
+                                            Some(ref mut reasoning) => reasoning.push_str(text),
+                                            None => recorder.thinking = Some(text.to_string()),
+                                        }
                                     }
                                 }
                             }
@@ -474,37 +586,39 @@ fn chunk_parser_and_log(
                             .and_then(|d| d.get("tool_calls"))
                             .and_then(|t| t.as_array())
                         {
-                            if recorder.tool_calls.is_none() {
-                                recorder.tool_calls = Some(Default::default());
-                            }
+                            if log_to_file {
+                                if recorder.tool_calls.is_none() {
+                                    recorder.tool_calls = Some(Default::default());
+                                }
 
-                            if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                for tc in tool_calls {
-                                    let tool_id = tc
-                                        .get("id")
-                                        .and_then(|i| i.as_str())
-                                        .map(|x| x.to_string())
-                                        .unwrap_or(get_tool_id());
+                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                    for tc in tool_calls {
+                                        let tool_id = tc
+                                            .get("id")
+                                            .and_then(|i| i.as_str())
+                                            .map(|x| x.to_string())
+                                            .unwrap_or(get_tool_id());
 
-                                    if let Some(func) = tc.get("function") {
-                                        if let Some(name) =
-                                            func.get("name").and_then(|n| n.as_str())
-                                        {
-                                            recorder_tool_calls
-                                                .entry(tool_id.to_string())
-                                                .or_insert_with(|| UnifiedFunctionCallPart {
-                                                    name: name.to_string(),
-                                                    args: "".to_string(),
-                                                });
-                                        }
-
-                                        if let Some(args) =
-                                            func.get("arguments").and_then(|a| a.as_str())
-                                        {
-                                            if let Some(tool) =
-                                                recorder_tool_calls.get_mut(&tool_id)
+                                        if let Some(func) = tc.get("function") {
+                                            if let Some(name) =
+                                                func.get("name").and_then(|n| n.as_str())
                                             {
-                                                tool.args.push_str(args);
+                                                recorder_tool_calls
+                                                    .entry(tool_id.to_string())
+                                                    .or_insert_with(|| UnifiedFunctionCallPart {
+                                                        name: name.to_string(),
+                                                        args: "".to_string(),
+                                                    });
+                                            }
+
+                                            if let Some(args) =
+                                                func.get("arguments").and_then(|a| a.as_str())
+                                            {
+                                                if let Some(tool) =
+                                                    recorder_tool_calls.get_mut(&tool_id)
+                                                {
+                                                    tool.args.push_str(args);
+                                                }
                                             }
                                         }
                                     }
@@ -562,7 +676,7 @@ fn chunk_parser_and_log(
                                                     status.tool_id = tool_id.clone();
                                                 }
 
-                                                if !tool_name.is_empty() {
+                                                if log_to_file && !tool_name.is_empty() {
                                                     if recorder.tool_calls.is_none() {
                                                         recorder.tool_calls =
                                                             Some(Default::default());
@@ -591,13 +705,18 @@ fn chunk_parser_and_log(
                                             Some("text_delta") => {
                                                 if let Some(text) = delta.text {
                                                     if !text.is_empty() {
-                                                        recorder.content.push_str(&text);
+                                                        if let Ok(mut status) = sse_status.write() {
+                                                            status.estimated_output_tokens += estimate_tokens(&text);
+                                                        }
+                                                        if log_to_file {
+                                                            recorder.content.push_str(&text);
+                                                        }
                                                     }
                                                 }
                                             }
                                             Some("thinking_delta") => {
                                                 if let Some(text) = delta.text {
-                                                    if !text.is_empty() {
+                                                    if log_to_file && !text.is_empty() {
                                                         if let Some(thinking) =
                                                             &mut recorder.thinking
                                                         {
@@ -611,7 +730,7 @@ fn chunk_parser_and_log(
                                             }
                                             Some("input_json_delta") => {
                                                 if let Some(partial_json) = delta.partial_json {
-                                                    if !partial_json.is_empty() {
+                                                    if log_to_file && !partial_json.is_empty() {
                                                         if let Ok(status) = sse_status.read() {
                                                             let tool_id = status.tool_id.clone();
 
@@ -662,7 +781,12 @@ fn chunk_parser_and_log(
                             .and_then(|t| t.as_str())
                         {
                             if !text.is_empty() {
-                                recorder.content.push_str(text);
+                                if let Ok(mut status) = sse_status.write() {
+                                    status.estimated_output_tokens += estimate_tokens(text);
+                                }
+                                if log_to_file {
+                                    recorder.content.push_str(text);
+                                }
                             }
                         }
                         if let Some(tool_calls) = json_data
@@ -672,28 +796,31 @@ fn chunk_parser_and_log(
                             .and_then(|c| c.get("parts"))
                             .and_then(|p| p.as_array())
                         {
-                            if recorder.tool_calls.is_none() {
-                                recorder.tool_calls = Some(Default::default());
-                            }
-                            if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                for tc in tool_calls {
-                                    if let Some(name) = tc
-                                        .get("functionCall")
-                                        .and_then(|f| f.get("name"))
-                                        .and_then(|n| n.as_str())
-                                    {
-                                        let id = get_tool_id();
-                                        recorder_tool_calls.entry(id.to_string()).or_insert_with(
-                                            || UnifiedFunctionCallPart {
-                                                name: name.to_string(),
-                                                args: "".to_string(),
-                                            },
-                                        );
-                                        if let Some(args) =
-                                            tc.get("functionCall").and_then(|f| f.get("args"))
+                            if log_to_file {
+                                if recorder.tool_calls.is_none() {
+                                    recorder.tool_calls = Some(Default::default());
+                                }
+                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                    for tc in tool_calls {
+                                        if let Some(name) = tc
+                                            .get("functionCall")
+                                            .and_then(|f| f.get("name"))
+                                            .and_then(|n| n.as_str())
                                         {
-                                            if let Some(tool) = recorder_tool_calls.get_mut(&id) {
-                                                tool.args.push_str(&args.to_string());
+                                            let id = get_tool_id();
+                                            recorder_tool_calls
+                                                .entry(id.to_string())
+                                                .or_insert_with(|| UnifiedFunctionCallPart {
+                                                    name: name.to_string(),
+                                                    args: "".to_string(),
+                                                });
+                                            if let Some(args) =
+                                                tc.get("functionCall").and_then(|f| f.get("args"))
+                                            {
+                                                if let Some(tool) = recorder_tool_calls.get_mut(&id)
+                                                {
+                                                    tool.args.push_str(&args.to_string());
+                                                }
                                             }
                                         }
                                     }
@@ -729,13 +856,18 @@ fn chunk_parser_and_log(
                         if let Some(message) = json_data.get("message") {
                             if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
                                 if !text.is_empty() {
-                                    recorder.content.push_str(text);
+                                    if let Ok(mut status) = sse_status.write() {
+                                        status.estimated_output_tokens += estimate_tokens(text);
+                                    }
+                                    if log_to_file {
+                                        recorder.content.push_str(text);
+                                    }
                                 }
                             }
 
                             if let Some(thinking) = message.get("thinking").and_then(|t| t.as_str())
                             {
-                                if !thinking.is_empty() {
+                                if log_to_file && !thinking.is_empty() {
                                     if let Some(reasoning) = &mut recorder.thinking {
                                         reasoning.push_str(thinking);
                                     } else {
@@ -747,29 +879,33 @@ fn chunk_parser_and_log(
                             if let Some(tool_calls) =
                                 message.get("tool_calls").and_then(|t| t.as_array())
                             {
-                                if recorder.tool_calls.is_none() {
-                                    recorder.tool_calls = Some(Default::default());
-                                }
-                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                    for tc in tool_calls {
-                                        if let Some(name) = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|n| n.as_str())
-                                        {
-                                            let id = get_tool_id();
-                                            recorder_tool_calls
-                                                .entry(id.to_string())
-                                                .or_insert_with(|| UnifiedFunctionCallPart {
-                                                    name: name.to_string(),
-                                                    args: "".to_string(),
-                                                });
-                                            if let Some(args) =
-                                                tc.get("function").and_then(|f| f.get("arguments"))
+                                if log_to_file {
+                                    if recorder.tool_calls.is_none() {
+                                        recorder.tool_calls = Some(Default::default());
+                                    }
+                                    if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
+                                        for tc in tool_calls {
+                                            if let Some(name) = tc
+                                                .get("function")
+                                                .and_then(|f| f.get("name"))
+                                                .and_then(|n| n.as_str())
                                             {
-                                                if let Some(tool) = recorder_tool_calls.get_mut(&id)
+                                                let id = get_tool_id();
+                                                recorder_tool_calls
+                                                    .entry(id.to_string())
+                                                    .or_insert_with(|| UnifiedFunctionCallPart {
+                                                        name: name.to_string(),
+                                                        args: "".to_string(),
+                                                    });
+                                                if let Some(args) = tc
+                                                    .get("function")
+                                                    .and_then(|f| f.get("arguments"))
                                                 {
-                                                    tool.args.push_str(&args.to_string());
+                                                    if let Some(tool) =
+                                                        recorder_tool_calls.get_mut(&id)
+                                                    {
+                                                        tool.args.push_str(&args.to_string());
+                                                    }
                                                 }
                                             }
                                         }
@@ -799,12 +935,108 @@ fn chunk_parser_and_log(
     }
 
     if is_finished {
-        if let Ok(final_log) = log_recorder.clone().lock() {
-            log::info!(target: "ccproxy_logger",
-                "[Direct]{} Stream Response: \n{}\n================\n\n",
-                chat_protocol.to_string(),
-                serde_json::to_string_pretty(&*final_log).unwrap_or_default()
-            );
+        let (input, output) = {
+            let recorder = log_recorder.lock().unwrap();
+            if log_to_file {
+                log::info!(target: "ccproxy_logger",
+                    "[Direct]{} Stream Response: \n{}\n================\n\n",
+                    chat_protocol.to_string(),
+                    serde_json::to_string_pretty(&*recorder).unwrap_or_default()
+                );
+            }
+            (recorder.input_tokens.unwrap_or(0), recorder.output_tokens.unwrap_or(0))
+        };
+
+        // Record statistics to DB on finish
+        if let Ok(store) = main_store_arc.read() {
+            let (est_input, est_output) = if let Ok(status) = sse_status.read() {
+                (status.estimated_input_tokens, status.estimated_output_tokens)
+            } else {
+                (0.0, 0.0)
+            };
+
+            let final_input = if input > 0 { input } else { est_input.ceil() as u64 };
+            let final_output = if output > 0 { output } else { est_output.ceil() as u64 };
+
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model,
+                backend_model,
+                provider,
+                protocol: chat_protocol.to_string(),
+                tool_compat_mode: 0,
+                status_code: 200,
+                error_message: None,
+                input_tokens: final_input as i64,
+                output_tokens: final_output as i64,
+                cache_tokens: 0, // Cache tokens are rarely provided in streaming direct forward
+                request_at: None,
+            });
+        }
+    }
+}
+
+fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64) {
+    match protocol {
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+            let usage = value.get("usage");
+            let input = usage
+                .and_then(|u| u.get("prompt_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = usage
+                .and_then(|u| u.get("completion_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache = usage
+                .and_then(|u| u.get("prompt_tokens_details"))
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, cache)
+        }
+        ChatProtocol::Claude => {
+            let usage = value.get("usage");
+            let input = usage
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = usage
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache = usage
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, cache)
+        }
+        ChatProtocol::Gemini => {
+            let usage = value.get("usageMetadata");
+            let input = usage
+                .and_then(|u| u.get("promptTokenCount"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = usage
+                .and_then(|u| u.get("candidatesTokenCount"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let cache = usage
+                .and_then(|u| u.get("cachedContentTokenCount"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, cache)
+        }
+        ChatProtocol::Ollama => {
+            let input = value
+                .get("prompt_eval_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = value
+                .get("eval_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, 0)
         }
     }
 }
