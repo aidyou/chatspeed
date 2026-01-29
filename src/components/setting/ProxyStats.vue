@@ -58,7 +58,10 @@
                 show-overflow-tooltip />
               <el-table-column prop="protocol" :label="$t('settings.proxy.stats.protocol')" width="90">
                 <template #default="scope">
-                  <el-tag size="small" effect="plain">{{ scope.row.protocol }}</el-tag>
+                  <el-tag size="small" :color="getProtocolColor(scope.row.protocol)"
+                    :style="{ color: getProtocolTextColor(scope.row.protocol), borderColor: getProtocolTextColor(scope.row.protocol) + '50' }">
+                    {{ scope.row.protocol }}
+                  </el-tag>
                 </template>
               </el-table-column>
               <el-table-column :label="$t('settings.proxy.stats.toolCompat')" width="90" align="center">
@@ -72,114 +75,90 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="requestCount" :label="$t('settings.proxy.stats.requests')" width="80" />
-              <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="90">
-                <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
-              </el-table-column>
-              <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="90">
-                <template #default="scope">{{
-                  formatTokens(scope.row.totalOutputTokens)
-                  }}</template>
-              </el-table-column>
-                            <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="90">
-                              <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
-                            </el-table-column>
-                            <el-table-column :label="$t('settings.proxy.stats.errors')" width="80">
-                              <template #default="scope">
-                                <el-link
-                                  v-if="scope.row.errorCount > 0"
-                                  type="danger"
-                                  @click="showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)">
-                                  {{ scope.row.errorCount }}
-                                </el-link>
-                                <span v-else>0</span>
-                              </template>
-                            </el-table-column>
-                          </el-table>
-                        </div>
-                      </template>
-                    </el-table-column>
-                    <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" width="110" />
-                    <el-table-column
-                      prop="providerCount"
-                      :label="$t('settings.proxy.stats.providers')"
-                      width="90"
-                      align="center" />
-                    <el-table-column
-                      prop="topProvider"
-                      :label="$t('settings.proxy.stats.topProvider')"
-                      min-width="180"
-                      show-overflow-tooltip />
-                    <el-table-column
-                      prop="totalRequestCount"
-                      :label="$t('settings.proxy.stats.requests')"
-                      width="100" />
-                    <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="100">
-                      <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
-                    </el-table-column>
-                    <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="100">
-                      <template #default="scope">{{ formatTokens(scope.row.totalOutputTokens) }}</template>
-                    </el-table-column>
-                    <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="100">
-                      <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
-                    </el-table-column>
-                    <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" />
-                  </el-table>
-              
-                  <div class="charts-section">
-                    <!-- 1. Trend chart (full width) -->
-                    <div class="charts-row">
-                      <div class="chart-card bar-chart">
-                        <h4>{{ $t('settings.proxy.stats.dailyTokensTitle') }}</h4>
-                        <div id="daily-tokens-column"></div>
-                      </div>
-                    </div>
-              
-                    <!-- 2. Distribution charts (side by side) -->
-                    <div class="charts-row">
-                      <div class="chart-card pie-chart">
-                        <h4>{{ $t('settings.proxy.stats.modelUsageTitle') }}</h4>
-                        <div id="model-usage-pie"></div>
-                      </div>
-                      <div class="chart-card pie-chart">
-                        <h4>{{ $t('settings.proxy.stats.modelTokenUsageTitle') }}</h4>
-                        <div id="model-token-usage-pie"></div>
-                      </div>
-                      <div class="chart-card pie-chart">
-                        <h4>{{ $t('settings.proxy.stats.errorDistTitle') }}</h4>
-                        <div id="error-dist-pie"></div>
-                      </div>
-                    </div>
-                  </div>
-              
-                  <!-- Error Detail Dialog -->
-                  <el-dialog
-                    v-model="errorDialogVisible"
-                    :title="$t('settings.proxy.stats.errorDetailTitle', { date: selectedErrorDate })"
-                    width="700px"
-                    append-to-body
-                    class="error-detail-dialog">
-                    <el-table
-                      :data="errorStats"
-                      size="small"
-                      border
-                      v-loading="errorLoading"
-                      max-height="60vh"
-                      style="width: 100%">
-                      <el-table-column
-                        prop="statusCode"
-                        :label="$t('settings.proxy.stats.statusCode')"
-                        width="80" />
-                      <el-table-column prop="errorMessage" :label="$t('settings.proxy.stats.errorMessage')">
-                        <template #default="scope">
-                          <div class="error-msg-text">{{ scope.row.errorMessage }}</div>
-                        </template>
-                      </el-table-column>
-                      <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.count')" width="80" />
-                    </el-table>
-                  </el-dialog>
-                </div>
-              </template>
+               <el-table-column prop="requestCount" :label="$t('settings.proxy.stats.requests')" width="100" sortable />
+               <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="90" sortable sort-by="totalInputTokens">
+                 <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
+               </el-table-column>
+               <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="90" sortable sort-by="totalOutputTokens">
+                 <template #default="scope">{{
+                   formatTokens(scope.row.totalOutputTokens)
+                   }}</template>
+               </el-table-column>
+               <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="90" sortable sort-by="totalCacheTokens">
+                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
+               </el-table-column>
+               <el-table-column :label="$t('settings.proxy.stats.errors')" width="100" sortable sort-by="errorCount">
+                 <template #default="scope">
+                   <el-link v-if="scope.row.errorCount > 0" type="danger"
+                     @click="showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)">
+                     {{ scope.row.errorCount }}
+                   </el-link>
+                   <span v-else>0</span>
+                 </template>
+               </el-table-column>
+            </el-table>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" width="110" />
+      <el-table-column prop="providerCount" :label="$t('settings.proxy.stats.providers')" width="90" align="center" />
+      <el-table-column prop="topProvider" :label="$t('settings.proxy.stats.topProvider')" min-width="180"
+        show-overflow-tooltip />
+      <el-table-column prop="totalRequestCount" :label="$t('settings.proxy.stats.requests')" width="100" />
+      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="100">
+        <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="100">
+        <template #default="scope">{{ formatTokens(scope.row.totalOutputTokens) }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="100">
+        <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
+      </el-table-column>
+      <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" />
+    </el-table>
+
+    <div class="charts-section">
+      <!-- 1. Trend chart (full width) -->
+      <div class="charts-row">
+        <div class="chart-card bar-chart">
+          <h4>{{ $t('settings.proxy.stats.dailyTokensTitle') }}</h4>
+          <div id="daily-tokens-column"></div>
+        </div>
+      </div>
+
+      <!-- 2. Distribution charts (side by side) -->
+      <div class="charts-row">
+        <div class="chart-card pie-chart">
+          <h4>{{ $t('settings.proxy.stats.modelUsageTitle') }}</h4>
+          <div id="model-usage-pie"></div>
+        </div>
+        <div class="chart-card pie-chart">
+          <h4>{{ $t('settings.proxy.stats.modelTokenUsageTitle') }}</h4>
+          <div id="model-token-usage-pie"></div>
+        </div>
+        <div class="chart-card pie-chart">
+          <h4>{{ $t('settings.proxy.stats.errorDistTitle') }}</h4>
+          <div id="error-dist-pie"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error Detail Dialog -->
+    <el-dialog v-model="errorDialogVisible"
+      :title="$t('settings.proxy.stats.errorDetailTitle', { date: selectedErrorDate })" width="700px" append-to-body
+      class="error-detail-dialog">
+      <el-table :data="errorStats" size="small" border v-loading="errorLoading" max-height="60vh" style="width: 100%">
+        <el-table-column prop="statusCode" :label="$t('settings.proxy.stats.statusCode')" width="80" />
+        <el-table-column prop="errorMessage" :label="$t('settings.proxy.stats.errorMessage')">
+          <template #default="scope">
+            <div class="error-msg-text">{{ scope.row.errorMessage }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.count')" width="80" />
+      </el-table>
+    </el-dialog>
+  </div>
+</template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, markRaw } from 'vue'
@@ -234,6 +213,28 @@ const formatTokens = val => {
     return (num / 10000).toFixed(2) + ' 万'
   }
   return num.toLocaleString()
+}
+
+
+
+const getProtocolColor = (protocol) => {
+  const colorMap = {
+    'openai': 'rgba(16, 163, 127, 0.1)',
+    'claude': 'rgba(229, 119, 25, 0.1)',
+    'gemini': 'rgba(0, 108, 255, 0.1)',
+    'ollama': 'rgba(80, 85, 242, 0.1)'
+  }
+  return colorMap[protocol] || ''
+}
+
+const getProtocolTextColor = (protocol) => {
+  const colorMap = {
+    'openai': '#10a37f',
+    'claude': '#e57719',
+    'gemini': '#006cff',
+    'ollama': '#5055f2'
+  }
+  return colorMap[protocol] || 'var(--el-text-color-regular)'
 }
 
 const fetchDailyStats = async (isAutoRefresh = false) => {
