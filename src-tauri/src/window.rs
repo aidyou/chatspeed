@@ -455,7 +455,6 @@ pub async fn create_or_focus_setting_window(
                 });
         }
     } else {
-        let mut max_height: f64 = 1024.0;
         let mut height: f64 = 1024.0;
         let width = 700.0;
         if let Ok(Some(monitor)) = app_handle.primary_monitor() {
@@ -463,7 +462,6 @@ pub async fn create_or_focus_setting_window(
             // Reserve space for system UI (taskbar, menu bar, etc.) and window decorations
             // Typically 100-150px for system UI + 30-50px for window decorations
             let usable_height = logical_size.height - 120.0;
-            max_height = usable_height;
             height = if usable_height < 1024.0 {
                 usable_height
             } else {
@@ -481,7 +479,6 @@ pub async fn create_or_focus_setting_window(
         .maximizable(false)
         .inner_size(width, height)
         .min_inner_size(width, 600.0)
-        .max_inner_size(1024.0, max_height)
         .center()
         .transparent(true);
 
