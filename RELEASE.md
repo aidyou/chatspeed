@@ -2,6 +2,18 @@
 
 # Release Notes
 
+## [1.2.1]
+
+### 🐞 Bug Fixes
+
+- **Privacy Security Hardening (Attachment Sanitization)**: Resolved a critical vulnerability where sensitive data filtering was bypassed for multimodal (array format) messages. Text extracted from attachments (PDF, Word, or image analysis) is now rigorously sanitized before being sent to AI providers.
+- **Gemini Protocol Link Calibration**:
+  - **URL Generation Fix**: Fixed a logic bug where the protocol colon in `https://` was mistakenly identified as a suffix separator, ensuring valid backend request URLs.
+  - **Auth Parameter Persistence**: Corrected an issue where the API Key query parameter was lost during embedding request forwarding.
+- **Backend Provider Compatibility**: Fixed 400 errors from strict backends (e.g., Qwen/ModelScope) by ensuring `encoding_format: "float"` is always supplied and empty string parameters are stripped.
+
+---
+
 ## [1.2.0]
 
 ### 🚀 New Features
@@ -23,10 +35,6 @@
 ### 🐞 Bug Fixes
 
 - **Router Conflict Hardening**: Resolved a critical issue where multiple protocols (OpenAI/Ollama/Claude) would attempt to register the same `/v1/embeddings` path, leading to application panics on startup.
-- **Gemini Protocol Link Calibration**:
-  - **URL Generation Fix**: Fixed a logic bug where the protocol colon in `https://` was mistakenly identified as a suffix separator, ensuring valid backend request URLs.
-  - **Auth Parameter Persistence**: Corrected an issue where the API Key query parameter was lost during embedding request forwarding.
-- **Backend Provider Compatibility**: Fixed 400 errors from strict backends (e.g., Qwen/ModelScope) by ensuring `encoding_format: "float"` is always supplied and empty string parameters are stripped.
 
 ---
 

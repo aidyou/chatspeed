@@ -159,6 +159,46 @@ fn prepare_messages_with_system_context(mut messages: Vec<Value>, has_tools: boo
     messages
 }
 
+/// Helper function to filter a single piece of text for sensitive information
+fn filter_single_text(
+    text: &str,
+    filter_manager: &FilterManager,
+    sensitive_config: &SensitiveConfig,
+    interface_lang: &String,
+) -> String {
+    let lang_info = detect(text);
+    let detected_code = if let Some(ref info) = lang_info {
+        lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
+    } else {
+        "en"
+    };
+
+    let langs = vec![detected_code, interface_lang.as_str()];
+
+    #[cfg(debug_assertions)]
+    log::debug!(
+        "Detect language: {:?} -> {}. Interface lang: {}",
+        lang_info,
+        detected_code,
+        interface_lang
+    );
+
+    let sanitized = filter_manager.filter_text(text, &langs, sensitive_config);
+
+    #[cfg(debug_assertions)]
+    if text != sanitized {
+        log::debug!(
+            "Filtered content. Original len: {}, Sanitized len: {}",
+            text.len(),
+            sanitized.len()
+        );
+    } else {
+        log::debug!("No sensitive data found in message.");
+    }
+
+    sanitized
+}
+
 pub fn setup_chat_proxy(
     main_state: Arc<std::sync::RwLock<MainStore>>,
     metadata: &mut Option<Value>,
@@ -336,43 +376,26 @@ pub async fn chat_completion(
 
         for message in filtered_messages.iter_mut() {
             if message.get("role").and_then(|r| r.as_str()) == Some("user") {
-                if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
-                    if !content.is_empty() {
-                        // Detect language
-                        let lang_info = detect(content);
-                        let detected_code = if let Some(ref info) = lang_info {
-                            lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
-                        } else {
-                            "en"
-                        };
-
-                        let langs = vec![detected_code, interface_lang.as_str()];
-
-                        #[cfg(debug_assertions)]
-                        log::debug!(
-                            "Detect language: {:?} -> {}. Interface lang: {}",
-                            lang_info,
-                            detected_code,
-                            interface_lang
-                        );
-
-                        let sanitized =
-                            filter_manager.filter_text(content, &langs, &sensitive_config);
-
-                        #[cfg(debug_assertions)]
-                        if content != sanitized {
-                            log::debug!(
-                                "Filtered content. Original len: {}, Sanitized len: {}",
-                                content.len(),
-                                sanitized.len()
-                            );
-                        } else {
-                            log::debug!("No sensitive data found in message.");
+                if let Some(content_val) = message.get_mut("content") {
+                    if let Some(content_str) = content_val.as_str() {
+                        if !content_str.is_empty() {
+                            let sanitized = filter_single_text(content_str, &filter_manager, &sensitive_config, &interface_lang);
+                            *content_val = json!(sanitized);
                         }
-
-                        // Update content
-                        if let Some(obj) = message.as_object_mut() {
-                            obj.insert("content".to_string(), json!(sanitized));
+                    } else if let Some(content_array) = content_val.as_array_mut() {
+                        for block in content_array {
+                            if let Some(block_obj) = block.as_object_mut() {
+                                if block_obj.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    if let Some(text_val) = block_obj.get_mut("text") {
+                                        if let Some(text_str) = text_val.as_str() {
+                                            if !text_str.is_empty() {
+                                                let sanitized = filter_single_text(text_str, &filter_manager, &sensitive_config, &interface_lang);
+                                                *text_val = json!(sanitized);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
