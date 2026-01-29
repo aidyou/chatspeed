@@ -11,16 +11,20 @@
   - **Full-Chain Filtering**: Built-in blacklist for restricted headers (e.g., `Host`, `Connection`, `Content-Length`) in `should_forward_header` to prevent proxy protocol conflicts.
   - **Source Validation**: Added real-time validation in the AI Engine settings UI. Users are now alerted with localized error messages when trying to save restricted headers, avoiding confusion over failed forwardings.
   - **Prefix-Aware Protection**: The interceptor intelligently strips the `cs-` prefix before performing safety checks, ensuring no restricted headers bypass the filter.
+- **Model ID Robustness Enhancement**:
+  - **Full-Chain Noise Reduction**: Implemented automatic `.trim()` handling in both backend forwarding logic (Body injection and URL splicing) and frontend model settings (Saving and Importing). This eliminates API authentication or matching failures caused by accidental leading/trailing spaces in configurations.
+  - **Protocol-Aware Model Injection**: For OpenAI, Claude, and Ollama protocols, the proxy now forcibly inserts the correct backend model ID into the request body. This ensures the backend receives the expected ID even if the client omits the `model` field or passes an alias.
 
 ### 🪄 Improvements
 
 - **Proxy Statistics Dashboard Optimization**:
   - **Real-time Auto-Refresh**: The dashboard now supports automatic data updates every 10 seconds. Auto-refreshes do not trigger full-screen loading or clear current views, ensuring a smooth and continuous observation experience.
   - **Parallel Data Fetching**: Optimized the statistics dashboard by switching from serial to parallel requests (`Promise.all`), significantly reducing load times.
-- **Header Forwarding Architecture Overhaul**:
-  - **Optimized Override Priority**: Refactored the header building pipeline to strictly follow: `Metadata Defaults -> Adapter Required Headers -> Forced Headers -> Client cs- Overrides`.
-  - **Deduplication Logic**: Completely resolved issues with duplicate headers during custom forwarding. Client `cs-` headers now correctly replace system defaults in "override mode".
+- **Header Forwarding Architecture Overhaul (Sandwich Logic)**:
+  - **Tiered Override Priority**: Refactored the header construction pipeline to establish a strict hierarchy: `Client Standard Headers -> Provider Config Headers -> Protocol Mandatory Headers -> Client cs- Overrides`. This prevents standard client headers from accidentally overriding provider-specific configurations (like custom User-Agents) while maintaining the explicit override power of `cs-` prefixed headers.
+  - **Internal Metadata Passthrough**: Restored the forwarding of internal identification headers such as `X-Provider-Id`, `X-Model-Id`, and `X-Internal-Request` for better observability.
 - **Token Estimation Calibration**: Fixed a major estimation bug in direct forward mode. The system now counts tokens only for **plain text content**, excluding massive counts caused by binary data like Base64 images.
+- **Param Forwarding Strategy Optimization**: Refined the handling of sampling parameters like `stop`. If the configuration is empty or resolves to an empty list, the field is no longer sent, ensuring compatibility with providers that enforce strict validation against empty values.
 - **Performance & Stability Enhancements**:
   - **Streaming Robustness**: Restored and optimized buffer flush logic for the Claude protocol, ensuring complete output delivery even during unexpected stream interruptions.
 

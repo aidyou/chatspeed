@@ -113,9 +113,26 @@ pub async fn handle_direct_forward(
     ModelResolver::merge_parameters_json(&mut body_json, &proxy_model);
 
     body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
-
-    if let Some(model_field) = body_json.get_mut("model") {
-        *model_field = Value::String(proxy_model.model.clone());
+    // Force set the model field for protocols that require it in the body to ensure the backend receives the correct ID.
+    // We apply .trim() to prevent issues with leading/trailing spaces in configuration.
+    // For Gemini, the model is specified in the URL, so we only update it if present to avoid breaking strict body validation.
+    if let Some(obj) = body_json.as_object_mut() {
+        match proxy_model.chat_protocol {
+            ChatProtocol::OpenAI
+            | ChatProtocol::Ollama
+            | ChatProtocol::Claude
+            | ChatProtocol::HuggingFace => {
+                obj.insert(
+                    "model".to_string(),
+                    Value::String(proxy_model.model.trim().to_string()),
+                );
+            }
+            ChatProtocol::Gemini => {
+                if let Some(model_field) = obj.get_mut("model") {
+                    *model_field = Value::String(proxy_model.model.trim().to_string());
+                }
+            }
+        }
     }
 
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
@@ -136,6 +153,8 @@ pub async fn handle_direct_forward(
     // Handle response
     let status_code = target_response.status();
     let response_headers = target_response.headers().clone();
+    dbg!(status_code);
+    dbg!(&response_headers);
 
     if !status_code.is_success() {
         let error_body_bytes = target_response.bytes().await.map_err(|e| {

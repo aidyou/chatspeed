@@ -11,7 +11,10 @@ import iconFont from '@/components/icon/type.js'
  * @returns {string} - The corresponding logo key or 'ai-common' if no match is found.
  */
 export function getModelLogo(model) {
-  model = model.toLowerCase();
+  if (!model) {
+    return "common";
+  }
+  model = model?.trim()?.toLowerCase();
   // Some service platforms may set the model as company/model name (e.g., openai/gpt-4o),
   // so the company name needs to be removed.
   if (model.indexOf('/') !== -1) {
@@ -39,6 +42,7 @@ export function getModelLogo(model) {
     'hunyuan': 'hunyuan',
     'qwq:': 'qwen',
     'qwq-': 'qwen',
+    'qwen': 'qwen',
     'openai': 'gpt',
   };
 

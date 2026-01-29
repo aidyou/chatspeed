@@ -1,7 +1,7 @@
+use rand::{distr::Alphanumeric, Rng};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use uuid::Uuid;
-use rand::{distr::Alphanumeric, Rng};
 
 use crate::ai::network::ProxyType;
 
@@ -16,9 +16,16 @@ use crate::ai::network::ProxyType;
 pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMap<String, String> {
     let mut processed = HashMap::new();
 
-    if let Some(custom_headers) = metadata.as_ref().and_then(|m| m.get("customHeaders")).and_then(Value::as_array) {
+    if let Some(custom_headers) = metadata
+        .as_ref()
+        .and_then(|m| m.get("customHeaders"))
+        .and_then(Value::as_array)
+    {
         for header in custom_headers {
-            if let (Some(key), Some(value)) = (header.get("key").and_then(Value::as_str), header.get("value").and_then(Value::as_str)) {
+            if let (Some(key), Some(value)) = (
+                header.get("key").and_then(Value::as_str),
+                header.get("value").and_then(Value::as_str),
+            ) {
                 if key.trim().is_empty() {
                     continue;
                 }
@@ -27,7 +34,8 @@ pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMa
 
                 // Replace placeholders
                 if processed_value.contains("{UUID}") {
-                    processed_value = processed_value.replace("{UUID}", &Uuid::new_v4().to_string());
+                    processed_value =
+                        processed_value.replace("{UUID}", &Uuid::new_v4().to_string());
                 }
 
                 if processed_value.contains("{RANDOM}") {
@@ -87,10 +95,9 @@ pub fn process_custom_params(metadata: &Option<Value>) -> HashMap<String, Value>
 
         if let Some(custom_params) = params_array {
             for param in custom_params {
-                if let (Some(key), Some(value_val)) = (
-                    param.get("key").and_then(Value::as_str),
-                    param.get("value"),
-                ) {
+                if let (Some(key), Some(value_val)) =
+                    (param.get("key").and_then(Value::as_str), param.get("value"))
+                {
                     if key.trim().is_empty() {
                         continue;
                     }
@@ -141,7 +148,9 @@ pub fn merge_custom_params(body: &mut Value, custom_params: &Option<Value>) {
             // Special fix for providers like ModelScope/Qwen:
             // "parameter.enable_thinking must be set to false for non-streaming calls"
             if k == "enable_thinking" && !is_stream && final_val.as_bool() == Some(true) {
-                log::debug!("Forcing enable_thinking to false for non-streaming request to avoid API error");
+                log::debug!(
+                    "Forcing enable_thinking to false for non-streaming request to avoid API error"
+                );
                 final_val = serde_json::json!(false);
             }
 
@@ -227,24 +236,28 @@ pub fn init_extra_params(extra_params: Option<Value>) -> Value {
     let stop_sequences = extra_params.as_ref().and_then(|params| {
         params.get("stop").and_then(|v| {
             if v.is_string() {
-                v.as_str().map(|s| {
-                    s.split('\n')
-                        .filter_map(|part| {
-                            let trimmed = part.trim();
-                            if trimmed.is_empty() {
-                                None
-                            } else {
-                                Some(trimmed.to_string())
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                })
+                v.as_str()
+                    .map(|s| {
+                        s.split('\n')
+                            .filter_map(|part| {
+                                let trimmed = part.trim();
+                                if trimmed.is_empty() {
+                                    None
+                                } else {
+                                    Some(trimmed.to_string())
+                                }
+                            })
+                            .collect::<Vec<String>>()
+                    })
+                    .filter(|v| !v.is_empty())
             } else if v.is_array() {
-                v.as_array().map(|arr| {
-                    arr.iter()
-                        .filter_map(|val| val.as_str().map(String::from))
-                        .collect()
-                })
+                v.as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|val| val.as_str().map(String::from))
+                            .collect::<Vec<String>>()
+                    })
+                    .filter(|v| !v.is_empty())
             } else {
                 None
             }

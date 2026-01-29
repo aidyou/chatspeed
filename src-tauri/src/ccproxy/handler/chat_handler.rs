@@ -241,11 +241,11 @@ pub async fn handle_chat_completion(
 
     let proxy_model = if let (Some(provider_id), Some(model_id)) = (
         client_headers
-            .get("X-Provider-Id")
+            .get("X-CS-Provider-Id")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<i64>().ok()),
         client_headers
-            .get("X-Model-Id")
+            .get("X-CS-Model-Id")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string()),
     ) {
@@ -386,7 +386,12 @@ pub async fn handle_chat_completion(
     let mut final_headers = reqwest::header::HeaderMap::new();
 
     // Inject all proxy headers (Metadata + Protocol Defaults + Client Overrides)
-    ModelResolver::inject_proxy_headers(&mut final_headers, &client_headers, &proxy_model, &message_id);
+    ModelResolver::inject_proxy_headers(
+        &mut final_headers,
+        &client_headers,
+        &proxy_model,
+        &message_id,
+    );
 
     // Set mandatory content headers (these shouldn't be overridden)
     final_headers.insert(

@@ -25,7 +25,7 @@ pub async fn authenticate_request(
     }
 
     // Check for internal request header
-    if let Some(internal_header) = headers.get("X-Internal-Request") {
+    if let Some(internal_header) = headers.get("X-CS-Internal-Request") {
         if internal_header == "true" {
             if let Some(auth_header) = headers.get("authorization") {
                 if let Ok(auth_str) = auth_header.to_str() {

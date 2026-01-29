@@ -771,7 +771,28 @@ impl ModelResolver {
         proxy_model: &ProxyModel,
         message_id: &str,
     ) {
-        // 1. Add custom headers from model metadata (Default values)
+        // 1. Forward relevant headers from client (Override everything)
+        for (name, value) in client_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if should_forward_header(&name_str) {
+                // The "cs-" prefix is added to custom headers defined by users in the backend;
+                // it MUST be stripped before forwarding to the AI server to restore the original name.
+                let final_name = if name_str.starts_with("cs-") {
+                    &name_str[3..]
+                } else {
+                    &name_str
+                };
+
+                if let (Ok(reqwest_name), Ok(reqwest_value)) = (
+                    reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
+                    reqwest::header::HeaderValue::from_bytes(value.as_ref()),
+                ) {
+                    final_headers.insert(reqwest_name, reqwest_value);
+                }
+            }
+        }
+
+        // 2. Add custom headers from model metadata (Default values)
         let custom_headers =
             crate::ai::util::process_custom_headers(&proxy_model.model_metadata, message_id);
         for (k, v) in custom_headers {
@@ -791,7 +812,7 @@ impl ModelResolver {
             }
         }
 
-        // 2. Add protocol-specific authentication and version headers
+        // 3. Add protocol-specific authentication and version headers
         match proxy_model.chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                 if !proxy_model.api_key.is_empty() {
@@ -815,25 +836,6 @@ impl ModelResolver {
             ChatProtocol::Gemini => {} // API key is in URL
             ChatProtocol::Ollama => {} // No auth
         }
-
-        // 3. Forward relevant headers from client (Override everything)
-        for (name, value) in client_headers.iter() {
-            let name_str = name.as_str().to_lowercase();
-            if should_forward_header(&name_str) {
-                let final_name = if name_str.starts_with("cs-") {
-                    &name_str[3..]
-                } else {
-                    &name_str
-                };
-
-                if let (Ok(reqwest_name), Ok(reqwest_value)) = (
-                    reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
-                    reqwest::header::HeaderValue::from_bytes(value.as_ref()),
-                ) {
-                    final_headers.insert(reqwest_name, reqwest_value);
-                }
-            }
-        }
     }
 }
 
@@ -853,7 +855,10 @@ impl ModelResolver {
 /// - Any header starting with "x-" (custom headers)
 pub fn should_forward_header(name_str: &str) -> bool {
     // 1. Block internal routing headers
-    if name_str == "x-provider-id" || name_str == "x-model-id" || name_str == "x-internal-request" {
+    if name_str == "x-cs-provider-id"
+        || name_str == "x-cs-model-id"
+        || name_str == "x-cs-internal-request"
+    {
         return false;
     }
 
@@ -902,6 +907,7 @@ pub fn get_provider_chat_full_url(
     api_key: &str,
     is_streaming_request: bool,
 ) -> String {
+    let clean_model_id = model_id.trim();
     match protocol {
         ChatProtocol::OpenAI => {
             format!("{}/chat/completions", base_url.trim_end_matches('/'))
@@ -914,13 +920,13 @@ pub fn get_provider_chat_full_url(
             .map(|(base, _)| {
                 format!(
                     "{}/hf-inference/models/{}/v1/chat/completions",
-                    base, model_id
+                    base, clean_model_id
                 )
             })
             .unwrap_or_else(|| {
                 format!(
                     "https://router.huggingface.co/hf-inference/models/{}/v1/chat/completions",
-                    model_id
+                    clean_model_id
                 )
             }),
         ChatProtocol::Claude => format!("{}/messages", base_url.trim_end_matches('/')),
@@ -929,14 +935,14 @@ pub fn get_provider_chat_full_url(
                 format!(
                     "{}/models/{}:streamGenerateContent?alt=sse&key={}",
                     base_url.trim_end_matches('/'),
-                    model_id,
+                    clean_model_id,
                     api_key
                 )
             } else {
                 format!(
                     "{}/models/{}:generateContent?key={}",
                     base_url.trim_end_matches('/'),
-                    model_id,
+                    clean_model_id,
                     api_key
                 )
             }

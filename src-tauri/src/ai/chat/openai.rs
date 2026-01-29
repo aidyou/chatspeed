@@ -717,9 +717,9 @@ impl AiChatTrait for OpenAIChat {
 
         let internal_api_key = INTERNAL_CCPROXY_API_KEY.read().clone();
         let mut headers_json = json!({
-            "X-Provider-Id": provider_id.to_string(),
-            "X-Model-Id": model,
-            "X-Internal-Request": "true",
+            "X-CS-Provider-Id": provider_id.to_string(),
+            "X-CS-Model-Id": model,
+            "X-CS-Internal-Request": "true",
         });
 
         // Add custom headers from model metadata
