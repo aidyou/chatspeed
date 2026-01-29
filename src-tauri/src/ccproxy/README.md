@@ -18,6 +18,16 @@ This completes the entire proxy request process. The entire data flow can be rep
 
 client -> claude protocol request -> from_claude (claude -> unified) -> adapt_request (unified -> openai) -> openai server -> `adapt_response | adapt_stream_chunk` (openai -> unified) -> `adapt_response | adapt_stream_chunk` (unified -> claude) -> client
 
+### Embedding Proxy
+
+CCProxy also supports converting Embedding requests from different protocols into the format supported by the target server.
+
+1. **OpenAI**: Supports `/v1/embeddings`.
+2. **Gemini**: Supports `/:embedContent`.
+3. **Ollama**: Supports `/api/embed` and legacy `/api/embeddings` (automatically handles response format differences).
+
+The data flow is similar to the chat completion proxy but is handled via specialized embedding adapters to ensure vector data is correctly returned.
+
 ### Tool Compatibility Mode
 
 Models deployed on OpenAI-compatible servers or Ollama often have incomplete native support for tool calls, which can limit the utility of certain free models. To enhance the capabilities of these models, we have added a Tool Compatibility Mode. The principle is as follows:

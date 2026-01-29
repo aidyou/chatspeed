@@ -405,6 +405,43 @@ pub struct FileData {
     pub file_uri: String, // e.g., "gs://bucket/path/to/file.png"
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiEmbedRequest {
+    pub content: GeminiContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>, // e.g., "RETRIEVAL_QUERY", "RETRIEVAL_DOCUMENT"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_dimensionality: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiBatchEmbedRequest {
+    pub requests: Vec<GeminiEmbedRequest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiBatchEmbedResponse {
+    pub embeddings: Vec<GeminiEmbedding>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiEmbedResponse {
+    pub embedding: GeminiEmbedding,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GeminiEmbedding {
+    pub values: Vec<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

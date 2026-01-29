@@ -74,7 +74,7 @@ use crate::ccproxy::errors::CCProxyError;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     auth::authenticate_request,
-    handle_chat_completion, handle_list_models, handle_ollama_tags,
+    handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
     helper::CcproxyQuery,
 };
@@ -229,6 +229,95 @@ async fn ollama_chat_logic(
     .into_response())
 }
 
+async fn openai_embedding_logic(
+    state: Arc<SharedState>,
+    query: CcproxyQuery,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    Ok(handle_embedding(
+        ChatProtocol::OpenAI,
+        headers,
+        query,
+        body,
+        final_group,
+        "".to_string(),
+        state.main_store.clone(),
+    )
+    .await
+    .into_response())
+}
+
+async fn gemini_embedding_logic(
+    state: Arc<SharedState>,
+    query: CcproxyQuery,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+    model_id: String,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    Ok(handle_embedding(
+        ChatProtocol::Gemini,
+        headers,
+        query,
+        body,
+        final_group,
+        model_id,
+        state.main_store.clone(),
+    )
+    .await
+    .into_response())
+}
+
+async fn ollama_embedding_logic(
+    state: Arc<SharedState>,
+    query: CcproxyQuery,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    Ok(handle_embedding(
+        ChatProtocol::Ollama,
+        headers,
+        query,
+        body,
+        final_group,
+        "".to_string(),
+        state.main_store.clone(),
+    )
+    .await
+    .into_response())
+}
+
+async fn claude_embedding_logic(
+    state: Arc<SharedState>,
+    query: CcproxyQuery,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    Ok(handle_embedding(
+        ChatProtocol::Claude,
+        headers,
+        query,
+        body,
+        final_group,
+        "".to_string(),
+        state.main_store.clone(),
+    )
+    .await
+    .into_response())
+}
+
 // ----------------------------------------------------------------------------
 // Protocol-specific Route Builders
 // ----------------------------------------------------------------------------
@@ -268,9 +357,27 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                     .await
                     .map_err(|e| e.into_response())
             });
+            let fixed_group_for_embed = fixed_group.clone();
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    openai_embedding_logic(
+                        state,
+                        query,
+                        headers,
+                        body,
+                        Some(fixed_group_for_embed.clone()),
+                    )
+                    .await
+                    .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/v1/chat/completions", chat_handler)
                 .route("/v1/models", list_model_handler)
+                .route("/v1/embeddings", embedding_handler)
         }
         GroupMode::Path => {
             let chat_handler = post(
@@ -291,9 +398,21 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         .map_err(|e| e.into_response())
                 },
             );
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    openai_embedding_logic(state, query, headers, body, Some(group_name))
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/v1/chat/completions", chat_handler)
                 .route("/v1/models", list_model_handler)
+                .route("/v1/embeddings", embedding_handler)
         }
         GroupMode::None => {
             let chat_handler = post(
@@ -311,19 +430,30 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                     .await
                     .map_err(|e| e.into_response())
             });
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    openai_embedding_logic(state, query, headers, body, None)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/v1/chat/completions", chat_handler)
                 .route("/v1/models", list_model_handler)
+                .route("/v1/embeddings", embedding_handler)
         }
     }
 }
 
 /// Creates routes for Claude-compatible endpoints.
 fn claude_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>> {
-    let handler = match mode {
+    match mode {
         GroupMode::Fixed(fixed_group) => {
             let fixed_group_for_chat = fixed_group.clone();
-            post(
+            let chat_handler = post(
                 move |State(state): State<Arc<SharedState>>,
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
@@ -339,31 +469,81 @@ fn claude_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                     .await
                     .map_err(|e| e.into_response())
                 },
-            )
+            );
+            let fixed_group_for_embed = fixed_group.clone();
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    claude_embedding_logic(
+                        state,
+                        query,
+                        headers,
+                        body,
+                        Some(fixed_group_for_embed.clone()),
+                    )
+                    .await
+                    .map_err(|e| e.into_response())
+                },
+            );
+            Router::new()
+                .route("/v1/messages", chat_handler)
+                .route("/v1/claude/embeddings", embedding_handler)
         }
-        GroupMode::Path => post(
-            move |State(state): State<Arc<SharedState>>,
-                  Path(group_name): Path<String>,
-                  Query(query): Query<CcproxyQuery>,
-                  headers: HeaderMap,
-                  body: Bytes| async move {
-                claude_chat_logic(state, query, headers, body, Some(group_name), compat_mode)
-                    .await
-                    .map_err(|e| e.into_response())
-            },
-        ),
-        GroupMode::None => post(
-            move |State(state): State<Arc<SharedState>>,
-                  Query(query): Query<CcproxyQuery>,
-                  headers: HeaderMap,
-                  body: Bytes| async move {
-                claude_chat_logic(state, query, headers, body, None, compat_mode)
-                    .await
-                    .map_err(|e| e.into_response())
-            },
-        ),
-    };
-    Router::new().route("/v1/messages", handler)
+        GroupMode::Path => {
+            let chat_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    claude_chat_logic(state, query, headers, body, Some(group_name), compat_mode)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    claude_embedding_logic(state, query, headers, body, Some(group_name))
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new()
+                .route("/v1/messages", chat_handler)
+                .route("/v1/claude/embeddings", embedding_handler)
+        }
+        GroupMode::None => {
+            let chat_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    claude_chat_logic(state, query, headers, body, None, compat_mode)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    claude_embedding_logic(state, query, headers, body, None)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new()
+                .route("/v1/messages", chat_handler)
+                .route("/v1/claude/embeddings", embedding_handler)
+        }
+    }
 }
 
 /// Creates routes for Gemini-compatible endpoints.
@@ -381,6 +561,18 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         .rsplit_once(':')
                         .ok_or_else(|| CCProxyError::InvalidProtocolError(action.clone()))
                         .map_err(|e| e.into_response())?;
+                    if action == "embedContent" {
+                        return gemini_embedding_logic(
+                            state,
+                            query,
+                            headers,
+                            body,
+                            Some(fixed_group_for_chat.clone()),
+                            model_id.to_string(),
+                        )
+                        .await
+                        .map_err(|e| e.into_response());
+                    }
                     gemini_chat_logic(
                         state,
                         query,
@@ -417,6 +609,18 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         .rsplit_once(':')
                         .ok_or_else(|| CCProxyError::InvalidProtocolError(model_and_action.clone()))
                         .map_err(|e| e.into_response())?;
+                    if action == "embedContent" {
+                        return gemini_embedding_logic(
+                            state,
+                            query,
+                            headers,
+                            body,
+                            Some(group_name),
+                            model_id.to_string(),
+                        )
+                        .await
+                        .map_err(|e| e.into_response());
+                    }
                     gemini_chat_logic(
                         state,
                         query,
@@ -453,6 +657,18 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         .rsplit_once(':')
                         .ok_or_else(|| CCProxyError::InvalidProtocolError(model_and_action.clone()))
                         .map_err(|e| e.into_response())?;
+                    if action == "embedContent" {
+                        return gemini_embedding_logic(
+                            state,
+                            query,
+                            headers,
+                            body,
+                            None,
+                            model_id.to_string(),
+                        )
+                        .await
+                        .map_err(|e| e.into_response());
+                    }
                     gemini_chat_logic(
                         state,
                         query,
@@ -508,9 +724,28 @@ fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedSt
                     .await
                     .map_err(|e| e.into_response())
             });
+            let fixed_group_for_embed = fixed_group.clone();
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    ollama_embedding_logic(
+                        state,
+                        query,
+                        headers,
+                        body,
+                        Some(fixed_group_for_embed.clone()),
+                    )
+                    .await
+                    .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/api/chat", chat_handler)
                 .route("/api/tags", list_model_handler)
+                .route("/api/embeddings", embedding_handler.clone())
+                .route("/api/embed", embedding_handler)
         }
         GroupMode::Path => {
             let chat_handler = post(
@@ -531,9 +766,22 @@ fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedSt
                         .map_err(|e| e.into_response())
                 },
             );
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    ollama_embedding_logic(state, query, headers, body, Some(group_name))
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/api/chat", chat_handler)
                 .route("/api/tags", list_model_handler)
+                .route("/api/embeddings", embedding_handler.clone())
+                .route("/api/embed", embedding_handler)
         }
         GroupMode::None => {
             let chat_handler = post(
@@ -551,9 +799,21 @@ fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedSt
                     .await
                     .map_err(|e| e.into_response())
             });
+            let embedding_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    ollama_embedding_logic(state, query, headers, body, None)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
             Router::new()
                 .route("/api/chat", chat_handler)
                 .route("/api/tags", list_model_handler)
+                .route("/api/embeddings", embedding_handler.clone())
+                .route("/api/embed", embedding_handler)
         }
     }
 }
@@ -824,13 +1084,13 @@ fn log_registered_routes() {
     log::info!("  - GET /");
     log::info!("  - GET /api/version");
     log::info!("[OpenAI-Compatible]");
-    log::info!("  - /v1/models, /v1/chat/completions,");
+    log::info!("  - /v1/models, /v1/chat/completions, /v1/embeddings");
     log::info!("[Claude-Compatible]");
-    log::info!("  - /v1/messages");
+    log::info!("  - /v1/messages, /v1/claude/embeddings");
     log::info!("[Gemini-Compatible]");
     log::info!("  - /v1beta/models, /v1beta/models/{{model_id}}:{{action}}");
     log::info!("[Ollama-Specific]");
-    log::info!("  - /api/tags, /api/show, /api/chat");
+    log::info!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
     log::info!("[Access Modes]");
     log::info!("  - Grouped:           /{{group_name}}/{{path}}");
     log::info!("  - Tool Compat:       /compat_mode/{{path}}");

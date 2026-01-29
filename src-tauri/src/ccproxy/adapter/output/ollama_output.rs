@@ -1,6 +1,6 @@
 use super::OutputAdapter;
 use crate::ccproxy::{
-    adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    adapter::unified::{SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk},
     helper::sse::Event,
     types::ollama::{
         OllamaChatCompletionResponse, OllamaFunctionCall, OllamaMessage, OllamaStreamResponse,
@@ -68,11 +68,15 @@ impl OutputAdapter for OllamaOutputAdapter {
             tool_name: None,
         };
 
-        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = _sse_status.read() {
-            (status.estimated_input_tokens, status.estimated_output_tokens)
-        } else {
-            (0.0, 0.0)
-        };
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+            if let Ok(status) = _sse_status.read() {
+                (
+                    status.estimated_input_tokens,
+                    status.estimated_output_tokens,
+                )
+            } else {
+                (0.0, 0.0)
+            };
 
         let prompt_eval_count = if response.usage.input_tokens > 0 {
             response.usage.input_tokens as u32
@@ -219,11 +223,15 @@ impl OutputAdapter for OllamaOutputAdapter {
             }
 
             UnifiedStreamChunk::MessageStop { usage, .. } => {
-                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-                    (status.estimated_input_tokens, status.estimated_output_tokens)
-                } else {
-                    (0.0, 0.0)
-                };
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+                    if let Ok(status) = sse_status.read() {
+                        (
+                            status.estimated_input_tokens,
+                            status.estimated_output_tokens,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
 
                 let prompt_eval_count = if usage.input_tokens > 0 {
                     usage.input_tokens as u32
@@ -276,5 +284,20 @@ impl OutputAdapter for OllamaOutputAdapter {
         } else {
             Ok(vec![])
         }
+    }
+
+    fn adapt_embedding_response(
+        &self,
+        response: UnifiedEmbeddingResponse,
+    ) -> Result<Response, anyhow::Error> {
+        let ollama_response = crate::ccproxy::types::ollama::OllamaEmbedResponse {
+            model: response.model,
+            embeddings: response.data.into_iter().map(|d| d.embedding).collect(),
+            total_duration: None,
+            load_duration: None,
+            prompt_eval_count: None,
+        };
+
+        Ok(Json(ollama_response).into_response())
     }
 }

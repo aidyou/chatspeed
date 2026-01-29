@@ -7,9 +7,10 @@ use super::{BackendAdapter, BackendResponse};
 use crate::ccproxy::get_tool_id;
 use crate::ccproxy::openai::{
     OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse,
-    OpenAIFunctionCall, OpenAIFunctionDefinition, OpenAIImageUrl, OpenAIMessageContent,
-    OpenAIMessageContentPart, OpenAIResponseFormat, OpenAITool, OpenAIToolChoice,
-    OpenAIToolChoiceFunction, OpenAIToolChoiceObject, UnifiedChatMessage, UnifiedToolCall,
+    OpenAIEmbeddingInput, OpenAIEmbeddingRequest, OpenAIEmbeddingResponse, OpenAIFunctionCall,
+    OpenAIFunctionDefinition, OpenAIImageUrl, OpenAIMessageContent, OpenAIMessageContentPart,
+    OpenAIResponseFormat, OpenAITool, OpenAIToolChoice, OpenAIToolChoiceFunction,
+    OpenAIToolChoiceObject, UnifiedChatMessage, UnifiedToolCall,
 };
 use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_START};
 use crate::ccproxy::{
@@ -17,8 +18,9 @@ use crate::ccproxy::{
         backend::{common, update_message_block},
         range_adapter::adapt_temperature,
         unified::{
-            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
-            UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
+            SseStatus, UnifiedContentBlock, UnifiedEmbeddingData, UnifiedEmbeddingInput,
+            UnifiedEmbeddingRequest, UnifiedEmbeddingResponse, UnifiedRequest, UnifiedResponse,
+            UnifiedRole, UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
         },
     },
     types::ChatProtocol,
@@ -795,6 +797,75 @@ impl BackendAdapter for OpenAIBackendAdapter {
         }
 
         Ok(unified_chunks)
+    }
+
+    async fn adapt_embedding_request(
+        &self,
+        client: &Client,
+        unified_request: &UnifiedEmbeddingRequest,
+        api_key: &str,
+        provider_full_url: &str,
+        model: &str,
+        headers: &mut reqwest::header::HeaderMap,
+    ) -> Result<RequestBuilder, anyhow::Error> {
+        let input = match &unified_request.input {
+            UnifiedEmbeddingInput::String(s) => OpenAIEmbeddingInput::String(s.clone()),
+            UnifiedEmbeddingInput::StringArray(a) => OpenAIEmbeddingInput::Array(a.clone()),
+            UnifiedEmbeddingInput::Tokens(t) => OpenAIEmbeddingInput::Tokens(t.clone()),
+            UnifiedEmbeddingInput::TokensArray(ta) => OpenAIEmbeddingInput::ArrayOfTokens(ta.clone()),
+        };
+
+        let openai_request = OpenAIEmbeddingRequest {
+            model: model.to_string(),
+            input,
+            encoding_format: Some(unified_request.encoding_format.as_ref()
+                .filter(|ef| !ef.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "float".to_string())),
+            dimensions: unified_request.dimensions,
+            user: unified_request.user.clone(),
+        };
+
+        if !api_key.is_empty() {
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))?,
+            );
+        }
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        Ok(client.post(provider_full_url).json(&openai_request))
+    }
+
+    async fn adapt_embedding_response(
+        &self,
+        backend_response: BackendResponse,
+    ) -> Result<UnifiedEmbeddingResponse, anyhow::Error> {
+        let openai_response: OpenAIEmbeddingResponse =
+            serde_json::from_slice(&backend_response.body)?;
+
+        let data = openai_response
+            .data
+            .into_iter()
+            .map(|d| UnifiedEmbeddingData {
+                index: d.index,
+                embedding: d.embedding,
+            })
+            .collect();
+
+        Ok(UnifiedEmbeddingResponse {
+            model: openai_response.model,
+            data,
+            usage: UnifiedUsage {
+                input_tokens: openai_response.usage.prompt_tokens,
+                output_tokens: openai_response.usage.total_tokens
+                    - openai_response.usage.prompt_tokens,
+                ..Default::default()
+            },
+        })
     }
 }
 

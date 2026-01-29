@@ -355,3 +355,39 @@ impl OpenAIChatCompletionRequest {
         Ok(())
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIEmbeddingRequest {
+    pub input: OpenAIEmbeddingInput,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding_format: Option<String>, // "float" or "base64"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum OpenAIEmbeddingInput {
+    String(String),
+    Array(Vec<String>),
+    Tokens(Vec<u32>),
+    ArrayOfTokens(Vec<Vec<u32>>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIEmbeddingResponse {
+    pub object: String, // "list"
+    pub data: Vec<OpenAIEmbeddingData>,
+    pub model: String,
+    pub usage: OpenAIUsage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpenAIEmbeddingData {
+    pub object: String, // "embedding"
+    pub index: u32,
+    pub embedding: Vec<f64>,
+}

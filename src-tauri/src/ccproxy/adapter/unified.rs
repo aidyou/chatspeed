@@ -83,6 +83,45 @@ pub struct UnifiedRequest {
     pub custom_params: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedEmbeddingRequest {
+    pub model: String,
+    pub input: UnifiedEmbeddingInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    // Gemini specific
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UnifiedEmbeddingInput {
+    String(String),
+    StringArray(Vec<String>),
+    Tokens(Vec<u32>),
+    TokensArray(Vec<Vec<u32>>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedEmbeddingResponse {
+    pub model: String,
+    pub data: Vec<UnifiedEmbeddingData>,
+    pub usage: UnifiedUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedEmbeddingData {
+    pub index: u32,
+    pub embedding: Vec<f64>,
+}
+
 impl UnifiedRequest {
     pub fn enhance_prompt(&mut self) {
         // We only inject prompts when tools are present.

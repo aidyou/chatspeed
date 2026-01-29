@@ -1,6 +1,9 @@
 use super::OutputAdapter;
 use crate::ccproxy::{
-    adapter::unified::{SseStatus, UnifiedFunctionCallPart, UnifiedResponse, UnifiedStreamChunk},
+    adapter::unified::{
+        SseStatus, UnifiedEmbeddingResponse, UnifiedFunctionCallPart, UnifiedResponse,
+        UnifiedStreamChunk,
+    },
     gemini::{
         GeminiCandidate, GeminiContent, GeminiPart, GeminiResponse as GeminiNetworkResponse,
         GeminiUsageMetadata,
@@ -65,11 +68,15 @@ impl OutputAdapter for GeminiOutputAdapter {
             response.id
         };
 
-        let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-            (status.estimated_input_tokens, status.estimated_output_tokens)
-        } else {
-            (0.0, 0.0)
-        };
+        let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+            if let Ok(status) = sse_status.read() {
+                (
+                    status.estimated_input_tokens,
+                    status.estimated_output_tokens,
+                )
+            } else {
+                (0.0, 0.0)
+            };
 
         let input_tokens = if response.usage.input_tokens > 0 {
             response.usage.input_tokens
@@ -224,11 +231,15 @@ impl OutputAdapter for GeminiOutputAdapter {
                     }
                 }
 
-                let (estimated_input_tokens_f64, estimated_output_tokens_f64) = if let Ok(status) = sse_status.read() {
-                    (status.estimated_input_tokens, status.estimated_output_tokens)
-                } else {
-                    (0.0, 0.0)
-                };
+                let (estimated_input_tokens_f64, estimated_output_tokens_f64) =
+                    if let Ok(status) = sse_status.read() {
+                        (
+                            status.estimated_input_tokens,
+                            status.estimated_output_tokens,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
 
                 let input_tokens = if usage.input_tokens > 0 {
                     usage.input_tokens
@@ -267,5 +278,22 @@ impl OutputAdapter for GeminiOutputAdapter {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    fn adapt_embedding_response(
+        &self,
+        response: UnifiedEmbeddingResponse,
+    ) -> Result<Response, anyhow::Error> {
+        let gemini_response = crate::ccproxy::gemini::GeminiEmbedResponse {
+            embedding: crate::ccproxy::gemini::GeminiEmbedding {
+                values: response
+                    .data
+                    .get(0)
+                    .map(|d| d.embedding.clone())
+                    .unwrap_or_default(),
+            },
+        };
+
+        Ok(Json(gemini_response).into_response())
     }
 }

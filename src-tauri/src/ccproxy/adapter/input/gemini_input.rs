@@ -4,11 +4,11 @@ use crate::ccproxy::{
     adapter::{
         range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
-            UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
-            UnifiedToolChoice,
+            UnifiedContentBlock, UnifiedEmbeddingInput, UnifiedEmbeddingRequest, UnifiedMessage,
+            UnifiedRequest, UnifiedRole, UnifiedTool, UnifiedToolChoice,
         },
     },
-    gemini::{GeminiPart, GeminiRequest},
+    gemini::{GeminiEmbedRequest, GeminiPart, GeminiRequest},
     types::{ChatProtocol, TOOL_ARG_ERROR_REMINDER},
 };
 
@@ -254,4 +254,33 @@ fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, any
     } else {
         anyhow::bail!("Unsupported Gemini content part")
     }
+}
+
+/// Converts a Gemini-compatible embedding request into the `UnifiedEmbeddingRequest`.
+pub fn from_gemini_embedding(
+    req: GeminiEmbedRequest,
+    model_id: String,
+) -> Result<UnifiedEmbeddingRequest, anyhow::Error> {
+    let mut parts = Vec::new();
+    for part in req.content.parts {
+        if let Some(text) = part.text {
+            parts.push(text);
+        }
+    }
+
+    let input = if parts.len() == 1 {
+        UnifiedEmbeddingInput::String(parts.remove(0))
+    } else {
+        UnifiedEmbeddingInput::StringArray(parts)
+    };
+
+    Ok(UnifiedEmbeddingRequest {
+        model: req.model.unwrap_or(model_id),
+        input,
+        dimensions: req.output_dimensionality.map(|d| d as u32),
+        encoding_format: None,
+        user: None,
+        task_type: req.task_type,
+        title: req.title,
+    })
 }

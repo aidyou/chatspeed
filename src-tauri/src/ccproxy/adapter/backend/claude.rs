@@ -15,8 +15,9 @@ use crate::ccproxy::{
         backend::update_message_block,
         range_adapter::adapt_temperature,
         unified::{
-            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
-            UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
+            SseStatus, UnifiedContentBlock, UnifiedEmbeddingRequest, UnifiedEmbeddingResponse,
+            UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk, UnifiedToolChoice,
+            UnifiedUsage,
         },
     },
     types::ChatProtocol,
@@ -1013,5 +1014,28 @@ impl BackendAdapter for ClaudeBackendAdapter {
         }
 
         Ok(unified_chunks)
+    }
+
+    async fn adapt_embedding_request(
+        &self,
+        _client: &Client,
+        _unified_request: &UnifiedEmbeddingRequest,
+        _api_key: &str,
+        _provider_full_url: &str,
+        _model: &str,
+        _headers: &mut reqwest::header::HeaderMap,
+    ) -> Result<RequestBuilder, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "Claude protocol does not support embeddings"
+        ))
+    }
+
+    async fn adapt_embedding_response(
+        &self,
+        _backend_response: BackendResponse,
+    ) -> Result<UnifiedEmbeddingResponse, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "Claude protocol does not support embeddings"
+        ))
     }
 }

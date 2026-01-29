@@ -1,4 +1,3 @@
-use crate::ccproxy::adapter::unified::SseStatus;
 use crate::ccproxy::get_tool_id;
 use crate::ccproxy::types::{
     TOOL_PARSE_ERROR_REMINDER, TOOL_RESULT_SUFFIX_REMINDER, TOOL_TAG_END, TOOL_TAG_START,
@@ -13,8 +12,9 @@ use super::{BackendAdapter, BackendResponse};
 use crate::ccproxy::adapter::{
     range_adapter::adapt_temperature,
     unified::{
-        UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole, UnifiedStreamChunk,
-        UnifiedToolChoice, UnifiedUsage,
+        SseStatus, UnifiedContentBlock, UnifiedEmbeddingData, UnifiedEmbeddingInput,
+        UnifiedEmbeddingRequest, UnifiedEmbeddingResponse, UnifiedRequest, UnifiedResponse,
+        UnifiedRole, UnifiedStreamChunk, UnifiedToolChoice, UnifiedUsage,
     },
 };
 use crate::ccproxy::gemini::{
@@ -1017,5 +1017,119 @@ impl BackendAdapter for GeminiBackendAdapter {
         }
 
         Ok(unified_chunks)
+    }
+
+    async fn adapt_embedding_request(
+        &self,
+        client: &Client,
+        unified_request: &UnifiedEmbeddingRequest,
+        api_key: &str,
+        provider_full_url: &str,
+        model: &str,
+        headers: &mut reqwest::header::HeaderMap,
+    ) -> Result<RequestBuilder, anyhow::Error> {
+        // Robust base URL extraction: remove any suffix starting with ':'
+        // But be careful not to split the 'https://' protocol part.
+        let base = if let Some(idx) = provider_full_url.rfind(':') {
+            if idx > 6 {
+                &provider_full_url[..idx]
+            } else {
+                provider_full_url
+            }
+        } else {
+            provider_full_url
+        };
+
+        // Remove any existing query string if it was accidentally kept in base
+        let base = base.split('?').next().unwrap_or(base);
+
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        match &unified_request.input {
+            UnifiedEmbeddingInput::String(s) => {
+                let embed_url = format!("{}:embedContent?key={}", base, api_key);
+                let gemini_request = crate::ccproxy::gemini::GeminiEmbedRequest {
+                    model: Some(format!("models/{}", model)),
+                    content: crate::ccproxy::gemini::GeminiContent {
+                        role: None,
+                        parts: vec![crate::ccproxy::gemini::GeminiPart {
+                            text: Some(s.clone()),
+                            ..Default::default()
+                        }],
+                    },
+                    task_type: unified_request.task_type.clone(),
+                    title: unified_request.title.clone(),
+                    output_dimensionality: unified_request.dimensions.map(|d| d as i32),
+                };
+                Ok(client.post(embed_url).json(&gemini_request))
+            }
+            UnifiedEmbeddingInput::StringArray(a) => {
+                let embed_url = format!("{}:batchEmbedContents?key={}", base, api_key);
+                let requests = a
+                    .iter()
+                    .map(|s| crate::ccproxy::gemini::GeminiEmbedRequest {
+                        model: Some(format!("models/{}", model)),
+                        content: crate::ccproxy::gemini::GeminiContent {
+                            role: None,
+                            parts: vec![crate::ccproxy::gemini::GeminiPart {
+                                text: Some(s.clone()),
+                                ..Default::default()
+                            }],
+                        },
+                        task_type: unified_request.task_type.clone(),
+                        title: unified_request.title.clone(),
+                        output_dimensionality: unified_request.dimensions.map(|d| d as i32),
+                    })
+                    .collect();
+                let gemini_request = crate::ccproxy::gemini::GeminiBatchEmbedRequest { requests };
+                Ok(client.post(embed_url).json(&gemini_request))
+            }
+            _ => Err(anyhow::anyhow!(
+                "Gemini does not support token inputs for embedding"
+            )),
+        }
+    }
+
+    async fn adapt_embedding_response(
+        &self,
+        backend_response: BackendResponse,
+    ) -> Result<UnifiedEmbeddingResponse, anyhow::Error> {
+        // Try parsing as Batch response first
+        if let Ok(batch_response) = serde_json::from_slice::<
+            crate::ccproxy::gemini::GeminiBatchEmbedResponse,
+        >(&backend_response.body)
+        {
+            let data = batch_response
+                .embeddings
+                .into_iter()
+                .enumerate()
+                .map(|(i, e)| UnifiedEmbeddingData {
+                    index: i as u32,
+                    embedding: e.values,
+                })
+                .collect();
+
+            return Ok(UnifiedEmbeddingResponse {
+                model: "gemini".to_string(),
+                data,
+                usage: UnifiedUsage::default(),
+            });
+        }
+
+        // Fallback to single response
+        let gemini_response: crate::ccproxy::gemini::GeminiEmbedResponse =
+            serde_json::from_slice(&backend_response.body)?;
+
+        Ok(UnifiedEmbeddingResponse {
+            model: "gemini".to_string(),
+            data: vec![UnifiedEmbeddingData {
+                index: 0,
+                embedding: gemini_response.embedding.values,
+            }],
+            usage: UnifiedUsage::default(),
+        })
     }
 }

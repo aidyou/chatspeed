@@ -2,6 +2,34 @@
 
 # Release Notes
 
+## [1.2.0]
+
+### 🚀 New Features
+
+- **Full Embedding Proxy Protocol Support**:
+  - **Multi-Protocol Integration**: The proxy layer now natively supports embedding protocols for **OpenAI** (`/v1/embeddings`), **Gemini** (`:embedContent`), and **Ollama** (`/api/embeddings`).
+  - **Cross-Protocol Auto-Conversion**: Implemented a comprehensive protocol conversion engine. Users can use any client SDK (e.g., OpenAI SDK) to call backend models configured with different protocols.
+  - **Intelligent Parameter Alignment**: Added automatic cleaning and completion logic for optional parameters (like `encoding_format`) that certain backends validate strictly. Systems now automatically supply default values (e.g., `float`) when converting from Gemini/Ollama to OpenAI.
+  - **Dedicated Rejection Path**: Created a standalone `/v1/claude/embeddings` path for the Claude protocol. Since Claude officially does not support embeddings, this path returns a clear 501 error, keeping the API structure aligned without causing router conflicts.
+- **MCP Proxy Router Overhaul**:
+  - **Path Unification**: Consolidated MCP-related SSE and HTTP routes under the `/mcp` namespace, introducing `/mcp/sse` and `/mcp/http` as standard endpoints.
+  - **State Isolation**: Leveraged `nest_service` to decouple different application states (SharedState vs. ChatState), improving system stability under concurrent requests.
+  - **Backward Compatibility**: Maintained the legacy `/sse` entry point (marked as deprecated) to ensure a smooth transition for older clients.
+
+### 🪄 Improvements
+
+- **API Documentation & UI Sync**: Updated the API endpoint help table in the Proxy Settings page, adding full path descriptions and placeholder replacement guides for Embedding services.
+
+### 🐞 Bug Fixes
+
+- **Router Conflict Hardening**: Resolved a critical issue where multiple protocols (OpenAI/Ollama/Claude) would attempt to register the same `/v1/embeddings` path, leading to application panics on startup.
+- **Gemini Protocol Link Calibration**:
+  - **URL Generation Fix**: Fixed a logic bug where the protocol colon in `https://` was mistakenly identified as a suffix separator, ensuring valid backend request URLs.
+  - **Auth Parameter Persistence**: Corrected an issue where the API Key query parameter was lost during embedding request forwarding.
+- **Backend Provider Compatibility**: Fixed 400 errors from strict backends (e.g., Qwen/ModelScope) by ensuring `encoding_format: "float"` is always supplied and empty string parameters are stripped.
+
+---
+
 ## [1.1.26]
 
 ### 🚀 New Features

@@ -1,11 +1,17 @@
 use crate::ccproxy::{
     adapter::{
         range_adapter::clamp_to_protocol_range,
-        unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
+        unified::{
+            UnifiedContentBlock, UnifiedEmbeddingInput, UnifiedEmbeddingRequest, UnifiedMessage,
+            UnifiedRequest, UnifiedRole, UnifiedTool,
+        },
     },
     get_tool_id,
     types::{
-        ollama::{OllamaChatCompletionRequest, OllamaMessage},
+        ollama::{
+            OllamaChatCompletionRequest, OllamaEmbedInput, OllamaEmbedRequest,
+            OllamaEmbeddingsRequest, OllamaMessage,
+        },
         ChatProtocol, TOOL_ARG_ERROR_REMINDER,
     },
 };
@@ -207,4 +213,34 @@ fn convert_ollama_message_to_content_blocks(
     }
 
     Ok(blocks)
+}
+
+/// Converts an Ollama legacy embedding request into the `UnifiedEmbeddingRequest`.
+pub fn from_ollama_embedding(req: OllamaEmbeddingsRequest) -> Result<UnifiedEmbeddingRequest> {
+    Ok(UnifiedEmbeddingRequest {
+        model: req.model,
+        input: UnifiedEmbeddingInput::String(req.prompt),
+        dimensions: None,
+        encoding_format: None,
+        user: None,
+        task_type: None,
+        title: None,
+    })
+}
+
+/// Converts an Ollama modern embed request into the `UnifiedEmbeddingRequest`.
+pub fn from_ollama_embed(req: OllamaEmbedRequest) -> Result<UnifiedEmbeddingRequest> {
+    let input = match req.input {
+        OllamaEmbedInput::String(s) => UnifiedEmbeddingInput::String(s),
+        OllamaEmbedInput::Array(a) => UnifiedEmbeddingInput::StringArray(a),
+    };
+    Ok(UnifiedEmbeddingRequest {
+        model: req.model,
+        input,
+        dimensions: None,
+        encoding_format: None,
+        user: None,
+        task_type: None,
+        title: None,
+    })
 }

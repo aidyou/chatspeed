@@ -150,3 +150,46 @@ pub struct OllamaFunctionDefinition {
     pub description: Option<String>,
     pub parameters: Value, // JSON schema
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OllamaEmbedRequest {
+    pub model: String,
+    pub input: OllamaEmbedInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncate: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_alive: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum OllamaEmbedInput {
+    String(String),
+    Array(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OllamaEmbedResponse {
+    pub model: String,
+    pub embeddings: Vec<Vec<f64>>,
+    pub total_duration: Option<u64>,
+    pub load_duration: Option<u64>,
+    pub prompt_eval_count: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OllamaEmbeddingsRequest {
+    pub model: String,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_alive: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OllamaEmbeddingsResponse {
+    pub embedding: Vec<f64>,
+}

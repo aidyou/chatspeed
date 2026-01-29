@@ -950,6 +950,49 @@ pub fn get_provider_chat_full_url(
     }
 }
 
+pub fn get_provider_embedding_full_url(
+    protocol: ChatProtocol,
+    base_url: &str,
+    model_id: &str,
+    api_key: &str,
+) -> String {
+    let clean_model_id = model_id.trim();
+    match protocol {
+        ChatProtocol::OpenAI => {
+            format!("{}/embeddings", base_url.trim_end_matches('/'))
+        }
+        ChatProtocol::Ollama => {
+            format!("{}/api/embed", base_url.trim_end_matches('/'))
+        }
+        ChatProtocol::HuggingFace => format!(
+            "https://api-inference.huggingface.co/pipeline/feature-extraction/{}",
+            clean_model_id
+        ),
+        ChatProtocol::Gemini => {
+            // Robust base URL extraction: remove any suffix starting with ':'
+            // But be careful not to split the 'https://' protocol part.
+            let base = if let Some(idx) = base_url.rfind(':') {
+                if idx > 6 {
+                    // Likely an action suffix like :generateContent
+                    &base_url[..idx]
+                } else {
+                    // Likely the colon in https://
+                    base_url
+                }
+            } else {
+                base_url
+            };
+            format!(
+                "{}/models/{}:embedContent?key={}",
+                base.trim_end_matches('/'),
+                clean_model_id,
+                api_key
+            )
+        }
+        ChatProtocol::Claude => String::new(),
+    }
+}
+
 pub fn get_tool_id() -> String {
     format!("tool_{}", &uuid::Uuid::new_v4().to_string()[..8])
 }

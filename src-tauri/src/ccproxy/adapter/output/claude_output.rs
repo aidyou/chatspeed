@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use super::OutputAdapter;
 use crate::ccproxy::{
-    adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk},
+    adapter::unified::{SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk},
     helper::sse::Event,
     types::claude::{ClaudeNativeContentBlock, ClaudeNativeResponse, ClaudeNativeUsage},
 };
@@ -343,6 +343,15 @@ impl OutputAdapter for ClaudeOutputAdapter {
             // }
             _ => Ok(vec![]),
         }
+    }
+
+    fn adapt_embedding_response(
+        &self,
+        _response: UnifiedEmbeddingResponse,
+    ) -> Result<Response, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "Claude protocol does not support embeddings"
+        ))
     }
 }
 

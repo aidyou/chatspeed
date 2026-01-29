@@ -1171,6 +1171,38 @@ const genTableData = () => {
       note: ''
     },
     {
+      type: 'Embed',
+      protocol: 'Openai',
+      group: '',
+      compat: 'false',
+      apiUrl: '/v1/embeddings',
+      note: ''
+    },
+    {
+      type: 'Embed',
+      protocol: 'Openai',
+      group: '{group}',
+      compat: 'false',
+      apiUrl: '/{group}/v1/embeddings',
+      note: t('settings.proxy.settings.api.replaceGroup', { group: '{group}' })
+    },
+    {
+      type: 'Embed',
+      protocol: 'Gemini',
+      group: '',
+      compat: 'false',
+      apiUrl: '/v1beta/models/{model}:embedContent?key={key}',
+      note: t('settings.proxy.settings.api.replaceModelAndKey', { model: '{model}', key: '{key}' })
+    },
+    {
+      type: 'Embed',
+      protocol: 'Ollama',
+      group: '',
+      compat: 'false',
+      apiUrl: '/api/embed',
+      note: ''
+    },
+    {
       type: 'List',
       protocol: 'Openai',
       group: '',

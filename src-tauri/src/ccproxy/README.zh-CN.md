@@ -18,6 +18,16 @@
 
 client -> claude protocol request -> from_claude (claude -> unified) -> adapt_request (unified -> openai) -> openai server -> `adapt_response | adapt_stream_chunk` (openai -> unified) -> `adapt_response | adapt_stream_chunk` (unified -> claude) -> client
 
+### 嵌入 (Embedding) 代理说明
+
+ccproxy 同样支持将不同协议的 Embedding 请求转换为目标服务器支持的格式。
+
+1. **OpenAI**: 支持 `/v1/embeddings`。
+2. **Gemini**: 支持 `/:embedContent`。
+3. **Ollama**: 支持 `/api/embed` 和旧版 `/api/embeddings`（自动兼容响应格式）。
+
+数据流向与聊天代理类似，但经过专门的 Embedding 适配器处理，确保向量数据正确返回。
+
 ### 工具兼容模式说明
 
 openai 兼容格式服务器或者 ollama 部署的模型，对工具调用的原生支持往往不够完善，这会导致某些免费模型的用途受限。为了提高模型的能力，我们新增了工具兼容模式，原理就是：

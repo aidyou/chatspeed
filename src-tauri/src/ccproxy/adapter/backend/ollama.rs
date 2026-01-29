@@ -14,8 +14,9 @@ use crate::ccproxy::{
     adapter::{
         backend::update_message_block,
         unified::{
-            SseStatus, UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedRole,
-            UnifiedStreamChunk, UnifiedUsage,
+            SseStatus, UnifiedContentBlock, UnifiedEmbeddingData, UnifiedEmbeddingInput,
+            UnifiedEmbeddingRequest, UnifiedEmbeddingResponse, UnifiedRequest, UnifiedResponse,
+            UnifiedRole, UnifiedStreamChunk, UnifiedUsage,
         },
     },
     types::ChatProtocol,
@@ -648,6 +649,77 @@ impl BackendAdapter for OllamaBackendAdapter {
         }
 
         Ok(unified_chunks)
+    }
+
+    async fn adapt_embedding_request(
+        &self,
+        client: &Client,
+        unified_request: &UnifiedEmbeddingRequest,
+        _api_key: &str,
+        provider_full_url: &str,
+        model: &str,
+        headers: &mut reqwest::header::HeaderMap,
+    ) -> Result<RequestBuilder, anyhow::Error> {
+        let input = match &unified_request.input {
+            UnifiedEmbeddingInput::String(s) => crate::ccproxy::types::ollama::OllamaEmbedInput::String(s.clone()),
+            UnifiedEmbeddingInput::StringArray(a) => crate::ccproxy::types::ollama::OllamaEmbedInput::Array(a.clone()),
+            _ => return Err(anyhow::anyhow!("Ollama does not support token inputs for embedding")),
+        };
+
+        let ollama_request = crate::ccproxy::types::ollama::OllamaEmbedRequest {
+            model: model.to_string(),
+            input,
+            truncate: None,
+            options: None,
+            keep_alive: None,
+        };
+
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        Ok(client.post(provider_full_url).json(&ollama_request))
+    }
+
+    async fn adapt_embedding_response(
+        &self,
+        backend_response: BackendResponse,
+    ) -> Result<UnifiedEmbeddingResponse, anyhow::Error> {
+        // Try parsing as modern OllamaEmbedResponse first
+        if let Ok(ollama_response) = serde_json::from_slice::<
+            crate::ccproxy::types::ollama::OllamaEmbedResponse,
+        >(&backend_response.body)
+        {
+            let data = ollama_response
+                .embeddings
+                .into_iter()
+                .enumerate()
+                .map(|(i, e)| UnifiedEmbeddingData {
+                    index: i as u32,
+                    embedding: e,
+                })
+                .collect();
+
+            return Ok(UnifiedEmbeddingResponse {
+                model: ollama_response.model,
+                data,
+                usage: UnifiedUsage::default(),
+            });
+        }
+
+        // Fallback to legacy OllamaEmbeddingsResponse
+        let legacy_response: crate::ccproxy::types::ollama::OllamaEmbeddingsResponse =
+            serde_json::from_slice(&backend_response.body)?;
+
+        Ok(UnifiedEmbeddingResponse {
+            model: "ollama".to_string(),
+            data: vec![UnifiedEmbeddingData {
+                index: 0,
+                embedding: legacy_response.embedding,
+            }],
+            usage: UnifiedUsage::default(),
+        })
     }
 }
 

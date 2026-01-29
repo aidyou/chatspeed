@@ -2,14 +2,14 @@ use crate::ccproxy::{
     adapter::{
         range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
-            UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
-            UnifiedToolChoice,
+            UnifiedContentBlock, UnifiedEmbeddingInput, UnifiedEmbeddingRequest, UnifiedMessage,
+            UnifiedRequest, UnifiedRole, UnifiedTool, UnifiedToolChoice,
         },
     },
     types::{
         openai::{
-            OpenAIChatCompletionRequest, OpenAIMessageContent, OpenAIMessageContentPart,
-            OpenAIToolChoice,
+            OpenAIChatCompletionRequest, OpenAIEmbeddingInput, OpenAIEmbeddingRequest,
+            OpenAIMessageContent, OpenAIMessageContentPart, OpenAIToolChoice,
         },
         ChatProtocol, TOOL_ARG_ERROR_REMINDER,
     },
@@ -258,4 +258,32 @@ fn convert_openai_tool_choice(choice: OpenAIToolChoice) -> UnifiedToolChoice {
             }
         }
     }
+}
+
+/// Converts an OpenAI-compatible embedding request into the `UnifiedEmbeddingRequest`.
+pub fn from_openai_embedding(
+    req: OpenAIEmbeddingRequest,
+) -> Result<UnifiedEmbeddingRequest, anyhow::Error> {
+    let input = match req.input {
+        OpenAIEmbeddingInput::String(s) => UnifiedEmbeddingInput::String(s),
+        OpenAIEmbeddingInput::Array(a) => UnifiedEmbeddingInput::StringArray(a),
+        OpenAIEmbeddingInput::Tokens(t) => UnifiedEmbeddingInput::Tokens(t),
+        OpenAIEmbeddingInput::ArrayOfTokens(at) => UnifiedEmbeddingInput::TokensArray(at),
+    };
+
+    Ok(UnifiedEmbeddingRequest {
+        model: req.model,
+        input,
+        dimensions: req.dimensions,
+        encoding_format: req.encoding_format.and_then(|ef| {
+            if ef.trim().is_empty() {
+                None
+            } else {
+                Some(ef)
+            }
+        }),
+        user: req.user,
+        task_type: None,
+        title: None,
+    })
 }

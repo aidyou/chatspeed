@@ -1,4 +1,6 @@
-use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::adapter::unified::{
+    SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk,
+};
 use crate::ccproxy::helper::Event;
 
 use axum::response::Response;
@@ -20,4 +22,10 @@ pub trait OutputAdapter: Send + Sync {
         chunk: UnifiedStreamChunk,
         sse_status: Arc<RwLock<SseStatus>>,
     ) -> Result<Vec<Event>, Infallible>;
+
+    /// Converts a `UnifiedEmbeddingResponse` into a `Response`.
+    fn adapt_embedding_response(
+        &self,
+        response: UnifiedEmbeddingResponse,
+    ) -> Result<Response, anyhow::Error>;
 }

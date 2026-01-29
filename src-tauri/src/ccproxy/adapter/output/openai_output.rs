@@ -1,10 +1,13 @@
 use super::OutputAdapter;
-use crate::ccproxy::adapter::unified::{SseStatus, UnifiedResponse, UnifiedStreamChunk};
+use crate::ccproxy::adapter::unified::{
+    SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk,
+};
 use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::types::openai::{
     CompletionTokensDetails, OpenAIChatCompletionChoice, OpenAIChatCompletionResponse,
-    OpenAIMessageContent, OpenAIUsage, PromptTokensDetails, UnifiedChatMessage,
+    OpenAIEmbeddingData, OpenAIEmbeddingResponse, OpenAIMessageContent, OpenAIUsage,
+    PromptTokensDetails, UnifiedChatMessage,
 };
 
 use axum::response::{IntoResponse, Response};
@@ -417,5 +420,32 @@ impl OutputAdapter for OpenAIOutputAdapter {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    fn adapt_embedding_response(
+        &self,
+        response: UnifiedEmbeddingResponse,
+    ) -> Result<Response, anyhow::Error> {
+        let openai_response = OpenAIEmbeddingResponse {
+            object: "list".to_string(),
+            data: response
+                .data
+                .into_iter()
+                .map(|d| OpenAIEmbeddingData {
+                    object: "embedding".to_string(),
+                    index: d.index,
+                    embedding: d.embedding,
+                })
+                .collect(),
+            model: response.model,
+            usage: OpenAIUsage {
+                prompt_tokens: response.usage.input_tokens,
+                completion_tokens: 0,
+                total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+                ..Default::default()
+            },
+        };
+
+        Ok(Json(openai_response).into_response())
     }
 }
