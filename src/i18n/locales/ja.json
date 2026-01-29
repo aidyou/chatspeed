@@ -115,7 +115,8 @@
     "copyCode": "コードをコピー",
     "copyMarkdown": "Markdownをコピー",
     "detail": "詳細",
-    "diagram": "フローチャート",
+    "deleteSuccess": "削除に成功しました",
+    "diagram": "図",
     "downloadSvg": "SVGでダウンロード",
     "fullscreen": "全画面",
     "close": "閉じる",
@@ -445,6 +446,7 @@
       "presetModels": "プリセットモデル",
       "provider": "サプライヤー",
       "proxyServerRequired": "プロキシサーバーのアドレスを入力してください",
+      "restrictedHeader": "制限されたヘッダーが含まれています: {headers}",
       "reasoning": "推論モデル",
       "searchByIdOrName": "IDまたは名前で検索",
       "stop": "停止トークン",
@@ -548,6 +550,7 @@
         }
       },
       "stats": {
+        "autoRefresh": "自動更新",
         "backendModel": "バックエンドモデル",
         "cacheTokens": "キャッシュ",
         "clientModel": "モデルエイリアス",
@@ -572,6 +575,7 @@
         "requests": "リクエスト回数",
         "statusCode": "ステータスコード",
         "title": "プロキシ統計情報",
+        "today": "今日",
         "toolCompat": "互換モード",
         "topProvider": "人気モデル",
         "yes": "はい"

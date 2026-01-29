@@ -364,7 +364,7 @@ impl ClaudeNativeRequest {
                 log::warn!("thinking budget_tokens must be at least 1024");
             }
             if thinking.budget_tokens >= self.max_tokens {
-                // 从 claude cli 的 claude-sonnet-4-5 已经支持 thinking.budget_tokens >= self.max_tokens
+                // From claude cli, claude-sonnet-4-5 already supports thinking.budget_tokens >= self.max_tokens
                 if !wildmatch::WildMatch::new("claude-*-4-5-*").matches(&self.model) {
                     thinking.budget_tokens = (self.max_tokens - 1).max(0);
                     log::warn!("thinking budget_tokens must be less than max_tokens");

@@ -58,7 +58,7 @@ export const chatPreProcess = async (inputMessage, historyMessages, skill, metad
       prompt,
       metadata?.sourceLang,
       metadata?.targetLang,
-      inputMessage // 翻译技能不使用引用消息
+      inputMessage // Translation skill does not use quoted messages
     )
     messages.push({ role: 'user', content: processedPrompt })
   } else {
@@ -116,12 +116,12 @@ function reconstructUserMessage(content, metadata) {
     const textAttachments = metadata.attachments.filter(
       a => a.type === 'text' && a.content
     )
-    
+
     if (textAttachments.length > 0) {
       const textContext = textAttachments
         .map(a => `[File: ${a.name}]:\n${a.content}`)
         .join('\n\n')
-      
+
       if (contextContent) contextContent += '\n'
       contextContent += textContext
     }
@@ -399,7 +399,7 @@ export const formatReference = (content, reference) => {
         .replace(/"/g, "'")
         .replace(/\n+/g, '')
         .replace(/([\\*_])/g, '\\$1')
-        .replace(/\|/g,'')
+        .replace(/\|/g, '')
         .trim()
       content = content.replace(
         new RegExp(`\\[\\[${item.id}\\]\\]`, 'g'),
@@ -519,8 +519,6 @@ export const parseMarkdown = (content, reference, toolCalls) => {
       return `<div class="katex katex-block" data-formula="${encodeURIComponent(formula)}"></div>`
     })
 
-    // 在 markdown 文档解析单`$`包裹的共识非常容易识别错误，所以还是不要支持行内公式好。
-    //
     // Parsing single `$` wrapped formulas in markdown documents is very prone to recognition errors, so inline formulas are not supported.
     //
     // Process inline math formulas

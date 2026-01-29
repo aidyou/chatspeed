@@ -115,6 +115,7 @@
     "copyCode": "Copiar código",
     "copyMarkdown": "Copiar Markdown",
     "detail": "Detalle",
+    "deleteSuccess": "Eliminado con éxito",
     "diagram": "Diagrama",
     "downloadSvg": "Descargar SVG",
     "fullscreen": "Pantalla completa",
@@ -445,6 +446,7 @@
       "presetModels": "Modelos preestablecidos",
       "provider": "Proveedor",
       "proxyServerRequired": "Por favor, introduce la dirección del servidor proxy",
+      "restrictedHeader": "Contiene encabezados restringidos: {headers}",
       "reasoning": "Modelo de razonamiento",
       "searchByIdOrName": "Buscar por ID o nombre",
       "stop": "Token de parada",
@@ -548,6 +550,7 @@
         }
       },
       "stats": {
+        "autoRefresh": "Actualización automática",
         "backendModel": "Modelo backend",
         "cacheTokens": "Caché",
         "clientModel": "Alias de modelo",
@@ -571,7 +574,8 @@
         "providers": "Proveedores",
         "requests": "Solicitudes",
         "statusCode": "Código de estado",
-        "title": "Estadísticas del proxy",
+        "title": "Estadísticas de proxy",
+        "today": "Hoy",
         "toolCompat": "Modo de compatibilidad",
         "topProvider": "Modelo popular",
         "yes": "Sí"

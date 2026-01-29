@@ -37,6 +37,7 @@ impl BackendAdapter for OllamaBackendAdapter {
         provider_full_url: &str,
         model: &str,
         log_proxy_to_file: bool,
+        headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
         crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
 
@@ -391,52 +392,22 @@ impl BackendAdapter for OllamaBackendAdapter {
             tools: ollama_tools,
         };
 
-        let mut request_builder = client.post(provider_full_url);
-        request_builder = request_builder.header("Content-Type", "application/json");
-        // Ollama doesn't use API keys, but we keep the pattern consistent
-        // if !api_key.is_empty() {
-        //     request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
-        // }
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
 
-        // Try to serialize the request and log it for debugging
         let mut request_json = serde_json::to_value(&ollama_request)?;
 
         // Merge custom params from model config
         crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
-
-        request_builder = request_builder.json(&request_json);
 
         if log_proxy_to_file {
             // Log the request to a file
             log::info!(target: "ccproxy_logger","Ollama Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     match serde_json::to_string_pretty(&ollama_request) {
-        //         Ok(request_json) => {
-        //             log::debug!("Ollama request: {}", request_json);
-        //         }
-        //         Err(e) => {
-        //             log::error!("Failed to serialize Ollama request: {}", e);
-        //             if let Some(tools) = &ollama_request.tools {
-        //                 for (i, tool) in tools.iter().enumerate() {
-        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
-        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
-        //                         log::error!(
-        //                             "Tool details - name: {}, type: {}",
-        //                             tool.function.name,
-        //                             tool.r#type
-        //                         );
-        //                     }
-        //                 }
-        //             }
-        //             return Err(anyhow::anyhow!("Failed to serialize Ollama request: {}", e));
-        //         }
-        //     }
-        // }
-
-        Ok(request_builder)
+        Ok(client.post(provider_full_url).json(&request_json))
     }
 
     async fn adapt_response(

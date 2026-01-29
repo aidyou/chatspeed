@@ -300,10 +300,10 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 });
                 Ok(vec![Event::default().event("error").data(data.to_string())])
             }
-            // Claude 的工具开始信息包含在 content_block_start 事件中，如：
+            // Claude's tool start information is included in the content_block_start event, for example:
             // event: content_block_start
             // data: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_014hJH82Qum7Td6UV8gDXThB","name":"web_search","input":{}}}
-            // 所以我们不处理 ToolUseStart 和 ToolUseEnd
+            // So we don't process ToolUseStart and ToolUseEnd
 
             // UnifiedStreamChunk::ToolUseStart {
             //     tool_type,

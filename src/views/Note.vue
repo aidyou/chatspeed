@@ -202,7 +202,7 @@ const handleResizeStart = e => {
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
 
-  // 添加全局事件监听
+  // Add global event listeners
   document.addEventListener('mousemove', handleResizeMove)
   document.addEventListener('mouseup', handleResizeEnd)
 }
@@ -213,10 +213,10 @@ const handleResizeMove = e => {
   const deltaX = e.clientX - startX.value
   const newWidth = startWidth.value + deltaX
 
-  // 限制最小和最大宽度
+  // Limit minimum and maximum width
   sidebarWidth.value = Math.max(200, Math.min(500, newWidth))
 
-  // 保存宽度到本地存储
+  // Save width to local storage
   csSetStorage(csStorageKey.noteSidebarWidth, sidebarWidth.value)
 }
 

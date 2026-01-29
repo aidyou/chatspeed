@@ -1,6 +1,4 @@
-use crate::db::backup_crypto::{
-    decrypt_database_streaming, encrypt_database_streaming,
-};
+use crate::db::backup_crypto::{decrypt_database_streaming, encrypt_database_streaming};
 use crate::db::error::StoreError;
 use chrono::Local;
 use log::{error, info};
@@ -105,14 +103,14 @@ impl DbBackup {
     fn backup_single_db(&self, db_path: &Path, db_type: &str) -> Result<PathBuf, StoreError> {
         let backup_path = self.backup_dir.join(format!("{}.db", db_type));
 
-        // 获取备份目录名称（时间格式）
+        // Get backup directory name (time format)
         let backup_dir_name = self
             .backup_dir
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        // 使用流式加密数据库
+        // Use streaming encryption for database
         encrypt_database_streaming(db_path, &backup_path, backup_dir_name)?;
 
         Ok(backup_path)
@@ -133,11 +131,11 @@ impl DbBackup {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        // 使用流式解密数据库
+        // Use streaming decryption for database
         let temp_file = target_path.with_extension("tmp");
         decrypt_database_streaming(backup_path, &temp_file, backup_dir_name)?;
 
-        // 原子性替换原文件
+        // Atomically replace original file
         fs::rename(&temp_file, target_path).map_err(|e| {
             error!("Failed to rename temp database file: {}", e);
             StoreError::IoError(

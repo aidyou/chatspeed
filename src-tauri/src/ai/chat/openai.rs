@@ -56,19 +56,21 @@ impl OpenAIChat {
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<Value>,
         provider_name: String, // Added to correctly attribute errors
-        is_stream: bool, // Added to distinguish between stream and non-stream responses
+        is_stream: bool,       // Added to distinguish between stream and non-stream responses
     ) -> Result<String, AiError> {
         // If not streaming, handle as non-streaming response
         if !is_stream {
-            return self.handle_non_stream_response(
-                chat_id,
-                response,
-                callback,
-                metadata_option,
-                provider_name,
-            ).await;
+            return self
+                .handle_non_stream_response(
+                    chat_id,
+                    response,
+                    callback,
+                    metadata_option,
+                    provider_name,
+                )
+                .await;
         }
-        
+
         // Streaming response handling
         let mut full_response = String::new();
         let mut reasoning_content = String::new();
@@ -80,7 +82,7 @@ impl OpenAIChat {
             .process_stream(response, &StreamFormat::OpenAI)
             .await;
 
-        // 用于累积工具调用信息，键为工具调用的索引 (tool_call.index)
+        // Used to accumulate tool call information, key is the tool call index (tool_call.index)
         let mut accumulated_tool_calls: HashMap<u32, ToolCallDeclaration> = HashMap::new();
         let mut finish_reason = FinishReason::Complete;
 
@@ -601,15 +603,17 @@ impl AiChatTrait for OpenAIChat {
 
         // Determine if stream is enabled.
         // Priority: extra_params > model_metadata > default (true)
-        let stream_enabled = extra_params.as_ref()
+        let stream_enabled = extra_params
+            .as_ref()
             .and_then(|v| v.get("stream"))
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| {
-                params.get("stream")
+                params
+                    .get("stream")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true)
             });
-        
+
         let mut payload = json!({
             "model": model,
             "messages": messages,

@@ -37,6 +37,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         full_provider_url: &str,
         model: &str,
         log_proxy_to_file: bool,
+        headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
         crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
 
@@ -464,53 +465,28 @@ impl BackendAdapter for OpenAIBackendAdapter {
             store: None, // Not supported in unified request yet
         };
 
-        let mut request_builder = client.post(full_provider_url);
-        request_builder = request_builder.header("Content-Type", "application/json");
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         if !api_key.is_empty() {
-            request_builder =
-                request_builder.header("Authorization", format!("Bearer {}", api_key));
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))?,
+            );
         }
 
-        // Try to serialize the request and log it for debugging
         let mut request_json = serde_json::to_value(&openai_request)?;
 
         // Merge custom params from model config
         crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
-
-        request_builder = request_builder.json(&request_json);
 
         if log_proxy_to_file {
             // Log the request to a file
             log::info!(target: "ccproxy_logger","Openai Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     match serde_json::to_string_pretty(&openai_request) {
-        //         Ok(request_json) => {
-        //             log::debug!("OpenAI request: {}", request_json);
-        //         }
-        //         Err(e) => {
-        //             log::error!("Failed to serialize OpenAI request: {}", e);
-        //             // Try to serialize individual parts to identify the issue
-        //             if let Some(tools) = &openai_request.tools {
-        //                 for (i, tool) in tools.iter().enumerate() {
-        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
-        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
-        //                         log::error!(
-        //                             "Tool details - name: {}, type: {}",
-        //                             tool.function.name,
-        //                             tool.r#type
-        //                         );
-        //                     }
-        //                 }
-        //             }
-        //             return Err(anyhow::anyhow!("Failed to serialize OpenAI request: {}", e));
-        //         }
-        //     }
-        // }
-
-        Ok(request_builder)
+        Ok(client.post(full_provider_url).json(&request_json))
     }
 
     async fn adapt_response(

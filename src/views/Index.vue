@@ -4,20 +4,29 @@
       <!-- header -->
       <titlebar :show-menu-button="settingStore.settings.showMenuButton">
         <template #left>
-          <el-tooltip :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)" placement="right"
-            :hide-after="0" :enterable="false">
+          <el-tooltip
+            :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
+            placement="right"
+            :hide-after="0"
+            :enterable="false">
             <div class="icon-btn upperLayer" @click="onToggleSidebar">
               <cs name="sidebar" />
             </div>
           </el-tooltip>
         </template>
         <template #center>
-          <!-- 中间位置空出来给用户放其他内容 -->
+          <!-- Leave the center position empty for user to add other content -->
         </template>
         <template #right>
-          <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: mainWindowIsAlwaysOnTop }">
-            <el-tooltip :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)" :hide-after="0"
-              :enterable="false" placement="bottom">
+          <div
+            class="icon-btn upperLayer pin-btn"
+            @click="onPin"
+            :class="{ active: mainWindowIsAlwaysOnTop }">
+            <el-tooltip
+              :content="$t(`common.${mainWindowIsAlwaysOnTop ? 'unpin' : 'pin'}`)"
+              :hide-after="0"
+              :enterable="false"
+              placement="bottom">
               <cs name="pin" />
             </el-tooltip>
           </div>
@@ -33,10 +42,17 @@
                 <cs name="search" />
               </template>
             </el-input>
-            <el-tooltip :content="$t('chat.showFavoriteConversations')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <cs class="favourite-flag-icon" :name="favoriteFlag ? 'favourite-fill' : 'favourite1'"
-                :active="favoriteFlag" @click.stop="favoriteFlag = !favoriteFlag" />
+            <el-tooltip
+              :content="$t('chat.showFavoriteConversations')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <cs
+                class="favourite-flag-icon"
+                :name="favoriteFlag ? 'favourite-fill' : 'favourite1'"
+                :active="favoriteFlag"
+                @click.stop="favoriteFlag = !favoriteFlag" />
             </el-tooltip>
           </div>
           <div v-show="!sidebarCollapsed" class="conversations">
@@ -44,14 +60,22 @@
               <template v-for="(date, idx) in dateGroupKeys" :key="idx">
                 <template v-if="conversationsForShow[date]?.length > 0">
                   <div class="date">{{ $t(`chat.date.${date}`) }}</div>
-                  <div class="item" v-for="(chat, index) in conversationsForShow[date]"
-                    @click="selectConversation(chat.id)" @mouseenter="hoveredConversionIndex = chat.id"
-                    @mouseleave="hoveredConversionIndex = null" :key="index"
+                  <div
+                    class="item"
+                    v-for="(chat, index) in conversationsForShow[date]"
+                    @click="selectConversation(chat.id)"
+                    @mouseenter="hoveredConversionIndex = chat.id"
+                    @mouseleave="hoveredConversionIndex = null"
+                    :key="index"
                     :class="{ active: chat.id === chatStore.currentConversationId }">
                     {{ chat.title }}
                     <div class="icons" v-show="chat.id === hoveredConversionIndex">
-                      <div class="icon icon-favourite" @click.stop="onFavouriteConversation(chat.id)">
-                        <cs :name="chat.isFavorite ? 'favourite-fill' : 'favourite'" :active="chat.isFavorite" />
+                      <div
+                        class="icon icon-favourite"
+                        @click.stop="onFavouriteConversation(chat.id)">
+                        <cs
+                          :name="chat.isFavorite ? 'favourite-fill' : 'favourite'"
+                          :active="chat.isFavorite" />
                       </div>
                       <div class="icon icon-edit" @click.stop="onEditConversation(chat.id)">
                         <cs name="edit" />
@@ -85,19 +109,28 @@
             </div>
 
             <!-- message list -->
-            <div class="message" v-for="(message, index) in processedMessages" :key="index" :class="[
-              message.role,
-              {
-                'message-group-start': message.display.isFirstInGroup,
-                'message-group-end': message.display.isLastInGroup
-              }
-            ]" :id="'message-' + message.id" @mouseenter="hoveredMessageIndex = index"
+            <div
+              class="message"
+              v-for="(message, index) in processedMessages"
+              :key="index"
+              :class="[
+                message.role,
+                {
+                  'message-group-start': message.display.isFirstInGroup,
+                  'message-group-end': message.display.isLastInGroup
+                }
+              ]"
+              :id="'message-' + message.id"
+              @mouseenter="hoveredMessageIndex = index"
               @mouseleave="hoveredMessageIndex = null">
               <div class="avatar" v-if="message.display.showAvatar">
                 <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
-                <logo v-else :name="message?.metadata?.provider
-                  ? getModelLogo(message.metadata.provider)
-                  : currentModel?.logo
+                <logo
+                  v-else
+                  :name="
+                    message?.metadata?.provider
+                      ? getModelLogo(message.metadata.provider)
+                      : currentModel?.logo
                   " />
                 <span class="provider" v-if="message.metadata?.provider">
                   {{ message.metadata.provider }}
@@ -107,11 +140,18 @@
                 <div class="content" v-if="message.role === 'user'">
                   <!-- Display attachments if present -->
                   <div class="attachments" v-if="message.metadata?.attachments?.length > 0">
-                    <div v-for="(attachment, index) in message.metadata.attachments" :key="index"
+                    <div
+                      v-for="(attachment, index) in message.metadata.attachments"
+                      :key="index"
                       class="attachment-item">
                       <div v-if="attachment.type === 'image'" class="image-attachment">
-                        <el-image :src="attachment.url" :preview-src-list="[attachment.url]" :initial-index="0"
-                          fit="cover" class="attachment-img" preview-teleported />
+                        <el-image
+                          :src="attachment.url"
+                          :preview-src-list="[attachment.url]"
+                          :initial-index="0"
+                          fit="cover"
+                          class="attachment-img"
+                          preview-teleported />
                       </div>
                       <div v-else-if="attachment.type === 'text'" class="text-attachment">
                         <cs name="file" />
@@ -121,27 +161,54 @@
                   </div>
                   <pre class="simple-text">{{ message.content }}</pre>
                 </div>
-                <markdown :content="message.content" :reference="message.metadata?.reference || []"
-                  :reasoning="message.metadata?.reasoning || ''" :toolCalls="message.metadata?.toolCall || []" v-else />
+                <markdown
+                  :content="message.content"
+                  :reference="message.metadata?.reference || []"
+                  :reasoning="message.metadata?.reasoning || ''"
+                  :toolCalls="message.metadata?.toolCall || []"
+                  v-else />
                 <div class="metadata" v-if="message.display.showMetadata">
                   <div class="buttons">
-                    <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" :enterable="false" placement="top"
-                      transition="none" v-if="message.role == 'user'">
+                    <el-tooltip
+                      :content="$t('chat.resendMessage')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top"
+                      transition="none"
+                      v-if="message.role == 'user'">
                       <cs name="resend" @click="onResendMessage(message.id)" class="icon-resend" />
                     </el-tooltip>
-                    <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" :enterable="false" placement="top"
-                      transition="none" v-else>
+                    <el-tooltip
+                      :content="$t('chat.quoteMessage')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top"
+                      transition="none"
+                      v-else>
                       <cs name="quote" @click="onReplyMessage(message.id)" class="icon-quote" />
                     </el-tooltip>
-                    <el-tooltip :content="$t('chat.copyMessage')" :hide-after="0" :enterable="false" placement="top"
+                    <el-tooltip
+                      :content="$t('chat.copyMessage')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top"
                       transition="none">
                       <cs name="copy" @click="onCopyMessage(message.id)" class="icon-copy" />
                     </el-tooltip>
-                    <el-tooltip :content="$t('chat.takeNote')" :hide-after="0" :enterable="false" placement="top"
-                      transition="none" v-if="message.role != 'user'">
+                    <el-tooltip
+                      :content="$t('chat.takeNote')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top"
+                      transition="none"
+                      v-if="message.role != 'user'">
                       <cs name="note" @click="onTakeNote(message)" class="icon-note" />
                     </el-tooltip>
-                    <el-tooltip :content="$t('chat.deleteMessage')" :hide-after="0" :enterable="false" placement="top"
+                    <el-tooltip
+                      :content="$t('chat.deleteMessage')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top"
                       transition="none">
                       <cs name="delete" @click="onDeleteMessage(message.id)" class="icon-delete" />
                     </el-tooltip>
@@ -165,7 +232,8 @@
                           $t('chat.metadata.speed', {
                             speed: Math.round((message?.metadata?.tokensPerSecond * 100) / 100)
                           })
-                        }}</span>
+                        }}</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -173,18 +241,26 @@
             </div>
 
             <!-- chatting message -->
-            <div v-if="isChatting" class="message assistant message-group-start message-group-end"
+            <div
+              v-if="isChatting"
+              class="message assistant message-group-start message-group-end"
               :class="{ loading: isChatting }">
               <div class="avatar">
-                <logo :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
+                <logo
+                  :name="chatState.model ? getModelLogo(chatState.model) : currentModel?.logo" />
                 <span class="provider">
                   {{ currentModel.defaultModel }}
                 </span>
               </div>
               <div class="content-container" :class="{ chatting: isChatting }">
-                <chatting :key="lastChatId" :step="chatState.step" :content="chatState.lastMessageChunk"
-                  :reference="chatState.reference" :reasoning="chatState.lastReasoningChunk"
-                  :toolCalls="chatState.toolCall || []" :is-reasoning="chatState.isReasoning"
+                <chatting
+                  :key="lastChatId"
+                  :step="chatState.step"
+                  :content="chatState.lastMessageChunk"
+                  :reference="chatState.reference"
+                  :reasoning="chatState.lastReasoningChunk"
+                  :toolCalls="chatState.toolCall || []"
+                  :is-reasoning="chatState.isReasoning"
                   :is-chatting="isChatting" />
               </div>
             </div>
@@ -204,7 +280,10 @@
           <!-- footer -->
           <el-footer class="input-container">
             <div class="skill-list-container" v-show="isSkillListVisible">
-              <SkillList ref="skillListRef" @onSelected="onSkillSelected" @visibleChanged="onSkillListVisibleChanged"
+              <SkillList
+                ref="skillListRef"
+                @onSelected="onSkillSelected"
+                @visibleChanged="onSkillListVisibleChanged"
                 :searchKw="skillSearchKeyword" />
             </div>
             <div class="additional" v-if="selectedSkill || replyMessage">
@@ -229,18 +308,33 @@
               <!-- Attachments area -->
               <div class="attachments-area" v-if="attachments.length > 0">
                 <div v-for="attachment in attachments" :key="attachment.id" class="attachment-item">
-                  <img v-if="attachment.type === 'image'" :src="attachment.url" class="attachment-preview" />
+                  <img
+                    v-if="attachment.type === 'image'"
+                    :src="attachment.url"
+                    class="attachment-preview" />
                   <cs v-else name="file" class="attachment-icon" />
                   <span class="attachment-name">{{ attachment.name }}</span>
-                  <cs name="close" class="attachment-remove" @click="removeAttachment(attachment.id)" />
+                  <cs
+                    name="close"
+                    class="attachment-remove"
+                    @click="removeAttachment(attachment.id)" />
                 </div>
               </div>
 
               <!-- message input -->
-              <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
-                :disabled="!canChat" :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
-                @keydown.enter="onKeyEnter" @keydown="onKeyDown" @input="onInput" @compositionstart="onCompositionStart"
-                @compositionend="onCompositionEnd" @paste="onPaste" />
+              <el-input
+                ref="inputRef"
+                v-model="inputMessage"
+                type="textarea"
+                :autosize="{ minRows: 1, maxRows: 10 }"
+                :disabled="!canChat"
+                :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
+                @keydown.enter="onKeyEnter"
+                @keydown="onKeyDown"
+                @input="onInput"
+                @compositionstart="onCompositionStart"
+                @compositionend="onCompositionEnd"
+                @paste="onPaste" />
 
               <!-- chat icons -->
               <div class="input-footer">
@@ -249,56 +343,93 @@
                   <label v-if="modelProviders.length > 0" class="default">
                     <ModelSelector position="bottom" :useProviderAvatar="true" :triggerSize="16" />
                   </label>
-                  <label v-else class="icon-btn dropdown-text upperLayer" @click="onOpenSettingWindow('model')">
+                  <label
+                    v-else
+                    class="icon-btn dropdown-text upperLayer"
+                    @click="onOpenSettingWindow('model')">
                     <cs name="add" class="small" />
                     {{ $t('settings.model.add') }}
                   </label>
 
                   <!-- attachment button -->
-                  <el-tooltip :content="$t('chat.addAttachment')" :hide-after="0" :enterable="false" placement="top">
+                  <el-tooltip
+                    :content="$t('chat.addAttachment')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
                     <label @click="onOpenFileDialog">
                       <cs name="attachment" class="small" />
                     </label>
                   </el-tooltip>
 
-                  <el-tooltip :content="$t('chat.useSkills')" :hide-after="0" :enterable="false" placement="top">
+                  <el-tooltip
+                    :content="$t('chat.useSkills')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
                     <label @click="onToggleSkillSelector" :class="{ active: isSkillListVisible }">
                       <cs class="small" name="tool" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)" :hide-after="0"
-                    :enterable="false" placement="top" v-if="mcpServers.length > 0">
+                  <el-tooltip
+                    :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top"
+                    v-if="mcpServers.length > 0">
                     <label @click="onToggleMcp" :class="{ active: mcpEnabled }">
                       <cs name="mcp" class="small" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
-                    :hide-after="0" :enterable="false" placement="top">
+                  <el-tooltip
+                    :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
                     <label @click="onToggleNetwork" :class="{ active: networkEnabled }">
                       <cs name="connected" class="small" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
-                    :hide-after="0" :enterable="false" placement="top">
+                  <el-tooltip
+                    :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
                     <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
                       <cs name="clear-context" class="small" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t('chat.sensitiveFiltering')" :hide-after="0" :enterable="false"
+                  <el-tooltip
+                    :content="$t('chat.sensitiveFiltering')"
+                    :hide-after="0"
+                    :enterable="false"
                     placement="top">
-                    <label @click="onToggleSensitiveFiltering" :class="{ active: sensitiveStore.config.enabled }">
+                    <label
+                      @click="onToggleSensitiveFiltering"
+                      :class="{ active: sensitiveStore.config.enabled }">
                       <cs name="filter" class="small" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t('chat.newConversaction')" :hide-after="0" :enterable="false" placement="top">
+                  <el-tooltip
+                    :content="$t('chat.newConversaction')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
                     <label @click="newChat" :class="{ disabled: !canCreateNewConversation }">
-                      <cs name="new-chat" class="small" :class="{ disabled: !canCreateNewConversation }" />
+                      <cs
+                        name="new-chat"
+                        class="small"
+                        :class="{ disabled: !canCreateNewConversation }" />
                     </label>
                   </el-tooltip>
                 </div>
                 <div class="icons">
                   <cs name="stop" @click="onStopChat" v-if="isChatting" />
-                  <cs v-else name="send" @click="dispatchChatCompletion(null)" :class="{ disabled: !canSendMessage }" />
+                  <cs
+                    v-else
+                    name="send"
+                    @click="dispatchChatCompletion(null)"
+                    :class="{ disabled: !canSendMessage }" />
                 </div>
               </div>
             </div>
@@ -308,8 +439,11 @@
     </el-container>
 
     <!-- eidt conversation -->
-    <el-dialog v-model="editConversationDialogVisible" :title="$t('chat.editConversationTitle')"
-      :close-on-press-escape="false" width="50%">
+    <el-dialog
+      v-model="editConversationDialogVisible"
+      :title="$t('chat.editConversationTitle')"
+      :close-on-press-escape="false"
+      width="50%">
       <el-form>
         <el-form-item :label="$t('chat.conversationTitle')">
           <el-input v-model="editConversationTitle" />
@@ -326,14 +460,34 @@
     </el-dialog>
 
     <!-- add note dialog -->
-    <el-dialog v-model="takeNoteDialogVisible" :title="$t('chat.takeNote')" :close-on-press-escape="false"
-      :close-on-click-modal="false" width="50%" class="take-note-dialog">
-      <el-form ref="takeNoteFormRef" :model="takeNoteForm" :rules="takeNoteRules" label-width="80px">
+    <el-dialog
+      v-model="takeNoteDialogVisible"
+      :title="$t('chat.takeNote')"
+      :close-on-press-escape="false"
+      :close-on-click-modal="false"
+      width="50%"
+      class="take-note-dialog">
+      <el-form
+        ref="takeNoteFormRef"
+        :model="takeNoteForm"
+        :rules="takeNoteRules"
+        label-width="80px">
         <el-form-item :label="$t('chat.noteTags')" prop="tags">
-          <el-select ref="tagsInputRef" v-model="takeNoteForm.tags" filterable allow-create multiple
-            default-first-option :placeholder="$t('chat.noteTagsPlaceholder')" :no-data-text="$t('common.noData')"
+          <el-select
+            ref="tagsInputRef"
+            v-model="takeNoteForm.tags"
+            filterable
+            allow-create
+            multiple
+            default-first-option
+            :placeholder="$t('chat.noteTagsPlaceholder')"
+            :no-data-text="$t('common.noData')"
             class="w-full">
-            <el-option v-for="tag in noteStore.tags" :key="tag.id" :label="tag.name" :value="tag.name" />
+            <el-option
+              v-for="tag in noteStore.tags"
+              :key="tag.id"
+              :label="tag.name"
+              :value="tag.name" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('chat.noteTitle')" prop="title">
@@ -350,7 +504,11 @@
 
     <!-- File selection dialog -->
     <el-dialog v-model="fileDialogVisible" :title="$t('chat.selectFile')" width="500px">
-      <el-upload drag :auto-upload="false" :on-change="onFileSelect" :show-file-list="false"
+      <el-upload
+        drag
+        :auto-upload="false"
+        :on-change="onFileSelect"
+        :show-file-list="false"
         accept="image/*,.txt,.md,.json,.xml,.csv,.log,.php,.go,.rs,.js,.py,.ts,.css,.html,.htm,.pdf,.docx,.xlsx,.xls">
         <div class="upload-area">
           <cs name="upload" size="48px" />
@@ -571,13 +729,16 @@ const toolsEnabled = computed(() => {
 const mcpServers = computed(() => mcpStore.servers)
 
 // listen AI response, update scroll
-watch([() => chatState.value.message, () => chatState.value.reasoning, () => chatState.value.step], () => {
-  nextTick(() => {
-    if (!userHasScrolled.value || isScrolledToBottom.value) {
-      scrollToBottomIfNeeded()
-    }
-  })
-})
+watch(
+  [() => chatState.value.message, () => chatState.value.reasoning, () => chatState.value.step],
+  () => {
+    nextTick(() => {
+      if (!userHasScrolled.value || isScrolledToBottom.value) {
+        scrollToBottomIfNeeded()
+      }
+    })
+  }
+)
 
 watch(
   () => chatStore.messages?.length,
@@ -591,7 +752,7 @@ watch(
       return
     }
 
-    // 只在消息数量变化时才重置
+    // Only reset when message count changes
     if (newLength !== messagesForShow.value.length) {
       const startIndex = Math.max(0, newLength - pageSize)
       messagesForShow.value = chatStore.messages.slice(startIndex, newLength)
@@ -663,7 +824,7 @@ const dateGroupKeys = [
 const favoriteFlag = ref(false)
 
 /**
- * 创建新的日期分组对象
+ * Create a new date grouping object
  * @returns {Object}
  */
 const createDateGroups = () => {
@@ -939,9 +1100,7 @@ const analyzeImagesWithVisionModel = async (imageAttachments, textAttachments, u
   // Build vision analysis request - analyze all images together
   const visionMessage = {
     role: 'user',
-    content: [
-      { type: 'text', text: 'Please describe all the images in detail.' }
-    ]
+    content: [{ type: 'text', text: 'Please describe all the images in detail.' }]
   }
 
   // Add all images to the same message
@@ -951,9 +1110,7 @@ const analyzeImagesWithVisionModel = async (imageAttachments, textAttachments, u
 
   // Add text attachments content to the vision prompt
   if (textAttachments.length > 0) {
-    const textContent = textAttachments
-      .map(a => `[File: ${a.name}]:\n${a.content}`)
-      .join('\n\n')
+    const textContent = textAttachments.map(a => `[File: ${a.name}]:\n${a.content}`).join('\n\n')
     visionMessage.content.push({ type: 'text', text: textContent })
   }
 
@@ -973,7 +1130,7 @@ const analyzeImagesWithVisionModel = async (imageAttachments, textAttachments, u
     let unlistenFn = null
 
     try {
-      unlistenFn = await listen('chat_message', (event) => {
+      unlistenFn = await listen('chat_message', event => {
         const payload = event.payload
 
         console.log('Checking chatId:', payload.chatId, 'vs', visionChatId, 'type:', payload.type)
@@ -1063,7 +1220,7 @@ const dispatchChatCompletion = async (messageId = null) => {
     await chatStore.getCurrentConversationId()
   }
 
-  // 1. 备份数据，用于失败时回滚
+  // 1. Backup data for rollback on failure
   const backupMessage = inputMessage.value
   const backupAttachments = [...attachments.value]
   const rawUserMessage = inputMessage.value.trim()
@@ -1071,7 +1228,7 @@ const dispatchChatCompletion = async (messageId = null) => {
   let processedAttachmentMetadata = null
   let visionAnalysisResult = ''
 
-  // 2. 立即清空 UI 状态，让进度条显示出来
+  // 2. Clear UI state immediately to show progress bar
   inputMessage.value = ''
   attachments.value = []
   chatState.value = getDefaultChatState()
@@ -1083,7 +1240,7 @@ const dispatchChatCompletion = async (messageId = null) => {
     scrollToBottom()
   })
 
-  // 处理附件
+  // Process attachments
   if (backupAttachments.length > 0) {
     chatState.value.step = t('chat.preparingAttachments')
 
@@ -1141,7 +1298,7 @@ const dispatchChatCompletion = async (messageId = null) => {
           let finished = false
           let unlistenFn = null
 
-          listen('chat_stream', (event) => {
+          listen('chat_stream', event => {
             const payload = event.payload
             if (payload.chatId === visionChatId) {
               if (payload.type === 'text' && payload.chunk) {
@@ -1154,7 +1311,7 @@ const dispatchChatCompletion = async (messageId = null) => {
                 reject(new Error(payload.chunk || 'Vision analysis failed'))
               }
             }
-          }).then(fn => unlistenFn = fn)
+          }).then(fn => (unlistenFn = fn))
 
           setTimeout(() => {
             if (!finished) {
@@ -1179,10 +1336,12 @@ const dispatchChatCompletion = async (messageId = null) => {
         visionAnalysisResult = await visionPromise
       } catch (error) {
         console.error('Error analyzing images:', error)
-        // 失败回滚：把备份的数据放回去
+        // Rollback on failure: restore backed up data
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
-        chatErrorMessage.value = t('chat.errorOnAddAttachment', { error: error.message || 'Vision failed' })
+        chatErrorMessage.value = t('chat.errorOnAddAttachment', {
+          error: error.message || 'Vision failed'
+        })
         isChatting.value = false
         return
       }
@@ -1211,7 +1370,9 @@ const dispatchChatCompletion = async (messageId = null) => {
       } else if (originalMsg.metadata?.attachments?.length > 0) {
         // Fallback: reconstruct context from text attachments if vision_analysis is missing
         // This handles cases where only text files were attached or old data format
-        const textAttachments = originalMsg.metadata.attachments.filter(a => a.type === 'text' && a.content)
+        const textAttachments = originalMsg.metadata.attachments.filter(
+          a => a.type === 'text' && a.content
+        )
         if (textAttachments.length > 0) {
           visionAnalysisResult = textAttachments
             .map(a => `[File: ${a.name}]:\n${a.content}`)
@@ -1257,12 +1418,19 @@ const dispatchChatCompletion = async (messageId = null) => {
     )
   }
 
-  const messages = await chatPreProcess(finalMessageToSend, historyMessages, selectedSkill.value, {})
+  const messages = await chatPreProcess(
+    finalMessageToSend,
+    historyMessages,
+    selectedSkill.value,
+    {}
+  )
 
   // Detailed logging
   console.log('--- Outgoing Messages ---')
   messages.forEach((msg, i) => {
-    console.log(`[${i}] ${msg.role} (${msg.content.length} chars): ${msg.content.substring(0, 100)}...`)
+    console.log(
+      `[${i}] ${msg.role} (${msg.content.length} chars): ${msg.content.substring(0, 100)}...`
+    )
   })
   console.log('Total character length:', JSON.stringify(messages).length)
   console.log('-------------------------')
@@ -1279,13 +1447,7 @@ const dispatchChatCompletion = async (messageId = null) => {
   }
 
   chatStore
-    .addChatMessage(
-      chatStore.currentConversationId,
-      'user',
-      dbUserMessage,
-      metadata,
-      messageId
-    )
+    .addChatMessage(chatStore.currentConversationId, 'user', dbUserMessage, metadata, messageId)
     .then(async () => {
       lastChatId.value = lastId
       nextTick(scrollToBottom)
@@ -1818,7 +1980,7 @@ const onDeleteConversation = id => {
     chatStore
       .deleteConversation(id)
       .then(() => {
-        // 用户删除了当前的会话，则跳转到下一个会话，如果当前没有会话，则新建一个会话
+        // If user deleted the current conversation, navigate to the next one. If no conversations exist, create a new one
         if (oldCurrentConversationId == id) {
           if (chatStore.currentConversationId > 0) {
             messageReady.value = false
@@ -2180,7 +2342,7 @@ const handleImageFile = async file => {
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = (e) => {
+      reader.onload = e => {
         addAttachment({
           type: 'image',
           name: rawFile.name,
@@ -2189,7 +2351,7 @@ const handleImageFile = async file => {
         })
         resolve()
       }
-      reader.onerror = (error) => {
+      reader.onerror = error => {
         console.error('FileReader error:', error)
         showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read image' }), 'error')
         reject(error)
@@ -2212,7 +2374,7 @@ const handleTextFile = async file => {
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = (e) => {
+      reader.onload = e => {
         addAttachment({
           type: 'text',
           name: rawFile.name,
@@ -2221,7 +2383,7 @@ const handleTextFile = async file => {
         })
         resolve()
       }
-      reader.onerror = (error) => {
+      reader.onerror = error => {
         console.error('FileReader error:', error)
         showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read text file' }), 'error')
         reject(error)
@@ -2230,7 +2392,10 @@ const handleTextFile = async file => {
     })
   } catch (error) {
     console.error('Error handling text file:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }), 'error')
+    showMessage(
+      t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }),
+      'error'
+    )
   }
 }
 
@@ -2249,9 +2414,36 @@ const onFileSelect = async file => {
   // Element Plus wraps the file, so we need to get the raw file
   const rawFile = file.raw || file
 
-  const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp']
+  const imageTypes = [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/svg+xml',
+    'image/bmp'
+  ]
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']
-  const textExtensions = ['.txt', '.md', '.json', '.xml', '.csv', '.log', '.php', '.go', '.rs', '.js', '.py', '.ts', '.css', '.html', '.htm', '.pdf', '.docx', '.xlsx', '.xls']
+  const textExtensions = [
+    '.txt',
+    '.md',
+    '.json',
+    '.xml',
+    '.csv',
+    '.log',
+    '.php',
+    '.go',
+    '.rs',
+    '.js',
+    '.py',
+    '.ts',
+    '.css',
+    '.html',
+    '.htm',
+    '.pdf',
+    '.docx',
+    '.xlsx',
+    '.xls'
+  ]
 
   const fileName = rawFile.name.toLowerCase()
 
@@ -2264,7 +2456,7 @@ const onFileSelect = async file => {
   } else if (textExtensions.some(ext => fileName.endsWith(ext))) {
     try {
       const content = await parseFileContent(rawFile)
-      if (content || content === "") {
+      if (content || content === '') {
         addAttachment({
           type: 'text',
           name: rawFile.name,
@@ -2274,7 +2466,10 @@ const onFileSelect = async file => {
       }
     } catch (error) {
       console.error('Error parsing file:', error)
-      showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }), 'error')
+      showMessage(
+        t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }),
+        'error'
+      )
     }
   } else {
     showMessage(t('chat.unsupportedFileType'), 'error')
@@ -2678,7 +2873,6 @@ const onTakeNote = message => {
         }
 
         .content-container {
-
           .content,
           .markdown-container {
             border-radius: var(--cs-border-radius-md);
@@ -2687,7 +2881,6 @@ const onTakeNote = message => {
 
         &:not(.message-group-start) {
           .content-container {
-
             .content,
             .markdown-container {
               border-top-left-radius: 0;
@@ -2699,7 +2892,6 @@ const onTakeNote = message => {
 
         &:not(.message-group-end) {
           .content-container {
-
             .content,
             .markdown-container {
               border-bottom-left-radius: 0;

@@ -4,44 +4,82 @@
       <div class="input-container">
         <!-- Attachments area -->
         <div class="attachments-area" v-if="attachments.length > 0">
-          <div v-for="attachment in attachments" :key="attachment.id" class="attachment-item upperLayer">
-            <img v-if="attachment.type === 'image'" :src="attachment.url" class="attachment-preview" />
+          <div
+            v-for="attachment in attachments"
+            :key="attachment.id"
+            class="attachment-item upperLayer">
+            <img
+              v-if="attachment.type === 'image'"
+              :src="attachment.url"
+              class="attachment-preview" />
             <cs v-else name="file" class="attachment-icon" />
             <span class="attachment-name">{{ attachment.name }}</span>
             <cs name="close" class="attachment-remove" @click="removeAttachment(attachment.id)" />
           </div>
         </div>
 
-        <el-input class="input upperLayer" ref="inputRef" v-model="inputMessage" type="textarea" :disabled="!canChat"
-          :autosize="{ minRows: 3, maxRows: 5 }" :placeholder="$t('assistant.chatPlaceholder')" @input="onInput"
-          @keydown.enter="onKeyEnter" @compositionstart="onCompositionStart" @compositionend="onCompositionEnd"
+        <el-input
+          class="input upperLayer"
+          ref="inputRef"
+          v-model="inputMessage"
+          type="textarea"
+          :disabled="!canChat"
+          :autosize="{ minRows: 3, maxRows: 5 }"
+          :placeholder="$t('assistant.chatPlaceholder')"
+          @input="onInput"
+          @keydown.enter="onKeyEnter"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @paste="onPaste" />
 
         <div class="icons upperLayer" v-if="canChat">
           <!-- model selector -->
-          <ModelSelector v-model="currentModelProvider" position="top" :useProviderAvatar="true" :triggerSize="14"
-            @model-select="onModelSelect" @sub-model-select="onSubModelSelect"
+          <ModelSelector
+            v-model="currentModelProvider"
+            position="top"
+            :useProviderAvatar="true"
+            :triggerSize="14"
+            @model-select="onModelSelect"
+            @sub-model-select="onSubModelSelect"
             @selection-complete="onSelectionComplete" />
 
           <!-- attachment button -->
-          <el-tooltip :content="$t('chat.addAttachment')" :hide-after="0" :enterable="false" placement="right">
+          <el-tooltip
+            :content="$t('chat.addAttachment')"
+            :hide-after="0"
+            :enterable="false"
+            placement="right">
             <cs name="attachment" @click="onOpenFileDialog" />
           </el-tooltip>
 
           <!-- sensitive filtering switch -->
-          <el-tooltip :content="$t('chat.sensitiveFiltering')" :hide-after="0" :enterable="false" placement="right">
-            <cs name="filter" @click="onToggleSensitiveFiltering" :class="{ active: sensitiveStore.config.enabled }" />
+          <el-tooltip
+            :content="$t('chat.sensitiveFiltering')"
+            :hide-after="0"
+            :enterable="false"
+            placement="right">
+            <cs
+              name="filter"
+              @click="onToggleSensitiveFiltering"
+              :class="{ active: sensitiveStore.config.enabled }" />
           </el-tooltip>
 
           <!-- netowrk switch -->
-          <el-tooltip :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)" :hide-after="0"
-            :enterable="false" placement="right">
+          <el-tooltip
+            :content="$t(`chat.${!networkEnabled ? 'networkEnabled' : 'networkDisabled'}`)"
+            :hide-after="0"
+            :enterable="false"
+            placement="right">
             <cs name="connected" @click="onToggleNetwork" :class="{ active: networkEnabled }" />
           </el-tooltip>
 
           <!-- MCP switch -->
-          <el-tooltip :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)" :hide-after="0"
-            :enterable="false" placement="right" v-if="mcpServers.length > 0">
+          <el-tooltip
+            :content="$t(`chat.${!mcpEnabled ? 'mcpEnabled' : 'mcpDisabled'}`)"
+            :hide-after="0"
+            :enterable="false"
+            placement="right"
+            v-if="mcpServers.length > 0">
             <cs name="mcp" @click="onToggleMcp" :class="{ active: mcpEnabled }" />
           </el-tooltip>
         </div>
@@ -60,7 +98,10 @@
               <el-dropdown-item @click="fromLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" @click="fromLang = lang.code">
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                @click="fromLang = lang.code">
                 <span>{{ lang.icon }} {{ lang.name }}</span>
                 <cs name="check" class="active" v-if="lang.code === fromLang" />
               </el-dropdown-item>
@@ -78,7 +119,10 @@
               <el-dropdown-item @click="toLang = ''">{{
                 $t('chat.transaction.autoDetection')
               }}</el-dropdown-item>
-              <el-dropdown-item v-for="lang in availableLanguages" :key="lang.code" :checked="toLang === lang.code"
+              <el-dropdown-item
+                v-for="lang in availableLanguages"
+                :key="lang.code"
+                :checked="toLang === lang.code"
                 @click="toLang = lang.code">
                 <span>{{ lang.icon }} {{ lang.name }}</span>
                 <cs name="check" class="active" v-if="lang.code === toLang" />
@@ -98,7 +142,10 @@
 
       <!-- pin button -->
       <div class="pin-btn upperLayer" @click="onPin" :class="{ active: isAlwaysOnTop }">
-        <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)" :hide-after="0" :enterable="false"
+        <el-tooltip
+          :content="$t(`common.${isAlwaysOnTop ? 'autoHide' : 'pin'}`)"
+          :hide-after="0"
+          :enterable="false"
           placement="bottom">
           <cs name="pin" />
         </el-tooltip>
@@ -137,10 +184,19 @@
     <main class="main" v-else :class="{ 'split-view': chatState.message || isChatting }">
       <!-- Left Sidebar: Compact Skill List (only in split-view) -->
       <div class="skill-list-sidebar" v-if="chatState.message || isChatting">
-        <el-tooltip v-for="(skill, index) in skills" :key="skill.id"
-          :content="skill.name + ': ' + skill.metadata.description" placement="top" :hide-after="0" :enterable="false"
-          :disabled="!skill.metadata.description" transition="none">
-          <div class="skill-item-compact" :class="{ active: skillIndex === index }" @click="onSelectSkill(index)">
+        <el-tooltip
+          v-for="(skill, index) in skills"
+          :key="skill.id"
+          :content="skill.name + ': ' + skill.metadata.description"
+          placement="top"
+          :hide-after="0"
+          :enterable="false"
+          :disabled="!skill.metadata.description"
+          transition="none">
+          <div
+            class="skill-item-compact"
+            :class="{ active: skillIndex === index }"
+            @click="onSelectSkill(index)">
             <div class="icon">
               <cs :name="skill.icon" />
             </div>
@@ -154,16 +210,26 @@
         <div class="chat" v-if="chatState.message || isChatting">
           <div class="message">
             <div class="content-container">
-              <chatting ref="chatMessagesRef" :key="lastChatId" :step="chatState.step"
-                :content="chatState.lastMessageChunk" :reference="chatState.reference"
-                :reasoning="chatState.lastReasoningChunk" :toolCalls="chatState.toolCall || []"
-                :is-reasoning="chatState.isReasoning" :is-chatting="isChatting" />
+              <chatting
+                ref="chatMessagesRef"
+                :key="lastChatId"
+                :step="chatState.step"
+                :content="chatState.lastMessageChunk"
+                :reference="chatState.reference"
+                :reasoning="chatState.lastReasoningChunk"
+                :toolCalls="chatState.toolCall || []"
+                :is-reasoning="chatState.isReasoning"
+                :is-chatting="isChatting" />
             </div>
           </div>
         </div>
         <div class="skill-list" v-else>
-          <div class="skill-item" v-for="(skill, index) in skills" :key="skill.id"
-            :class="{ active: skillIndex === index }" @click="onSkillItemClick(index)">
+          <div
+            class="skill-item"
+            v-for="(skill, index) in skills"
+            :key="skill.id"
+            :class="{ active: skillIndex === index }"
+            @click="onSkillItemClick(index)">
             <SkillItem :skill="skill" class="skill-item-content" :active="skillIndex === index" />
             <div class="icon">
               <cs name="enter" v-if="skillIndex === index" />
@@ -175,16 +241,30 @@
     <footer class="footer" v-if="!isChatting && chatState.message">
       <div class="metadata">
         <div class="buttons">
-          <el-tooltip :content="$t('chat.quoteMessage')" :hide-after="0" :enterable="false" placement="top"
+          <el-tooltip
+            :content="$t('chat.quoteMessage')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
             transition="none">
             <cs name="quote" @click="onReplyMessage()" class="icon-quote" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.resendMessage')" :hide-after="0" :enterable="false" placement="top"
-            transition="none" v-if="userMessage">
+          <el-tooltip
+            :content="$t('chat.resendMessage')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
+            transition="none"
+            v-if="userMessage">
             <cs name="resend" @click="onReAsk()" class="icon-resend" />
           </el-tooltip>
-          <el-tooltip :content="$t('chat.goToChat')" :hide-after="0" :enterable="false" placement="top"
-            transition="none" v-if="userMessage">
+          <el-tooltip
+            :content="$t('chat.goToChat')"
+            :hide-after="0"
+            :enterable="false"
+            placement="top"
+            transition="none"
+            v-if="userMessage">
             <cs name="skill-chat-square" @click="onGoToChat()" class="icon-chat" />
           </el-tooltip>
           <cs name="copy" @click="onCopyMessage()" class="icon-copy" />
@@ -196,30 +276,26 @@
   <!-- File selection dialog -->
 
   <el-dialog v-model="fileDialogVisible" :title="$t('chat.selectFile')" width="500px">
-
-    <el-upload drag :auto-upload="false" :on-change="onFileSelect" :show-file-list="false"
+    <el-upload
+      drag
+      :auto-upload="false"
+      :on-change="onFileSelect"
+      :show-file-list="false"
       accept="image/*,.txt,.md,.json,.xml,.csv,.log,.php,.go,.rs,.js,.py,.ts,.css,.html,.htm,.pdf,.docx,.xlsx,.xls">
-
       <div class="upload-area">
-
         <cs name="upload" size="48px" />
 
         <div class="upload-text">{{ $t('chat.dragOrClickToSelectFile') }}</div>
 
         <div class="upload-hint">
-
           {{ $t('chat.supportedImageFormats') }}<br />
 
           {{ $t('chat.supportedOfficeFormats') }}<br />
 
           {{ $t('chat.supportedTextFormats') }}
-
         </div>
-
       </div>
-
     </el-upload>
-
   </el-dialog>
 </template>
 
@@ -229,10 +305,13 @@ import { useI18n } from 'vue-i18n'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import SkillItem from '@/components/chat/SkillItem.vue'
 import ChatToolCalls from '@/components/chat/ToolCall.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
+
+const appWindow = getCurrentWebviewWindow()
 
 import {
   buildUserMessage,
@@ -326,6 +405,8 @@ const displayToLang = computed(() => {
 let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 let unlistenSyncState = ref(null)
+let unlistenFocusInput = ref(null)
+let unlistenFocus = ref(null)
 
 // Do not remove this, it's useful when user does not set default model at assistant dialog
 const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
@@ -434,11 +515,14 @@ watch(
 /**
  * Scroll to bottom when assistant message changes
  */
-watch([() => chatState.value.message, () => chatState.value.reasoning, () => chatState.value.step], () => {
-  nextTick(() => {
-    scrollToBottomIfNeeded()
-  })
-})
+watch(
+  [() => chatState.value.message, () => chatState.value.reasoning, () => chatState.value.step],
+  () => {
+    nextTick(() => {
+      scrollToBottomIfNeeded()
+    })
+  }
+)
 
 watch(
   () => currentModelProvider.value,
@@ -458,11 +542,22 @@ watch(
 // lifecycle
 // =================================================
 // Window visibility state
-// const focusListener = ref(null)
 
 onMounted(async () => {
   inputRef.value?.focus()
   await sensitiveStore.fetchConfig()
+
+  unlistenFocus.value = await appWindow.onFocusChanged(({ payload: focused }) => {
+    if (!focused && !windowStore.assistantAlwaysOnTop) {
+      appWindow.hide()
+    }
+  })
+
+  unlistenFocusInput.value = await listen('cs://assistant-focus-input', event => {
+    if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
+      inputRef.value?.focus()
+    }
+  })
 
   // set default model from local storage
   const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
@@ -543,9 +638,13 @@ onUnmounted(() => {
     unlistenSyncState.value()
   }
 
-  // if (focusListener.value) {
-  //   focusListener.value()
-  // }
+  if (unlistenFocusInput.value) {
+    unlistenFocusInput.value()
+  }
+
+  if (unlistenFocus.value) {
+    unlistenFocus.value()
+  }
 
   if (chatMessagesRef.value?.contentRef) {
     chatMessagesRef.value.contentRef.removeEventListener('scroll', onScroll)
@@ -573,7 +672,7 @@ const dispatchChatCompletion = async () => {
     return
   }
 
-  // 1. 备份数据
+  // 1. Backup data
   const backupMessage = inputMessage.value
   const backupAttachments = [...attachments.value]
   const rawUserMessage = inputMessage.value.trim()
@@ -581,7 +680,7 @@ const dispatchChatCompletion = async () => {
   let processedAttachmentMetadata = null
   let visionAnalysisResult = ''
 
-  // 2. 立即初始化状态并清空输入
+  // 2. Initialize state immediately and clear input
   inputMessage.value = ''
   attachments.value = []
   chatErrorMessage.value = ''
@@ -651,7 +750,7 @@ const dispatchChatCompletion = async () => {
           let finished = false
           let unlistenFn = null
 
-          listen('chat_stream', (event) => {
+          listen('chat_stream', event => {
             const payload = event.payload
             if (payload.chatId === visionChatId) {
               if (payload.type === 'text' && payload.chunk) {
@@ -664,7 +763,7 @@ const dispatchChatCompletion = async () => {
                 reject(new Error(payload.chunk || 'Vision failed'))
               }
             }
-          }).then(fn => unlistenFn = fn)
+          }).then(fn => (unlistenFn = fn))
 
           setTimeout(() => {
             if (!finished) {
@@ -689,7 +788,7 @@ const dispatchChatCompletion = async () => {
         visionAnalysisResult = await visionPromise
       } catch (error) {
         console.error('Error analyzing images:', error)
-        // 回退
+        // Rollback
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
         chatErrorMessage.value = t('chat.errorOnAddAttachment', { error: error.message })
@@ -817,7 +916,7 @@ const isScrolledToBottom = ref(true)
 const scrollToBottomIfNeeded = () => {
   if (!chatMessagesRef.value?.contentRef) return
 
-  // 确保内容已经渲染
+  // Ensure content is rendered
   nextTick(() => {
     if (!userHasScrolled.value || isScrolledToBottom.value) {
       const el = chatMessagesRef.value.contentRef
@@ -867,8 +966,8 @@ const onPin = async () => {
  * @param {Object} model model config
  */
 const onModelSelect = model => {
-  // ModelSelector组件会通过v-model自动更新currentModelProvider
-  // 这里只需要处理localStorage存储
+  // ModelSelector component will automatically update currentModelProvider via v-model
+  // Only need to handle localStorage storage here
   csSetStorage(csStorageKey.defaultModelIdAtDialog, model.id)
 }
 
@@ -878,8 +977,8 @@ const onModelSelect = model => {
  * @param {String} modelId sub model id
  */
 const onSubModelSelect = (model, modelId) => {
-  // ModelSelector组件会通过v-model自动更新currentModelProvider
-  // 这里只需要处理localStorage存储
+  // ModelSelector component will automatically update currentModelProvider via v-model
+  // Only need to handle localStorage storage here
   csSetStorage(csStorageKey.defaultModelAtDialog, modelId)
 }
 
@@ -1091,7 +1190,7 @@ const handleImageFile = async file => {
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = (e) => {
+      reader.onload = e => {
         addAttachment({
           type: 'image',
           name: rawFile.name,
@@ -1100,7 +1199,7 @@ const handleImageFile = async file => {
         })
         resolve()
       }
-      reader.onerror = (error) => {
+      reader.onerror = error => {
         console.error('FileReader error:', error)
         showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read image' }), 'error')
         reject(error)
@@ -1123,7 +1222,7 @@ const handleTextFile = async file => {
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = (e) => {
+      reader.onload = e => {
         addAttachment({
           type: 'text',
           name: rawFile.name,
@@ -1132,7 +1231,7 @@ const handleTextFile = async file => {
         })
         resolve()
       }
-      reader.onerror = (error) => {
+      reader.onerror = error => {
         console.error('FileReader error:', error)
         showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read text file' }), 'error')
         reject(error)
@@ -1141,7 +1240,10 @@ const handleTextFile = async file => {
     })
   } catch (error) {
     console.error('Error handling text file:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }), 'error')
+    showMessage(
+      t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }),
+      'error'
+    )
   }
 }
 
@@ -1191,7 +1293,7 @@ const restorePinState = async () => {
 }
 
 // Watch for dialog close (e.g. by clicking overlay) to restore pin state
-watch(fileDialogVisible, (val) => {
+watch(fileDialogVisible, val => {
   if (!val) {
     restorePinState()
   }
@@ -1205,9 +1307,36 @@ const onFileSelect = async file => {
   // Element Plus wraps the file, so we need to get the raw file
   const rawFile = file.raw || file
 
-  const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp']
+  const imageTypes = [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/svg+xml',
+    'image/bmp'
+  ]
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']
-  const textExtensions = ['.txt', '.md', '.json', '.xml', '.csv', '.log', '.php', '.go', '.rs', '.js', '.py', '.ts', '.css', '.html', '.htm', '.pdf', '.docx', '.xlsx', '.xls']
+  const textExtensions = [
+    '.txt',
+    '.md',
+    '.json',
+    '.xml',
+    '.csv',
+    '.log',
+    '.php',
+    '.go',
+    '.rs',
+    '.js',
+    '.py',
+    '.ts',
+    '.css',
+    '.html',
+    '.htm',
+    '.pdf',
+    '.docx',
+    '.xlsx',
+    '.xls'
+  ]
 
   const fileName = rawFile.name.toLowerCase()
 
@@ -1220,7 +1349,7 @@ const onFileSelect = async file => {
   } else if (textExtensions.some(ext => fileName.endsWith(ext))) {
     try {
       const content = await parseFileContent(rawFile)
-      if (content || content === "") {
+      if (content || content === '') {
         addAttachment({
           type: 'text',
           name: rawFile.name,
@@ -1230,7 +1359,10 @@ const onFileSelect = async file => {
       }
     } catch (error) {
       console.error('Error parsing file:', error)
-      showMessage(t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }), 'error')
+      showMessage(
+        t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }),
+        'error'
+      )
     }
   } else {
     showMessage(t('chat.unsupportedFileType'), 'error')
@@ -1400,7 +1532,7 @@ const onAddModel = async () => {
         }
       }
 
-      .input>.el-textarea__inner {
+      .input > .el-textarea__inner {
         box-shadow: none !important;
         border: none !important;
         border-radius: var(--cs-border-radius-sm);

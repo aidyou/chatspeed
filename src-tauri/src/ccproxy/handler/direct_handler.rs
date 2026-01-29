@@ -1,13 +1,13 @@
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::helper::get_tool_id;
+use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
-    helper::{get_provider_chat_full_url, should_forward_header, ModelResolver},
+    helper::{get_provider_chat_full_url, ModelResolver},
     types::ProxyModel,
     ChatProtocol,
 };
 use crate::db::{CcproxyStat, MainStore};
-use crate::ccproxy::utils::token_estimator::estimate_tokens;
 
 use axum::body::Body;
 use axum::response::Response;
@@ -16,7 +16,6 @@ use http::HeaderMap;
 use reqwest::header::{HeaderName as ReqwestHeaderName, HeaderValue as ReqwestHeaderValue};
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub async fn handle_direct_forward(
@@ -47,86 +46,15 @@ pub async fn handle_direct_forward(
 
     let mut reqwest_headers = reqwest::header::HeaderMap::new();
 
-    // 1. Add custom headers from model metadata (Default values)
-    let custom_headers =
-        crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
-    for (k, v) in custom_headers {
-        let final_key = if k.to_lowercase().starts_with("cs-") {
-            &k[3..]
-        } else {
-            &k
-        };
-        if let (Ok(n), Ok(h)) = (
-            ReqwestHeaderName::from_str(final_key),
-            ReqwestHeaderValue::from_str(&v),
-        ) {
-            reqwest_headers.insert(n, h);
-        }
-    }
+    // Inject all proxy headers (Metadata + Protocol Defaults + Client Overrides)
+    ModelResolver::inject_proxy_headers(
+        &mut reqwest_headers,
+        &client_headers,
+        &proxy_model,
+        &message_id,
+    );
 
-    // 2. Forward relevant headers from client (Override values)
-    for (name, value) in client_headers.iter() {
-        let name_str = name.as_str().to_lowercase();
-        if should_forward_header(&name_str) {
-            let final_name = if name_str.starts_with("cs-") {
-                &name_str[3..]
-            } else {
-                &name_str
-            };
-
-            match ReqwestHeaderValue::from_bytes(value.as_bytes()) {
-                Ok(h) => {
-                    if let Ok(n) = ReqwestHeaderName::from_str(final_name) {
-                        reqwest_headers.insert(n, h);
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-    }
-
-    // Add protocol-specific headers
-    match proxy_model.chat_protocol {
-        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
-            if !proxy_model.api_key.is_empty() {
-                match ReqwestHeaderValue::from_str(&format!("Bearer {}", proxy_model.api_key)) {
-                    Ok(h) => {
-                        reqwest_headers.insert(reqwest::header::AUTHORIZATION, h);
-                    }
-                    Err(_) => {}
-                }
-            }
-        }
-        ChatProtocol::Claude => {
-            match ReqwestHeaderValue::from_str(&proxy_model.api_key) {
-                Ok(h) => {
-                    reqwest_headers.insert(ReqwestHeaderName::from_static("x-api-key"), h);
-                }
-                Err(_) => {}
-            }
-
-            reqwest_headers.insert(
-                ReqwestHeaderName::from_static("anthropic-version"),
-                ReqwestHeaderValue::from_static("2023-06-01"),
-            );
-            if let Some(beta_header) = client_headers.get("anthropic-beta") {
-                match ReqwestHeaderValue::from_bytes(beta_header.as_bytes()) {
-                    Ok(h) => {
-                        reqwest_headers.insert(ReqwestHeaderName::from_static("anthropic-beta"), h);
-                    }
-                    Err(_) => {}
-                }
-            }
-        }
-        ChatProtocol::Gemini => {
-            // API key is in the URL for Gemini
-        }
-        ChatProtocol::Ollama => {
-            // No auth for Ollama
-        }
-    }
-
-    // Set Content-Type and Accept headers
+    // Set mandatory content headers
     reqwest_headers.insert(
         reqwest::header::CONTENT_TYPE,
         ReqwestHeaderValue::from_static("application/json"),
@@ -143,71 +71,84 @@ pub async fn handle_direct_forward(
         );
     }
 
-            // Modify the request body to replace the model alias
-
-            let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
-
-                CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
-
-            })?;
-
-            
-
-            // Capture the original model alias before any transformations
-
-            let proxy_alias_for_stat = body_json.get("model")
-
-                .and_then(|v| v.as_str())
-
-                .unwrap_or("")
-
-                .to_string();
-
-        
-
-            // Estimate input tokens from request body
-
-        
-        let input_text_for_est = body_json.to_string();
-        let estimated_input_tokens = crate::ccproxy::utils::token_estimator::estimate_tokens(&input_text_for_est);
-    
-        body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
-    
-        if let Some(model_field) = body_json.get_mut("model") {
-            *model_field = Value::String(proxy_model.model.clone());
+    // Capture beta headers if present (Protocol specific override)
+    if proxy_model.chat_protocol == ChatProtocol::Claude {
+        if let Some(beta_header) = client_headers.get("anthropic-beta") {
+            if let Ok(h) = ReqwestHeaderValue::from_bytes(beta_header.as_bytes()) {
+                reqwest_headers.insert(ReqwestHeaderName::from_static("anthropic-beta"), h);
+            }
         }
-    
-        let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
-            CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
+    }
+
+    // Modify the request body to replace the model alias
+    let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
+        CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
+    })?;
+
+    // Estimate input tokens from text content in the request body
+    let mut text_for_estimation = String::new();
+    if let Some(messages) = body_json.get("messages").and_then(|m| m.as_array()) {
+        for msg in messages {
+            if let Some(content) = msg.get("content") {
+                if let Some(text) = content.as_str() {
+                    text_for_estimation.push_str(text);
+                } else if let Some(parts) = content.as_array() {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                            text_for_estimation.push_str(text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(system) = body_json.get("system").and_then(|s| s.as_str()) {
+        text_for_estimation.push_str(system);
+    }
+
+    let estimated_input_tokens =
+        crate::ccproxy::utils::token_estimator::estimate_tokens(&text_for_estimation);
+
+    // Merge proxy parameters into the body (Client > Model Config)
+    ModelResolver::merge_parameters_json(&mut body_json, &proxy_model);
+
+    body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
+
+    if let Some(model_field) = body_json.get_mut("model") {
+        *model_field = Value::String(proxy_model.model.clone());
+    }
+
+    let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
+        CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
+    })?;
+
+    let onward_request_builder = http_client
+        .post(&full_url)
+        .headers(reqwest_headers)
+        .body(modified_body);
+
+    // Send request
+    let target_response = onward_request_builder
+        .send()
+        .await
+        .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
+
+    // Handle response
+    let status_code = target_response.status();
+    let response_headers = target_response.headers().clone();
+
+    if !status_code.is_success() {
+        let error_body_bytes = target_response.bytes().await.map_err(|e| {
+            CCProxyError::InternalError(
+                t!("network.response_read_error", error = e.to_string()).to_string(),
+            )
         })?;
-    
-        let onward_request_builder = http_client
-            .post(&full_url)
-            .headers(reqwest_headers)
-            .body(modified_body);
-    
-        // Send request
-        let target_response = onward_request_builder
-            .send()
-            .await
-            .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)))?;
-    
-        // Handle response
-        let status_code = target_response.status();
-        let response_headers = target_response.headers().clone();
-    
-        if !status_code.is_success() {
-            let error_body_bytes = target_response.bytes().await.map_err(|e| {
-                CCProxyError::InternalError(
-                    t!("network.response_read_error", error = e.to_string()).to_string(),
-                )
+        let mut response = Response::builder()
+            .status(status_code)
+            .body(Body::from(error_body_bytes.clone()))
+            .map_err(|e| {
+                CCProxyError::InternalError(format!("Failed to build error response: {}", e))
             })?;
-            let mut response = Response::builder()
-                .status(status_code)
-                            .body(Body::from(error_body_bytes.clone()))
-                            .map_err(|e| {
-                                CCProxyError::InternalError(format!("Failed to build error response: {}", e))
-                            })?;
         for (name, value) in response_headers.iter() {
             if let Ok(axum_name) = http::header::HeaderName::from_bytes(name.as_ref()) {
                 if let Ok(axum_value) = http::header::HeaderValue::from_bytes(value.as_ref()) {
@@ -215,13 +156,13 @@ pub async fn handle_direct_forward(
                 }
             }
         }
-        
+
         // Record error for non-streaming direct forward
         if let Ok(store) = main_store_arc.read() {
             let error_msg = String::from_utf8_lossy(&error_body_bytes).to_string();
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,
-                client_model: proxy_alias_for_stat.clone(),
+                client_model: proxy_model.client_alias.clone(),
                 backend_model: model_name.clone(),
                 provider: provider_name.clone(),
                 protocol: chat_protocol_for_stat.to_string(),
@@ -234,62 +175,62 @@ pub async fn handle_direct_forward(
                 request_at: None,
             });
         }
-        
+
         return Ok(response);
     }
-    
-        let mut response_builder = Response::builder().status(status_code);
-    
-        for (name, value) in response_headers.iter() {
-            response_builder = response_builder.header(name.as_str(), value.as_bytes());
-        }
-    
-        if is_streaming_request {
-            let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
-                format!("cid_{}", uuid::Uuid::new_v4().simple()),
-                proxy_model.model.clone(),
-            )));
-            let chat_protocol = proxy_model.chat_protocol.clone();
-                    let log_recorder_clone = log_recorder.clone();
-                    let main_store_for_stream = main_store_arc.clone();
-                    let provider_for_stream = provider_name.clone();
-                    let client_model_for_stream = proxy_alias_for_stat.clone();
-                    let backend_model_for_stream = model_name.clone();
-                    let sse_status = Arc::new(RwLock::new(SseStatus::new(
-                        "".to_string(),
-                        "".to_string(),
-                        false,
-                        estimated_input_tokens,
-                    )));
-            
-                    let stream = target_response.bytes_stream().map(move |chunk| {
-                        let sse_status = sse_status.clone();
-                        let log_recorder = log_recorder_clone.clone();
-                        let chat_protocol = chat_protocol.clone();
-                        let main_store = main_store_for_stream.clone();
-                        let provider = provider_for_stream.clone();
-                        let client_model = client_model_for_stream.clone();
-                        let backend_model = backend_model_for_stream.clone();
-                        
-                        chunk.map(move |bytes| {
-                            // Always parse for statistics, but only log to file if enabled
-                            chunk_parser_and_log(
-                                &bytes,
-                                log_recorder.clone(),
-                                &chat_protocol,
-                                sse_status.clone(),
-                                log_to_file,
-                                main_store,
-                                provider,
-                                client_model,
-                                backend_model,
-                            );
-            
-                            bytes
-                        })
-                    });
-            
-            let body = Body::from_stream(stream);
+
+    let mut response_builder = Response::builder().status(status_code);
+
+    for (name, value) in response_headers.iter() {
+        response_builder = response_builder.header(name.as_str(), value.as_bytes());
+    }
+
+    if is_streaming_request {
+        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
+            format!("cid_{}", uuid::Uuid::new_v4().simple()),
+            proxy_model.model.clone(),
+        )));
+        let chat_protocol = proxy_model.chat_protocol.clone();
+        let log_recorder_clone = log_recorder.clone();
+        let main_store_for_stream = main_store_arc.clone();
+        let provider_for_stream = provider_name.clone();
+        let client_model_for_stream = proxy_model.client_alias.clone();
+        let backend_model_for_stream = model_name.clone();
+        let sse_status = Arc::new(RwLock::new(SseStatus::new(
+            "".to_string(),
+            "".to_string(),
+            false,
+            estimated_input_tokens,
+        )));
+
+        let stream = target_response.bytes_stream().map(move |chunk| {
+            let sse_status = sse_status.clone();
+            let log_recorder = log_recorder_clone.clone();
+            let chat_protocol = chat_protocol.clone();
+            let main_store = main_store_for_stream.clone();
+            let provider = provider_for_stream.clone();
+            let client_model = client_model_for_stream.clone();
+            let backend_model = backend_model_for_stream.clone();
+
+            chunk.map(move |bytes| {
+                // Always parse for statistics, but only log to file if enabled
+                chunk_parser_and_log(
+                    &bytes,
+                    log_recorder.clone(),
+                    &chat_protocol,
+                    sse_status.clone(),
+                    log_to_file,
+                    main_store,
+                    provider,
+                    client_model,
+                    backend_model,
+                );
+
+                bytes
+            })
+        });
+
+        let body = Body::from_stream(stream);
         if let Ok(rsp) = response_builder.body(body) {
             Ok(rsp)
         } else {
@@ -312,11 +253,12 @@ pub async fn handle_direct_forward(
             if let Ok(store) = main_store_arc.read() {
                 // For direct forward, we try a simple extraction of tokens from the JSON body
                 let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
-                let (input, output, cache) = extract_usage_from_value(&body_json, &chat_protocol_for_stat);
-                
+                let (input, output, cache) =
+                    extract_usage_from_value(&body_json, &chat_protocol_for_stat);
+
                 let _ = store.record_ccproxy_stat(CcproxyStat {
                     id: None,
-                    client_model: proxy_alias_for_stat.clone(),
+                    client_model: proxy_model.client_alias.clone(),
                     backend_model: model_name.clone(),
                     provider: provider_name.clone(),
                     protocol: chat_protocol_for_stat.to_string(),
@@ -370,17 +312,7 @@ fn enhance_direct_request_body(
     proxy_model: &ProxyModel,
     chat_protocol: &ChatProtocol,
 ) -> Value {
-    if proxy_model.temperature != 1.0 {
-        if let Some(temperature) = body.get("temperature").and_then(|t| t.as_f64()) {
-            if let Some(body_map) = body.as_object_mut() {
-                body_map.insert(
-                    "temperature".to_string(),
-                    json!((proxy_model.temperature as f64) * temperature),
-                );
-            }
-        }
-    }
-
+    // 1. Tool filtering
     if !proxy_model.tool_filter.is_empty() {
         if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
             tools.retain(|tool| {
@@ -411,6 +343,7 @@ fn enhance_direct_request_body(
         .and_then(|t| t.as_array())
         .map_or(false, |t| !t.is_empty());
 
+    // 3. Prompt injection (System instruction behavior)
     if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
         if let Some(body_map) = body.as_object_mut() {
             match chat_protocol {
@@ -499,7 +432,7 @@ fn enhance_direct_request_body(
         }
     }
 
-    // Merge custom params from model config using global helper
+    // 4. Final step: Merge model-specific custom body params (Highest override for non-standard fields)
     crate::ai::util::merge_custom_params(&mut body, &proxy_model.custom_params);
 
     body
@@ -706,7 +639,8 @@ fn chunk_parser_and_log(
                                                 if let Some(text) = delta.text {
                                                     if !text.is_empty() {
                                                         if let Ok(mut status) = sse_status.write() {
-                                                            status.estimated_output_tokens += estimate_tokens(&text);
+                                                            status.estimated_output_tokens +=
+                                                                estimate_tokens(&text);
                                                         }
                                                         if log_to_file {
                                                             recorder.content.push_str(&text);
@@ -944,19 +878,33 @@ fn chunk_parser_and_log(
                     serde_json::to_string_pretty(&*recorder).unwrap_or_default()
                 );
             }
-            (recorder.input_tokens.unwrap_or(0), recorder.output_tokens.unwrap_or(0))
+            (
+                recorder.input_tokens.unwrap_or(0),
+                recorder.output_tokens.unwrap_or(0),
+            )
         };
 
         // Record statistics to DB on finish
         if let Ok(store) = main_store_arc.read() {
             let (est_input, est_output) = if let Ok(status) = sse_status.read() {
-                (status.estimated_input_tokens, status.estimated_output_tokens)
+                (
+                    status.estimated_input_tokens,
+                    status.estimated_output_tokens,
+                )
             } else {
                 (0.0, 0.0)
             };
 
-            let final_input = if input > 0 { input } else { est_input.ceil() as u64 };
-            let final_output = if output > 0 { output } else { est_output.ceil() as u64 };
+            let final_input = if input > 0 {
+                input
+            } else {
+                est_input.ceil() as u64
+            };
+            let final_output = if output > 0 {
+                output
+            } else {
+                est_output.ceil() as u64
+            };
 
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,

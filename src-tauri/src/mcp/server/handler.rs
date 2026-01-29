@@ -276,7 +276,7 @@ impl ServerHandler for McpProxyHandler {
                 });
             }
         };
-        drop(tool_map_guard); // 显式释放锁
+        drop(tool_map_guard); // Explicitly release lock
 
         let arguments = request.arguments.unwrap_or_default();
 

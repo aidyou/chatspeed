@@ -115,6 +115,7 @@
     "copyCode": "Copy Code",
     "copyMarkdown": "Copy Markdown",
     "detail": "Detail",
+    "deleteSuccess": "Deleted successfully",
     "diagram": "Diagram",
     "downloadSvg": "Download SVG",
     "fullscreen": "Fullscreen",
@@ -445,6 +446,7 @@
       "presetModels": "Preset Models",
       "provider": "Provider",
       "proxyServerRequired": "Please enter the proxy server address",
+      "restrictedHeader": "Contains restricted headers: {headers}",
       "reasoning": "Reasoning Model",
       "searchByIdOrName": "Search by ID or name",
       "stop": "Stop Token",
@@ -548,6 +550,7 @@
         }
       },
       "stats": {
+        "autoRefresh": "Auto Refresh",
         "backendModel": "Backend Model",
         "cacheTokens": "Cache Tokens",
         "clientModel": "Model Alias",
@@ -572,6 +575,7 @@
         "requests": "Requests",
         "statusCode": "Status Code",
         "title": "Proxy Statistics",
+        "today": "Today",
         "toolCompat": "Compat Mode",
         "topProvider": "Top Provider",
         "yes": "Yes"

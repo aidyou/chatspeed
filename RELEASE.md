@@ -2,6 +2,36 @@
 
 # Release Notes
 
+## [1.1.26] - Upcoming
+
+### 🚀 New Features
+
+- **Refined Proxy Statistics**: Added "Today" (natural day) dimension to stats, complementing the "Last 24 Hours" view for a more intuitive perspective on daily usage.
+- **Custom Header Defense System**:
+  - **Full-Chain Filtering**: Built-in blacklist for restricted headers (e.g., `Host`, `Connection`, `Content-Length`) in `should_forward_header` to prevent proxy protocol conflicts.
+  - **Source Validation**: Added real-time validation in the AI Engine settings UI. Users are now alerted with localized error messages when trying to save restricted headers, avoiding confusion over failed forwardings.
+  - **Prefix-Aware Protection**: The interceptor intelligently strips the `cs-` prefix before performing safety checks, ensuring no restricted headers bypass the filter.
+
+### 🪄 Improvements
+
+- **Proxy Statistics Dashboard Optimization**:
+  - **Real-time Auto-Refresh**: The dashboard now supports automatic data updates every 10 seconds. Auto-refreshes do not trigger full-screen loading or clear current views, ensuring a smooth and continuous observation experience.
+  - **Parallel Data Fetching**: Optimized the statistics dashboard by switching from serial to parallel requests (`Promise.all`), significantly reducing load times.
+- **Header Forwarding Architecture Overhaul**:
+  - **Optimized Override Priority**: Refactored the header building pipeline to strictly follow: `Metadata Defaults -> Adapter Required Headers -> Forced Headers -> Client cs- Overrides`.
+  - **Deduplication Logic**: Completely resolved issues with duplicate headers during custom forwarding. Client `cs-` headers now correctly replace system defaults in "override mode".
+- **Token Estimation Calibration**: Fixed a major estimation bug in direct forward mode. The system now counts tokens only for **plain text content**, excluding massive counts caused by binary data like Base64 images.
+- **Performance & Stability Enhancements**:
+  - **Streaming Robustness**: Restored and optimized buffer flush logic for the Claude protocol, ensuring complete output delivery even during unexpected stream interruptions.
+
+### 🐞 Bug Fixes
+
+- **Assistant Window UX Fix**: Resolved an issue where the Assistant window failed to auto-hide on blur and lacked reliable input focus upon being shown. Optimized focus handling specifically for macOS to ensure a smoother transition.
+- **Codebase Cleanup**: Eliminated multiple redundant header forwarding loops in `chat_handler.rs`, streamlining the backend execution path.
+- **i18n Synchronization**: Completed translations for "Today" statistics and "Restricted Header" warnings across all supported language packs.
+
+---
+
 ## [1.1.25] - 2026-01-28
 
 ### 🚀 New Features

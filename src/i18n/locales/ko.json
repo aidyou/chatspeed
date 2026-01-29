@@ -115,6 +115,7 @@
     "copyCode": "코드 복사",
     "copyMarkdown": "Markdown 복사",
     "detail": "세부정보",
+    "deleteSuccess": "성공적으로 삭제되었습니다",
     "diagram": "플로우차트",
     "downloadSvg": "SVG로 다운로드",
     "fullscreen": "전체 화면",
@@ -445,6 +446,7 @@
       "presetModels": "프리셋 모델",
       "provider": "공급업체",
       "proxyServerRequired": "프록시 서버 주소를 입력하십시오.",
+      "restrictedHeader": "제한된 헤더가 포함되어 있습니다: {headers}",
       "reasoning": "추론 모델",
       "searchByIdOrName": "ID 또는 이름으로 검색",
       "stop": "중지 토큰",
@@ -548,6 +550,7 @@
         }
       },
       "stats": {
+        "autoRefresh": "자동 새로고침",
         "backendModel": "백엔드 모델",
         "cacheTokens": "캐시",
         "clientModel": "모델 별칭",
@@ -572,6 +575,7 @@
         "requests": "요청 횟수",
         "statusCode": "상태 코드",
         "title": "프록시 통계 정보",
+        "today": "오늘",
         "toolCompat": "호환 모드",
         "topProvider": "인기 모델",
         "yes": "예"

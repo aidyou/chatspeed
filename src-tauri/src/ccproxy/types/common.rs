@@ -64,6 +64,7 @@ impl fmt::Debug for StreamFormat {
 }
 
 pub struct ProxyModel {
+    pub client_alias: String,
     pub provider: String,
     pub chat_protocol: ChatProtocol,
     pub base_url: String,
@@ -76,14 +77,15 @@ pub struct ProxyModel {
     pub prompt_text: String,
     pub tool_filter: HashMap<String, i8>,
     pub prompt_replace: Vec<(String, String)>,
-    // ratio of the temperature
-    pub temperature: f32,
-    // Base parameters from AiModel
-    pub max_tokens: i32,
-    pub presence_penalty: f32,
-    pub frequency_penalty: f32,
-    pub top_p: f32,
-    pub top_k: i32,
+    // ratio of the temperature (from proxy group)
+    pub temp_ratio: f32,
+    // Base parameters from AiModel (Option represents 'not set' in config)
+    pub max_tokens: Option<i32>,
+    pub temperature: Option<f32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<i32>,
     pub stop: Vec<String>,
     // Tool compatibility mode from metadata: "auto", "compat", "native"
     pub tool_compat_mode: Option<String>,

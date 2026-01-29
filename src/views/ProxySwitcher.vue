@@ -1,5 +1,10 @@
 <template>
-  <div class="proxy-switcher-window" @mousedown.stop tabindex="0" @keydown="handleKeyDown" ref="windowRef">
+  <div
+    class="proxy-switcher-window"
+    @mousedown.stop
+    tabindex="0"
+    @keydown="handleKeyDown"
+    ref="windowRef">
     <div class="header">
       <span class="title">{{ $t('proxySwitcher.title') }}</span>
       <div class="header-actions upperLayer">
@@ -10,14 +15,25 @@
     </div>
 
     <div class="proxy-list" v-if="proxyGroupStore.list.length > 0" ref="listRef">
-      <div v-for="(group, index) in sortedProxyGroupList" :key="group.id" class="proxy-item" :class="{
-        active: proxyGroupStore.activeGroup === group.name,
-        focused: selectedIndex === index
-      }" @click="handleActivateGroup(group.name)" @mouseenter="selectedIndex = index">
+      <div
+        v-for="(group, index) in sortedProxyGroupList"
+        :key="group.id"
+        class="proxy-item"
+        :class="{
+          active: proxyGroupStore.activeGroup === group.name,
+          focused: selectedIndex === index
+        }"
+        @click="handleActivateGroup(group.name)"
+        @mouseenter="selectedIndex = index">
         <div class="group-info">
           <div class="name-row">
             <span class="name">{{ group.name }}</span>
-            <el-tag v-if="proxyGroupStore.activeGroup === group.name" type="success" size="small" effect="plain" round
+            <el-tag
+              v-if="proxyGroupStore.activeGroup === group.name"
+              type="success"
+              size="small"
+              effect="plain"
+              round
               class="active-tag">
               {{ $t('settings.proxyGroup.activeGroup') }}
             </el-tag>
@@ -28,16 +44,24 @@
         <div class="actions" @click.stop>
           <el-tooltip placement="top" :hide-after="0">
             <template #content>
-              {{ $t('settings.proxyGroup.toolCompatMode') }}: {{
-                $t(`settings.proxyGroup.toolCompatModes.${group.metadata?.toolCompatMode || 'auto'}`) }}
+              {{ $t('settings.proxyGroup.toolCompatMode') }}:
+              {{
+                $t(
+                  `settings.proxyGroup.toolCompatModes.${group.metadata?.toolCompatMode || 'auto'}`
+                )
+              }}
             </template>
             <span class="icon-btn action-btn" @click="handleToggleToolCompatMode(group)">
-              <cs :name="getToolCompatModeIcon(group.metadata?.toolCompatMode || 'auto')" size="14px"
+              <cs
+                :name="getToolCompatModeIcon(group.metadata?.toolCompatMode || 'auto')"
+                size="14px"
                 :active="(group.metadata?.toolCompatMode || 'auto') !== 'auto'" />
             </span>
           </el-tooltip>
 
-          <span class="icon-btn action-btn activate-btn" v-if="proxyGroupStore.activeGroup !== group.name"
+          <span
+            class="icon-btn action-btn activate-btn"
+            v-if="proxyGroupStore.activeGroup !== group.name"
             @click="handleActivateGroup(group.name)">
             <cs name="check-circle" size="16px" color="secondary" />
           </span>
@@ -89,7 +113,7 @@ const handleHide = async () => {
   }
 }
 
-const handleActivateGroup = async (name) => {
+const handleActivateGroup = async name => {
   if (proxyGroupStore.activeGroup === name) return
   try {
     await proxyGroupStore.setActiveGroup(name)
@@ -99,7 +123,7 @@ const handleActivateGroup = async (name) => {
   }
 }
 
-const handleKeyDown = (e) => {
+const handleKeyDown = e => {
   if (sortedProxyGroupList.value.length === 0) return
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -107,7 +131,9 @@ const handleKeyDown = (e) => {
     ensureVisible()
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
-    selectedIndex.value = (selectedIndex.value - 1 + sortedProxyGroupList.value.length) % sortedProxyGroupList.value.length
+    selectedIndex.value =
+      (selectedIndex.value - 1 + sortedProxyGroupList.value.length) %
+      sortedProxyGroupList.value.length
     ensureVisible()
   } else if (e.key === 'Enter') {
     e.preventDefault()
@@ -128,15 +154,18 @@ const ensureVisible = () => {
   })
 }
 
-const getToolCompatModeIcon = (mode) => {
+const getToolCompatModeIcon = mode => {
   switch (mode) {
-    case 'compat': return 'xml'
-    case 'native': return 'hammer'
-    default: return 'setting'
+    case 'compat':
+      return 'xml'
+    case 'native':
+      return 'hammer'
+    default:
+      return 'setting'
   }
 }
 
-const handleToggleToolCompatMode = async (group) => {
+const handleToggleToolCompatMode = async group => {
   const currentMode = group.metadata?.toolCompatMode || 'auto'
   const modeMap = { auto: 'compat', compat: 'native', native: 'auto' }
   const newMode = modeMap[currentMode]
@@ -147,7 +176,12 @@ const handleToggleToolCompatMode = async (group) => {
     }
     await proxyGroupStore.update(updatedGroup)
     sendSyncState('proxy_group_updated', 'proxy_switcher', { group: updatedGroup })
-    showMessage(t('settings.proxyGroup.toolCompatModeChanged', { mode: t(`settings.proxyGroup.toolCompatModes.${newMode}`) }), 'success')
+    showMessage(
+      t('settings.proxyGroup.toolCompatModeChanged', {
+        mode: t(`settings.proxyGroup.toolCompatModes.${newMode}`)
+      }),
+      'success'
+    )
   } catch (error) {
     showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
   }
@@ -159,9 +193,11 @@ onUnmounted(() => {
 
 onMounted(async () => {
   await proxyGroupStore.getList()
-  const activeIdx = sortedProxyGroupList.value.findIndex(g => g.name === proxyGroupStore.activeGroup)
+  const activeIdx = sortedProxyGroupList.value.findIndex(
+    g => g.name === proxyGroupStore.activeGroup
+  )
   if (activeIdx !== -1) selectedIndex.value = activeIdx
-  
+
   nextTick(() => {
     windowRef.value?.focus()
   })

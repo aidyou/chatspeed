@@ -218,6 +218,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
         full_provider_url: &str,
         model: &str,
         log_proxy_to_file: bool,
+        headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
         crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
 
@@ -500,12 +501,24 @@ impl BackendAdapter for ClaudeBackendAdapter {
             }),
         };
 
-        let mut request_builder = client.post(full_provider_url);
-        request_builder = request_builder.header("Content-Type", "application/json");
-        request_builder = request_builder.header("x-api-key", api_key);
-        request_builder = request_builder.header("anthropic-version", "2023-06-01");
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-api-key"),
+            reqwest::header::HeaderValue::from_str(api_key)?,
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("anthropic-version"),
+            reqwest::header::HeaderValue::from_static("2023-06-01"),
+        );
+
         if unified_request.tools.is_some() || unified_request.tool_choice.is_some() {
-            request_builder = request_builder.header("anthropic-beta", "tools-2024-04-04");
+            headers.insert(
+                reqwest::header::HeaderName::from_static("anthropic-beta"),
+                reqwest::header::HeaderValue::from_static("tools-2024-04-04"),
+            );
         }
 
         let mut request_json = serde_json::to_value(&claude_request)?;
@@ -513,40 +526,12 @@ impl BackendAdapter for ClaudeBackendAdapter {
         // Merge custom params from model config
         crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
 
-        request_builder = request_builder.json(&request_json);
-
         if log_proxy_to_file {
             // Log the request to a file
             log::info!(target: "ccproxy_logger","Claude Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     match serde_json::to_string_pretty(&claude_request) {
-        //         Ok(request_json) => {
-        //             log::debug!("Claude request: {}", request_json);
-        //         }
-        //         Err(e) => {
-        //             log::error!("Failed to serialize Claude request: {}", e);
-        //             // Try to serialize individual parts to identify the issue
-        //             if let Some(tools) = &claude_request.tools {
-        //                 for (i, tool) in tools.iter().enumerate() {
-        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
-        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
-        //                         log::error!(
-        //                             "Tool details - name: {}, params: {}",
-        //                             tool.name,
-        //                             tool.input_schema
-        //                         );
-        //                     }
-        //                 }
-        //             }
-        //             return Err(anyhow::anyhow!("Failed to serialize Claude request: {}", e));
-        //         }
-        //     }
-        // }
-
-        Ok(request_builder)
+        Ok(client.post(full_provider_url).json(&request_json))
     }
 
     async fn adapt_response(

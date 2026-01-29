@@ -41,8 +41,8 @@ use crate::error::AppError;
 
 // use commands::toolbar::*;
 use ai::interaction::chat_completion::ChatState;
-use commands::chat::*;
 use commands::ccproxy::*;
+use commands::chat::*;
 use commands::clipboard::*;
 use commands::dev_tool::*;
 use commands::env::*;
@@ -175,10 +175,12 @@ pub async fn run() -> crate::error::Result<()> {
             sync_state,
             detect_language,
             // ccproxy stats
+            delete_ccproxy_stats,
             get_ccproxy_daily_stats,
             get_ccproxy_provider_stats_by_date,
             get_ccproxy_error_stats_by_date,
             get_ccproxy_model_usage_stats,
+            get_ccproxy_model_token_usage_stats,
             get_ccproxy_error_distribution_stats,
             // mcp
             list_mcp_servers,
@@ -758,13 +760,13 @@ fn save_window_position<F, G>(
 
 // fn setup_text_monitor(state: State<Arc<Mutex<TextMonitorManager>>>) -> Result<(), String> {
 //     let monitor = state.get_mut();
-//     // 在新的异步任务中处理接收到的事件
+//     // Process received events in a new async task
 //     tauri::async_runtime::spawn(async move {
 //         while let Ok(event) = rx.recv().await {
-//             // 处理选中的文本
+//             // Process selected text
 //             println!("Selected text: {}", event.text);
 
-//             // 发送事件到前端
+//             // Send event to frontend
 //             if let Err(e) = app_handle.emit("text-selected", &event) {
 //                 eprintln!("Failed to emit text event: {}", e);
 //             }

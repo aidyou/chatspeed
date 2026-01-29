@@ -494,7 +494,7 @@ const onFileSelectorChange = file => {
   }
 }
 
-// 预设技能相关
+// Preset skills related
 const presetSkillsVisible = ref(false)
 const presetSkills = ref([])
 
@@ -569,7 +569,7 @@ const importSkill = skill => {
     })
 }
 
-// 添加 tab 激活状态控制
+// Add tab activation state control
 const activeTab = ref('basic')
 </script>
 

@@ -243,7 +243,7 @@
             <el-input-number
               v-model="modelForm.maxTokens"
               :min="64"
-              :max="128000"
+              :max="1000000"
               :step="1024"
               :step-strictly="false"
               controls-position="right"
@@ -277,9 +277,9 @@
                 v-model="modelForm.topP"
                 :min="0"
                 :max="1"
-                :step="0.1"
+                :step="0.05"
                 show-input
-                :format-tooltip="value => value.toFixed(1)"
+                :format-tooltip="value => value.toFixed(2)"
                 :show-tooltip="false"
                 input-size="small" />
             </el-tooltip>
@@ -312,7 +312,7 @@
                 v-model="modelForm.frequencyPenalty"
                 :min="-2"
                 :max="2"
-                :step="1"
+                :step="0.1"
                 show-input
                 :show-tooltip="false"
                 input-size="small" />
@@ -329,7 +329,7 @@
                 v-model="modelForm.presencePenalty"
                 :min="-2"
                 :max="2"
-                :step="1"
+                :step="0.1"
                 show-input
                 :show-tooltip="false"
                 input-size="small" />
@@ -375,7 +375,12 @@
               </el-button>
             </div>
 
-            <el-button type="primary" plain size="small" @click="addCustomHeader" style="width: 100%">
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              @click="addCustomHeader"
+              style="width: 100%">
               <cs name="add" /> {{ $t('settings.model.addHeader') }}
             </el-button>
           </div>
@@ -779,7 +784,6 @@ const defaultFormData = {
   topK: 40,
   presencePenalty: 0.0,
   frequencyPenalty: 0.0,
-  responseFormat: 'text',
   stop: '',
   proxyType: 'bySetting',
   proxyServer: '',
@@ -927,6 +931,38 @@ const updateModel = () => {
       showMessage(t('settings.model.modelsRequired'), 'error')
       return
     }
+
+    // Validate restricted headers
+    const restrictedHeaders = [
+      'host',
+      'connection',
+      'content-length',
+      'transfer-encoding',
+      'keep-alive',
+      'proxy-authenticate',
+      'proxy-authorization',
+      'te',
+      'trailer',
+      'upgrade',
+      'expect'
+    ]
+
+    const foundRestricted = modelForm.value.customHeaders
+      .map(h => h.key.trim().toLowerCase())
+      .filter(k => k !== '')
+      .filter(k => {
+        const baseKey = k.startsWith('cs-') ? k.substring(3) : k
+        return restrictedHeaders.includes(baseKey)
+      })
+
+    if (foundRestricted.length > 0) {
+      showMessage(
+        t('settings.model.restrictedHeader', { headers: foundRestricted.join(', ') }),
+        'error'
+      )
+      return
+    }
+
     if (modelForm.value.proxyType === 'http') {
       if (!modelForm.value.proxyServer) {
         showMessage(t('settings.model.proxyServerRequired'), 'error')
@@ -964,8 +1000,6 @@ const updateModel = () => {
           logo: modelForm.value.logo || '',
           frequencyPenalty: modelForm.value.frequencyPenalty,
           presencePenalty: modelForm.value.presencePenalty,
-          responseFormat: modelForm.value.responseFormat,
-          n: Math.max(0, modelForm.value.n),
           stop: modelForm.value.stop.trim() || '',
           proxyType: modelForm.value.proxyType || 'bySetting',
           proxyServer: modelForm.value.proxyServer.trim() || '',
@@ -1029,7 +1063,7 @@ const deleteModel = id => {
  * Toggles the disabled status of a model provider
  * @param {Object} model - The model provider to toggle
  */
-const toggleModelStatus = async (model) => {
+const toggleModelStatus = async model => {
   const originalDisabled = model.disabled
   try {
     // Create a copy of the model with the toggled disabled status
@@ -1037,20 +1071,20 @@ const toggleModelStatus = async (model) => {
       ...model,
       disabled: !model.disabled
     }
-    
+
     // Update the model using the setModelProvider function
     await modelStore.setModelProvider(updatedModel)
-    
+
     // Update the UI state to reflect the change
     model.disabled = !model.disabled
-    
+
     const actionText = model.disabled ? 'disable' : 'enable'
     showMessage(t(`settings.model.${actionText}Success`, { name: model.name }), 'success')
   } catch (e) {
     model.disabled = originalDisabled
     const actionText = originalDisabled ? 'enable' : 'disable'
     const langKey = `settings.model.${actionText}Failed`
-    
+
     if (e instanceof FrontendAppError) {
       showMessage(t(langKey, { error: e.toFormattedString(), name: model.name }), 'error')
       console.error('Error toggling model status:', e.originalError)
@@ -1436,7 +1470,7 @@ const importPresetModel = model => {
 
     .el-select {
       .el-select__tags {
-        max-height: 52px; // 约等于两行的高度
+        max-height: 52px; // Approximately two lines height
         overflow-y: auto;
 
         &::-webkit-scrollbar {

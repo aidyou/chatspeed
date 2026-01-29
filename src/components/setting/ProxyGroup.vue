@@ -4,13 +4,20 @@
       <div class="title">
         <span>{{ $t('settings.proxyGroup.title') }}</span>
         <div class="actions">
-          <el-tooltip placement="top" :content="$t('settings.proxyGroup.batchUpdate')" :hide-after="0"
+          <el-tooltip
+            placement="top"
+            :content="$t('settings.proxyGroup.batchUpdate')"
+            :hide-after="0"
             :enterable="false">
             <span class="icon" @click="openBatchUpdateDialog">
               <cs name="skill-format1" />
             </span>
           </el-tooltip>
-          <el-tooltip placement="left" :content="$t('settings.proxyGroup.addGroup')" :hide-after="0" :enterable="false">
+          <el-tooltip
+            placement="left"
+            :content="$t('settings.proxyGroup.addGroup')"
+            :hide-after="0"
+            :enterable="false">
             <span class="icon" @click="openAddDialog">
               <cs name="add" />
             </span>
@@ -26,8 +33,13 @@
               <div class="label-text">
                 <div class="name-row">
                   {{ group.name }}
-                  <el-tag v-if="proxyGroupStore.activeGroup === group.name" type="success" size="small" effect="dark"
-                    round class="active-tag">
+                  <el-tag
+                    v-if="proxyGroupStore.activeGroup === group.name"
+                    type="success"
+                    size="small"
+                    effect="dark"
+                    round
+                    class="active-tag">
                     {{ $t('settings.proxyGroup.activeGroup') }}
                   </el-tag>
                 </div>
@@ -38,14 +50,27 @@
             <div class="value">
               <el-tooltip placement="top" :hide-after="0" :enterable="false">
                 <template #content>
-                  {{ $t('settings.proxyGroup.toolCompatMode') }}: {{ $t(`settings.proxyGroup.toolCompatModes.${group.metadata?.toolCompatMode || 'auto'}`) }}
+                  {{ $t('settings.proxyGroup.toolCompatMode') }}:
+                  {{
+                    $t(
+                      `settings.proxyGroup.toolCompatModes.${group.metadata?.toolCompatMode || 'auto'}`
+                    )
+                  }}
                 </template>
                 <span class="icon" @click="handleToggleToolCompatMode(group)">
-                  <cs :name="getToolCompatModeIcon(group.metadata?.toolCompatMode || 'auto')" size="16px" color="secondary" :active="(group.metadata?.toolCompatMode || 'auto') !== 'auto'" />
+                  <cs
+                    :name="getToolCompatModeIcon(group.metadata?.toolCompatMode || 'auto')"
+                    size="16px"
+                    color="secondary"
+                    :active="(group.metadata?.toolCompatMode || 'auto') !== 'auto'" />
                 </span>
               </el-tooltip>
-              <el-tooltip placement="top" :content="$t('settings.proxyGroup.activateGroup')" :hide-after="0"
-                :enterable="false" v-if="proxyGroupStore.activeGroup !== group.name">
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.activateGroup')"
+                :hide-after="0"
+                :enterable="false"
+                v-if="proxyGroupStore.activeGroup !== group.name">
                 <span class="icon" @click="handleActivateGroup(group.name)">
                   <cs name="check-circle" size="16px" color="secondary" />
                 </span>
@@ -53,19 +78,28 @@
               <span class="icon active" v-else>
                 <cs name="check-circle" size="16px" color="secondary" :active="true" />
               </span>
-              <el-tooltip placement="top" :content="$t('settings.proxyGroup.copyGroup')" :hide-after="0"
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.copyGroup')"
+                :hide-after="0"
                 :enterable="false">
                 <span class="icon" @click="openCopyDialog(group)">
                   <cs name="copy" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
-              <el-tooltip placement="top" :content="$t('settings.proxyGroup.editGroup')" :hide-after="0"
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.editGroup')"
+                :hide-after="0"
                 :enterable="false">
                 <span class="icon" @click="openEditDialog(group)">
                   <cs name="edit" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
-              <el-tooltip placement="top" :content="$t('settings.proxyGroup.deleteGroup')" :hide-after="0"
+              <el-tooltip
+                placement="top"
+                :content="$t('settings.proxyGroup.deleteGroup')"
+                :hide-after="0"
                 :enterable="false">
                 <span class="icon" @click="handleDeleteGroup(group.id)">
                   <cs name="trash" size="16px" color="secondary" />
@@ -94,33 +128,62 @@
       </div>
 
       <!-- proxy group editor -->
-      <el-dialog v-model="dialogVisible" width="560px" class="model-edit-dialog" :show-close="false"
-        :close-on-click-modal="false" :close-on-press-escape="false" @closed="resetForm">
+      <el-dialog
+        v-model="dialogVisible"
+        width="560px"
+        class="model-edit-dialog"
+        :show-close="false"
+        :close-on-click-modal="false"
+        :close-on-press-escape="false"
+        @closed="resetForm">
         <el-form :model="currentGroup" label-width="120px" ref="proxyGroupFormRef">
           <el-tabs v-model="activeTab">
             <!-- basic info -->
-                        <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
-                          <el-form-item :label="$t('settings.proxyGroup.form.name')" prop="name" :rules="[
-                            { validator: validateGroupName, trigger: 'blur' }
-                          ]">
-                            <el-input v-model="currentGroup.name" :placeholder="$t('settings.proxyGroup.form.namePlaceholder')" />
-                          </el-form-item>              <el-form-item :label="$t('settings.proxyGroup.form.description')" prop="description">
-                <el-input v-model="currentGroup.description" type="textarea" :rows="2"
+            <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
+              <el-form-item
+                :label="$t('settings.proxyGroup.form.name')"
+                prop="name"
+                :rules="[{ validator: validateGroupName, trigger: 'blur' }]">
+                <el-input
+                  v-model="currentGroup.name"
+                  :placeholder="$t('settings.proxyGroup.form.namePlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.proxyGroup.form.description')" prop="description">
+                <el-input
+                  v-model="currentGroup.description"
+                  type="textarea"
+                  :rows="2"
                   :placeholder="$t('settings.proxyGroup.form.descriptionPlaceholder')" />
               </el-form-item>
-              <el-form-item :label="$t('settings.proxyGroup.form.toolCompatMode')"
+              <el-form-item
+                :label="$t('settings.proxyGroup.form.toolCompatMode')"
                 prop="metadata.toolCompatMode">
-                <el-select v-model="currentGroup.metadata.toolCompatMode"
+                <el-select
+                  v-model="currentGroup.metadata.toolCompatMode"
                   :placeholder="$t('settings.proxyGroup.form.toolCompatModePlaceholder')">
                   <el-option :label="$t('settings.proxyGroup.toolCompatModes.auto')" value="auto" />
-                  <el-option :label="$t('settings.proxyGroup.toolCompatModes.compat')" value="compat" />
-                  <el-option :label="$t('settings.proxyGroup.toolCompatModes.native')" value="native" />
+                  <el-option
+                    :label="$t('settings.proxyGroup.toolCompatModes.compat')"
+                    value="compat" />
+                  <el-option
+                    :label="$t('settings.proxyGroup.toolCompatModes.native')"
+                    value="native" />
                 </el-select>
               </el-form-item>
-              <el-form-item :label="$t('settings.proxyGroup.form.temperatureRatio')" prop="temperature">
-                <el-tooltip :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')" placement="top">
-                  <el-slider v-model="currentGroup.temperature" :min="0" :max="1.0" :step="0.1" show-input
-                    :show-tooltip="false" input-size="small" />
+              <el-form-item
+                :label="$t('settings.proxyGroup.form.temperatureRatio')"
+                prop="temperature">
+                <el-tooltip
+                  :content="$t('settings.proxyGroup.form.temperatureRatioPlaceholder')"
+                  placement="top">
+                  <el-slider
+                    v-model="currentGroup.temperature"
+                    :min="0"
+                    :max="1.0"
+                    :step="0.1"
+                    show-input
+                    :show-tooltip="false"
+                    input-size="small" />
                 </el-tooltip>
               </el-form-item>
               <el-form-item :label="$t('settings.proxyGroup.form.disabled')" prop="disabled">
@@ -131,56 +194,106 @@
             <!-- prompt info -->
             <el-tab-pane :label="$t('settings.skill.promptInfo')" name="prompt">
               <div class="tab-content-scroll">
-                <el-form-item :label="$t('settings.proxyGroup.form.promptInjection')" prop="prompt_injection">
-                  <el-select v-model="currentGroup.promptInjection"
+                <el-form-item
+                  :label="$t('settings.proxyGroup.form.promptInjection')"
+                  prop="prompt_injection">
+                  <el-select
+                    v-model="currentGroup.promptInjection"
                     :placeholder="$t('settings.proxyGroup.form.promptInjectionPlaceholder')">
                     <el-option :label="$t('settings.proxyGroup.promptInjection.off')" value="off" />
-                    <el-option :label="$t('settings.proxyGroup.promptInjection.enhance')" value="enhance" />
-                    <el-option :label="$t('settings.proxyGroup.promptInjection.replace')" value="replace" />
+                    <el-option
+                      :label="$t('settings.proxyGroup.promptInjection.enhance')"
+                      value="enhance" />
+                    <el-option
+                      :label="$t('settings.proxyGroup.promptInjection.replace')"
+                      value="replace" />
                   </el-select>
                 </el-form-item>
-                <el-form-item :label="$t('settings.proxyGroup.form.promptInjectionPosition')"
+                <el-form-item
+                  :label="$t('settings.proxyGroup.form.promptInjectionPosition')"
                   prop="metadata.prompt_injection_position">
-                  <el-select v-model="currentGroup.metadata.promptInjectionPosition"
-                    :placeholder="$t('settings.proxyGroup.form.promptInjectionPositionPlaceholder')">
-                    <el-option :label="$t('settings.proxyGroup.promptInjectionPosition.system')" value="system" />
-                    <el-option :label="$t('settings.proxyGroup.promptInjectionPosition.user')" value="user" />
+                  <el-select
+                    v-model="currentGroup.metadata.promptInjectionPosition"
+                    :placeholder="
+                      $t('settings.proxyGroup.form.promptInjectionPositionPlaceholder')
+                    ">
+                    <el-option
+                      :label="$t('settings.proxyGroup.promptInjectionPosition.system')"
+                      value="system" />
+                    <el-option
+                      :label="$t('settings.proxyGroup.promptInjectionPosition.user')"
+                      value="user" />
                   </el-select>
                 </el-form-item>
-                <el-form-item :label="$t('settings.proxyGroup.form.modelInjectionCondition')"
+                <el-form-item
+                  :label="$t('settings.proxyGroup.form.modelInjectionCondition')"
                   prop="metadata.model_injection_condition">
-                  <el-input v-model="currentGroup.metadata.modelInjectionCondition" type="textarea" :rows="2"
+                  <el-input
+                    v-model="currentGroup.metadata.modelInjectionCondition"
+                    type="textarea"
+                    :rows="2"
                     :autosize="{ minRows: 2, maxRows: 5 }"
-                    :placeholder="$t('settings.proxyGroup.form.modelInjectionConditionPlaceholder')" />
+                    :placeholder="
+                      $t('settings.proxyGroup.form.modelInjectionConditionPlaceholder')
+                    " />
                 </el-form-item>
                 <el-form-item :label="$t('settings.proxyGroup.form.promptText')" prop="prompt_text">
-                  <el-input v-model="currentGroup.promptText" type="textarea" :rows="4"
+                  <el-input
+                    v-model="currentGroup.promptText"
+                    type="textarea"
+                    :rows="4"
                     :placeholder="$t('settings.proxyGroup.form.promptTextPlaceholder')" />
                 </el-form-item>
                 <el-form-item :label="$t('settings.proxyGroup.form.toolFilter')" prop="tool_filter">
-                  <el-input v-model="currentGroup.toolFilter" type="textarea" :rows="3"
+                  <el-input
+                    v-model="currentGroup.toolFilter"
+                    type="textarea"
+                    :rows="3"
                     :placeholder="$t('settings.proxyGroup.form.toolFilterPlaceholder')" />
                 </el-form-item>
 
                 <div class="custom-headers-section">
                   <div class="header-title">
                     <span>{{ $t('settings.proxyGroup.form.promptReplace') }}</span>
-                    <el-tooltip :content="$t('settings.proxyGroup.form.promptReplaceTip')" placement="top">
-                      <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
+                    <el-tooltip
+                      :content="$t('settings.proxyGroup.form.promptReplaceTip')"
+                      placement="top">
+                      <cs
+                        name="help-circle"
+                        size="14px"
+                        color="secondary"
+                        style="margin-left: 4px" />
                     </el-tooltip>
                   </div>
 
-                  <div v-for="(item, index) in currentGroup.metadata.promptReplace" :key="index" class="header-row"
+                  <div
+                    v-for="(item, index) in currentGroup.metadata.promptReplace"
+                    :key="index"
+                    class="header-row"
                     style="display: flex; gap: 10px; margin-bottom: 10px">
-                    <el-input v-model="item.key" :placeholder="$t('settings.model.headerKey')" style="flex: 1" />
-                    <el-input v-model="item.value" :placeholder="$t('settings.model.headerValue')" style="flex: 2" />
-                    <el-button type="danger" link @click="removePromptReplace(index)"
+                    <el-input
+                      v-model="item.key"
+                      :placeholder="$t('settings.model.headerKey')"
+                      style="flex: 1" />
+                    <el-input
+                      v-model="item.value"
+                      :placeholder="$t('settings.model.headerValue')"
+                      style="flex: 2" />
+                    <el-button
+                      type="danger"
+                      link
+                      @click="removePromptReplace(index)"
                       style="padding: 0; min-width: 24px">
                       <cs name="trash" size="16px" />
                     </el-button>
                   </div>
 
-                  <el-button type="primary" plain size="small" @click="addPromptReplace" style="width: 100%">
+                  <el-button
+                    type="primary"
+                    plain
+                    size="small"
+                    @click="addPromptReplace"
+                    style="width: 100%">
                     <cs name="add" /> {{ $t('settings.model.addHeader') }}
                   </el-button>
                 </div>
@@ -199,24 +312,49 @@
       </el-dialog>
 
       <!-- batch update dialog -->
-      <el-dialog v-model="batchUpdateDialogVisible" :title="$t('settings.proxyGroup.batchUpdateTitle')" width="600px"
-        align-center class="proxy-group-edit-dialog" :show-close="false" :close-on-click-modal="false"
-        :close-on-press-escape="false" style="--el-dialog-margin-top: 5vh; min-height: 600px">
+      <el-dialog
+        v-model="batchUpdateDialogVisible"
+        :title="$t('settings.proxyGroup.batchUpdateTitle')"
+        width="600px"
+        align-center
+        class="proxy-group-edit-dialog"
+        :show-close="false"
+        :close-on-click-modal="false"
+        :close-on-press-escape="false"
+        style="--el-dialog-margin-top: 5vh; min-height: 600px">
         <div class="form-container">
           <el-form :model="batchUpdateForm" label-width="auto" style="padding-top: 10px">
             <el-form-item :label="$t('settings.proxyGroup.selectGroups')">
-              <el-select v-model="batchUpdateForm.selectedIds" multiple collapse-tags collapse-tags-indicator
+              <el-select
+                v-model="batchUpdateForm.selectedIds"
+                multiple
+                collapse-tags
+                collapse-tags-indicator
                 style="width: 100%">
-                <el-option v-for="item in sortedProxyGroupList" :key="item.id" :label="item.name" :value="item.id" />
+                <el-option
+                  v-for="item in sortedProxyGroupList"
+                  :key="item.id"
+                  :label="item.name"
+                  :value="item.id" />
               </el-select>
             </el-form-item>
 
-            <el-divider border-style="dashed">{{ $t('settings.proxyGroup.selectFieldsToUpdate') }}</el-divider>
+            <el-divider border-style="dashed">{{
+              $t('settings.proxyGroup.selectFieldsToUpdate')
+            }}</el-divider>
 
             <div class="tab-content-scroll" style="max-height: 400px">
               <el-form-item :label="$t('settings.proxyGroup.form.loadFromTemplate')">
-                <el-select v-model="batchUpdateForm.templateGroupId" style="width: 100%" :placeholder="$t('settings.proxyGroup.form.selectTemplate')" @change="loadTemplate">
-                  <el-option v-for="item in sortedProxyGroupList" :key="item.id" :label="item.name" :value="item.id" />
+                <el-select
+                  v-model="batchUpdateForm.templateGroupId"
+                  style="width: 100%"
+                  :placeholder="$t('settings.proxyGroup.form.selectTemplate')"
+                  @change="loadTemplate">
+                  <el-option
+                    v-for="item in sortedProxyGroupList"
+                    :key="item.id"
+                    :label="item.name"
+                    :value="item.id" />
                 </el-select>
               </el-form-item>
 
@@ -226,11 +364,19 @@
                     <el-checkbox v-model="batchUpdateFields.promptInjection" />
                   </el-col>
                   <el-col :span="22">
-                    <el-select v-model="batchUpdateForm.promptInjection" :disabled="!batchUpdateFields.promptInjection"
+                    <el-select
+                      v-model="batchUpdateForm.promptInjection"
+                      :disabled="!batchUpdateFields.promptInjection"
                       style="width: 100%">
-                      <el-option :label="$t('settings.proxyGroup.promptInjection.off')" value="off" />
-                      <el-option :label="$t('settings.proxyGroup.promptInjection.enhance')" value="enhance" />
-                      <el-option :label="$t('settings.proxyGroup.promptInjection.replace')" value="replace" />
+                      <el-option
+                        :label="$t('settings.proxyGroup.promptInjection.off')"
+                        value="off" />
+                      <el-option
+                        :label="$t('settings.proxyGroup.promptInjection.enhance')"
+                        value="enhance" />
+                      <el-option
+                        :label="$t('settings.proxyGroup.promptInjection.replace')"
+                        value="replace" />
                     </el-select>
                   </el-col>
                 </el-row>
@@ -242,10 +388,16 @@
                     <el-checkbox v-model="batchUpdateFields.promptInjectionPosition" />
                   </el-col>
                   <el-col :span="22">
-                    <el-select v-model="batchUpdateForm.promptInjectionPosition"
-                      :disabled="!batchUpdateFields.promptInjectionPosition" style="width: 100%">
-                      <el-option :label="$t('settings.proxyGroup.promptInjectionPosition.system')" value="system" />
-                      <el-option :label="$t('settings.proxyGroup.promptInjectionPosition.user')" value="user" />
+                    <el-select
+                      v-model="batchUpdateForm.promptInjectionPosition"
+                      :disabled="!batchUpdateFields.promptInjectionPosition"
+                      style="width: 100%">
+                      <el-option
+                        :label="$t('settings.proxyGroup.promptInjectionPosition.system')"
+                        value="system" />
+                      <el-option
+                        :label="$t('settings.proxyGroup.promptInjectionPosition.user')"
+                        value="user" />
                     </el-select>
                   </el-col>
                 </el-row>
@@ -254,11 +406,16 @@
               <el-form-item :label="$t('settings.proxyGroup.form.modelInjectionCondition')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.modelInjectionCondition" style="margin-top: 4px" />
+                    <el-checkbox
+                      v-model="batchUpdateFields.modelInjectionCondition"
+                      style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
-                    <el-input v-model="batchUpdateForm.modelInjectionCondition"
-                      :disabled="!batchUpdateFields.modelInjectionCondition" type="textarea" :rows="2"
+                    <el-input
+                      v-model="batchUpdateForm.modelInjectionCondition"
+                      :disabled="!batchUpdateFields.modelInjectionCondition"
+                      type="textarea"
+                      :rows="2"
                       :autosize="{ minRows: 2, maxRows: 5 }" />
                   </el-col>
                 </el-row>
@@ -270,8 +427,11 @@
                     <el-checkbox v-model="batchUpdateFields.promptText" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
-                    <el-input v-model="batchUpdateForm.promptText" :disabled="!batchUpdateFields.promptText"
-                      type="textarea" :rows="4" />
+                    <el-input
+                      v-model="batchUpdateForm.promptText"
+                      :disabled="!batchUpdateFields.promptText"
+                      type="textarea"
+                      :rows="4" />
                   </el-col>
                 </el-row>
               </el-form-item>
@@ -282,8 +442,11 @@
                     <el-checkbox v-model="batchUpdateFields.toolFilter" style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
-                    <el-input v-model="batchUpdateForm.toolFilter" :disabled="!batchUpdateFields.toolFilter"
-                      type="textarea" :rows="3" />
+                    <el-input
+                      v-model="batchUpdateForm.toolFilter"
+                      :disabled="!batchUpdateFields.toolFilter"
+                      type="textarea"
+                      :rows="3" />
                   </el-col>
                 </el-row>
               </el-form-item>
@@ -291,22 +454,42 @@
               <el-form-item :label="$t('settings.proxyGroup.form.promptReplace')">
                 <el-row :gutter="10" style="width: 100%; align-items: flex-start">
                   <el-col :span="2">
-                    <el-checkbox v-model="batchUpdateFields.promptReplace" style="margin-top: 4px" />
+                    <el-checkbox
+                      v-model="batchUpdateFields.promptReplace"
+                      style="margin-top: 4px" />
                   </el-col>
                   <el-col :span="22">
-                    <div v-for="(item, index) in batchUpdateForm.promptReplace" :key="index" class="header-row"
+                    <div
+                      v-for="(item, index) in batchUpdateForm.promptReplace"
+                      :key="index"
+                      class="header-row"
                       style="display: flex; gap: 10px; margin-bottom: 10px">
-                      <el-input v-model="item.key" :placeholder="$t('settings.model.headerKey')" style="flex: 1"
+                      <el-input
+                        v-model="item.key"
+                        :placeholder="$t('settings.model.headerKey')"
+                        style="flex: 1"
                         :disabled="!batchUpdateFields.promptReplace" />
-                      <el-input v-model="item.value" :placeholder="$t('settings.model.headerValue')" style="flex: 2"
+                      <el-input
+                        v-model="item.value"
+                        :placeholder="$t('settings.model.headerValue')"
+                        style="flex: 2"
                         :disabled="!batchUpdateFields.promptReplace" />
-                      <el-button type="danger" link @click="removeBatchPromptReplace(index)"
-                        :disabled="!batchUpdateFields.promptReplace" style="padding: 0; min-width: 24px">
+                      <el-button
+                        type="danger"
+                        link
+                        @click="removeBatchPromptReplace(index)"
+                        :disabled="!batchUpdateFields.promptReplace"
+                        style="padding: 0; min-width: 24px">
                         <cs name="trash" size="16px" />
                       </el-button>
                     </div>
-                    <el-button type="primary" plain size="small" @click="addBatchPromptReplace"
-                      :disabled="!batchUpdateFields.promptReplace" style="width: 100%">
+                    <el-button
+                      type="primary"
+                      plain
+                      size="small"
+                      @click="addBatchPromptReplace"
+                      :disabled="!batchUpdateFields.promptReplace"
+                      style="width: 100%">
                       <cs name="add" /> {{ $t('settings.model.addHeader') }}
                     </el-button>
                   </el-col>
@@ -317,7 +500,9 @@
         </div>
         <template #footer>
           <span class="dialog-footer">
-            <el-button @click="batchUpdateDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+            <el-button @click="batchUpdateDialogVisible = false">{{
+              $t('common.cancel')
+            }}</el-button>
             <el-button type="primary" @click="handleBatchUpdateSubmit" :loading="formLoading">
               {{ $t('common.confirm') }}
             </el-button>
@@ -414,7 +599,12 @@ const openCopyDialog = group => {
     name: newGroupName
   }
   if (!currentGroup.value.metadata) {
-    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [], toolCompatMode: 'auto' }
+    currentGroup.value.metadata = {
+      maxContext: 0,
+      modelInjectionCondition: '',
+      promptReplace: [],
+      toolCompatMode: 'auto'
+    }
   }
   if (!currentGroup.value.metadata.modelInjectionCondition) {
     currentGroup.value.metadata.modelInjectionCondition = ''
@@ -452,9 +642,14 @@ const openEditDialog = group => {
   isEditing.value = true
   currentGroup.value = { ...group }
   if (!currentGroup.value.metadata) {
-    currentGroup.value.metadata = { maxContext: 0, modelInjectionCondition: '', promptReplace: [], toolCompatMode: 'auto' }
+    currentGroup.value.metadata = {
+      maxContext: 0,
+      modelInjectionCondition: '',
+      promptReplace: [],
+      toolCompatMode: 'auto'
+    }
   }
-  // 确保在编辑现有分组时包含modelInjectionCondition字段
+  // Ensure modelInjectionCondition field is included when editing existing group
   if (!currentGroup.value.metadata.modelInjectionCondition) {
     currentGroup.value.metadata.modelInjectionCondition = ''
   }
@@ -486,7 +681,9 @@ const handleGroupConfigSubmit = async () => {
       const newGroup = { ...currentGroup.value }
       // Filter out empty prompt replacement keys
       if (newGroup.metadata && newGroup.metadata.promptReplace) {
-        newGroup.metadata.promptReplace = newGroup.metadata.promptReplace.filter(item => item.key.trim() !== '')
+        newGroup.metadata.promptReplace = newGroup.metadata.promptReplace.filter(
+          item => item.key.trim() !== ''
+        )
       }
       try {
         if (isEditing.value) {
@@ -548,7 +745,7 @@ const handleDeleteGroup = id => {
         }
       }
     })
-    .catch(() => { })
+    .catch(() => {})
 }
 
 const handleActivateGroup = async name => {
@@ -632,12 +829,20 @@ const handleBatchUpdateSubmit = async () => {
     formLoading.value = true
     const payload = {
       ids: batchUpdateForm.value.selectedIds,
-      promptInjection: batchUpdateFields.value.promptInjection ? batchUpdateForm.value.promptInjection : null,
+      promptInjection: batchUpdateFields.value.promptInjection
+        ? batchUpdateForm.value.promptInjection
+        : null,
       promptText: batchUpdateFields.value.promptText ? batchUpdateForm.value.promptText : null,
       toolFilter: batchUpdateFields.value.toolFilter ? batchUpdateForm.value.toolFilter : null,
-      injectionPosition: batchUpdateFields.value.promptInjectionPosition ? batchUpdateForm.value.promptInjectionPosition : null,
-      injectionCondition: batchUpdateFields.value.modelInjectionCondition ? batchUpdateForm.value.modelInjectionCondition : null,
-      promptReplace: batchUpdateFields.value.promptReplace ? batchUpdateForm.value.promptReplace.filter(item => item.key.trim() !== '') : null
+      injectionPosition: batchUpdateFields.value.promptInjectionPosition
+        ? batchUpdateForm.value.promptInjectionPosition
+        : null,
+      injectionCondition: batchUpdateFields.value.modelInjectionCondition
+        ? batchUpdateForm.value.modelInjectionCondition
+        : null,
+      promptReplace: batchUpdateFields.value.promptReplace
+        ? batchUpdateForm.value.promptReplace.filter(item => item.key.trim() !== '')
+        : null
     }
 
     await proxyGroupStore.batchUpdate(payload)
@@ -655,16 +860,22 @@ const loadTemplate = () => {
   if (!batchUpdateForm.value.templateGroupId) {
     return
   }
-  const templateGroup = sortedProxyGroupList.value.find(g => g.id === batchUpdateForm.value.templateGroupId)
+  const templateGroup = sortedProxyGroupList.value.find(
+    g => g.id === batchUpdateForm.value.templateGroupId
+  )
   if (!templateGroup) {
     return
   }
   batchUpdateForm.value.promptInjection = templateGroup.promptInjection || 'off'
-  batchUpdateForm.value.promptInjectionPosition = templateGroup.metadata?.promptInjectionPosition || 'system'
-  batchUpdateForm.value.modelInjectionCondition = templateGroup.metadata?.modelInjectionCondition || ''
+  batchUpdateForm.value.promptInjectionPosition =
+    templateGroup.metadata?.promptInjectionPosition || 'system'
+  batchUpdateForm.value.modelInjectionCondition =
+    templateGroup.metadata?.modelInjectionCondition || ''
   batchUpdateForm.value.promptText = templateGroup.promptText || ''
   batchUpdateForm.value.toolFilter = templateGroup.toolFilter || ''
-  batchUpdateForm.value.promptReplace = templateGroup.metadata?.promptReplace ? JSON.parse(JSON.stringify(templateGroup.metadata.promptReplace)) : []
+  batchUpdateForm.value.promptReplace = templateGroup.metadata?.promptReplace
+    ? JSON.parse(JSON.stringify(templateGroup.metadata.promptReplace))
+    : []
 }
 
 const addBatchPromptReplace = () => {
@@ -707,7 +918,12 @@ const handleToggleToolCompatMode = async group => {
       }
     }
     await proxyGroupStore.update(updatedGroup)
-    showMessage(t('settings.proxyGroup.toolCompatModeChanged', { mode: t(`settings.proxyGroup.toolCompatModes.${newMode}`) }), 'success')
+    showMessage(
+      t('settings.proxyGroup.toolCompatModeChanged', {
+        mode: t(`settings.proxyGroup.toolCompatModes.${newMode}`)
+      }),
+      'success'
+    )
   } catch (error) {
     showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
   }

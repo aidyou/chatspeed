@@ -23,6 +23,7 @@ pub trait BackendAdapter: Send + Sync {
         provider_full_url: &str,
         model: &str,
         log_proxy_to_file: bool,
+        headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error>;
 
     /// Adapts a full `BackendResponse` into a `UnifiedResponse`.

@@ -51,6 +51,7 @@ plugin_review.md
 # 本地文档和品牌相关文件
 /archive/docs/
 /brand.md
+中国证券市场研究智能体.md
 
 src-tauri/src/plugins
 

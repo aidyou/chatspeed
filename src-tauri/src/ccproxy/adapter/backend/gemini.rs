@@ -272,6 +272,7 @@ impl BackendAdapter for GeminiBackendAdapter {
         full_provider_url: &str,
         _model: &str,
         log_proxy_to_file: bool,
+        headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
         crate::ccproxy::adapter::backend::common::preprocess_unified_request(unified_request);
 
@@ -648,43 +649,22 @@ impl BackendAdapter for GeminiBackendAdapter {
             cached_content: unified_request.cached_content.clone(),
         };
 
-        let mut request_builder = client.post(full_provider_url);
-        request_builder = request_builder.header("Content-Type", "application/json");
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
 
         let mut request_json = serde_json::to_value(&gemini_request)?;
 
         // Merge custom params from model config
         crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
 
-        request_builder = request_builder.json(&request_json);
-
         if log_proxy_to_file {
             // Log the request to a file
             log::info!(target: "ccproxy_logger","Gemini Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     match serde_json::to_string_pretty(&gemini_request) {
-        //         Ok(request_json) => {
-        //             log::debug!("Gemini request: {}", request_json);
-        //         }
-        //         Err(e) => {
-        //             log::error!("Failed to serialize Gemini request: {}", e);
-        //             if let Some(tools) = &gemini_request.tools {
-        //                 for (i, tool) in tools.iter().enumerate() {
-        //                     if let Err(tool_err) = serde_json::to_string(&tool) {
-        //                         log::error!("Failed to serialize tool {}: {}", i, tool_err);
-        //                         log::error!("Tool details: {:?}", tool.function_declarations);
-        //                     }
-        //                 }
-        //             }
-        //             return Err(anyhow::anyhow!("Failed to serialize Gemini request: {}", e));
-        //         }
-        //     }
-        // }
-
-        Ok(request_builder)
+        Ok(client.post(full_provider_url).json(&request_json))
     }
 
     async fn adapt_response(

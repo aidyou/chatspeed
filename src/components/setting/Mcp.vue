@@ -1,6 +1,6 @@
 <template>
   <div class="card">
-    <!-- 顶部标题和添加按钮 -->
+    <!-- Top title and add button -->
     <div class="title">
       <span>{{ $t('settings.mcp.title') }}</span>
       <el-tooltip
@@ -14,7 +14,7 @@
       </el-tooltip>
     </div>
 
-    <!-- 服务器列表/空状态 -->
+    <!-- Server list/empty state -->
     <div class="list">
       <template v-if="mcpStore.servers.length > 0">
         <div v-for="server in mcpStore.servers" :key="server.id" class="item-wrapper">
@@ -141,7 +141,7 @@
       </template>
     </div>
 
-    <!-- 添加/编辑对话框 -->
+    <!-- Add/Edit dialog -->
     <el-dialog
       v-model="dialogVisible"
       width="600px"
@@ -368,7 +368,7 @@ const mcpStore = useMcpStore()
 const serverFormRef = ref(null)
 const activeTabName = ref('formEditor') // Changed from activeTab to activeTabName
 
-// 对话框状态
+// Dialog state
 const dialogVisible = ref(false)
 const formLoading = ref(false)
 const isEditMode = ref(false)
@@ -650,7 +650,7 @@ const handleSubmit = async () => {
     }
   })
 
-  // 检查是否包含占位符
+  // Check if placeholders are included
   const placeholderValidation = validatePlaceholders()
   if (!placeholderValidation.isValid) {
     showMessage(placeholderValidation.message, 'error')
@@ -889,7 +889,10 @@ const loadPresetMcps = async () => {
       showMessage(t('settings.mcp.loadPresetError', { error: error.toFormattedString() }), 'error')
     } else {
       console.error('Failed to load preset MCPs:', error)
-      showMessage(t('settings.mcp.loadPresetError', { error: error.message || String(error) }), 'error')
+      showMessage(
+        t('settings.mcp.loadPresetError', { error: error.message || String(error) }),
+        'error'
+      )
     }
     presetMcps.value = [] // Clear on error
   } finally {

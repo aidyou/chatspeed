@@ -115,6 +115,7 @@
     "copyCode": "程式碼",
     "copyMarkdown": "Markdown",
     "detail": "詳情",
+    "deleteSuccess": "刪除成功",
     "diagram": "流程圖",
     "downloadSvg": "下載SVG",
     "fullscreen": "全螢幕",
@@ -445,6 +446,7 @@
       "presetModels": "預設模型",
       "provider": "供應商",
       "proxyServerRequired": "請輸入代理伺服器位址",
+      "restrictedHeader": "包含受限的請求頭：{headers}",
       "reasoning": "推理模型",
       "searchByIdOrName": "按 ID 或名稱搜尋",
       "stop": "終止標記",
@@ -548,6 +550,7 @@
         }
       },
       "stats": {
+        "autoRefresh": "自動刷新",
         "backendModel": "後端模型",
         "cacheTokens": "緩存",
         "clientModel": "模型別名",
@@ -572,6 +575,7 @@
         "requests": "請求次數",
         "statusCode": "狀態碼",
         "title": "代理統計資訊",
+        "today": "今天",
         "toolCompat": "相容模式",
         "topProvider": "熱門模型",
         "yes": "是"

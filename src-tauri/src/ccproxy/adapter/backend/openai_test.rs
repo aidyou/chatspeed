@@ -134,6 +134,7 @@ mod tests {
                 "https://api.openai.com/v1",
                 "gpt-4",
                 false,
+                &mut reqwest::header::HeaderMap::new(),
             )
             .await;
 
@@ -227,6 +228,7 @@ mod tests {
                 "https://api.openai.com/v1",
                 "gpt-4",
                 false,
+                &mut reqwest::header::HeaderMap::new(),
             )
             .await;
 
@@ -299,6 +301,7 @@ mod tests {
                 "https://api.openai.com/v1",
                 "gpt-4",
                 false,
+                &mut reqwest::header::HeaderMap::new(),
             )
             .await;
 
@@ -1094,6 +1097,7 @@ mod tests {
                 "https://api.abc.com/v1",
                 "gpt-4",
                 false,
+                &mut reqwest::header::HeaderMap::new(),
             )
             .await
             .unwrap();
@@ -1128,6 +1132,7 @@ mod tests {
                 "https://api.openai.com/v1",
                 "gpt-4",
                 false,
+                &mut reqwest::header::HeaderMap::new(),
             )
             .await
             .unwrap();

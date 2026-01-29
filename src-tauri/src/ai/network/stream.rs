@@ -40,8 +40,8 @@ pub struct StreamParser;
 impl StreamParser {
     /// Parse OpenAI compatible format
     pub fn parse_openai(chunk: Bytes) -> Result<Vec<StreamChunk>, String> {
-        // 使用 from_utf8_lossy 替代 from_utf8，以便在遇到无效的 UTF-8 序列时能够继续处理
-        // 这将用替换字符 (U+FFFD) 替代无效的 UTF-8 序列，而不是返回错误
+        // Use from_utf8_lossy instead of from_utf8 to continue processing when encountering invalid UTF-8 sequences
+        // This will replace invalid UTF-8 sequences with replacement characters (U+FFFD) instead of returning an error
         let chunk_str = String::from_utf8_lossy(&chunk).into_owned();
         let mut chunks = Vec::new();
 

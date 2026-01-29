@@ -176,7 +176,7 @@ onMounted(async () => {
 
   window.addEventListener('keydown', handleShortcut)
 
-  // 监听权限请求
+  // Listen for permission requests
   // await listen('accessibility-permission-required', () => {
   //   ElMessageBox.confirm(
   //     'This app needs accessibility permission to monitor text selection. Would you like to open System Settings?',
@@ -188,7 +188,7 @@ onMounted(async () => {
   //     }
   //   )
   //     .then(() => {
-  //       // 调用后端打开系统设置
+  //       // Call backend to open system settings
   //       invoke('open_accessibility_settings').catch(err => {
   //         ElMessage.error(`Failed to open settings: ${err}`)
   //       })
@@ -198,7 +198,7 @@ onMounted(async () => {
   //     })
   // })
 
-  // 监听权限错误
+  // Listen for permission errors
   // await listen('accessibility-error', event => {
   //   ElMessage.error({
   //     message: `Accessibility error: ${event.payload}`,
@@ -206,7 +206,7 @@ onMounted(async () => {
   //     showClose: true
   //   })
   // })
-  // 监听监控错误
+  // Listen for monitoring errors
   // await listen('text-monitor-error', event => {
   //   ElMessage.error({
   //     message: `Monitor error: ${event.payload}`,

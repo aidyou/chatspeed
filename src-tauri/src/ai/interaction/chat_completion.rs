@@ -558,7 +558,7 @@ async fn global_message_processor_loop(
                                 |_| json!({"error": "failed to parse tool result chunk"}),
                             );
 
-                    // 从 tool_result_msg_for_history 中提取 tool_call_id
+                    // Extract tool_call_id from tool_result_msg_for_history
                     let tool_call_id = tool_result_msg_for_history
                         .get("tool_call_id")
                         .and_then(Value::as_str)
@@ -947,7 +947,7 @@ async fn global_message_processor_loop(
                     chat_id
                 );
 
-                // 重要提醒：工具调用的时候不要将当轮结束标志发送给前端，否则可能导致前端结束会话
+                // IMPORTANT: Do not send end-of-round flag to frontend during tool calls, otherwise frontend may end the session
                 // IMPORTANT: Do not send Finished with ToolCalls reason to UI,
                 // otherwise UI will end the session.
                 if response_chunk.finish_reason != Some(FinishReason::ToolCalls) {

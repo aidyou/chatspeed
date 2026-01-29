@@ -227,18 +227,23 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
         );
 
         // Use the "always_on_top" trick to grab focus, which is effective on Linux.
-        if let Err(e) = window.set_always_on_top(true) {
-            log::warn!(
-                "Failed to set always_on_top(true) for window '{}': {}",
-                label,
-                e
-            );
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Err(e) = window.set_always_on_top(true) {
+                log::warn!(
+                    "Failed to set always_on_top(true) for window '{}': {}",
+                    label,
+                    e
+                );
+            }
         }
+
         if let Err(e) = window.set_focus() {
             log::warn!("Failed to set focus on window '{}': {}", label, e);
         }
 
         // 4. Restore the original "always on top" state immediately.
+        #[cfg(not(target_os = "macos"))]
         if !user_wants_on_top {
             // If the user did NOT have the window pinned, turn off always_on_top after the trick.
             if let Err(e) = window.set_always_on_top(false) {
@@ -248,6 +253,11 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
                     e
                 );
             }
+        }
+        // On macOS, if the user wants it on top, we should ensure it's set.
+        #[cfg(target_os = "macos")]
+        if user_wants_on_top {
+            let _ = window.set_always_on_top(true);
         }
         // If user_wants_on_top is true, we simply leave it on top, which is the correct state.
     } else {
@@ -471,7 +481,7 @@ pub async fn create_or_focus_setting_window(
         .maximizable(false)
         .inner_size(width, height)
         .min_inner_size(width, 600.0)
-        .max_inner_size(width, max_height)
+        .max_inner_size(1024.0, max_height)
         .center()
         .transparent(true);
 

@@ -322,31 +322,10 @@ pub async fn handle_chat_completion(
 
     unified_request.custom_params = proxy_model.custom_params.clone();
 
-    // --- Inject Engine Defaults if missing ---
-    if unified_request.max_tokens.is_none() && proxy_model.max_tokens > 0 {
-        unified_request.max_tokens = Some(proxy_model.max_tokens);
-    }
-    if unified_request.top_p.is_none() && proxy_model.top_p > 0.0 {
-        unified_request.top_p = Some(proxy_model.top_p);
-    }
-    if unified_request.top_k.is_none() && proxy_model.top_k > 0 {
-        unified_request.top_k = Some(proxy_model.top_k);
-    }
-    if unified_request.presence_penalty.is_none() && proxy_model.presence_penalty != 0.0 {
-        unified_request.presence_penalty = Some(proxy_model.presence_penalty);
-    }
-    if unified_request.frequency_penalty.is_none() && proxy_model.frequency_penalty != 0.0 {
-        unified_request.frequency_penalty = Some(proxy_model.frequency_penalty);
-    }
-    if unified_request.stop_sequences.is_none() && !proxy_model.stop.is_empty() {
-        unified_request.stop_sequences = Some(proxy_model.stop.clone());
-    }
+    // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
+    ModelResolver::merge_parameters_unified(&mut unified_request, &proxy_model);
 
-    if proxy_model.temperature != 1.0 && unified_request.temperature.is_some() {
-        unified_request.temperature =
-            Some(proxy_model.temperature * unified_request.temperature.unwrap_or(0.0));
-    }
-
+    // Tool filtering logic remains same
     if proxy_model.tool_filter.len() > 0 {
         unified_request.tools = unified_request.tools.map(|tools| {
             tools
@@ -403,7 +382,32 @@ pub async fn handle_chat_completion(
         proxy_model.model_metadata.clone(),
     )?;
 
-    // 3. Adapt and send request to backend
+    // Build consolidated headers using HeaderMap to handle overrides correctly
+    let mut final_headers = reqwest::header::HeaderMap::new();
+
+    // Inject all proxy headers (Metadata + Protocol Defaults + Client Overrides)
+    ModelResolver::inject_proxy_headers(&mut final_headers, &client_headers, &proxy_model, &message_id);
+
+    // Set mandatory content headers (these shouldn't be overridden)
+    final_headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+
+    // Set streaming request headers
+    if is_streaming_request {
+        final_headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+    } else {
+        final_headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+    }
+
+    // 3. Adapt request (Adapter will handle body transformation and specific protocol adjustments)
     let mut onward_request_builder = backend_adapter
         .adapt_request(
             &http_client,
@@ -412,71 +416,13 @@ pub async fn handle_chat_completion(
             &full_url,
             &proxy_model.model,
             log_proxy_to_file,
+            &mut final_headers,
         )
         .await
         .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-    // 1. Add custom headers from model metadata (Default values)
-    let custom_headers =
-        crate::ai::util::process_custom_headers(&proxy_model.model_metadata, &message_id);
-    for (k, v) in custom_headers {
-        let final_key = if k.to_lowercase().starts_with("cs-") {
-            &k[3..]
-        } else {
-            &k
-        };
-        onward_request_builder = onward_request_builder.header(final_key, v);
-    }
-
-    // 2. Forward relevant headers from client (Override values)
-    for (name, value) in client_headers.iter() {
-        let name_str = name.as_str().to_lowercase();
-        if crate::ccproxy::helper::should_forward_header(&name_str) {
-            let final_name = if name_str.starts_with("cs-") {
-                &name_str[3..]
-            } else {
-                &name_str
-            };
-
-            if let (Ok(reqwest_name), Ok(reqwest_value)) = (
-                reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
-                reqwest::header::HeaderValue::from_bytes(value.as_ref()),
-            ) {
-                onward_request_builder = onward_request_builder.header(reqwest_name, reqwest_value);
-            }
-        }
-    }
-
-    // Set common headers (Force specific values)
-    onward_request_builder = onward_request_builder.header("Content-Type", "application/json");
-
-    // Set streaming request headers
-    if is_streaming_request {
-        onward_request_builder =
-            onward_request_builder.header(reqwest::header::ACCEPT, "text/event-stream");
-    } else {
-        onward_request_builder =
-            onward_request_builder.header(reqwest::header::ACCEPT, "application/json");
-    }
-
-    // Forward relevant headers
-    for (name, value) in client_headers.iter() {
-        let name_str = name.as_str().to_lowercase();
-        if crate::ccproxy::helper::should_forward_header(&name_str) {
-            let final_name = if name_str.starts_with("cs-") {
-                &name_str[3..]
-            } else {
-                &name_str
-            };
-
-            if let (Ok(reqwest_name), Ok(reqwest_value)) = (
-                reqwest::header::HeaderName::from_bytes(final_name.as_bytes()),
-                reqwest::header::HeaderValue::from_bytes(value.as_ref()),
-            ) {
-                onward_request_builder = onward_request_builder.header(reqwest_name, reqwest_value);
-            }
-        }
-    }
+    // Apply consolidated headers to the request builder
+    onward_request_builder = onward_request_builder.headers(final_headers);
 
     let target_response = onward_request_builder
         .send()
@@ -544,7 +490,7 @@ pub async fn handle_chat_completion(
         if let Ok(store) = main_store_arc.read() {
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,
-                client_model: proxy_alias.clone(),
+                client_model: proxy_model.client_alias.clone(),
                 backend_model: proxy_model.model.clone(),
                 provider: proxy_model.provider.clone(),
                 protocol: chat_protocol.to_string(),
@@ -702,7 +648,7 @@ pub async fn handle_chat_completion(
 
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,
-                client_model: proxy_alias.clone(),
+                client_model: proxy_model.client_alias.clone(),
                 backend_model: proxy_model.model.clone(),
                 provider: proxy_model.provider.clone(),
                 protocol: chat_protocol.to_string(),

@@ -182,7 +182,7 @@ pub fn setup_chat_proxy(
             }
         }
 
-        // 如果代理类型是"bySetting"，从配置中获取
+        // If proxy type is "bySetting", get it from config
         // if proxy_type is "bySetting", get proxy type from config
         if proxy_type == "bySetting" {
             let config_store = main_state.read()?;

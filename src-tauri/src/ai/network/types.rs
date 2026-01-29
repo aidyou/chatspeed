@@ -145,7 +145,7 @@ impl Clone for ErrorFormat {
             Self::OpenAI => Self::OpenAI,
             Self::Claude => Self::Claude,
             Self::Google => Self::Google,
-            Self::Custom(_) => Self::Custom(Box::new(|_s| None)), // 提供一个默认的空解析器
+            Self::Custom(_) => Self::Custom(Box::new(|_s| None)), // Provide a default empty parser
         }
     }
 }

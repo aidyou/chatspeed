@@ -177,7 +177,7 @@ export const useModelStore = defineStore('modelProvider', () => {
     }
 
 
-    // 查找标记为默认的模型，如果没有则使用第一个可用模型
+    // Find the model marked as default, if none use the first available model
     const model = getAvailableProviders.value.find((model) => model.isDefault)
       ?? getAvailableProviders.value[0] ?? null;
 
