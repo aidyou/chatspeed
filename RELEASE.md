@@ -2,6 +2,28 @@
 
 # Release Notes
 
+## [1.2.2]
+
+### 🚀 New Features
+
+- **Proxy Switcher Window**: Introduced a lightweight, dedicated window for quickly switching active proxy groups. Accessible via the system tray, titlebar menu, and global shortcuts.
+- **Enhanced Proxy Stats UI**:
+  - **Persistent Auto-Refresh**: Auto-refresh state is now persisted in local storage.
+  - **Improved Interactivity**: Added sortable columns for Client Model, Backend Model, and various token counts.
+
+### 🪄 Improvements
+
+- **Fair Weight Rotation Logic**: Refactored the proxy rotation engine to group targets by provider. This prevents "weight explosion" where a provider with many keys or model aliases would unfairly dominate traffic distribution.
+- **Robust Statistics Recording**: Introduced a RAII-based `StreamStatGuard` to ensure proxy usage statistics are accurately recorded even when streams are prematurely terminated or encounter errors.
+- **Refined Proxy Rotator**: Simplified the internal architecture by removing redundant locks, improving performance and maintainability.
+- **Cleaner Debug Logs**: Updated VS Code launch configurations to suppress noisy `OS_ACTIVITY_MODE` logs on macOS.
+
+### 🐞 Bug Fixes
+
+- **Stat Recording Leak**: Fixed a potential issue where statistics might not be recorded if a streaming response ended unexpectedly.
+
+---
+
 ## [1.2.1]
 
 ### 🐞 Bug Fixes
