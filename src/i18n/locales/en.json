@@ -141,6 +141,7 @@
     "model": "AI Engine",
     "note": "Note",
     "proxy": "Proxy",
+    "proxy_switcher": "Proxy Switcher",
     "quit": "Quit",
     "scraperTest": "Scraper Test",
     "setting": "Settings",

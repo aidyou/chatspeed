@@ -3,7 +3,7 @@ use crate::ccproxy::helper::get_tool_id;
 use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
-    helper::{get_provider_chat_full_url, ModelResolver},
+    helper::{get_provider_chat_full_url, stat_guard::StreamStatGuard, ModelResolver},
     types::ProxyModel,
     ChatProtocol,
 };
@@ -114,8 +114,6 @@ pub async fn handle_direct_forward(
 
     body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
     // Force set the model field for protocols that require it in the body to ensure the backend receives the correct ID.
-    // We apply .trim() to prevent issues with leading/trailing spaces in configuration.
-    // For Gemini, the model is specified in the URL, so we only update it if present to avoid breaking strict body validation.
     if let Some(obj) = body_json.as_object_mut() {
         match proxy_model.chat_protocol {
             ChatProtocol::OpenAI
@@ -153,8 +151,6 @@ pub async fn handle_direct_forward(
     // Handle response
     let status_code = target_response.status();
     let response_headers = target_response.headers().clone();
-    dbg!(status_code);
-    dbg!(&response_headers);
 
     if !status_code.is_success() {
         let error_body_bytes = target_response.bytes().await.map_err(|e| {
@@ -211,10 +207,6 @@ pub async fn handle_direct_forward(
         )));
         let chat_protocol = proxy_model.chat_protocol.clone();
         let log_recorder_clone = log_recorder.clone();
-        let main_store_for_stream = main_store_arc.clone();
-        let provider_for_stream = provider_name.clone();
-        let client_model_for_stream = proxy_model.client_alias.clone();
-        let backend_model_for_stream = model_name.clone();
         let sse_status = Arc::new(RwLock::new(SseStatus::new(
             "".to_string(),
             "".to_string(),
@@ -222,14 +214,24 @@ pub async fn handle_direct_forward(
             estimated_input_tokens,
         )));
 
+        // Create the guard that will record stats when dropped (stream ends)
+        let stat_guard = Arc::new(StreamStatGuard {
+            log_recorder: log_recorder.clone(),
+            sse_status: sse_status.clone(),
+            main_store: main_store_arc.clone(),
+            client_model: proxy_model.client_alias.clone(),
+            backend_model: model_name.clone(),
+            provider: provider_name.clone(),
+            protocol: chat_protocol.to_string(),
+            tool_compat_mode: false,
+        });
+
         let stream = target_response.bytes_stream().map(move |chunk| {
             let sse_status = sse_status.clone();
             let log_recorder = log_recorder_clone.clone();
             let chat_protocol = chat_protocol.clone();
-            let main_store = main_store_for_stream.clone();
-            let provider = provider_for_stream.clone();
-            let client_model = client_model_for_stream.clone();
-            let backend_model = backend_model_for_stream.clone();
+            // Move the guard into the closure so it lives as long as the stream
+            let _guard = stat_guard.clone();
 
             chunk.map(move |bytes| {
                 // Always parse for statistics, but only log to file if enabled
@@ -239,10 +241,6 @@ pub async fn handle_direct_forward(
                     &chat_protocol,
                     sse_status.clone(),
                     log_to_file,
-                    main_store,
-                    provider,
-                    client_model,
-                    backend_model,
                 );
 
                 bytes
@@ -275,13 +273,22 @@ pub async fn handle_direct_forward(
                 let (input, output, cache) =
                     extract_usage_from_value(&body_json, &chat_protocol_for_stat);
 
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "Recording non-streaming direct stat: provider='{}', model='{}', tokens={}/{}",
+                    &provider_name,
+                    &model_name,
+                    input,
+                    output
+                );
+
                 let _ = store.record_ccproxy_stat(CcproxyStat {
                     id: None,
                     client_model: proxy_model.client_alias.clone(),
                     backend_model: model_name.clone(),
                     provider: provider_name.clone(),
                     protocol: chat_protocol_for_stat.to_string(),
-                    tool_compat_mode: 0, // Direct forward is never in compat mode
+                    tool_compat_mode: 0,
                     status_code: status_code.as_u16() as i32,
                     error_message: None,
                     input_tokens: input,
@@ -303,29 +310,6 @@ pub async fn handle_direct_forward(
 }
 
 /// Enhances the request body sent directly to the AI provider.
-///
-/// Applies proxy-level transformations before forwarding:
-///   - **temperature scaling**: If `proxy_model.temperature` is not `1.0`,
-///     multiplies any existing `"temperature"` value in the body by the proxy setting.
-///   - **tool filtering**: Removes any function/tool whose name appears in
-///     `proxy_model.tool_filter`.
-///   - **prompt injection**: When tools are present (`"tools"` array is non-empty)
-///     and `proxy_model.prompt_injection` is not `"off"`, inserts or overwrites
-///     the system prompt with `proxy_model.prompt_text`.
-///     - `"enhance"` appends it.
-///     - `"replace"` wholly replaces the original system prompt.
-///     Protocol-specific locations:
-///       - **Claude**: `"system"` key.
-///       - **Gemini**: `"system_instruction"` object with `"parts"`.
-///       - **OpenAI / Ollama / HuggingFace**: `"messages"` array, inserting a new
-///         `"system"` message at position 0 if none exists.
-///
-/// Args:
-/// - `body`: Original request body as JSON.
-/// - `proxy_model`: Proxy settings influencing transformations.
-/// - `chat_protocol`: The target provider protocol clarifying field semantics.
-///
-/// Returns the updated JSON body ready for forwarding.
 fn enhance_direct_request_body(
     mut body: Value,
     proxy_model: &ProxyModel,
@@ -463,21 +447,13 @@ fn chunk_parser_and_log(
     chat_protocol: &ChatProtocol,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
-    provider: String,
-    client_model: String,
-    backend_model: String,
 ) {
     let chunk_str = String::from_utf8_lossy(bytes);
-    let mut is_finished = false;
 
     for line in chunk_str.lines() {
         if line.starts_with("data:") {
             let data = &line["data:".len()..].trim();
             if data.is_empty() || *data == "[DONE]" {
-                if *data == "[DONE]" {
-                    is_finished = true;
-                }
                 continue;
             }
 
@@ -514,7 +490,6 @@ fn chunk_parser_and_log(
                                     }
                                 }
                             }
-                            // ... reasoning and tool_calls omitted for brevity but remain the same
 
                             if let Some(text) =
                                 detlta.get("reasoning_content").and_then(|c| c.as_str())
@@ -589,17 +564,6 @@ fn chunk_parser_and_log(
                                 usage.get("completion_tokens").and_then(|t| t.as_u64())
                             {
                                 recorder.output_tokens = Some(completion_tokens);
-                            }
-                        }
-
-                        if let Some(reason) = json_data
-                            .get("choices")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("finish_reason"))
-                            .and_then(|r| r.as_str())
-                        {
-                            if !reason.is_empty() {
-                                is_finished = true;
                             }
                         }
                     }
@@ -710,14 +674,6 @@ fn chunk_parser_and_log(
                                         recorder.output_tokens =
                                             Some(usage.output_tokens.unwrap_or(0));
                                     }
-                                    if let Some(delta) = claude_event.delta {
-                                        if delta.stop_reason.is_some() {
-                                            is_finished = true;
-                                        }
-                                    }
-                                }
-                                "message_stop" => {
-                                    is_finished = true;
                                 }
                                 _ => {}
                             }
@@ -794,16 +750,6 @@ fn chunk_parser_and_log(
                                 recorder.output_tokens = Some(candidates_token_count);
                             }
                         }
-                        if let Some(reason) = json_data
-                            .get("candidates")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("finishReason"))
-                            .and_then(|r| r.as_str())
-                        {
-                            if !reason.is_empty() {
-                                is_finished = true;
-                            }
-                        }
                     }
                     ChatProtocol::Ollama => {
                         if let Some(message) = json_data.get("message") {
@@ -876,69 +822,9 @@ fn chunk_parser_and_log(
                         {
                             recorder.output_tokens = Some(eval_count);
                         }
-                        if let Some(done) = json_data.get("done").and_then(|d| d.as_bool()) {
-                            if done {
-                                is_finished = true;
-                            }
-                        }
                     }
                 }
             }
-        }
-    }
-
-    if is_finished {
-        let (input, output) = {
-            let recorder = log_recorder.lock().unwrap();
-            if log_to_file {
-                log::info!(target: "ccproxy_logger",
-                    "[Direct]{} Stream Response: \n{}\n================\n\n",
-                    chat_protocol.to_string(),
-                    serde_json::to_string_pretty(&*recorder).unwrap_or_default()
-                );
-            }
-            (
-                recorder.input_tokens.unwrap_or(0),
-                recorder.output_tokens.unwrap_or(0),
-            )
-        };
-
-        // Record statistics to DB on finish
-        if let Ok(store) = main_store_arc.read() {
-            let (est_input, est_output) = if let Ok(status) = sse_status.read() {
-                (
-                    status.estimated_input_tokens,
-                    status.estimated_output_tokens,
-                )
-            } else {
-                (0.0, 0.0)
-            };
-
-            let final_input = if input > 0 {
-                input
-            } else {
-                est_input.ceil() as u64
-            };
-            let final_output = if output > 0 {
-                output
-            } else {
-                est_output.ceil() as u64
-            };
-
-            let _ = store.record_ccproxy_stat(CcproxyStat {
-                id: None,
-                client_model,
-                backend_model,
-                provider,
-                protocol: chat_protocol.to_string(),
-                tool_compat_mode: 0,
-                status_code: 200,
-                error_message: None,
-                input_tokens: final_input as i64,
-                output_tokens: final_output as i64,
-                cache_tokens: 0, // Cache tokens are rarely provided in streaming direct forward
-                request_at: None,
-            });
         }
     }
 }

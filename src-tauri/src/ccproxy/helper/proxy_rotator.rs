@@ -9,7 +9,6 @@ use dashmap::DashMap;
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Represents a single API key with its associated provider information
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +41,7 @@ pub struct ProxyRotator {
     /// Global key pool for each composite key.
     /// Key: Composite Key
     /// Value: Vec<GlobalApiKey> - all keys from all providers for this composite key
-    global_key_pools: Arc<RwLock<DashMap<String, Vec<GlobalApiKey>>>>,
+    global_key_pools: Arc<DashMap<String, Vec<GlobalApiKey>>>,
 
     /// Global counter for key rotation per composite key.
     /// Key: Composite Key
@@ -52,7 +51,7 @@ pub struct ProxyRotator {
     /// Mapping between provider ID and their keys for efficient update detection.
     /// Key: format!("{}:{}", composite_key, provider_id)
     /// Value: (Vec<String>, base_url, model_name) - keys and metadata for this provider
-    provider_keys_mapping: Arc<RwLock<DashMap<String, (Vec<String>, String, String)>>>,
+    provider_keys_mapping: Arc<DashMap<String, (Vec<String>, String, String)>>,
 }
 
 impl ProxyRotator {
@@ -91,8 +90,7 @@ impl ProxyRotator {
     /// # Returns
     /// The next GlobalApiKey to use, or None if no keys are available.
     pub async fn get_next_global_key(&self, composite_key: &str) -> Option<GlobalApiKey> {
-        let pools = self.global_key_pools.read().await;
-        let keys = pools.get(composite_key)?;
+        let keys = self.global_key_pools.get(composite_key)?;
 
         if keys.is_empty() {
             return None;
@@ -121,13 +119,13 @@ impl ProxyRotator {
         new_pool.sort_by(|a, b| a.key.cmp(&b.key));
 
         // Atomically insert the new pool, replacing the old one.
-        let pools = self.global_key_pools.write().await;
-        pools.insert(composite_key.to_string(), new_pool);
+        self.global_key_pools
+            .insert(composite_key.to_string(), new_pool);
 
         // Since we are replacing the pool directly, we should also clear the old provider_keys_mapping
         // for this composite key to prevent stale data from being used if the old update path is ever called.
-        let mapping = self.provider_keys_mapping.write().await;
-        mapping.retain(|key, _| !key.starts_with(&format!("{}:", composite_key)));
+        self.provider_keys_mapping
+            .retain(|key, _| !key.starts_with(&format!("{}:", composite_key)));
 
         #[cfg(debug_assertions)]
         log::debug!(

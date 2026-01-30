@@ -28,7 +28,7 @@
               <el-dropdown-item :command="30">{{ $t('settings.proxy.stats.deleteOlderThan30Days') }}</el-dropdown-item>
               <el-dropdown-item :command="90">{{ $t('settings.proxy.stats.deleteOlderThan90Days') }}</el-dropdown-item>
               <el-dropdown-item :command="365">{{ $t('settings.proxy.stats.deleteOlderThan365Days')
-                }}</el-dropdown-item>
+              }}</el-dropdown-item>
               <el-dropdown-item :command="-1" divided style="color: var(--el-color-danger)">{{
                 $t('settings.proxy.stats.deleteAll') }}</el-dropdown-item>
             </el-dropdown-menu>
@@ -47,15 +47,15 @@
               <el-table-column prop="provider" :label="$t('settings.proxy.stats.provider')" width="100"
                 show-overflow-tooltip />
               <el-table-column prop="clientModel" :label="$t('settings.proxy.stats.clientModel')" min-width="150"
-                show-overflow-tooltip>
+                show-overflow-tooltip sortable>
                 <template #default="scope">
                   <span style="color: var(--cs-color-primary); font-weight: bold">{{
                     scope.row.clientModel
-                    }}</span>
+                  }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="backendModel" :label="$t('settings.proxy.stats.backendModel')" min-width="200"
-                show-overflow-tooltip />
+                show-overflow-tooltip sortable />
               <el-table-column prop="protocol" :label="$t('settings.proxy.stats.protocol')" width="90">
                 <template #default="scope">
                   <el-tag size="small" :color="getProtocolColor(scope.row.protocol)"
@@ -75,27 +75,30 @@
                   </el-tag>
                 </template>
               </el-table-column>
-               <el-table-column prop="requestCount" :label="$t('settings.proxy.stats.requests')" width="100" sortable />
-               <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="90" sortable sort-by="totalInputTokens">
-                 <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
-               </el-table-column>
-               <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="90" sortable sort-by="totalOutputTokens">
-                 <template #default="scope">{{
-                   formatTokens(scope.row.totalOutputTokens)
-                   }}</template>
-               </el-table-column>
-               <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="90" sortable sort-by="totalCacheTokens">
-                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
-               </el-table-column>
-               <el-table-column :label="$t('settings.proxy.stats.errors')" width="100" sortable sort-by="errorCount">
-                 <template #default="scope">
-                   <el-link v-if="scope.row.errorCount > 0" type="danger"
-                     @click="showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)">
-                     {{ scope.row.errorCount }}
-                   </el-link>
-                   <span v-else>0</span>
-                 </template>
-               </el-table-column>
+              <el-table-column prop="requestCount" :label="$t('settings.proxy.stats.requests')" width="100" sortable />
+              <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="90" sortable
+                sort-by="totalInputTokens">
+                <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
+              </el-table-column>
+              <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="90" sortable
+                sort-by="totalOutputTokens">
+                <template #default="scope">{{
+                  formatTokens(scope.row.totalOutputTokens)
+                }}</template>
+              </el-table-column>
+              <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="90" sortable
+                sort-by="totalCacheTokens">
+                <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
+              </el-table-column>
+              <el-table-column :label="$t('settings.proxy.stats.errors')" width="100" sortable sort-by="errorCount">
+                <template #default="scope">
+                  <el-link v-if="scope.row.errorCount > 0" type="danger"
+                    @click="showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)">
+                    {{ scope.row.errorCount }}
+                  </el-link>
+                  <span v-else>0</span>
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </template>
@@ -171,9 +174,11 @@ import { ElMessageBox } from 'element-plus'
 
 const { t } = useI18n()
 
+const STORAGE_KEY_AUTO_REFRESH = 'ccproxy_stats_auto_refresh'
+
 const loading = ref(false)
 const selectedDays = ref(0)
-const autoRefreshEnabled = ref(false)
+const autoRefreshEnabled = ref(localStorage.getItem(STORAGE_KEY_AUTO_REFRESH) === 'true')
 const dailyStats = ref([])
 // Use reactive to ensure reactivity when dynamically adding keys
 const providerStats = ref({})
@@ -479,6 +484,7 @@ const handleDeleteStats = async days => {
 }
 
 watch(autoRefreshEnabled, (val) => {
+  localStorage.setItem(STORAGE_KEY_AUTO_REFRESH, val ? 'true' : 'false')
   if (val) {
     startRefreshTimer()
   } else {

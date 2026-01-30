@@ -141,6 +141,7 @@
     "model": "AI引擎",
     "note": "智记",
     "proxy": "代理",
+    "proxy_switcher": "代理切换",
     "quit": "退出",
     "scraperTest": "爬虫测试",
     "setting": "设置",

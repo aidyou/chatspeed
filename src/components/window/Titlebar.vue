@@ -23,9 +23,7 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
-        <el-tooltip
-          placement="bottom"
-          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+        <el-tooltip placement="bottom" v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />
@@ -108,6 +106,8 @@ const availableMenus = [
   'skill',
   'mcp',
   'proxy',
+  'divider',
+  { name: 'proxy_switcher', icon: 'switch' },
   // 'agent',
   'divider',
   { name: 'scraperTest', icon: 'extract' },
@@ -253,6 +253,9 @@ const handleCommand = async command => {
       case 'setting':
         await invoke('open_setting_window', { settingType: 'general' })
         break
+      case 'proxy_switcher':
+        await invoke('open_proxy_switcher_window')
+        break
       case 'about':
       case 'agent':
       case 'mcp':
@@ -371,6 +374,7 @@ init()
       /* border-radius: var(--cs-border-radius); */
       font-size: var(--cs-font-size);
       color: var(--cs-success-color);
+
       .cs {
         color: var(--cs-success-color);
       }

@@ -231,6 +231,7 @@ pub async fn run() -> crate::error::Result<()> {
             open_note_window,
             open_url,
             show_window,
+            open_proxy_switcher_window,
             toggle_window_always_on_top,
             get_window_always_on_top,
             quit_window,

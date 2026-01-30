@@ -611,7 +611,7 @@ pub async fn handle_chat_completion(
             sse_status,
             log_org_to_file,
             main_store_arc.clone(),
-            proxy_alias.clone(),
+            proxy_model.client_alias.clone(),
             proxy_model.model.clone(),
             proxy_model.provider.clone(),
             final_tool_compat_mode,
@@ -644,6 +644,15 @@ pub async fn handle_chat_completion(
                 &proxy_model.model,
                 &proxy_model.provider
             );
+
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "Stat details: provider='{}', model='{}', client_alias='{}'",
+                &proxy_model.provider,
+                &proxy_model.model,
+                &proxy_model.client_alias
+            );
+
             let cache_tokens = unified_response
                 .usage
                 .cache_read_input_tokens

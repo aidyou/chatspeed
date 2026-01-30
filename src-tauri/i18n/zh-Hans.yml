@@ -274,6 +274,7 @@ tray:
   model: "模型"
   note: "智记"
   proxy: "代理"
+  proxy_switcher: "代理切换"
   quit: "退出"
   settings: "设置"
   skill: "技能"

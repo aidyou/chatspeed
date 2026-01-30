@@ -4,6 +4,7 @@ pub mod sse;
 pub mod stream_handler;
 mod stream_processor;
 pub mod tool_use_xml;
+pub mod stat_guard;
 
 pub use common::*;
 pub use proxy_rotator::CC_PROXY_ROTATOR;

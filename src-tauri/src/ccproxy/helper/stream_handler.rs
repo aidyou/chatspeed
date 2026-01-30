@@ -5,16 +5,17 @@ use crate::ccproxy::{
         unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart, UnifiedStreamChunk},
     },
     errors::{CCProxyError, ProxyResult},
+    helper::stat_guard::StreamStatGuard,
     ChatProtocol, StreamFormat, StreamProcessor,
 };
 
+use crate::db::MainStore;
 use axum::body::Body;
 use axum::response::Response;
 use futures_util::{stream::iter, StreamExt};
 use http::StatusCode;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
-use crate::db::{MainStore, CcproxyStat};
 
 pub async fn handle_streamed_response(
     backend_protocol: Arc<ChatProtocol>,
@@ -58,30 +59,18 @@ pub async fn handle_streamed_response(
     };
     let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(message_id, model_id)));
 
-    // let chat_protocol_str = chat_protocol.to_string();
     let unified_stream = reassembled_stream
         .then(move |item| {
             let adapter = backend_adapter.clone();
             let status = sse_status_clone.clone();
-            // let chat_protocol_str_clone = chat_protocol_str.clone();
             async move {
                 match item {
                     Ok(chunk) => {
-                        // #[cfg(debug_assertions)]
-                        // {
-                        //     log::debug!(
-                        //         "{} recv: {}",
-                        //         chat_protocol_str_clone,
-                        //         String::from_utf8_lossy(&chunk)
-                        //     );
-                        // }
-                        // Attempt to adapt the complete chunk
                         let result = adapter
                             .adapt_stream_chunk(chunk, status)
                             .await
                             .unwrap_or_else(|e| {
                                 log::error!("handler: adapt_stream_chunk failed: {}", e);
-                                // If adaptation fails, create an error chunk
                                 vec![
                                     crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
                                         message: e.to_string(),
@@ -103,16 +92,27 @@ pub async fn handle_streamed_response(
 
     let output_adapter = Arc::new(output_adapter);
     let log_recorder_clone = log_recorder.clone();
+
+    // Create the stat guard from public module
+    let stat_guard = Arc::new(StreamStatGuard {
+        log_recorder: log_recorder.clone(),
+        sse_status: sse_status.clone(),
+        main_store: main_store_arc.clone(),
+        client_model: client_model.clone(),
+        backend_model: backend_model.clone(),
+        provider: provider.clone(),
+        protocol: client_protocol.to_string(),
+        tool_compat_mode,
+    });
+
     let byte_stream = unified_stream.then(move |unified_chunk| {
         let client_protocol_inner = client_protocol.clone();
         let output_adapter = output_adapter.clone();
         let sse_status = sse_status.clone();
         let inner_log_recorder = log_recorder_clone.clone();
-        let main_store_arc = main_store_arc.clone();
-        let client_model = client_model.clone();
-        let backend_model = backend_model.clone();
-        let provider = provider.clone();
-        let tool_compat_mode = tool_compat_mode;
+        // Move guard into closure
+        let _guard = stat_guard.clone();
+
         async move {
             if let Ok(mut log_recorder) = inner_log_recorder.lock() {
                 adapt_stream_chunk_to_log(
@@ -120,21 +120,13 @@ pub async fn handle_streamed_response(
                     &unified_chunk,
                     &mut log_recorder,
                     log_to_file,
-                    main_store_arc,
-                    client_model,
-                    backend_model,
-                    provider,
-                    tool_compat_mode,
-                    sse_status.clone(),
                 );
             }
 
             let events = output_adapter
                 .adapt_stream_chunk(unified_chunk, sse_status)
                 .unwrap_or_else(|_| {
-                    log::error!(
-                        "adapt_stream_chunk failed unexpectedly despite Infallible error type"
-                    );
+                    log::error!("adapt_stream_chunk failed unexpectedly");
                     Vec::new()
                 });
 
@@ -197,12 +189,6 @@ pub fn adapt_stream_chunk_to_log(
     chunk: &UnifiedStreamChunk,
     recorder: &mut StreamLogRecorder,
     log_to_file: bool,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
-    client_model: String,
-    backend_model: String,
-    provider: String,
-    tool_compat_mode: bool,
-    sse_status: Arc<RwLock<SseStatus>>,
 ) {
     match chunk {
         UnifiedStreamChunk::MessageStart { id, .. } => {
@@ -249,41 +235,6 @@ pub fn adapt_stream_chunk_to_log(
 
             if log_to_file {
                 log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
-            }
-
-            // Record statistics
-            if let Ok(store) = main_store_arc.read() {
-                log::info!("Recording ccproxy stats for streaming response finish: client_model={}, backend_model={}, provider={}", &client_model, &backend_model, &provider);
-                
-                let (est_input, est_output) = if let Ok(status) = sse_status.read() {
-                    (status.estimated_input_tokens, status.estimated_output_tokens)
-                }
-                else {
-                    (0.0, 0.0)
-                };
-
-                let final_input = if usage.input_tokens > 0 { usage.input_tokens } else { est_input.ceil() as u64 };
-                let final_output = if usage.output_tokens > 0 { usage.output_tokens } else { est_output.ceil() as u64 };
-
-                let cache_tokens = usage.cache_read_input_tokens
-                    .or(usage.prompt_cached_tokens)
-                    .or(usage.cached_content_tokens)
-                    .unwrap_or(0);
-
-                let _ = store.record_ccproxy_stat(CcproxyStat {
-                    id: None,
-                    client_model,
-                    backend_model,
-                    provider,
-                    protocol: client_protocol.to_string(),
-                    tool_compat_mode: if tool_compat_mode { 1 } else { 0 },
-                    status_code: 200,
-                    error_message: None,
-                    input_tokens: final_input as i64,
-                    output_tokens: final_output as i64,
-                    cache_tokens: cache_tokens as i64,
-                    request_at: None,
-                });
             }
         }
         _ => {}

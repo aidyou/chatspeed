@@ -490,12 +490,39 @@ impl ModelResolver {
         let group_name = proxy_group.unwrap_or("default");
         let composite_key = format!("{}/{}", group_name, matched_alias_key);
 
-        // Atomically update the entire key pool for this alias
-        let mut new_key_pool = Vec::new();
+        // Group targets by provider to avoid weight multiplication.
+        // Use BTreeMap for stable iteration order.
+        let mut provider_to_models: std::collections::BTreeMap<i64, Vec<String>> =
+            std::collections::BTreeMap::new();
         for target in &backend_targets {
-            // Get AI model details for this target.
-            if let Ok(ai_model) = Self::get_ai_model_details(main_store_arc.clone(), target.id) {
-                // Skip providers with no keys (like Ollama)
+            provider_to_models
+                .entry(target.id)
+                .or_default()
+                .push(target.model.clone());
+        }
+
+        // Atomically update the entire key pool for this alias
+        //
+        // [Logic Refactor Explanation - 2026-01-30]
+        //
+        // Previous Issue (Weight Explosion):
+        // The old logic iterated: `for target in targets { for key in provider_keys { push(key, target) } }`.
+        // If a provider (e.g., ModelScope) was configured with 3 targets (e.g., via wildcards or multiple alias entries)
+        // and had 3 keys, it would create 3 * 3 = 9 entries in the pool.
+        // If another provider (e.g., iFlow) had 1 target and 1 key, it had 1 entry.
+        // This resulted in a 9:1 traffic skew, whereas the user expected a 3:1 skew based on key count (3 keys vs 1 key).
+        //
+        // Current Logic (Key-Centric Rotation):
+        // 1. We group targets by Provider ID first.
+        // 2. We ensure each PHYSICAL KEY from a provider is added to the global pool exactly ONCE.
+        //    This ensures that 3 keys = 3 entries, regardless of how many model aliases map to this provider.
+        // 3. To support multiple models for a single provider (e.g., "ds-3.2" and "ds-3.2-chat"),
+        //    we use a secondary round-robin counter (`model_rot`) to rotate the model name used by that key.
+        //
+        // Result: Traffic distribution is strictly proportional to the number of valid API keys.
+        let mut new_key_pool = Vec::new();
+        for (provider_id, models) in provider_to_models {
+            if let Ok(ai_model) = Self::get_ai_model_details(main_store_arc.clone(), provider_id) {
                 if ai_model.api_key.trim().is_empty() {
                     continue;
                 }
@@ -511,25 +538,30 @@ impl ModelResolver {
                     vec![ai_model.api_key.trim().to_string()]
                 };
 
-                for key in keys {
-                    // [Gemini] Correctly create the GlobalApiKey struct with all required fields
+                // Use a dedicated counter for rotating models within this provider to ensure
+                // that even if keys < models, all models are eventually used without inflating the key's weight.
+                let model_rot_key = format!("{}:{}:model_rot", composite_key, provider_id);
+                let model_rot = CC_PROXY_ROTATOR.get_next_target_index(&model_rot_key, models.len());
+
+                // Each unique key is added exactly ONCE to the global pool.
+                for (key_idx, key) in keys.into_iter().enumerate() {
+                    let model_idx = (key_idx + model_rot) % models.len();
                     new_key_pool.push(GlobalApiKey {
                         key,
                         provider_id: ai_model.id.unwrap_or_default(),
                         base_url: ai_model.base_url.clone(),
-                        model_name: target.model.clone(),
+                        model_name: models[model_idx].clone(),
                     });
                 }
             }
         }
 
-        // Call the new atomic replacement method
+        // Call the atomic replacement method
         CC_PROXY_ROTATOR
             .replace_pool_for_composite_key(&composite_key, new_key_pool)
             .await;
 
-        // The function still needs to select a target for the CURRENT request.
-        // We preserve the round-robin logic for selecting the provider for this specific call.
+        // The function still needs to select a target for the CURRENT request (mostly for early returns/Ollama).
         if backend_targets.is_empty() {
             log::warn!("No backend targets available for alias '{}'.", proxy_alias);
             return Err(CCProxyError::NoBackendTargets(proxy_alias.to_string()));

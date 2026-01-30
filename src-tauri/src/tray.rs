@@ -109,6 +109,15 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     )
     .map_err(|e| e.to_string())?;
 
+    let proxy_switcher_window_menu_item = tauri::menu::MenuItem::with_id(
+        app,
+        "proxy_switcher",
+        &rust_i18n::t!("tray.proxy_switcher"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+
     // let agent_window_menu_item = tauri::menu::MenuItem::with_id(
     //     app,
     //     "agent",
@@ -146,6 +155,8 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         .item(&skill_window_menu_item)
         .item(&mcp_window_menu_item)
         .item(&proxy_window_menu_item)
+        .separator()
+        .item(&proxy_switcher_window_menu_item)
         // .item(&agent_window_menu_item)
         .separator()
         .item(&about_window_menu_item)
@@ -220,6 +231,9 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
             if let Err(e) = crate::open_note_window(app.clone()).await {
                 log::error!("Failed to open note window: {}", e);
             }
+        }
+        "proxy_switcher" => {
+            crate::window::toggle_proxy_switcher_window(app);
         }
         "settings" | "agent" | "mcp" | "model" | "proxy" | "skill" | "about" => {
             let setting_type = if menu_id.as_str() == "settings" {

@@ -137,6 +137,23 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Opens the proxy switcher window
+///
+/// # Arguments
+/// - `app_handle` - Tauri application handle
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// await invoke('open_proxy_switcher_window');
+/// ```
+#[command]
+pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
+    crate::window::toggle_proxy_switcher_window(&app_handle);
+    Ok(())
+}
+
 /// Show the window by windowLabel
 ///
 /// # Arguments

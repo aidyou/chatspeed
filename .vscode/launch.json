@@ -24,7 +24,8 @@
       "env": {
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "trace",
-        "TAURI_DEV": "1"
+        "TAURI_DEV": "1",
+        "OS_ACTIVITY_MODE": "disable"
       },
       "preLaunchTask": "start-frontend-dev-server"
     },
@@ -51,7 +52,8 @@
       "env": {
         "RUST_BACKTRACE": "1",
         "RUST_LOG": "debug",
-        "TAURI_DEV": "1"
+        "TAURI_DEV": "1",
+        "OS_ACTIVITY_MODE": "disable"
       },
       "preLaunchTask": "prepare-debug-backend"
     },
@@ -77,7 +79,8 @@
       ],
       "env": {
         "RUST_BACKTRACE": "1",
-        "RUST_LOG": "info"
+        "RUST_LOG": "info",
+        "OS_ACTIVITY_MODE": "disable"
       },
       "preLaunchTask": "build-frontend-production"
     },
@@ -103,7 +106,8 @@
       ],
       "env": {
         "RUST_BACKTRACE": "full",
-        "RUST_LOG": "debug"
+        "RUST_LOG": "debug",
+        "OS_ACTIVITY_MODE": "disable"
       }
     },
     {
