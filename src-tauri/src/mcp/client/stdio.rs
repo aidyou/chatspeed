@@ -165,7 +165,11 @@ impl McpClient for StdioClient {
             let is_script = extension.eq_ignore_ascii_case("cmd")
                 || extension.eq_ignore_ascii_case("bat")
                 || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("npx")
-                || original_cmd_str == "npx";
+                || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("uv")
+                || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("uvx")
+                || original_cmd_str == "npx"
+                || original_cmd_str == "uv"
+                || original_cmd_str == "uvx";
 
             let mut cmd = if is_script {
                 let mut c = Command::new("cmd");
