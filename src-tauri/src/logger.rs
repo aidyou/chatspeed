@@ -1,6 +1,5 @@
 use lazy_static::*;
 use regex::Regex;
-use rust_i18n::t;
 use std::fs::File;
 use tauri::Manager;
 
@@ -187,22 +186,54 @@ fn replace_sensitive_info(message: &str) -> String {
 /// # Arguments
 /// * `app` - A reference to the Tauri application
 pub fn setup_logger(app: &tauri::App) {
-    // Initialize log directory and file
-    let log_dir = app
-        .path()
-        .app_log_dir()
-        .expect(&t!("main.failed_to_retrieve_log_directory"));
+    // 1. Try to get log directory safely
+    let log_dir_res = app.path().app_log_dir();
+    let log_dir = match log_dir_res {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Failed to retrieve log directory: {}", e);
+            // Fallback: Use standard dispatcher without file logging if directory is unavailable
+            let _ = fern::Dispatch::new()
+                .level(log::LevelFilter::Debug)
+                .format(console_log_formatter)
+                .chain(std::io::stdout())
+                .apply();
+            return;
+        }
+    };
 
     *LOG_DIR.write() = log_dir.clone();
 
     let log_file_path = log_dir.join("chatspeed.log");
     let ccproxy_log_path = log_dir.join("ccproxy.log");
 
-    // Ensure log directory exists
-    std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
-    // Create log file
-    File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
-    File::create(&ccproxy_log_path).expect("Failed to create ccproxy.log");
+    // 2. Ensure log directory exists safely
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("Failed to create log directory at {:?}: {}", log_dir, e);
+        let _ = fern::Dispatch::new()
+            .level(log::LevelFilter::Debug)
+            .format(console_log_formatter)
+            .chain(std::io::stdout())
+            .apply();
+        return;
+    }
+
+    // 3. Try to create log files
+    let log_file = match File::create(&log_file_path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("Failed to create log file: {}", e);
+            None
+        }
+    };
+
+    let ccproxy_log_file = match File::create(&ccproxy_log_path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("Failed to create ccproxy log file: {}", e);
+            None
+        }
+    };
 
     // Create base dispatcher
     let base_dispatcher = fern::Dispatch::new().level(log::LevelFilter::Debug);
@@ -218,44 +249,58 @@ pub fn setup_logger(app: &tauri::App) {
         .chain(std::io::stdout());
 
     // File dispatcher - detailed format
-    // In development (debug builds), log everything at Debug level.
-    // In production (release builds), log only Info and above to reduce noise.
     #[cfg(debug_assertions)]
     let log_level = log::LevelFilter::Debug;
     #[cfg(not(debug_assertions))]
     let log_level = log::LevelFilter::Info;
 
-    let file_dispatcher = fern::Dispatch::new()
+    let mut file_dispatcher = fern::Dispatch::new()
         .level(log_level)
         .filter(|record| {
             record.target().contains("chatspeed")
                 || (record.level() < log::LevelFilter::Info && record.target() != "ccproxy_logger")
         })
-        .format(file_log_formatter)
-        .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));
+        .format(file_log_formatter);
+
+    if log_file.is_some() {
+        if let Ok(file_chain) = fern::log_file(&log_file_path) {
+            file_dispatcher = file_dispatcher.chain(file_chain);
+        } else {
+            eprintln!("Failed to open log file chain even though file was created");
+        }
+    }
 
     // ccproxy dispatcher - raw format
-    let ccproxy_dispatcher = fern::Dispatch::new()
+    let mut ccproxy_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Info)
         .filter(|record| record.target() == "ccproxy_logger")
-        .format(|out, message, _| out.finish(format_args!("{}", message)))
-        .chain(fern::log_file(&ccproxy_log_path).expect("Failed to create ccproxy.log"));
+        .format(|out, message, _| out.finish(format_args!("{}", message)));
+
+    if ccproxy_log_file.is_some() {
+        if let Ok(file_chain) = fern::log_file(&ccproxy_log_path) {
+            ccproxy_dispatcher = ccproxy_dispatcher.chain(file_chain);
+        } else {
+            eprintln!("Failed to open ccproxy log file chain even though file was created");
+        }
+    }
 
     // Apply logger configuration
-    base_dispatcher
-        .chain(stdout_dispatcher)
-        .chain(file_dispatcher)
-        .chain(ccproxy_dispatcher)
-        .apply()
-        .expect(&t!("main.failed_to_initialize_logger"));
+    let mut final_dispatcher = base_dispatcher.chain(stdout_dispatcher);
+    if log_file.is_some() {
+        final_dispatcher = final_dispatcher.chain(file_dispatcher);
+    }
+    if ccproxy_log_file.is_some() {
+        final_dispatcher = final_dispatcher.chain(ccproxy_dispatcher);
+    }
+
+    if let Err(e) = final_dispatcher.apply() {
+        eprintln!("Failed to initialize logger: {}", e);
+    }
 
     log::info!(
-        "Logger initialized successfully, log file path: {:?}",
+        "Logger initialized, log file enabled: {}, path: {:?}",
+        log_file.is_some(),
         log_file_path
-    );
-    log::info!(
-        "Logger initialized successfully, ccproxy log file path: {:?}",
-        ccproxy_log_path
     );
 }
 
@@ -282,6 +327,8 @@ use crate::constants::LOG_DIR;
 pub fn setup_test_logger() -> Result<(), SetLoggerError> {
     use std::env;
     use std::path::PathBuf;
+
+    use rust_i18n::t;
 
     if log::logger().enabled(&log::Metadata::builder().level(log::Level::Debug).build()) {
         return Ok(()); // Logger already initialized

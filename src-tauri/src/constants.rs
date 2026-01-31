@@ -124,13 +124,13 @@ lazy_static! {
                 // In test environment, get project root directory from environment variable
                 env::var("PROJECT_ROOT")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory")).parent().unwrap().into()
+                    .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from("."))).parent().unwrap_or(&PathBuf::from(".")).into()
             } else {
                 // In development and production environments, get project root from CARGO_MANIFEST_DIR
                 // CARGO_MANIFEST_DIR points to src-tauri/, so we need to go up one level to get project root
                 let manifest_dir = env::var("CARGO_MANIFEST_DIR")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"));
+                    .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
                 log::debug!("CARGO_MANIFEST_DIR: {:?}", manifest_dir);
 
