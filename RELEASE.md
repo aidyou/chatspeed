@@ -20,6 +20,7 @@
 
 ### 🐞 Bug Fixes
 
+- **Startup Panic on Windows**: Fixed a critical issue where the application could panic during startup if window events (Resized/Moved) were triggered before the internal state was fully initialized.
 - **Stat Recording Leak**: Fixed a potential issue where statistics might not be recorded if a streaming response ended unexpectedly.
 
 ---
