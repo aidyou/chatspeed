@@ -732,7 +732,36 @@ pub async fn backup_setting(
 }
 
 #[tauri::command]
-pub async fn restore_setting(app: AppHandle, backup_dir: String) -> Result<()> {
+pub async fn restore_setting(
+    app: AppHandle,
+    state: State<'_, Arc<RwLock<MainStore>>>,
+    backup_dir: String,
+) -> Result<()> {
+    // 1. Define configuration keys that are machine-specific and should be preserved
+    let machine_specific_keys = [
+        "backupDir",
+        CFG_WINDOW_POSITION,
+        CFG_WINDOW_SIZE,
+        CFG_ASSISTANT_WINDOW_SIZE,
+        CFG_WORKFLOW_WINDOW_SIZE,
+        CFG_WORKFLOW_WINDOW_POSITION,
+        "proxyType",
+        "proxyServer",
+        "proxyUsername",
+        "proxyPassword",
+    ];
+
+    // 2. Backup current machine-specific configurations
+    let mut preserved_configs = HashMap::new();
+    {
+        let config_store = state.read()?;
+        for &key in &machine_specific_keys {
+            if let Some(value) = config_store.config.get_setting(key) {
+                preserved_configs.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+
     let result = tokio::spawn(async move {
         let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
         let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
@@ -765,6 +794,20 @@ pub async fn restore_setting(app: AppHandle, backup_dir: String) -> Result<()> {
     })?;
 
     result.map_err(AppError::Db)?;
+
+    // 3. Reload the configuration from the newly restored database file
+    let mut config_store = state.write()?;
+    config_store.reload_config().map_err(AppError::Db)?;
+
+    // 4. Restore the preserved configurations to the new database
+    for key in machine_specific_keys {
+        if let Some(value) = preserved_configs.get(key) {
+            config_store.set_config(key, value).map_err(AppError::Db)?;
+        } else {
+            // If the key didn't exist before, ensure it doesn't exist in the restored DB either
+            let _ = config_store.delete_config(key);
+        }
+    }
 
     Ok(())
 }

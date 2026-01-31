@@ -40,6 +40,23 @@ impl MainStore {
         Ok(())
     }
 
+    /// Deletes a configuration item from the database.
+    ///
+    /// # Arguments
+    /// * `key` - The key of the configuration item to delete.
+    pub fn delete_config(&mut self, key: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        if let Err(e) = conn.execute("DELETE FROM config WHERE key = ?", [key]) {
+            error!("Failed to delete config for key '{}': {}", key, e);
+            return Err(StoreError::from(e));
+        }
+        self.config.settings.remove(key);
+        Ok(())
+    }
+
     /// Adds a new AI model to the database.
     ///
     /// # Arguments

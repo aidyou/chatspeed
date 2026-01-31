@@ -13,6 +13,7 @@
 
 ### 🪄 Improvements
 
+- **Intelligent Configuration Protection**: Optimized the database restoration process to automatically preserve machine-specific settings, including window positions, sizes, network proxy configurations, and backup paths. This ensures a seamless transition when moving data between different machines.
 - **Fair Weight Rotation Logic**: Refactored the proxy rotation engine to group targets by provider. This prevents "weight explosion" where a provider with many keys or model aliases would unfairly dominate traffic distribution.
 - **Robust Statistics Recording**: Introduced a RAII-based `StreamStatGuard` to ensure proxy usage statistics are accurately recorded even when streams are prematurely terminated or encounter errors.
 - **Refined Proxy Rotator**: Simplified the internal architecture by removing redundant locks, improving performance and maintainability.
@@ -21,6 +22,7 @@
 ### 🐞 Bug Fixes
 
 - **Startup Panic on Windows**: Fixed a critical issue where the application could panic during startup if window events (Resized/Moved) were triggered before the internal state was fully initialized.
+- **Silent Process Execution on Windows**: Fixed an issue where starting MCP servers or environment detection would cause a terminal window (black box) to pop up on Windows. All background processes now run silently.
 - **Stat Recording Leak**: Fixed a potential issue where statistics might not be recorded if a streaming response ended unexpectedly.
 
 ---

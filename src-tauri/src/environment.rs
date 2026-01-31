@@ -1,6 +1,9 @@
 use std::env;
 use tokio::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 #[cfg(target_os = "windows")]
 /// Attempts to retrieve the full system PATH environment variable on Windows.
 ///
@@ -20,7 +23,7 @@ async fn get_shell_path() -> Option<String> {
     ];
 
     for (shell, args) in methods {
-        if let Ok(output) = Command::new(shell).args(&args).creation_flags(0x08000000 | 0x00000008).output().await {
+        if let Ok(output) = Command::new(shell).args(&args).creation_flags(0x08000000).output().await {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() && path != "%PATH%" {

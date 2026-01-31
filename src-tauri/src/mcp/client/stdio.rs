@@ -39,6 +39,9 @@ use tokio::{process::Command, sync::RwLock};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::mcp::client::types::McpClientInternal;
 use crate::mcp::client::util::find_executable_in_common_paths;
 use crate::mcp::McpError;
@@ -164,7 +167,8 @@ impl McpClient for StdioClient {
                 .unwrap_or("");
             let is_script = extension.eq_ignore_ascii_case("cmd")
                 || extension.eq_ignore_ascii_case("bat")
-                || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("npx");
+                || path.file_name().and_then(std::ffi::OsStr::to_str) == Some("npx")
+                || original_cmd_str == "npx";
 
             let mut cmd = if is_script {
                 let mut c = Command::new("cmd");
@@ -173,8 +177,9 @@ impl McpClient for StdioClient {
             } else {
                 Command::new(&executable_to_run)
             };
-            // Fix(mcp): Set CREATE_NO_WINDOW and DETACHED_PROCESS to hide the console window when starting the process
-            cmd.creation_flags(0x08000000 | 0x00000008);
+            // Set CREATE_NO_WINDOW to hide the console window when starting the process.
+            // Using only 0x08000000 (CREATE_NO_WINDOW) is usually sufficient and safer than DETACHED_PROCESS.
+            cmd.creation_flags(0x08000000);
             cmd
         };
 
