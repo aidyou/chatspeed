@@ -375,23 +375,24 @@ pub async fn run() -> crate::error::Result<()> {
                 }
                 let window_label = window.label();
                 if window_label == "main" || window_label == "assistant" || window_label == "workflow" {
-                    let config_state = window.state::<Arc<RwLock<MainStore>>>();
-                    let window_size = get_saved_window_size(config_state.inner().clone(),window_label).unwrap_or_default();
-                    if (window_size.width != size.width as f64
-                        || window_size.height != size.height as f64)
-                        && (size.width > 0 && size.height > 0)
-                    {
-                        // Get the current window's scale factor.
-                        let scale_factor = window.scale_factor().unwrap_or(1.0);
-                        // Convert physical size to logical size.
-                        let logical_size = size.to_logical(scale_factor);
-                        // Store the window size when the user resizes it to remember for the next startup.
-                        if let Ok(mut store) = config_state.write() {
-                            if let Err(e) = store.set_window_size(WindowSize {
-                                width: logical_size.width,
-                                height: logical_size.height,
-                            }, window_label) {
-                                error!("Failed to set window size: {}", e);
+                    if let Some(config_state) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                        let window_size = get_saved_window_size(config_state.inner().clone(), window_label).unwrap_or_default();
+                        if (window_size.width != size.width as f64
+                            || window_size.height != size.height as f64)
+                            && (size.width > 0 && size.height > 0)
+                        {
+                            // Get the current window's scale factor.
+                            let scale_factor = window.scale_factor().unwrap_or(1.0);
+                            // Convert physical size to logical size.
+                            let logical_size = size.to_logical(scale_factor);
+                            // Store the window size when the user resizes it to remember for the next startup.
+                            if let Ok(mut store) = config_state.write() {
+                                if let Err(e) = store.set_window_size(WindowSize {
+                                    width: logical_size.width,
+                                    height: logical_size.height,
+                                }, window_label) {
+                                    error!("Failed to set window size: {}", e);
+                                }
                             }
                         }
                     }
@@ -404,24 +405,26 @@ pub async fn run() -> crate::error::Result<()> {
 
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
-                    let config_store = &window.state::<Arc<RwLock<MainStore>>>();
-                    save_window_position(
-                        window,
-                        config_store,
-                        position,
-                        get_saved_window_position,
-                        |store, pos| store.save_window_position(pos),
-                    );
+                    if let Some(config_store) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                        save_window_position(
+                            window,
+                            &config_store,
+                            position,
+                            get_saved_window_position,
+                            |store, pos| store.save_window_position(pos),
+                        );
+                    }
                 } else if window.label() == "workflow" {
                     // Save the workflow window position when it is moved.
-                    let config_store = &window.state::<Arc<RwLock<MainStore>>>();
-                    save_window_position(
-                        window,
-                        config_store,
-                        position,
-                        get_saved_workflow_window_position,
-                        |store, pos| store.save_workflow_window_position(pos),
-                    );
+                    if let Some(config_store) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                        save_window_position(
+                            window,
+                            &config_store,
+                            position,
+                            get_saved_workflow_window_position,
+                            |store, pos| store.save_workflow_window_position(pos),
+                        );
+                    }
                 } else if window.label() == "assistant" {
                     constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
 
