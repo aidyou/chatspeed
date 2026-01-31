@@ -4,6 +4,10 @@
 
 ## [1.2.2]
 
+### ⚠️ Deprecation Notice
+
+- **MCP SSE Protocol**: The `/mcp/sse` endpoint is now officially deprecated and scheduled for removal in **v1.3.0**. Users are strongly encouraged to migrate to the more stable `/mcp/http` (Streamable HTTP) protocol. This decision is due to inherent stability issues with SSE (such as unfixable 410 errors) and the removal of support in the upstream library.
+
 ### 🚀 New Features
 
 - **Proxy Switcher Window**: Introduced a lightweight, dedicated window for quickly switching active proxy groups. Accessible via the system tray, titlebar menu, and global shortcuts.
@@ -22,6 +26,7 @@
 ### 🐞 Bug Fixes
 
 - **Startup Panic on Windows**: Fixed a critical issue where the application could panic during startup if window events (Resized/Moved) were triggered before the internal state was fully initialized.
+- **Windows MCP Reliability**: Resolved an issue where some MCP servers (e.g., Context7) would hang in the "Starting" state on Windows. This was caused by improper terminal handling and script execution wrapping.
 - **Silent Process Execution on Windows**: Fixed an issue where starting MCP servers or environment detection would cause a terminal window (black box) to pop up on Windows. All background processes now run silently.
 - **Stat Recording Leak**: Fixed a potential issue where statistics might not be recorded if a streaming response ended unexpectedly.
 
