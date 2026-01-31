@@ -1,9 +1,6 @@
 use std::env;
 use tokio::process::Command;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 #[cfg(target_os = "windows")]
 /// Attempts to retrieve the full system PATH environment variable on Windows.
 ///
@@ -23,7 +20,12 @@ async fn get_shell_path() -> Option<String> {
     ];
 
     for (shell, args) in methods {
-        if let Ok(output) = Command::new(shell).args(&args).creation_flags(0x08000000).output().await {
+        if let Ok(output) = Command::new(shell)
+            .args(&args)
+            .creation_flags(0x08000000)
+            .output()
+            .await
+        {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() && path != "%PATH%" {
@@ -51,7 +53,9 @@ async fn get_shell_path() -> Option<String> {
 
     for shell in shells {
         // Helper to try executing a command and return path or error kind
-        let try_command = async move |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
+        let try_command = async move |shell_name: &str,
+                                      args: Vec<&str>|
+                    -> Result<Option<String>, std::io::ErrorKind> {
             match Command::new(shell_name).args(&args).output().await {
                 Ok(output) => {
                     if output.status.success() {
@@ -74,28 +78,40 @@ async fn get_shell_path() -> Option<String> {
         };
 
         // 1. Try interactive login shell first (most likely to have full user PATH)
-        log::debug!("Attempting to get PATH using interactive login shell: {} -l -i -c \"echo $PATH\"", shell);
+        log::debug!(
+            "Attempting to get PATH using interactive login shell: {} -l -i -c \"echo $PATH\"",
+            shell
+        );
         match try_command(&shell, vec!["-l", "-i", "-c", "echo $PATH"]).await {
             Ok(Some(path)) => {
                 log::debug!("Using {} -l -i -c to get PATH: {}", shell, path);
                 return Some(path);
             }
             Err(std::io::ErrorKind::NotFound) => {
-                log::debug!("Shell {} not found, skipping further attempts with this shell.", shell);
+                log::debug!(
+                    "Shell {} not found, skipping further attempts with this shell.",
+                    shell
+                );
                 continue; // Shell not found, try next one
             }
             _ => { /* Fall through to non-interactive attempt */ }
         }
 
         // 2. If interactive login shell didn't yield a PATH, try non-interactive login shell
-        log::debug!("Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"", shell);
+        log::debug!(
+            "Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"",
+            shell
+        );
         match try_command(&shell, vec!["-l", "-c", "echo $PATH"]).await {
             Ok(Some(path)) => {
                 log::debug!("Using {} -l -c to get PATH: {}", shell, path);
                 return Some(path);
             }
             Err(std::io::ErrorKind::NotFound) => {
-                log::debug!("Shell {} not found, skipping further attempts with this shell.", shell);
+                log::debug!(
+                    "Shell {} not found, skipping further attempts with this shell.",
+                    shell
+                );
                 continue; // Should have been caught by interactive attempt, but for safety
             }
             _ => { /* Fall through to next shell */ }

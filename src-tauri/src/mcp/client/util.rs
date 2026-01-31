@@ -3,9 +3,6 @@ use serde_json::{json, Value};
 use std::{env, path::PathBuf, sync::Arc};
 use tokio::process::Command as TokioCommand;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 use crate::ai::traits::chat::MCPToolDeclaration;
 
 /// get_tools converts ListToolsResult to Vec<MCPToolDeclaration>

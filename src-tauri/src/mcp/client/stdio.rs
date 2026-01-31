@@ -39,9 +39,6 @@ use tokio::{process::Command, sync::RwLock};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 use crate::mcp::client::types::McpClientInternal;
 use crate::mcp::client::util::find_executable_in_common_paths;
 use crate::mcp::McpError;

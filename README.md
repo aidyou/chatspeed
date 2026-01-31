@@ -11,7 +11,10 @@
 - **💼 Multi-functional Desktop Assistant**: You can use it for translation, creating mind maps, flowcharts, daily conversations, etc., quickly summoned with the shortcut ALT+Z.
 - **🔌 Connect Any Dev Tool**: Beyond just [Claude Code](https://docs.chatspeed.aidyou.ai/ccproxy/claude-code.md), you can also connect models to almost any major AI development tool, including [Gemini CLI](https://docs.chatspeed.aidyou.ai/ccproxy/gemini.md), [Cline](https://docs.chatspeed.aidyou.ai/ccproxy/cline.md), [Roo Code](https://docs.chatspeed.aidyou.ai/ccproxy/roo-code.md), and [Zed](https://docs.chatspeed.aidyou.ai/ccproxy/zed.md).
 - **💰 Use Claude Code for Free**: As a best practice, we provide a detailed tutorial on how to [use Claude Code for free](https://docs.chatspeed.aidyou.ai/posts/claude-code-free/).
-- **🚀 MCP Hub**: Chatspeed's MCP proxy can provide its own `WebSearch` and `WebFetch` tools, along with any `MCP` tools you've installed, to external clients via the `SSE` protocol. Learn how to [centrally manage MCP](https://docs.chatspeed.aidyou.ai/mcp/).
+- **🚀 MCP Hub**：Chatspeed's MCP proxy can provide its own `WebSearch` and `WebFetch` tools, along with any `MCP` tools you've installed, to external clients via the more stable `Streamable HTTP` protocol. Learn how to [centrally manage MCP](https://docs.chatspeed.aidyou.ai/mcp/).
+
+> [!CAUTION]
+> **⚠️ Deprecation Notice**: The `/mcp/sse` endpoint is now officially deprecated and scheduled for removal in **v1.3.0**. Due to inherent stability issues with SSE (such as unfixable 410 errors) and the removal of support in the upstream library, users are strongly encouraged to migrate to the `/mcp/http` (Streamable HTTP) protocol.
 
 ## 🚀 Core Engine: `CCProxy`
 
