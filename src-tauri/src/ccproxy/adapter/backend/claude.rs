@@ -118,6 +118,7 @@ impl ClaudeBackendAdapter {
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
         if let Ok(mut status) = sse_status.write() {
+            status.estimated_output_tokens += estimate_tokens(text);
             status.tool_compat_fragment_buffer.push_str(text);
             status.tool_compat_fragment_count += 1;
 

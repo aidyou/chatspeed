@@ -165,6 +165,7 @@ impl GeminiBackendAdapter {
                             if let Some(text) = part.text.clone() {
                                 if !text.is_empty() {
                                     if let Ok(mut status) = sse_status.write() {
+                                        status.estimated_output_tokens += estimate_tokens(&text);
                                         // Add text to fragment buffer for tool compatibility processing
                                         status.tool_compat_fragment_buffer.push_str(&text);
                                         status.tool_compat_fragment_count += 1;
