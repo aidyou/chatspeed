@@ -232,6 +232,10 @@ pub fn adapt_stream_chunk_to_log(
         UnifiedStreamChunk::MessageStop { usage, .. } => {
             recorder.input_tokens = Some(usage.input_tokens);
             recorder.output_tokens = Some(usage.output_tokens);
+            recorder.cache_tokens = usage
+                .prompt_cached_tokens
+                .or(usage.cache_read_input_tokens)
+                .or(usage.cached_content_tokens);
 
             if log_to_file {
                 log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());

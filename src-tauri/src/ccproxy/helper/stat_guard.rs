@@ -17,14 +17,15 @@ pub struct StreamStatGuard {
 
 impl Drop for StreamStatGuard {
     fn drop(&mut self) {
-        let (input, output) = {
+        let (input, output, cache) = {
             if let Ok(recorder) = self.log_recorder.lock() {
                 (
                     recorder.input_tokens.unwrap_or(0),
                     recorder.output_tokens.unwrap_or(0),
+                    recorder.cache_tokens.unwrap_or(0),
                 )
             } else {
-                (0, 0)
+                (0, 0, 0)
             }
         };
 
@@ -53,11 +54,12 @@ impl Drop for StreamStatGuard {
             if final_input > 0 || final_output > 0 {
                 #[cfg(debug_assertions)]
                 log::debug!(
-                    "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}",
+                    "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
                     &self.provider,
                     &self.backend_model,
                     final_input,
-                    final_output
+                    final_output,
+                    cache
                 );
 
                 let _ = store.record_ccproxy_stat(CcproxyStat {
@@ -71,7 +73,7 @@ impl Drop for StreamStatGuard {
                     error_message: None,
                     input_tokens: final_input as i64,
                     output_tokens: final_output as i64,
-                    cache_tokens: 0,
+                    cache_tokens: cache as i64,
                     request_at: None,
                 });
             }

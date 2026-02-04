@@ -29,12 +29,17 @@ fn main() {
     // .\vcpkg install bzip2:x64-windows-static
     println!("cargo:warning=Build script is running on Windows");
 
-    // Set correct triplet based on architecture
-    let triplet = if is_arm64 {
+    // Set correct triplet based on architecture and environment
+    let default_triplet = if is_arm64 {
         "arm64-windows-static"
     } else {
         "x64-windows-static"
     };
+    
+    // Use environment variable if set, otherwise use default
+    let triplet_env = env::var("VCPKG_DEFAULT_TRIPLET").unwrap_or_else(|_| default_triplet.to_string());
+    let triplet = triplet_env.as_str();
+    
     println!("cargo:warning=Using vcpkg triplet: {}", triplet);
 
     // --- Manual linking for vcpkg dependencies ---

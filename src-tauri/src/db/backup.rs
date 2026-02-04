@@ -48,7 +48,7 @@ impl DbBackup {
             let app_local_data_dir = _app
                 .path()
                 .app_data_dir()
-                .expect("Failed to retrieve the application data directory");
+                .map_err(|e| StoreError::TauriError(format!("Failed to retrieve the application data directory: {}", e)))?;
             std::fs::create_dir_all(&app_local_data_dir)
                 .map_err(|e| StoreError::TauriError(e.to_string()))?;
             app_local_data_dir

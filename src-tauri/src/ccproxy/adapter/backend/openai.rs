@@ -1128,7 +1128,7 @@ impl OpenAIBackendAdapter {
             }
 
             // Add content to fragment buffer
-            status.tool_compat_fragment_buffer.push_str(&match content {
+            let text = match content {
                 OpenAIMessageContent::Text(text) => text.as_str(),
                 OpenAIMessageContent::Parts(parts) => parts
                     .iter()
@@ -1137,7 +1137,9 @@ impl OpenAIBackendAdapter {
                         _ => None,
                     })
                     .unwrap_or(""),
-            });
+            };
+            status.estimated_output_tokens += estimate_tokens(text);
+            status.tool_compat_fragment_buffer.push_str(text);
             status.tool_compat_fragment_count += 1;
 
             let now = std::time::Instant::now();

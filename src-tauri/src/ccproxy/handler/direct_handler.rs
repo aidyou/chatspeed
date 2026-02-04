@@ -495,6 +495,9 @@ fn chunk_parser_and_log(
                                 detlta.get("reasoning_content").and_then(|c| c.as_str())
                             {
                                 if !text.is_empty() {
+                                    if let Ok(mut status) = sse_status.write() {
+                                        status.estimated_output_tokens += estimate_tokens(text);
+                                    }
                                     if log_to_file {
                                         match recorder.thinking {
                                             Some(ref mut reasoning) => reasoning.push_str(text),
@@ -513,34 +516,44 @@ fn chunk_parser_and_log(
                             .and_then(|d| d.get("tool_calls"))
                             .and_then(|t| t.as_array())
                         {
-                            if log_to_file {
-                                if recorder.tool_calls.is_none() {
-                                    recorder.tool_calls = Some(Default::default());
-                                }
+                            for tc in tool_calls {
+                                let tool_id = tc
+                                    .get("id")
+                                    .and_then(|i| i.as_str())
+                                    .map(|x| x.to_string())
+                                    .unwrap_or(get_tool_id());
 
-                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                    for tc in tool_calls {
-                                        let tool_id = tc
-                                            .get("id")
-                                            .and_then(|i| i.as_str())
-                                            .map(|x| x.to_string())
-                                            .unwrap_or(get_tool_id());
-
-                                        if let Some(func) = tc.get("function") {
-                                            if let Some(name) =
-                                                func.get("name").and_then(|n| n.as_str())
-                                            {
-                                                recorder_tool_calls
-                                                    .entry(tool_id.to_string())
-                                                    .or_insert_with(|| UnifiedFunctionCallPart {
-                                                        name: name.to_string(),
-                                                        args: "".to_string(),
-                                                    });
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(args) =
+                                        func.get("arguments").and_then(|a| a.as_str())
+                                    {
+                                        if !args.is_empty() {
+                                            if let Ok(mut status) = sse_status.write() {
+                                                status.estimated_output_tokens +=
+                                                    estimate_tokens(args);
                                             }
+                                        }
 
-                                            if let Some(args) =
-                                                func.get("arguments").and_then(|a| a.as_str())
+                                        if log_to_file {
+                                            if recorder.tool_calls.is_none() {
+                                                recorder.tool_calls = Some(Default::default());
+                                            }
+                                            if let Some(recorder_tool_calls) =
+                                                &mut recorder.tool_calls
                                             {
+                                                if let Some(name) =
+                                                    func.get("name").and_then(|n| n.as_str())
+                                                {
+                                                    recorder_tool_calls
+                                                        .entry(tool_id.to_string())
+                                                        .or_insert_with(|| {
+                                                            UnifiedFunctionCallPart {
+                                                                name: name.to_string(),
+                                                                args: "".to_string(),
+                                                            }
+                                                        });
+                                                }
+
                                                 if let Some(tool) =
                                                     recorder_tool_calls.get_mut(&tool_id)
                                                 {
@@ -633,32 +646,46 @@ fn chunk_parser_and_log(
                                             }
                                             Some("thinking_delta") => {
                                                 if let Some(text) = delta.text {
-                                                    if log_to_file && !text.is_empty() {
-                                                        if let Some(thinking) =
-                                                            &mut recorder.thinking
-                                                        {
-                                                            thinking.push_str(&text);
-                                                        } else {
-                                                            recorder.thinking =
-                                                                Some(text.to_string());
+                                                    if !text.is_empty() {
+                                                        if let Ok(mut status) = sse_status.write() {
+                                                            status.estimated_output_tokens +=
+                                                                estimate_tokens(&text);
+                                                        }
+                                                        if log_to_file {
+                                                            if let Some(thinking) =
+                                                                &mut recorder.thinking
+                                                            {
+                                                                thinking.push_str(&text);
+                                                            } else {
+                                                                recorder.thinking =
+                                                                    Some(text.to_string());
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
                                             Some("input_json_delta") => {
                                                 if let Some(partial_json) = delta.partial_json {
-                                                    if log_to_file && !partial_json.is_empty() {
-                                                        if let Ok(status) = sse_status.read() {
-                                                            let tool_id = status.tool_id.clone();
+                                                    if !partial_json.is_empty() {
+                                                        if let Ok(mut status) = sse_status.write() {
+                                                            status.estimated_output_tokens +=
+                                                                estimate_tokens(&partial_json);
+                                                        }
 
-                                                            if let Some(tool_calls) =
-                                                                &mut recorder.tool_calls
-                                                            {
-                                                                if let Some(tool) =
-                                                                    tool_calls.get_mut(&tool_id)
+                                                        if log_to_file {
+                                                            if let Ok(status) = sse_status.read() {
+                                                                let tool_id = status.tool_id.clone();
+
+                                                                if let Some(tool_calls) =
+                                                                    &mut recorder.tool_calls
                                                                 {
-                                                                    tool.args
-                                                                        .push_str(&partial_json);
+                                                                    if let Some(tool) =
+                                                                        tool_calls.get_mut(&tool_id)
+                                                                    {
+                                                                        tool.args.push_str(
+                                                                            &partial_json,
+                                                                        );
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -705,32 +732,39 @@ fn chunk_parser_and_log(
                             .and_then(|c| c.get("parts"))
                             .and_then(|p| p.as_array())
                         {
-                            if log_to_file {
-                                if recorder.tool_calls.is_none() {
-                                    recorder.tool_calls = Some(Default::default());
-                                }
-                                if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                    for tc in tool_calls {
-                                        if let Some(name) = tc
-                                            .get("functionCall")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|n| n.as_str())
+                            for tc in tool_calls {
+                                if let Some(name) = tc
+                                    .get("functionCall")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())
+                                {
+                                    let args_str = tc
+                                        .get("functionCall")
+                                        .and_then(|f| f.get("args"))
+                                        .map(|a| a.to_string())
+                                        .unwrap_or_default();
+
+                                    if !args_str.is_empty() {
+                                        if let Ok(mut status) = sse_status.write() {
+                                            status.estimated_output_tokens +=
+                                                estimate_tokens(&args_str);
+                                        }
+                                    }
+
+                                    if log_to_file {
+                                        if recorder.tool_calls.is_none() {
+                                            recorder.tool_calls = Some(Default::default());
+                                        }
+                                        if let Some(recorder_tool_calls) =
+                                            &mut recorder.tool_calls
                                         {
                                             let id = get_tool_id();
-                                            recorder_tool_calls
-                                                .entry(id.to_string())
-                                                .or_insert_with(|| UnifiedFunctionCallPart {
+                                            recorder_tool_calls.entry(id.to_string()).or_insert_with(
+                                                || UnifiedFunctionCallPart {
                                                     name: name.to_string(),
-                                                    args: "".to_string(),
-                                                });
-                                            if let Some(args) =
-                                                tc.get("functionCall").and_then(|f| f.get("args"))
-                                            {
-                                                if let Some(tool) = recorder_tool_calls.get_mut(&id)
-                                                {
-                                                    tool.args.push_str(&args.to_string());
-                                                }
-                                            }
+                                                    args: args_str,
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -766,11 +800,16 @@ fn chunk_parser_and_log(
 
                             if let Some(thinking) = message.get("thinking").and_then(|t| t.as_str())
                             {
-                                if log_to_file && !thinking.is_empty() {
-                                    if let Some(reasoning) = &mut recorder.thinking {
-                                        reasoning.push_str(thinking);
-                                    } else {
-                                        recorder.thinking = Some(thinking.to_string());
+                                if !thinking.is_empty() {
+                                    if let Ok(mut status) = sse_status.write() {
+                                        status.estimated_output_tokens += estimate_tokens(thinking);
+                                    }
+                                    if log_to_file {
+                                        if let Some(reasoning) = &mut recorder.thinking {
+                                            reasoning.push_str(thinking);
+                                        } else {
+                                            recorder.thinking = Some(thinking.to_string());
+                                        }
                                     }
                                 }
                             }
@@ -778,32 +817,44 @@ fn chunk_parser_and_log(
                             if let Some(tool_calls) =
                                 message.get("tool_calls").and_then(|t| t.as_array())
                             {
-                                if log_to_file {
-                                    if recorder.tool_calls.is_none() {
-                                        recorder.tool_calls = Some(Default::default());
-                                    }
-                                    if let Some(recorder_tool_calls) = &mut recorder.tool_calls {
-                                        for tc in tool_calls {
-                                            if let Some(name) = tc
-                                                .get("function")
-                                                .and_then(|f| f.get("name"))
-                                                .and_then(|n| n.as_str())
+                                for tc in tool_calls {
+                                    if let Some(args) = tc
+                                        .get("function")
+                                        .and_then(|f| f.get("arguments"))
+                                        .map(|a| a.to_string())
+                                    {
+                                        if !args.is_empty() {
+                                            if let Ok(mut status) = sse_status.write() {
+                                                status.estimated_output_tokens +=
+                                                    estimate_tokens(&args);
+                                            }
+                                        }
+
+                                        if log_to_file {
+                                            if recorder.tool_calls.is_none() {
+                                                recorder.tool_calls = Some(Default::default());
+                                            }
+                                            if let Some(recorder_tool_calls) =
+                                                &mut recorder.tool_calls
                                             {
-                                                let id = get_tool_id();
-                                                recorder_tool_calls
-                                                    .entry(id.to_string())
-                                                    .or_insert_with(|| UnifiedFunctionCallPart {
-                                                        name: name.to_string(),
-                                                        args: "".to_string(),
-                                                    });
-                                                if let Some(args) = tc
+                                                if let Some(name) = tc
                                                     .get("function")
-                                                    .and_then(|f| f.get("arguments"))
+                                                    .and_then(|f| f.get("name"))
+                                                    .and_then(|n| n.as_str())
                                                 {
+                                                    let id = get_tool_id();
+                                                    recorder_tool_calls
+                                                        .entry(id.to_string())
+                                                        .or_insert_with(|| {
+                                                            UnifiedFunctionCallPart {
+                                                                name: name.to_string(),
+                                                                args: "".to_string(),
+                                                            }
+                                                        });
                                                     if let Some(tool) =
                                                         recorder_tool_calls.get_mut(&id)
                                                     {
-                                                        tool.args.push_str(&args.to_string());
+                                                        tool.args.push_str(&args);
                                                     }
                                                 }
                                             }

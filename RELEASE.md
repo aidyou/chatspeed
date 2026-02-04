@@ -2,6 +2,22 @@
 
 # Release Notes
 
+## [1.2.3]
+
+### 🪄 Improvements
+
+- **Mission-Critical Stability Hardening**: Performed a comprehensive audit and refactoring of the application's startup sequence. All hardcoded `.expect()` and `.unwrap()` calls in critical paths (logging, database path resolution, and window management) have been replaced with graceful error handling. This ensures the application remains operational even in highly restricted environments like Windows Server 2019.
+- **Graceful Logging Fallback**: The logging system now automatically degrades to console-only output if the designated log directory is unwritable or inaccessible, preventing immediate startup crashes.
+
+### 🐞 Bug Fixes
+
+- **Proxy Statistics Calibration**: Fixed a critical issue where output tokens were reported as 0 in `tool_compat_mode` and `direct_forward` modes. The system now accurately estimates tokens for **Reasoning/Thinking content** and **Tool Call Arguments** across all supported protocols (OpenAI, Claude, Gemini, Ollama).
+- **Unified Cache Token Tracking**: Implemented a standardized mapping for cached tokens. Cached data from various protocols (e.g., OpenAI's `prompt_cached_tokens`, Claude's `cache_read_input_tokens`, and Gemini's `cached_content_tokens`) is now correctly captured in stream logs and persisted to the database.
+- **Path Resolution Panic**: Resolved potential panics during environment detection when the current working directory or application data directory cannot be resolved by the OS.
+- **Window Handler Race Condition**: Added safety checks to window event listener registration to prevent crashes during the early initialization phase.
+
+---
+
 ## [1.2.2]
 
 ### ⚠️ Deprecation Notice

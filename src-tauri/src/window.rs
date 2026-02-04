@@ -558,10 +558,13 @@ pub async fn create_or_focus_url_window(
 /// # Arguments
 /// - `app_handle` - The Tauri application handle
 pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
-    // Get main window once
-    let main_window = app_handle
-        .get_webview_window("main")
-        .expect("Main window not found");
+    // Get main window once safely
+    let main_window = if let Some(window) = app_handle.get_webview_window("main") {
+        window
+    } else {
+        log::error!("Main window not found when setting up handlers");
+        return;
+    };
 
     // Helper function to spawn window creation task
     let spawn_window_task = |task: Pin<Box<dyn Future<Output = Result<(), String>> + Send>>| {

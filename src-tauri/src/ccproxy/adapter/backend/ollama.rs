@@ -908,6 +908,7 @@ impl OllamaBackendAdapter {
             }
 
             // Add content to fragment buffer
+            status.estimated_output_tokens += estimate_tokens(content);
             status.tool_compat_fragment_buffer.push_str(content);
             status.tool_compat_fragment_count += 1;
 
