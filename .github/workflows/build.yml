@@ -13,6 +13,11 @@ on:
           - macos
           - windows
           - linux
+      static_crt:
+        description: "Use Static CRT (+crt-static)"
+        required: false
+        default: true
+        type: boolean
 
 permissions: write-all
 env:
@@ -76,35 +81,37 @@ jobs:
       - name: Setup vcpkg env
         shell: pwsh
         run: |
-          # Set vcpkg root directory
-          # $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
-          # echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
+          $USE_STATIC = "${{ github.event.inputs.static_crt }}"
+          if ($USE_STATIC -eq "" -or $USE_STATIC -eq "true") {
+              $SUFFIX = "-static"
+              echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
+          } else {
+              $SUFFIX = ""
+              echo "VCPKG_CRT_LINKAGE=dynamic" >> $env:GITHUB_ENV
+          }
 
           # Set target architecture variables
           if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
-            echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+            $TRIPLET = "x64-windows$SUFFIX"
+            echo "VCPKG_DEFAULT_TRIPLET=$TRIPLET" >> $env:GITHUB_ENV
             echo "CARGO_CFG_TARGET_ARCH=x86_64" >> $env:GITHUB_ENV
           } else {
-            echo "VCPKG_DEFAULT_TRIPLET=arm64-windows-static" >> $env:GITHUB_ENV
+            $TRIPLET = "arm64-windows$SUFFIX"
+            echo "VCPKG_DEFAULT_TRIPLET=$TRIPLET" >> $env:GITHUB_ENV
             echo "CARGO_CFG_TARGET_ARCH=aarch64" >> $env:GITHUB_ENV
           }
 
           # Set common vcpkg variables for manifest mode
           echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
-          echo "VCPKG_CRT_LINKAGE=static" >> $env:GITHUB_ENV
           echo "VCPKG_LIBRARY_LINKAGE=static" >> $env:GITHUB_ENV
 
 
       - name: Install dependencies (windows)
         shell: pwsh
         run: |
-          # Set dependency paths
-          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
-            $TRIPLET = "x64-windows-static"
-          } else {
-            $TRIPLET = "arm64-windows-static"
-          }
-
+          # Use the triplet set in the previous step
+          $TRIPLET = $env:VCPKG_DEFAULT_TRIPLET
+          
           # Use manifest mode - vcpkg install without package names
           Write-Host "Installing dependencies using manifest mode for triplet: $TRIPLET"
           vcpkg install
@@ -115,17 +122,19 @@ jobs:
 
           echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
           echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
-          # echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
-          # Verification is now handled by the build.rs script, which will panic if paths are not found.
 
       - name: Setup Rust env
         shell: pwsh
         run: |
           # Set Rust environment variables
-          echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+          $USE_STATIC = "${{ github.event.inputs.static_crt }}"
+          if ($USE_STATIC -eq "" -or $USE_STATIC -eq "true") {
+              echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+          } else {
+              # No special RUSTFLAGS needed for dynamic CRT
+              echo "RUSTFLAGS=" >> $env:GITHUB_ENV
+          }
           echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
-
-          # Set vcpkg integration environment variables
 
           # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
 
