@@ -223,3 +223,43 @@ $kernel32Paths | ForEach-Object {
         Write-Host "✗ $_"
     }
 }
+
+# --- Auto-install vcpkg dependencies ---
+if ($env:VCPKG_ROOT) {
+    Write-Host "`n[vcpkg] Checking dependencies for triplet: $env:VCPKG_DEFAULT_TRIPLET"
+    $vcpkgExe = Join-Path $env:VCPKG_ROOT "vcpkg.exe"
+    
+    # Bootstrap vcpkg if exe is missing
+    if (-not (Test-Path $vcpkgExe)) {
+        Write-Host "[vcpkg] vcpkg.exe not found, attempting to bootstrap..."
+        $bootstrapBat = Join-Path $env:VCPKG_ROOT "bootstrap-vcpkg.bat"
+        if (Test-Path $bootstrapBat) {
+            Start-Process -FilePath $bootstrapBat -Wait -NoNewWindow
+        } else {
+            Write-Error "[vcpkg] bootstrap-vcpkg.bat not found in $env:VCPKG_ROOT"
+            return
+        }
+    }
+
+    # Run vcpkg install in manifest mode
+    if (Test-Path $vcpkgExe) {
+        Write-Host "[vcpkg] Running: vcpkg install --triplet=$env:VCPKG_DEFAULT_TRIPLET"
+        # Use Push-Location to ensure we are in the project root where vcpkg.json resides
+        Push-Location $projectRoot
+        try {
+            # Execute vcpkg install
+            & $vcpkgExe install --triplet=$env:VCPKG_DEFAULT_TRIPLET
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "[vcpkg] vcpkg install failed with exit code $LASTEXITCODE"
+            } else {
+                Write-Host "[vcpkg] Dependencies are up to date."
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+} else {
+    Write-Warning "[vcpkg] VCPKG_ROOT is not set, skipping dependency check."
+}
+
+Write-Host "`nEnvironment setup complete."
