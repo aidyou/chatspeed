@@ -128,13 +128,18 @@ jobs:
         run: |
           # Set Rust environment variables
           $USE_STATIC = "${{ github.event.inputs.static_crt }}"
+          # Force basic x86-64 instruction set to ensure compatibility with older server CPUs
+          $COMPAT_FLAGS = "-Ctarget-cpu=x86-64"
+          
           if ($USE_STATIC -eq "" -or $USE_STATIC -eq "true") {
-              echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
+              echo "RUSTFLAGS=$COMPAT_FLAGS -Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
           } else {
-              # No special RUSTFLAGS needed for dynamic CRT
-              echo "RUSTFLAGS=" >> $env:GITHUB_ENV
+              echo "RUSTFLAGS=$COMPAT_FLAGS" >> $env:GITHUB_ENV
           }
           echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
+          
+          # Environment variables to help WebView2/Tauri on servers
+          echo "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--no-sandbox --disable-gpu" >> $env:GITHUB_ENV
 
           # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
 
