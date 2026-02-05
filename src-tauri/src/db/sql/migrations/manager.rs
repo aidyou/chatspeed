@@ -60,14 +60,22 @@ fn execute_migration_sql(
 
 /// Gets the current database version
 pub fn get_db_version(conn: &Connection) -> Result<i32, StoreError> {
-    let version: i32 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM db_version",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    Ok(version)
+    let result: Result<i32, rusqlite::Error> = conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM db_version",
+        [],
+        |row| row.get(0),
+    );
+
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if e.to_string().contains("no such table: db_version") {
+                Ok(0)
+            } else {
+                Err(StoreError::from(e))
+            }
+        }
+    }
 }
 
 /// Runs all necessary migrations to update the database to the latest version

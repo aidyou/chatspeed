@@ -1,7 +1,7 @@
 use crate::db::{error::StoreError, ProxyGroup};
 
 use log::error;
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, OpenFlags, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
@@ -196,21 +196,28 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database connection or initialization fails.
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
-        let mut conn = Connection::open(&db_path).map_err(|e| {
+        let mut conn = Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+        )
+        .map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
             StoreError::Query(err)
         })?;
 
+        // Enable WAL mode for better concurrency in production
+        if let Err(e) = conn.execute("PRAGMA journal_mode=WAL;", []) {
+            log::warn!("Failed to enable WAL mode: {}", e);
+        }
+        if let Err(e) = conn.execute("PRAGMA synchronous=NORMAL;", []) {
+            log::warn!("Failed to set synchronous mode: {}", e);
+        }
+
         Self::init_db(&mut conn).map_err(|e| {
             let err = t!("db.failed_to_initialize_database", error = e.to_string()).to_string();
-            log::error!("{}", err);
-            StoreError::Query(err)
-        })?;
-
-        let db_dir = db_path.as_ref().parent().unwrap_or(db_path.as_ref());
-        Self::migrate_data(&db_dir).map_err(|e| {
-            let err = t!("db.failed_to_migrate_database", error = e.to_string()).to_string();
             log::error!("{}", err);
             StoreError::Query(err)
         })?;
@@ -270,6 +277,91 @@ impl MainStore {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
+    pub fn reopen<P: AsRef<Path>>(&mut self, db_path: P) -> Result<(), StoreError> {
+        let mut conn_guard = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        // 1. Open new connection
+        let mut new_conn = Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+        )
+        .map_err(|e| {
+            StoreError::Query(
+                t!("db.failed_to_open_db_connection", error = e.to_string()).to_string(),
+            )
+        })?;
+
+        // 2. Enable WAL mode
+        let _ = new_conn.execute("PRAGMA journal_mode=WAL;", []);
+        let _ = new_conn.execute("PRAGMA synchronous=NORMAL;", []);
+        let _ = new_conn.busy_timeout(std::time::Duration::from_secs(5));
+
+        // 3. Initialize/Migrate if needed (safety check)
+        Self::init_db(&mut new_conn)?;
+
+        // 4. Replace the connection inside the mutex
+        *conn_guard = new_conn;
+
+        Ok(())
+    }
+
+    /// Performs an atomic restoration of the database.
+    /// It preserves machine-specific configurations from the current database,
+    /// replaces the physical file, and reloads everything.
+    pub fn atomic_restore<P: AsRef<Path>>(
+        &mut self,
+        temp_db_path: P,
+        main_db_path: P,
+        machine_specific_keys: &[&str],
+    ) -> Result<(), StoreError> {
+        // 1. Backup current machine-specific configurations from memory/current DB
+        let mut preserved_configs = HashMap::new();
+        for &key in machine_specific_keys {
+            if let Some(value) = self.config.get_setting(key) {
+                preserved_configs.insert(key.to_string(), value.clone());
+            }
+        }
+
+        // 2. Close existing connection by swapping with an in-memory one
+        {
+            let mut conn_guard = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::LockError(e.to_string()))?;
+            // Replace with a dummy connection to close the file handle
+            *conn_guard = Connection::open_in_memory()?;
+        }
+
+        // 3. Clean up WAL/SHM and replace the file
+        super::DbBackup::cleanup_sqlite_temporaries(main_db_path.as_ref());
+        std::fs::rename(&temp_db_path, &main_db_path)
+            .map_err(|e| StoreError::IoError(format!("Failed to replace database file: {}", e)))?;
+
+        // 4. Reopen the connection to the new file
+        self.reopen(&main_db_path)?;
+
+        // 5. Write preserved configs back
+        for &key in machine_specific_keys {
+            if let Some(value) = preserved_configs.get(key) {
+                self.set_config(key, value)?;
+            } else {
+                // If the key didn't exist before, ensure it doesn't exist in the restored DB either
+                let _ = self.delete_config(key);
+            }
+        }
+
+        // 6. Reload full configuration cache
+        self.reload_config()?;
+
+        Ok(())
     }
 
     /// Retrieves all configuration items from the database.
@@ -466,38 +558,5 @@ impl MainStore {
             log::error!("Failed to initialize database: {}", e);
             e
         })
-    }
-
-    /// Checks if the unified database exists and creates it if necessary.
-    ///
-    /// # Arguments
-    ///
-    /// * `db_path` - Path to the database directory
-    ///
-    /// # Errors
-    ///
-    /// Returns a `StoreError` if any database operation fails.
-    pub fn migrate_data<P: AsRef<Path>>(db_path: P) -> Result<(), StoreError> {
-        let new_db_path = db_path.as_ref().join("chatspeed.db");
-
-        // Create new database and initialize tables if it doesn't exist
-        if !new_db_path.exists() {
-            let mut new_conn = Connection::open(&new_db_path).map_err(|e| {
-                StoreError::Query(
-                    t!(
-                        "db.failed_to_create_new_database_at",
-                        path = new_db_path.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
-                )
-            })?;
-            Self::init_db(&mut new_conn)?;
-            log::info!("Created new unified database: {:?}", new_db_path);
-        } else {
-            log::info!("Unified database already exists: {:?}", new_db_path);
-        }
-
-        Ok(())
     }
 }

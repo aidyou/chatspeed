@@ -2,15 +2,18 @@
 
 # Release Notes
 
-## [1.2.3]
+## [1.2.4]
 
 ### 🪄 Improvements
 
+- **Database Architecture Hardening**: Upgraded the database engine to use **WAL (Write-Ahead Logging)** mode and implemented a 5-second **Busy Timeout**. These changes significantly improve concurrency, allowing the background proxy (CCProxy) and the main chat interface to access the database simultaneously without locking issues.
+- **Atomic Restoration with State Preservation**: Completely refactored the database restoration process. The system now performs a safe, atomic "disconnect-replace-reconnect" sequence that prevents file corruption. It also preserves machine-specific settings (window positions, sizes, and network proxy configurations) during restoration, ensuring a seamless experience when migrating data.
 - **Mission-Critical Stability Hardening**: Performed a comprehensive audit and refactoring of the application's startup sequence. All hardcoded `.expect()` and `.unwrap()` calls in critical paths (logging, database path resolution, and window management) have been replaced with graceful error handling. This ensures the application remains operational even in highly restricted environments like Windows Server 2019.
 - **Graceful Logging Fallback**: The logging system now automatically degrades to console-only output if the designated log directory is unwritable or inaccessible, preventing immediate startup crashes.
 
 ### 🐞 Bug Fixes
 
+- **Production Database Locking**: Resolved a critical "attempt to write a readonly database" error in production environments caused by redundant file handle requests during initialization.
 - **Proxy Routing Precedence**: Resolved a critical routing conflict where generic group paths (e.g., `/{group}/...`) could incorrectly intercept specific functional prefixes like `/switch`, `/compat`, or `/compat_mode`. This fix ensures correct dispatching for all access modes and resolves 404 errors when using combined paths.
 - **Compatibility Mode Alias**: Introduced the `compat` shorthand alias as a convenient alternative to `compat_mode` (e.g., `/group/compat/v1/messages`), improving API call ergonomics.
 - **Proxy Statistics Calibration**: Fixed a critical issue where output tokens were reported as 0 in `tool_compat_mode` and `direct_forward` modes. The system now accurately estimates tokens for **Reasoning/Thinking content** and **Tool Call Arguments** across all supported protocols (OpenAI, Claude, Gemini, Ollama).

@@ -32,7 +32,7 @@
 //!
 
 use crate::constants::*;
-use crate::db::{AiModel, AiSkill, MainStore, ModelConfig};
+use crate::db::{AiModel, AiSkill, MainStore, ModelConfig, StoreError};
 use crate::db::{BackupConfig, DbBackup};
 use crate::libs::fs::{self, get_file_name};
 use crate::tray::create_tray;
@@ -710,18 +710,10 @@ fn upload_logo(image_path: String) -> Result<String> {
 // Backup
 // =================================================
 #[tauri::command]
-pub async fn backup_setting(
-    app: AppHandle,
-    backup_dir: Option<String>,
-) -> Result<()> {
+pub async fn backup_setting(app: AppHandle, backup_dir: Option<String>) -> Result<()> {
     let result = tokio::spawn(async move {
-        DbBackup::new(
-            &app,
-            BackupConfig {
-                backup_dir,
-            },
-        )
-        .and_then(|mut backup| backup.backup_to_directory())
+        DbBackup::new(&app, BackupConfig { backup_dir })
+            .and_then(|mut backup| backup.backup_to_directory())
     })
     .await
     .map_err(|e| AppError::General {
@@ -751,75 +743,59 @@ pub async fn restore_setting(
         "proxyPassword",
     ];
 
-    // 2. Backup current machine-specific configurations
-    let mut preserved_configs = HashMap::new();
+    // 2. Prepare paths and backup instance
+    let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
+    let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
+    let schema_dir = SCHEMA_DIR.read().clone();
+    let shared_dir = SHARED_DATA_DIR.read().clone();
+    let static_dir = HTTP_SERVER_DIR.read().clone();
+    let store_dir = STORE_DIR.read().clone();
+    let mcp_sessions_dir = store_dir.join("mcp_sessions");
+    let main_db_path = store_dir.join("chatspeed.db");
+
+    let db_backup = DbBackup::new(
+        &app,
+        BackupConfig {
+            backup_dir: Some(backup_dir.clone()),
+        },
+    )
+    .map_err(AppError::Db)?;
+
+    // 3. Decrypt database to a temporary file FIRST
+    let backup_db_file = Path::new(&backup_dir).join("chatspeed.db");
+    let temp_db_path = db_backup
+        .decrypt_to_temp(&backup_db_file, &main_db_path)
+        .map_err(AppError::Db)?;
+
+    // 4. Perform atomic database restoration
     {
-        let config_store = state.read()?;
-        for &key in &machine_specific_keys {
-            if let Some(value) = config_store.config.get_setting(key) {
-                preserved_configs.insert(key.to_string(), value.clone());
-            }
-        }
+        let mut config_store = state
+            .write()
+            .map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
+        config_store
+            .atomic_restore(&temp_db_path, &main_db_path, &machine_specific_keys)
+            .map_err(AppError::Db)?;
     }
 
-    let result = tokio::spawn(async move {
-        let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
-        let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
-        let schema_dir = SCHEMA_DIR.read().clone();
-        let shared_dir = SHARED_DATA_DIR.read().clone();
-        let static_dir = HTTP_SERVER_DIR.read().clone();
-        let store_dir = STORE_DIR.read().clone();
-        let mcp_sessions_dir = store_dir.join("mcp_sessions");
-        DbBackup::new(
-            &app,
-            BackupConfig {
-                backup_dir: Some(backup_dir.clone()),
-            },
+    // 5. Restore user files (static assets, etc.)
+    db_backup
+        .restore_user_files(
+            &Path::new(&backup_dir).join("user_files.zip"),
+            &Path::new(&*theme_dir),
+            &Path::new(&*upload_dir),
+            &Path::new(&mcp_sessions_dir),
+            &Path::new(&*schema_dir),
+            &Path::new(&*shared_dir),
+            &Path::new(&*static_dir),
         )
-        .and_then(|db_backup| {
-            db_backup.restore_from_directory(
-                &Path::new(&backup_dir),
-                &Path::new(&*theme_dir),
-                &Path::new(&*upload_dir),
-                &Path::new(&mcp_sessions_dir),
-                &Path::new(&*schema_dir),
-                &Path::new(&*shared_dir),
-                &Path::new(&*static_dir),
-            )
-        })
-    })
-    .await
-    .map_err(|e| AppError::General {
-        message: e.to_string(),
-    })?;
-
-    result.map_err(AppError::Db)?;
-
-    // 3. Reload the configuration from the newly restored database file
-    let mut config_store = state.write()?;
-    config_store.reload_config().map_err(AppError::Db)?;
-
-    // 4. Restore the preserved configurations to the new database
-    for key in machine_specific_keys {
-        if let Some(value) = preserved_configs.get(key) {
-            config_store.set_config(key, value).map_err(AppError::Db)?;
-        } else {
-            // If the key didn't exist before, ensure it doesn't exist in the restored DB either
-            let _ = config_store.delete_config(key);
-        }
-    }
+        .map_err(AppError::Db)?;
 
     Ok(())
 }
 
 #[tauri::command]
 pub fn get_all_backups(app: AppHandle, backup_dir: Option<String>) -> Result<Vec<String>> {
-    let db_backup = DbBackup::new(
-        &app,
-        BackupConfig {
-            backup_dir,
-        },
-    )?;
+    let db_backup = DbBackup::new(&app, BackupConfig { backup_dir })?;
 
     let backups = db_backup.list_backups().map_err(AppError::Db)?;
     Ok(backups

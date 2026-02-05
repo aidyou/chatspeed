@@ -115,3 +115,15 @@ This section outlines the coding standards, architectural patterns, and workflow
   5. **Correct**: Iteratively fix any issues found during verification.
   6. **Report**: Provide a concise summary of the resolution.
 - **Git Protocol**: Do not proactively stage or commit changes unless explicitly requested by the user.
+
+### 7. Database Concurrency & Deadlock Risks
+To ensure stability in production environments where background services (like CCProxy) and the main UI may access the database simultaneously, follow these rules:
+- **Enable WAL Mode**: Always use `PRAGMA journal_mode=WAL;` to allow multiple readers and one writer to coexist without blocking.
+- **Busy Timeout**: Always set a `busy_timeout` (e.g., 5 seconds) on the SQLite connection to handle transient locks gracefully.
+- **Avoid "Double Open"**: Ensure the database file is opened only once per process. Redundant calls to `Connection::open` on the same file can lead to `readonly database` errors or file corruption in production.
+- **Atomic Restoration**: When performing physical file replacement (restoration):
+    1. **Disconnect**: Close all active connections (or swap with an in-memory DB) to release file handles.
+    2. **Cleanup**: Delete temporary `-wal` and `-shm` files to prevent startup crashes due to file mismatch.
+    3. **Replace**: Physically move/rename the new database file.
+    4. **Reconnect**: Establish a fresh connection and re-enable WAL mode.
+- **Locking Hierarchy**: Be mindful of the `Arc<RwLock<MainStore>>` (Outer) and `Mutex<Connection>` (Inner) hierarchy. Ensure that restoration and high-concurrency operations are performed as single atomic blocks within the outer lock to prevent Rust-level deadlocks.

@@ -45,10 +45,12 @@ impl DbBackup {
 
         #[cfg(not(debug_assertions))]
         let app_dir = {
-            let app_local_data_dir = _app
-                .path()
-                .app_data_dir()
-                .map_err(|e| StoreError::TauriError(format!("Failed to retrieve the application data directory: {}", e)))?;
+            let app_local_data_dir = _app.path().app_data_dir().map_err(|e| {
+                StoreError::TauriError(format!(
+                    "Failed to retrieve the application data directory: {}",
+                    e
+                ))
+            })?;
             std::fs::create_dir_all(&app_local_data_dir)
                 .map_err(|e| StoreError::TauriError(e.to_string()))?;
             app_local_data_dir
@@ -116,39 +118,35 @@ impl DbBackup {
         Ok(backup_path)
     }
 
-    /// Restores a single database from a backup file with decryption
-    fn restore_single_db(&self, backup_path: &Path, target_path: &Path) -> Result<(), StoreError> {
+    /// Decrypts a backup database to a temporary file.
+    pub fn decrypt_to_temp(
+        &self,
+        backup_path: &Path,
+        target_path: &Path,
+    ) -> Result<PathBuf, StoreError> {
         if !backup_path.exists() {
             return Err(StoreError::NotFound(
                 t!("db.backup.file_not_found", path = backup_path.display()).to_string(),
             ));
         }
 
-        // 获取备份目录名称（时间格式）
         let backup_dir_name = backup_path
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        // Use streaming decryption for database
         let temp_file = target_path.with_extension("tmp");
         decrypt_database_streaming(backup_path, &temp_file, backup_dir_name)?;
+        Ok(temp_file)
+    }
 
-        // Atomically replace original file
-        fs::rename(&temp_file, target_path).map_err(|e| {
-            error!("Failed to rename temp database file: {}", e);
-            StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_rename_temp_db",
-                    path = target_path.display(),
-                    error = e.to_string()
-                )
-                .to_string(),
-            )
-        })?;
-
-        Ok(())
+    /// Cleans up SQLite temporary files (-wal, -shm) for a given database path.
+    pub fn cleanup_sqlite_temporaries(db_path: &Path) {
+        let wal_path = db_path.with_extension("db-wal");
+        let shm_path = db_path.with_extension("db-shm");
+        let _ = fs::remove_file(wal_path);
+        let _ = fs::remove_file(shm_path);
     }
 
     /// Lists all database backup directories in the backup directory, sorted by modification time.
@@ -260,65 +258,6 @@ impl DbBackup {
         Ok(())
     }
 
-    /// Restores databases and user files from a backup directory
-    ///
-    /// # Arguments
-    ///
-    /// * `backup_dir` - Path to the backup directory
-    /// * `theme_dir` - Path to restore theme files
-    /// * `upload_dir` - Path to restore uploaded files
-    /// * `mcp_sessions_dir` - Path to restore MCP sessions
-    /// * `schema_dir` - Path to restore schema files
-    /// * `shared_dir` - Path to restore shared files
-    /// * `static_dir` - Path to restore static files
-    ///
-    /// # Errors
-    ///
-    /// Returns a `StoreError` if any restore operation fails
-    pub fn restore_from_directory(
-        &self,
-        backup_dir: &Path,
-        theme_dir: &Path,
-        upload_dir: &Path,
-        mcp_sessions_dir: &Path,
-        schema_dir: &Path,
-        shared_dir: &Path,
-        static_dir: &Path,
-    ) -> Result<(), StoreError> {
-        // Verify backup directory exists
-        if !backup_dir.exists() || !backup_dir.is_dir() {
-            return Err(StoreError::NotFound(
-                t!(
-                    "db.backup.dir_not_found_for_restore",
-                    path = backup_dir.display()
-                )
-                .to_string(),
-            ));
-        }
-
-        // Check for chatspeed.db
-        let main_backup = backup_dir.join("chatspeed.db");
-        if main_backup.exists() {
-            self.restore_single_db(&main_backup, &self.main_db_path)?;
-        }
-
-        // Check for user_files.zip
-        let user_files = backup_dir.join("user_files.zip");
-        if user_files.exists() {
-            self.restore_user_files(
-                &user_files,
-                theme_dir,
-                upload_dir,
-                mcp_sessions_dir,
-                schema_dir,
-                shared_dir,
-                static_dir,
-            )?;
-        }
-
-        Ok(())
-    }
-
     /// Restores user files from a backup zip file
     ///
     /// # Arguments
@@ -334,7 +273,7 @@ impl DbBackup {
     /// # Errors
     ///
     /// Returns a `StoreError` if restore operation fails
-    fn restore_user_files(
+    pub fn restore_user_files(
         &self,
         zip_path: &Path,
         theme_dir: &Path,
