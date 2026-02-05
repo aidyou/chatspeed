@@ -11,6 +11,8 @@
 
 ### 🐞 修复
 
+- **代理路由优先级修复**：解决了通配分组路径（如 `/{group}/...`）可能意外拦截 `/switch`、`/compat` 或 `/compat_mode` 等特定功能前缀的冲突问题。该修复确保了所有访问模式都能正确分发，解决了组合路径下可能出现的 404 错误。
+- **兼容模式别名支持**：新增了 `compat` 简写别名作为 `compat_mode` 的便捷替代方案（例如：`/group/compat/v1/messages`），提升了 API 调用的易用性。
 - **代理统计校准**：修复了在 `工具兼容模式` (tool_compat_mode) 和 `直接转发` (direct_forward) 模式下，输出 Token 统计始终为 0 的问题。现在系统能准确估算所有协议（OpenAI、Claude、Gemini、Ollama）中的**推理/思考内容 (Reasoning/Thinking)** 及**工具调用参数**的 Token 消耗。
 - **统一缓存 Token 追踪**：实现了跨协议的缓存 Token 统一映射。现在能正确捕捉并记录来自不同协议的缓存数据（如 OpenAI 的 `prompt_cached_tokens`、Claude 的 `cache_read_input_tokens` 以及 Gemini 的 `cached_content_tokens`），并确保其在流式响应结束时准确入库。
 - **路径解析 Panic 修复**：解决了在部分受限环境下，若操作系统无法返回当前工作目录或应用数据目录时可能导致的 Panic。

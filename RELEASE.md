@@ -11,6 +11,8 @@
 
 ### 🐞 Bug Fixes
 
+- **Proxy Routing Precedence**: Resolved a critical routing conflict where generic group paths (e.g., `/{group}/...`) could incorrectly intercept specific functional prefixes like `/switch`, `/compat`, or `/compat_mode`. This fix ensures correct dispatching for all access modes and resolves 404 errors when using combined paths.
+- **Compatibility Mode Alias**: Introduced the `compat` shorthand alias as a convenient alternative to `compat_mode` (e.g., `/group/compat/v1/messages`), improving API call ergonomics.
 - **Proxy Statistics Calibration**: Fixed a critical issue where output tokens were reported as 0 in `tool_compat_mode` and `direct_forward` modes. The system now accurately estimates tokens for **Reasoning/Thinking content** and **Tool Call Arguments** across all supported protocols (OpenAI, Claude, Gemini, Ollama).
 - **Unified Cache Token Tracking**: Implemented a standardized mapping for cached tokens. Cached data from various protocols (e.g., OpenAI's `prompt_cached_tokens`, Claude's `cache_read_input_tokens`, and Gemini's `cached_content_tokens`) is now correctly captured in stream logs and persisted to the database.
 - **Path Resolution Panic**: Resolved potential panics during environment detection when the current working directory or application data directory cannot be resolved by the OS.

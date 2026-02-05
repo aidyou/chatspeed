@@ -10,7 +10,7 @@
 //! to generate formatted tool calls, which are then parsed and returned to the client in a
 //! standardized format.
 //!
-//! To use this mode, prefix the standard API path with `/compat_mode`.
+//! To use this mode, prefix the standard API path with `/compat_mode` (or `/compat`).
 //!
 //! ### Grouped Model Access
 //! `ccproxy` allows organizing models into groups (e.g., `qwen`). This is useful for routing
@@ -95,6 +95,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 const TOOL_COMPAT_MODE_PREFIX: &str = "compat_mode";
+const TOOL_COMPAT_SHORT_PREFIX: &str = "compat";
 const SWITCH_MODE_PREFIX: &str = "switch";
 
 // A struct to hold the shared state, which is passed to all route handlers.
@@ -989,15 +990,90 @@ pub async fn routes(
         .merge(unauthenticated_router)
         // Standalone Ollama API routes (no grouping/compat)
         .merge(ollama_api_routes().layer(ollama_auth_middleware.clone()))
+        // MCP Routes
+        .nest("/mcp", new_mcp_router)
+        .nest_service("/sse", legacy_sse_router) // Use nest_service to handle different state types
         // --- Route Combination Logic ---
-        // Non-grouped, normal mode
+        // 1. Switch mode with compatibility (Highest priority)
+        .nest(
+            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
+            switch_compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_SHORT_PREFIX),
+            switch_compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
+            ollama_switch_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_SHORT_PREFIX),
+            ollama_switch_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        // 2. Switch mode
+        .nest(
+            &format!("/{}", SWITCH_MODE_PREFIX),
+            switch_normal_routes.layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}", SWITCH_MODE_PREFIX),
+            ollama_switch_normal_chat.layer(ollama_auth_middleware.clone()),
+        )
+        // 3. Non-grouped, compatibility mode
+        .nest(
+            &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
+            compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}", TOOL_COMPAT_SHORT_PREFIX),
+            compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
+            ollama_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{}", TOOL_COMPAT_SHORT_PREFIX),
+            ollama_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        // 4. Grouped, compatibility mode
+        .nest(
+            &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
+            grouped_compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{{group_name}}/{}", TOOL_COMPAT_SHORT_PREFIX),
+            grouped_compat_routes.clone().layer(auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
+            ollama_grouped_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        .nest(
+            &format!("/{{group_name}}/{}", TOOL_COMPAT_SHORT_PREFIX),
+            ollama_grouped_compat_chat
+                .clone()
+                .layer(ollama_auth_middleware.clone()),
+        )
+        // 5. Non-grouped, normal mode
         .merge(normal_routes.clone().layer(auth_middleware.clone()))
         .merge(
             ollama_normal_chat
                 .clone()
                 .layer(ollama_auth_middleware.clone()),
         )
-        // Grouped, normal mode
+        // 6. Grouped, normal mode (Lowest priority)
         .nest(
             "/{group_name}",
             grouped_normal_routes.clone().layer(auth_middleware.clone()),
@@ -1008,49 +1084,6 @@ pub async fn routes(
                 .clone()
                 .layer(ollama_auth_middleware.clone()),
         )
-        // Non-grouped, compatibility mode
-        .nest(
-            &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
-            compat_routes.clone().layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
-            ollama_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
-        )
-        // Grouped, compatibility mode
-        .nest(
-            &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
-            grouped_compat_routes.clone().layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
-            ollama_grouped_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
-        )
-        // Switch mode
-        .nest(
-            &format!("/{}", SWITCH_MODE_PREFIX),
-            switch_normal_routes.layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}", SWITCH_MODE_PREFIX),
-            ollama_switch_normal_chat.layer(ollama_auth_middleware.clone()),
-        )
-        // Switch mode with compatibility
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
-            switch_compat_routes.layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
-            ollama_switch_compat_chat.layer(ollama_auth_middleware),
-        )
-        // MCP Routes
-        .nest("/mcp", new_mcp_router)
-        .nest_service("/sse", legacy_sse_router) // Use nest_service to handle different state types
         .with_state(shared_state)
 }
 
@@ -1093,8 +1126,10 @@ fn log_registered_routes() {
     log::info!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
     log::info!("[Access Modes]");
     log::info!("  - Grouped:           /{{group_name}}/{{path}}");
-    log::info!("  - Tool Compat:       /compat_mode/{{path}}");
-    log::info!("  - Grouped + Compat:  /{{group_name}}/compat_mode/{{path}}");
+    log::info!("  - Tool Compat:       /compat/{{path}} or /compat_mode/{{path}}");
+    log::info!("  - Grouped + Compat:  /{{group_name}}/compat/{{path}} or /{{group_name}}/compat_mode/{{path}}");
+    log::info!("  - Switch:            /switch/{{path}}");
+    log::info!("  - Switch + Compat:   /switch/compat/{{path}} or /switch/compat_mode/{{path}}");
     log::info!("-------------------------------------");
     log::info!("[MCP]");
     log::warn!("  - MCP SSE Proxy: /sse <- deprecated");
