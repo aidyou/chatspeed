@@ -279,6 +279,28 @@ impl MainStore {
         }
     }
 
+    /// Performs a database checkpoint, flushing all WAL data to the main database file.
+    /// This is critical before performing file-level backups in WAL mode.
+    pub fn checkpoint(&self) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        // PRAGMA wal_checkpoint returns rows, so we use query_row to handle it correctly.
+        // TRUNCATE ensures the WAL file is actually integrated and reduced in size.
+        let _ = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |_| Ok(()))
+            .map_err(|e| {
+                log::error!("Failed to checkpoint database: {}", e);
+                StoreError::from(e)
+            })?;
+
+        Ok(())
+    }
+
+    /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
+
     /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
     pub fn reopen<P: AsRef<Path>>(&mut self, db_path: P) -> Result<(), StoreError> {
         let mut conn_guard = self

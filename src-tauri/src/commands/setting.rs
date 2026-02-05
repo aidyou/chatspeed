@@ -710,7 +710,18 @@ fn upload_logo(image_path: String) -> Result<String> {
 // Backup
 // =================================================
 #[tauri::command]
-pub async fn backup_setting(app: AppHandle, backup_dir: Option<String>) -> Result<()> {
+pub async fn backup_setting(
+    app: AppHandle,
+    state: State<'_, Arc<RwLock<MainStore>>>,
+    backup_dir: Option<String>,
+) -> Result<()> {
+    // 1. Ensure all data is flushed from WAL to the main DB file before copying.
+    // This is critical when WAL mode is enabled.
+    {
+        let store = state.read().map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
+        store.checkpoint().map_err(AppError::Db)?;
+    }
+
     let result = tokio::spawn(async move {
         DbBackup::new(&app, BackupConfig { backup_dir })
             .and_then(|mut backup| backup.backup_to_directory())
