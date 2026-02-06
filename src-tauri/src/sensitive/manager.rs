@@ -52,51 +52,70 @@ impl Default for SensitiveConfig {
 pub struct FilterManager {
     /// A vector holding all registered filters as trait objects.
     filters: Vec<Box<dyn SensitiveDataFilter + Send + Sync>>,
+    /// Indicates if the manager was successfully initialized.
+    pub is_healthy: bool,
+    /// Detailed error message if initialization failed.
+    pub error_message: Option<String>,
 }
 
 impl FilterManager {
     /// Creates a new `FilterManager` and registers all available filters.
-    /// Performs pre-compilation of all regexes and returns an error if initialization fails.
-    pub fn new() -> Result<Self> {
+    /// Performs pre-compilation of all regexes.
+    pub fn new() -> Self {
         let mut filters: Vec<Box<dyn SensitiveDataFilter + Send + Sync>> = Vec::new();
 
-        // Register common filters
-        filters.push(Box::new(EmailFilter::new()?));
-        filters.push(Box::new(IpAddressFilter::new()?));
-        filters.push(Box::new(CreditCardFilter::new()?));
-        filters.push(Box::new(InternationalCreditCardFilter::new()?));
+        let registration_res = (|| -> Result<()> {
+            // Register common filters
+            filters.push(Box::new(EmailFilter::new()?));
+            filters.push(Box::new(IpAddressFilter::new()?));
+            filters.push(Box::new(CreditCardFilter::new()?));
+            filters.push(Box::new(InternationalCreditCardFilter::new()?));
 
-        // Register localized filters (ZH)
-        filters.push(Box::new(IdCardFilter::new()?));
-        filters.push(Box::new(ZhMobileFilter::new()?));
-        filters.push(Box::new(LandlineFilter::new()?));
-        filters.push(Box::new(ZhNameFilter::new()?));
-        filters.push(Box::new(UnionPayFilter::new()?));
-        filters.push(Box::new(ZhAddressFilter::new()?));
-        filters.push(Box::new(ZhCompanyFilter::new()?));
-        filters.push(Box::new(ZhProjectFilter::new()?));
-        filters.push(Box::new(ZhSocialFilter::new()?));
-        filters.push(Box::new(ZhFinancialFilter::new()?));
+            // Register localized filters (ZH)
+            filters.push(Box::new(IdCardFilter::new()?));
+            filters.push(Box::new(ZhMobileFilter::new()?));
+            filters.push(Box::new(LandlineFilter::new()?));
+            filters.push(Box::new(ZhNameFilter::new()?));
+            filters.push(Box::new(UnionPayFilter::new()?));
+            filters.push(Box::new(ZhAddressFilter::new()?));
+            filters.push(Box::new(ZhCompanyFilter::new()?));
+            filters.push(Box::new(ZhProjectFilter::new()?));
+            filters.push(Box::new(ZhSocialFilter::new()?));
+            filters.push(Box::new(ZhFinancialFilter::new()?));
 
-        // Register localized filters (EN)
-        filters.push(Box::new(EnMobileFilter::new()?));
-        filters.push(Box::new(EnNameFilter::new()?));
-        filters.push(Box::new(SsnFilter::new()?));
-        filters.push(Box::new(EnAddressFilter::new()?));
-        filters.push(Box::new(EnCompanyFilter::new()?));
-        filters.push(Box::new(EnProjectFilter::new()?));
-        filters.push(Box::new(EnFinancialFilter::new()?));
-        filters.push(Box::new(EnSocialFilter::new()?));
+            // Register localized filters (EN)
+            filters.push(Box::new(EnMobileFilter::new()?));
+            filters.push(Box::new(EnNameFilter::new()?));
+            filters.push(Box::new(SsnFilter::new()?));
+            filters.push(Box::new(EnAddressFilter::new()?));
+            filters.push(Box::new(EnCompanyFilter::new()?));
+            filters.push(Box::new(EnProjectFilter::new()?));
+            filters.push(Box::new(EnFinancialFilter::new()?));
+            filters.push(Box::new(EnSocialFilter::new()?));
+            Ok(())
+        })();
 
-        // Sort filters by priority (lower number = higher priority)
-        filters.sort_by_key(|f| f.priority());
-
-        Ok(Self { filters })
+        match registration_res {
+            Ok(_) => {
+                // Sort filters by priority (lower number = higher priority)
+                filters.sort_by_key(|f| f.priority());
+                Self {
+                    filters,
+                    is_healthy: true,
+                    error_message: None,
+                }
+            }
+            Err(e) => Self {
+                filters: Vec::new(),
+                is_healthy: false,
+                error_message: Some(e.to_string()),
+            },
+        }
     }
 
     /// This is the main entry point for filtering text.
     pub fn filter_text(&self, text: &str, languages: &[&str], config: &SensitiveConfig) -> String {
-        if !config.enabled {
+        if !self.is_healthy || !config.enabled {
             return text.to_string();
         }
 
@@ -324,12 +343,12 @@ mod tests {
     #[test]
     fn test_filter_manager_creation() {
         let manager = FilterManager::new();
-        assert!(manager.is_ok());
+        assert!(manager.is_healthy);
     }
 
     #[test]
     fn test_filter_text_empty() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let config = SensitiveConfig::default();
         let result = manager.filter_text("", &["en"], &config);
         assert_eq!(result, "");
@@ -337,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_filter_text_no_sensitive_info() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let config = SensitiveConfig::default();
         let text = "This is a normal sentence without any sensitive information.";
         let result = manager.filter_text(text, &["en"], &config);
@@ -346,41 +365,45 @@ mod tests {
 
     #[test]
     fn test_filter_text_multiple_replacements() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let config = SensitiveConfig::default();
-        
+
         // Text with multiple sensitive information that will be replaced with different length placeholders
         let text = "Contact: phone 13812345678, email test@example.com, IP 192.168.1.1";
         let result = manager.filter_text(text, &["zh", "en"], &config);
-        
+
         // Should contain replacements but not panic
-        assert!(result.contains("[ChineseMobile]") || result.contains("[Email]") || result.contains("[IPAddress]"));
+        assert!(
+            result.contains("[ChineseMobile]")
+                || result.contains("[Email]")
+                || result.contains("[IPAddress]")
+        );
         assert_ne!(result, text);
     }
 
     #[test]
     fn test_filter_text_unicode_boundary() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let config = SensitiveConfig::default();
-        
+
         // Text with Unicode characters and sensitive info
         let text = "中文测试📱手机号：13812345678，邮箱：test@example.com🎯";
         let result = manager.filter_text(text, &["zh"], &config);
-        
+
         // Should not panic with Unicode characters
         assert!(result.len() > 0);
     }
 
     #[test]
     fn test_filter_text_overlapping_matches() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let config = SensitiveConfig::default();
-        
+
         // Create a scenario with multiple detectable sensitive information
         // Using email and phone which are reliably detected
         let text = "Contact: test@example.com and phone: 13812345678";
         let result = manager.filter_text(text, &["zh", "en"], &config);
-        
+
         // Should contain replacements
         assert!(result.contains("[Email]") || result.contains("[ChineseMobile]"));
         // Original sensitive info should be replaced
@@ -389,15 +412,15 @@ mod tests {
 
     #[test]
     fn test_filter_text_with_allowlist() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let mut config = SensitiveConfig::default();
-        
+
         // Add an email to allowlist
         config.allowlist.push("test@example.com".to_string());
-        
+
         let text = "Allowed: test@example.com, Blocked: other@example.com";
         let result = manager.filter_text(text, &["en"], &config);
-        
+
         // Allowed email should remain, other should be replaced
         assert!(result.contains("test@example.com"));
         assert!(result.contains("[Email]"));
@@ -405,16 +428,16 @@ mod tests {
 
     #[test]
     fn test_filter_text_with_custom_blocklist() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let mut config = SensitiveConfig::default();
-        
+
         // Add custom blocklist
         config.custom_blocklist.push("secret".to_string());
         config.custom_blocklist.push("confidential".to_string());
-        
+
         let text = "This is a secret document with confidential information.";
         let result = manager.filter_text(text, &["en"], &config);
-        
+
         // Custom blocklist words should be replaced
         assert!(result.contains("[BLOCK]"));
         assert!(!result.contains("secret"));
@@ -423,33 +446,33 @@ mod tests {
 
     #[test]
     fn test_filter_text_disabled() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let mut config = SensitiveConfig::default();
         config.enabled = false;
-        
+
         let text = "Phone: 13812345678, Email: test@example.com";
         let result = manager.filter_text(text, &["zh", "en"], &config);
-        
+
         // When disabled, should return original text
         assert_eq!(result, text);
     }
 
     #[test]
     fn test_filter_text_common_disabled() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let mut config = SensitiveConfig::default();
         config.common_enabled = false;
-        
+
         // Test with only common filters (Email) and only localized filters (Chinese ID)
         // Email is common filter (supported_languages is empty)
         // Chinese ID is localized filter (supports zh)
         let text = "Email: test@example.com";
         let result = manager.filter_text(text, &["zh", "en"], &config);
-        
+
         // When common_enabled = false, common filters should be disabled
         // Email should NOT be replaced since it's a common filter
         assert!(result.contains("test@example.com"));
-        
+
         // Also test that localized filters still work when common filters are disabled
         let text2 = "身份证：44010619990101123X";
         let result2 = manager.filter_text(text2, &["zh"], &config);
@@ -479,9 +502,9 @@ mod tests {
                 confidence: 0.7,
             },
         ];
-        
+
         let resolved = FilterManager::resolve_conflicts(candidates);
-        
+
         // Should resolve overlapping conflicts (0-10 and 5-15 overlap)
         // The one with higher confidence (Test1) should win
         assert_eq!(resolved.len(), 2); // One overlapping pair resolved to one, plus non-overlapping
@@ -503,9 +526,9 @@ mod tests {
                 confidence: 0.8, // Same confidence
             },
         ];
-        
+
         let resolved = FilterManager::resolve_conflicts(candidates);
-        
+
         // Longer match should win when confidence is equal
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].filter_type, "Test1");
@@ -513,9 +536,9 @@ mod tests {
 
     #[test]
     fn test_supported_filter_types() {
-        let manager = FilterManager::new().unwrap();
+        let manager = FilterManager::new();
         let types = manager.supported_filter_types();
-        
+
         // Should return a non-empty list of filter types
         assert!(!types.is_empty());
         assert!(types.iter().any(|t| t.contains("Email")));

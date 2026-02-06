@@ -1133,7 +1133,7 @@ fn log_registered_routes() {
     log::info!("-------------------------------------");
     log::info!("[MCP]");
     log::warn!("  - MCP SSE Proxy: /sse <- deprecated");
-    log::info!("  - MCP SSE Proxy: /mcp/sse ");
+    log::warn!("  - MCP SSE Proxy: /mcp/sse <- deprecated");
     log::info!("  - MCP Http Streamable Proxy: /mcp/http");
     log::info!("-------------------------------------");
 }

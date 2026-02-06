@@ -36,7 +36,24 @@ pub fn update_sensitive_config(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct FilterStatus {
+    pub healthy: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_sensitive_status(filter_manager: State<'_, FilterManager>) -> FilterStatus {
+    FilterStatus {
+        healthy: filter_manager.is_healthy,
+        error: filter_manager.error_message.clone(),
+    }
+}
+
 #[tauri::command]
 pub fn get_supported_filters(filter_manager: State<'_, FilterManager>) -> Result<Vec<String>> {
+    if !filter_manager.is_healthy {
+        return Ok(Vec::new());
+    }
     Ok(filter_manager.supported_filter_types())
 }

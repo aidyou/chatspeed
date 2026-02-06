@@ -16,10 +16,21 @@ export const useSensitiveStore = defineStore('sensitive', () => {
 
   const supportedFilters = ref([]);
   const isLoading = ref(false);
+  const status = ref({ healthy: true, error: null });
+
+  const fetchStatus = async () => {
+    try {
+      status.value = await invoke('get_sensitive_status');
+    } catch (error) {
+      console.error('Failed to fetch sensitive status:', error);
+      status.value = { healthy: false, error: String(error) };
+    }
+  };
 
   const fetchConfig = async () => {
     isLoading.value = true;
     try {
+      await fetchStatus();
       const data = await invoke('get_sensitive_config');
       if (data) {
         config.value = {
@@ -38,6 +49,9 @@ export const useSensitiveStore = defineStore('sensitive', () => {
 
   const saveConfig = async () => {
     try {
+      if (!status.value.healthy) {
+        config.value.enabled = false;
+      }
       await invoke('update_sensitive_config', { config: config.value });
       // Broadcast change to other windows
       sendSyncState('sensitive_config_changed', windowLabel, config.value);
@@ -48,6 +62,10 @@ export const useSensitiveStore = defineStore('sensitive', () => {
   };
 
   const fetchSupportedFilters = async () => {
+    if (!status.value.healthy) {
+      supportedFilters.value = [];
+      return;
+    }
     try {
       supportedFilters.value = await invoke('get_supported_filters');
     } catch (error) {
@@ -59,8 +77,10 @@ export const useSensitiveStore = defineStore('sensitive', () => {
     config,
     supportedFilters,
     isLoading,
+    status,
     fetchConfig,
     saveConfig,
-    fetchSupportedFilters
+    fetchSupportedFilters,
+    fetchStatus
   };
 });

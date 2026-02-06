@@ -127,13 +127,17 @@ pub async fn start_http_server(
             log::info!("HTTP server received shutdown signal");
         });
 
-        if let Err(e) = server.await {
-            log::error!("HTTP server error: {}", e);
-            return Err(e.to_string());
+        match server.await {
+            Ok(_) => {
+                log::info!("HTTP server shut down gracefully");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("HTTP server failed to start: {}", e);
+                // Return Ok anyway to prevent task from causing process-level panic
+                Ok(())
+            }
         }
-
-        log::info!("HTTP server shut down gracefully");
-        Ok(())
     });
 
     // Create chat completion proxy routes
@@ -184,13 +188,18 @@ pub async fn start_http_server(
                         log::info!("CCProxy server received shutdown signal");
                     });
 
-                    if let Err(e) = server.await {
-                        log::error!("CCProxy server error: {}", e);
-                        return Err(e.to_string());
+                    match server.await {
+                        Ok(_) => {
+                            log::info!("CCProxy server shut down gracefully");
+                            break;
+                        }
+                        Err(e) => {
+                            log::error!("CCProxy server error: {}", e);
+                            // Do not return Err, just break or retry.
+                            // In this case, breaking allows the app to continue without proxy but without crashing.
+                            break;
+                        }
                     }
-
-                    log::info!("CCProxy server shut down gracefully");
-                    break; // If we get here, server started successfully
                 }
                 Err(e) => {
                     log::error!(

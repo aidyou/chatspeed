@@ -256,10 +256,8 @@ if ($env:VCPKG_ROOT) {
     # Run vcpkg install in manifest mode
     if (Test-Path $vcpkgExe) {
         Write-Host "[vcpkg] Running: vcpkg install --triplet=$env:VCPKG_DEFAULT_TRIPLET"
-        # Use Push-Location to ensure we are in the project root where vcpkg.json resides
         Push-Location $projectRoot
         try {
-            # Execute vcpkg install
             & $vcpkgExe install --triplet=$env:VCPKG_DEFAULT_TRIPLET
             if ($LASTEXITCODE -ne 0) {
                 Write-Error "[vcpkg] vcpkg install failed with exit code $LASTEXITCODE"

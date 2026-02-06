@@ -400,13 +400,16 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
-                    :content="$t('chat.sensitiveFiltering')"
+                    :content="sensitiveStore.status.healthy ? $t('chat.sensitiveFiltering') : `${$t('chat.sensitiveFiltering')} (${$t('chat.moduleUnavailable')}): ${sensitiveStore.status.error || ''}`"
                     :hide-after="0"
                     :enterable="false"
                     placement="top">
                     <label
-                      @click="onToggleSensitiveFiltering"
-                      :class="{ active: sensitiveStore.config.enabled }">
+                      @click="sensitiveStore.status.healthy && onToggleSensitiveFiltering()"
+                      :class="{ 
+                        active: sensitiveStore.config.enabled && sensitiveStore.status.healthy,
+                        disabled: !sensitiveStore.status.healthy
+                      }">
                       <cs name="filter" class="small" />
                     </label>
                   </el-tooltip>

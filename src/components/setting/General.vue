@@ -609,6 +609,16 @@
   <div class="card">
     <div class="title">{{ $t('settings.general.sensitiveFiltering.title') }}</div>
     <div class="list">
+      <div class="item" v-if="!sensitiveStore.status.healthy">
+        <div class="label" style="color: var(--el-color-danger)">
+          <cs name="error" />
+          {{ $t('chat.moduleUnavailable') }}
+        </div>
+        <div class="value" style="color: var(--el-color-danger); font-size: 12px">
+          {{ sensitiveStore.status.error }}
+        </div>
+      </div>
+
       <div class="item">
         <div class="label">
           <div class="label-text">
@@ -619,7 +629,8 @@
           </div>
         </div>
         <div class="value">
-          <el-switch v-model="sensitiveStore.config.enabled" @change="onSensitiveConfigChange" />
+          <el-switch v-model="sensitiveStore.config.enabled" @change="onSensitiveConfigChange"
+            :disabled="!sensitiveStore.status.healthy" />
         </div>
       </div>
 
@@ -633,7 +644,8 @@
           </div>
         </div>
         <div class="value">
-          <el-switch v-model="sensitiveStore.config.common_enabled" :disabled="!sensitiveStore.config.enabled"
+          <el-switch v-model="sensitiveStore.config.common_enabled"
+            :disabled="!sensitiveStore.config.enabled || !sensitiveStore.status.healthy"
             @change="onSensitiveConfigChange" />
         </div>
       </div>
@@ -651,7 +663,8 @@
           <el-select v-model="sensitiveStore.config.custom_blocklist" multiple filterable allow-create
             default-first-option :reserve-keyword="false"
             :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
-            :disabled="!sensitiveStore.config.enabled" @change="onSensitiveConfigChange" style="width: 100%" />
+            :disabled="!sensitiveStore.config.enabled || !sensitiveStore.status.healthy"
+            @change="onSensitiveConfigChange" style="width: 100%" />
         </div>
       </div>
 
@@ -667,7 +680,8 @@
         <div class="value" style="width: 100%">
           <el-select v-model="sensitiveStore.config.allowlist" multiple filterable allow-create default-first-option
             :reserve-keyword="false" :placeholder="$t('settings.general.sensitiveFiltering.placeholder')"
-            :disabled="!sensitiveStore.config.enabled" @change="onSensitiveConfigChange" style="width: 100%" />
+            :disabled="!sensitiveStore.config.enabled || !sensitiveStore.status.healthy"
+            @change="onSensitiveConfigChange" style="width: 100%" />
         </div>
       </div>
 
@@ -676,7 +690,7 @@
         <div class="value">
           <el-space wrap>
             <el-tag v-for="f in sensitiveStore.supportedFilters" :key="f" size="small" type="info"
-              :class="{ disabled: !sensitiveStore.config.enabled }">
+              :class="{ disabled: !sensitiveStore.config.enabled || !sensitiveStore.status.healthy }">
               {{ f }}
             </el-tag>
           </el-space>

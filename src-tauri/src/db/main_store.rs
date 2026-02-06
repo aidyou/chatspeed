@@ -203,7 +203,7 @@ impl MainStore {
         })?;
 
         // Enable WAL mode for better concurrency in production
-        if let Err(e) = conn.execute("PRAGMA journal_mode=WAL;", []) {
+        if let Err(e) = conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(())) {
             log::warn!("Failed to enable WAL mode: {}", e);
         }
         if let Err(e) = conn.execute("PRAGMA synchronous=NORMAL;", []) {
@@ -320,7 +320,7 @@ impl MainStore {
         })?;
 
         // 2. Enable WAL mode
-        let _ = new_conn.execute("PRAGMA journal_mode=WAL;", []);
+        let _ = new_conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(()));
         let _ = new_conn.execute("PRAGMA synchronous=NORMAL;", []);
         let _ = new_conn.busy_timeout(std::time::Duration::from_secs(5));
 

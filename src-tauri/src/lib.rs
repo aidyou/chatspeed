@@ -165,6 +165,7 @@ pub async fn run() -> crate::error::Result<()> {
             get_sensitive_config,
             update_sensitive_config,
             get_supported_filters,
+            get_sensitive_status,
             // clipboard
             read_clipboard,
             write_clipboard,
@@ -496,13 +497,8 @@ pub async fn run() -> crate::error::Result<()> {
 
         // Setup the application with necessary configurations and state management
         .setup(|app| {
-            // Initialize the logger
+            // Initialize the logger - this is critical and must stay here
             setup_logger(&app);
-
-            // Initialize environment
-            tauri::async_runtime::spawn(async move {
-                environment::init_environment().await;
-            });
 
             // Initialize the main store
             #[cfg(debug_assertions)]
@@ -528,7 +524,7 @@ pub async fn run() -> crate::error::Result<()> {
 
             println!("Initializing database at {:?}", db_path);
             let main_store_res = MainStore::new(db_path);
-            
+
             let main_store = match main_store_res {
                 Ok(store) => Arc::new(RwLock::new(store)),
                 Err(e) => {
@@ -561,15 +557,9 @@ pub async fn run() -> crate::error::Result<()> {
             // handle desktop shortcut
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
-                let _ = register_desktop_shortcut(&app.handle()).map_err(|e|{
-                    log::error!("Error on register dasktop shortcut, error:{:?}", e);
-                    AppError::General{message:e.to_string()}
-                });
-
-                // initialize text monitor
-                // let monitor = Arc::new(Mutex::new(TextMonitorManager::new()?));
-                // app.manage(monitor);
-                // start_text_monitor(app.handle().clone(), None)?;
+                if let Err(e) = register_desktop_shortcut(&app.handle()) {
+                    log::error!("Error on register desktop shortcut, error: {:?}", e);
+                }
             }
 
             // Setup ChatState and manage it
@@ -579,101 +569,84 @@ pub async fn run() -> crate::error::Result<()> {
                 Some(app_handle_for_chat_state),
                 main_store.clone(),
             );
-            let tm = chat_state.tool_manager.clone();
-            let app_handle_for_tm = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = tm
-                    .register_available_tools(app_handle_for_tm)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to register available tools: {}", e);
-                        AppError::Tool(e)
-                    });
-            });
             app.manage(chat_state.clone());
 
             // Initialize FilterManager with pre-compiled regexes
-            let filter_manager = crate::sensitive::manager::FilterManager::new().map_err(|e| {
-                error!("Failed to initialize FilterManager: {}", e);
-                AppError::General {
-                    message: format!("Sensitive Data Filter initialization failed: {}", e),
+            let filter_manager = crate::sensitive::manager::FilterManager::new();
+            if !filter_manager.is_healthy {
+                if let Some(err) = &filter_manager.error_message {
+                    log::error!("Failed to initialize FilterManager: {}. Sensitive info filtering will be disabled.", err);
                 }
-            })?;
+            }
             app.manage(filter_manager);
-
-            // Listen for the frontend to be ready before starting a workflow chat
-            crate::workflow::helper::listen_for_workflow_ready(app.handle());
 
             // Initialize the scraper pool and manage it
             let scraper_pool = ScraperPool::new(app.handle().clone());
             app.manage(scraper_pool);
 
-            // Read and set the main window size from the configuration
+            // Rest of non-critical tasks are spawned in background after UI initialization
+            let handle = app.handle().clone();
+            let main_store_clone = main_store.clone();
+            let chat_state_clone = chat_state.clone();
+
+            tauri::async_runtime::spawn(async move {
+                // 1. Initialize environment (Move out of setup critical path)
+                environment::init_environment().await;
+
+                // 2. Register tools
+                let tm = chat_state_clone.tool_manager.clone();
+                let _ = tm.register_available_tools(handle.clone()).await;
+
+                // 3. Start the HTTP server (With a slight delay to ensure network stack is ready)
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Err(e) = start_http_server(&handle, main_store_clone.clone(), chat_state_clone).await {
+                    error!("Failed to start HTTP server: {}", e);
+                }
+
+                // 4. Update check (2 minutes later)
+                let auto_update = if let Ok(c) = main_store_clone.read() {
+                    c.get_config(CFG_AUTO_UPDATE, true)
+                } else {
+                    true
+                };
+
+                if auto_update {
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    let update_manager = UpdateManager::new(handle.clone());
+                    loop {
+                        if let Err(e) = update_manager.check_and_download_update().await {
+                            log::error!("Failed to check for updates: {}", e);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+                    }
+                }
+            });
+
+            // Listen for the frontend to be ready before starting a workflow chat
+            crate::workflow::helper::listen_for_workflow_ready(app.handle());
+
+            // Read and set window sizes
             if let Some(main_window) = app.get_webview_window("main") {
                 restore_window_config(&main_window, main_store.clone());
             }
-
             if let Some(assistant_window) = app.get_webview_window("assistant") {
                 restore_window_config(&assistant_window, main_store.clone());
             }
-
             if let Some(workflow_window) = app.get_webview_window("workflow") {
                 restore_window_config(&workflow_window, main_store.clone());
             }
 
-            let handle = app.handle().clone();
-            let main_store_clone = main_store.clone();
-            // Start the HTTP server using Tauri's asynchronous runtime
-            let chat_state_for_http = chat_state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = start_http_server(&handle, main_store_clone, chat_state_for_http).await.map_err(|e| AppError::Http(crate::http::error::HttpError::StartUp(e.to_string()))) {
-                    error!("Failed to start HTTP server: {}", e);
-                }
-            });
-
-            //===== update check =======
-            // Create and manage the UpdateManager
-            let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
-            app.manage(update_manager.clone());
-
-            let auto_update = if let Ok(c) = main_store.read() {
-                c.get_config(CFG_AUTO_UPDATE, true)
-            } else {
-                true
-            };
-
-            if auto_update {
-                let update_manager_clone = update_manager.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
-
-                    loop {
-                        if let Err(e) = update_manager_clone.check_and_download_update().await.map_err(|e| AppError::Updater(e)) {
-                            log::error!("Failed to check for updates: {}", e);
-                        }
-
-                        // Check once every 24 hours
-                        tokio::time::sleep(tokio::time::Duration::from_secs(24 * 60 * 60)).await;
-                    }
-                });
-            }
-
-            // create tray with delay
+            // create tray
             let app_handle_clone = app.app_handle().clone();
-            if let Err(e) = create_tray(&app_handle_clone, None).map_err(|e| AppError::General{message:e.to_string()}) {
-                error!("Failed to create tray: {}", e);
-            }
+            let _ = create_tray(&app_handle_clone, None);
 
             // Register window creation event handlers
-            window::setup_window_creation_handlers(app_handle_clone);
+            window::setup_window_creation_handlers(app_handle_clone.clone());
 
             WINDOW_READY.store(true, Ordering::SeqCst);
 
-            // copy scrape resource to app data dir
-            let app_handle_clone = app.app_handle().clone();
-            let _ = scraper::ensure_default_configs_exist(&app_handle_clone).map_err(|e| {
-                error!("Failed to ensure default scrape configs exist: {}", e);
-            });
+            // copy scrape resource
+            let _ = scraper::ensure_default_configs_exist(&app_handle_clone);
 
             Ok(())
         })
