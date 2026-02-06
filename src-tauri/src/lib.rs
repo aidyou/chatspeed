@@ -24,7 +24,7 @@ mod workflow;
 pub mod test;
 
 use log::{error, warn};
-use rust_i18n::{i18n, set_locale, t};
+use rust_i18n::{i18n, set_locale};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -516,16 +516,35 @@ pub async fn run() -> crate::error::Result<()> {
                 let app_local_data_dir = app
                     .path()
                     .app_data_dir()
-                    .map_err(|e| db::StoreError::IoError(t!("db.failed_to_get_app_data_dir", error = e.to_string()).to_string()))?;
-                std::fs::create_dir_all(&app_local_data_dir)
-                    .map_err(|e| db::StoreError::IoError(e.to_string()))?;
+                    .unwrap_or_else(|e| {
+                        eprintln!("CRITICAL: Failed to get app data dir: {}", e);
+                        std::path::PathBuf::from("./") // Fallback to current dir
+                    });
+                if let Err(e) = std::fs::create_dir_all(&app_local_data_dir) {
+                    eprintln!("CRITICAL: Failed to create app data dir at {:?}: {}", app_local_data_dir, e);
+                }
                 app_local_data_dir.join("chatspeed.db")
             };
 
-            let main_store = Arc::new(RwLock::new(MainStore::new(db_path).map_err(|e| {
-                error!("Create main store error: {}", e);
-                AppError::Db(db::StoreError::IoError(t!("main.failed_to_create_main_store", error = e.to_string()).to_string()))
-            })?));
+            println!("Initializing database at {:?}", db_path);
+            let main_store_res = MainStore::new(db_path);
+            
+            let main_store = match main_store_res {
+                Ok(store) => Arc::new(RwLock::new(store)),
+                Err(e) => {
+                    eprintln!("CRITICAL: Failed to create main store: {}", e);
+                    // Create an in-memory database as fallback to prevent app from crashing immediately
+                    let fallback_res = MainStore::new(":memory:");
+                    match fallback_res {
+                        Ok(s) => Arc::new(RwLock::new(s)),
+                        Err(fe) => {
+                            eprintln!("FATAL: Even in-memory DB failed: {}", fe);
+                            return Err(Box::new(AppError::Db(e))); // Last resort crash
+                        }
+                    }
+                }
+            };
+
             // Add MainStore to the app's managed state for shared access
             app.manage(main_store.clone());
 

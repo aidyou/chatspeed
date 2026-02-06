@@ -196,13 +196,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database connection or initialization fails.
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
-        let mut conn = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
-        )
-        .map_err(|e| {
+        let mut conn = Connection::open(&db_path).map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
             StoreError::Query(err)
@@ -214,6 +208,10 @@ impl MainStore {
         }
         if let Err(e) = conn.execute("PRAGMA synchronous=NORMAL;", []) {
             log::warn!("Failed to set synchronous mode: {}", e);
+        }
+        // Set busy timeout to handle concurrent access gracefully
+        if let Err(e) = conn.busy_timeout(std::time::Duration::from_secs(5)) {
+            log::warn!("Failed to set busy timeout: {}", e);
         }
 
         Self::init_db(&mut conn).map_err(|e| {
