@@ -22,7 +22,7 @@ export default defineConfig(async () => ({
       resolvers: [ElementPlusResolver()],
     }),
   ],
-  assetsInclude: ['**/*.svg'],
+  assetsInclude: ['**/*.svg', '**/*.woff2', '**/*.woff', '**/*.ttf'],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

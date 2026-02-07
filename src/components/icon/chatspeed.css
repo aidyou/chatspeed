@@ -1,6 +1,7 @@
 @font-face {
   font-family: "chatspeed"; /* Project id 4710661 */
-  src: url('@/components/icon/iconfont.woff2') format('woff2');
+  src: url('./iconfont.woff2') format('woff2');
+  font-display: swap;
 }
 
 .chatspeed {

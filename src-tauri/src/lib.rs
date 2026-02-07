@@ -522,19 +522,38 @@ pub async fn run() -> crate::error::Result<()> {
                 app_local_data_dir.join("chatspeed.db")
             };
 
-            println!("Initializing database at {:?}", db_path);
-            let main_store_res = MainStore::new(db_path);
+            println!("========================================");
+            println!("Initializing database at: {:?}", db_path);
+            println!("Platform: {}", std::env::consts::OS);
+            println!("========================================");
+            
+            let main_store_res = MainStore::new(&db_path);
 
             let main_store = match main_store_res {
-                Ok(store) => Arc::new(RwLock::new(store)),
+                Ok(store) => {
+                    println!("✓ Database initialized successfully");
+                    Arc::new(RwLock::new(store))
+                },
                 Err(e) => {
+                    eprintln!("========================================");
                     eprintln!("CRITICAL: Failed to create main store: {}", e);
+                    eprintln!("Database path: {:?}", db_path);
+                    eprintln!("Parent directory exists: {}", db_path.parent().map_or(false, |p| p.exists()));
+                    eprintln!("Attempting fallback to in-memory database...");
+                    eprintln!("========================================");
+                    
                     // Create an in-memory database as fallback to prevent app from crashing immediately
                     let fallback_res = MainStore::new(":memory:");
                     match fallback_res {
-                        Ok(s) => Arc::new(RwLock::new(s)),
+                        Ok(s) => {
+                            eprintln!("WARNING: Using in-memory database. All data will be lost on exit!");
+                            Arc::new(RwLock::new(s))
+                        },
                         Err(fe) => {
+                            eprintln!("========================================");
                             eprintln!("FATAL: Even in-memory DB failed: {}", fe);
+                            eprintln!("The application cannot continue.");
+                            eprintln!("========================================");
                             return Err(Box::new(AppError::Db(e))); // Last resort crash
                         }
                     }

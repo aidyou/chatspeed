@@ -78,8 +78,10 @@ const mergeStyle = computed(() => {
     }
     icStyle['font-size'] = fontSize
   }
+  // Explicitly set font-family in inline style to ensure it takes precedence
+  // This is critical for Windows where font loading can be flaky
   return {
-    fontFamily: 'chatspeed',
+    fontFamily: 'chatspeed !important',
     ...icStyle,
   }
 })
@@ -96,12 +98,14 @@ const iconClass = computed(() => {
 
 <style lang="scss">
 .cs {
-  font-family: chatspeed;
+  font-family: 'chatspeed' !important;
   text-decoration: none;
   text-align: center;
   font-style: normal;
   display: inline-block;
   outline: none !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .color-black {

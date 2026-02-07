@@ -191,7 +191,11 @@ pub fn setup_logger(app: &tauri::App) {
     let log_dir = match log_dir_res {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("Failed to retrieve log directory: {}", e);
+            eprintln!("========================================");
+            eprintln!("CRITICAL: Failed to retrieve log directory: {}", e);
+            eprintln!("Platform: {}", std::env::consts::OS);
+            eprintln!("Logs will only be available in console output");
+            eprintln!("========================================");
             // Fallback: Use standard dispatcher without file logging if directory is unavailable
             let _ = fern::Dispatch::new()
                 .level(log::LevelFilter::Debug)
@@ -207,9 +211,17 @@ pub fn setup_logger(app: &tauri::App) {
     let log_file_path = log_dir.join("chatspeed.log");
     let ccproxy_log_path = log_dir.join("ccproxy.log");
 
+    eprintln!("Initializing logger...");
+    eprintln!("Log directory: {:?}", log_dir);
+    eprintln!("Log file: {:?}", log_file_path);
+
     // 2. Ensure log directory exists safely
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("Failed to create log directory at {:?}: {}", log_dir, e);
+        eprintln!("========================================");
+        eprintln!("CRITICAL: Failed to create log directory at {:?}: {}", log_dir, e);
+        eprintln!("Error kind: {:?}", e.kind());
+        eprintln!("Logs will only be available in console output");
+        eprintln!("========================================");
         let _ = fern::Dispatch::new()
             .level(log::LevelFilter::Debug)
             .format(console_log_formatter)
@@ -220,9 +232,17 @@ pub fn setup_logger(app: &tauri::App) {
 
     // 3. Try to create log files
     let log_file = match File::create(&log_file_path) {
-        Ok(f) => Some(f),
+        Ok(f) => {
+            eprintln!("Log file created successfully: {:?}", log_file_path);
+            Some(f)
+        },
         Err(e) => {
-            eprintln!("Failed to create log file: {}", e);
+            eprintln!("========================================");
+            eprintln!("WARNING: Failed to create log file: {}", e);
+            eprintln!("Path: {:?}", log_file_path);
+            eprintln!("Error kind: {:?}", e.kind());
+            eprintln!("Logs will only be written to console");
+            eprintln!("========================================");
             None
         }
     };
