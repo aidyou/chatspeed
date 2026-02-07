@@ -144,7 +144,8 @@
     "quit": "Salir",
     "scraperTest": "Prueba del scraper",
     "setting": "Configuración",
-    "skill": "Habilidad"
+    "skill": "Habilidad",
+    "proxy_switcher": "Selector de proxy"
   },
   "note": {
     "searchNotePlaceholder": "Buscar en notas"
@@ -550,6 +551,7 @@
         }
       },
       "stats": {
+        "allTime": "Todo el tiempo",
         "autoRefresh": "Actualización automática",
         "backendModel": "Modelo backend",
         "cacheTokens": "Caché",
@@ -557,6 +559,13 @@
         "count": "Cantidad",
         "dailyTokensTitle": "Tendencia de consumo diario de tokens",
         "date": "Fecha",
+        "deleteAll": "Borrar todos los registros",
+        "deleteAllConfirm": "¿Está seguro de que desea borrar todas las estadísticas de proxy? Esta acción no se puede deshacer.",
+        "deleteConfirm": "¿Está seguro de que desea eliminar las estadísticas de proxy con más de {days} días de antigüedad?",
+        "deleteOlderThan30Days": "Eliminar registros de más de 30 días",
+        "deleteOlderThan365Days": "Eliminar registros de más de 365 días",
+        "deleteOlderThan7Days": "Eliminar registros de más de 7 días",
+        "deleteOlderThan90Days": "Eliminar registros de más de 90 días",
         "errorDetailTitle": "Detalles del error para {date}",
         "errorDistTitle": "Distribución de códigos de error (no 200)",
         "errorMessage": "Mensaje de error",
@@ -564,8 +573,10 @@
         "inputTokens": "Entrada",
         "last1Day": "Últimas 24 horas",
         "last30Days": "Últimos 30 días",
+        "last365Days": "Últimos 365 días",
         "last7Days": "Últimos 7 días",
         "last90Days": "Últimos 90 días",
+        "modelTokenUsageTitle": "Distribución del consumo de tokens del modelo backend",
         "modelUsageTitle": "Distribución de uso de modelos backend",
         "no": "No",
         "outputTokens": "Salida",

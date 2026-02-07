@@ -127,3 +127,37 @@ To ensure stability in production environments where background services (like C
     3. **Replace**: Physically move/rename the new database file.
     4. **Reconnect**: Establish a fresh connection and re-enable WAL mode.
 - **Locking Hierarchy**: Be mindful of the `Arc<RwLock<MainStore>>` (Outer) and `Mutex<Connection>` (Inner) hierarchy. Ensure that restoration and high-concurrency operations are performed as single atomic blocks within the outer lock to prevent Rust-level deadlocks.
+
+### 8. Proxy Routing Stability & Priority
+The routing structure in `src-tauri/src/ccproxy/router.rs` is highly sensitive to ordering. To prevent **Route Shadowing** (where a dynamic route captures a static one):
+- **Strict Priority**: Fixed protocol prefixes (e.g., `/v1`, `/v1beta`, `/api`, `/mcp`) **MUST** be registered before any dynamic capture groups (e.g., `/{group_name}`).
+- **No Structural Changes**: Do not modify the hierarchical order of route mounting without performing a full protocol test matrix. Breaking this order will cause standard clients (like OpenAI SDKs) to receive 404 or connection errors.
+- **Verification**: Always run the API test suite (`python3 test/ccproxy/api_all_test.py`) after any routing or handler changes.
+
+### 9. I18N Key Organization & Sorting
+To maintain consistency and reduce merge conflicts in `src/i18n/locales/` and `src-tauri/i18n/`:
+- **Alphabetical Sorting**: All keys must be sorted **alphabetically (natural order)** at every nesting level.
+- **Grouping**: Keys should be grouped logically (e.g., `chat`, `settings`, `menu`), and within each group, the sub-keys must follow alphabetical order.
+- **Consistency**: When adding a new key to one language, ensure it is added to all other supported languages in the same sorted position.
+
+### 10. AI Proxy Protocol & Header Handling
+To prevent connection drops and protocol errors (e.g., "Empty reply from server"):
+- **Header Filtration**: When forwarding responses from an AI backend, always use the `filter_proxy_headers` utility. Never forward `Content-Length`, `Transfer-Encoding`, `Connection`, or `Content-Encoding` directly, as these must be managed by the local server framework (Axum/Hyper).
+- **Metadata Passthrough**: Always preserve business-critical headers like `x-ratelimit-*`, `retry-after`, and internal IDs (`X-CS-*`).
+- **Direct Forwarding**: Even in high-performance pass-through mode, headers must be filtered to ensure compatibility with the frontend's keep-alive and decompression logic.
+
+### 11. Cross-Protocol Type Safety
+To avoid panics when parsing non-standard or third-party AI responses:
+- **Signed Indices**: Always use `i32` (instead of `u32` or `usize`) for fields like `index` in tool calls or embedding vectors. Some providers (e.g., Qwen, OneAPI) may return `-1` for indices, which will cause a deserialization failure if mapped to an unsigned type.
+- **Optional Fields**: Use `Option<T>` for any field that is not strictly guaranteed by all supported protocols (e.g., `finish_reason`, `usage`, `logprobs`).
+
+### 12. Protocol Field Mapping (CamelCase vs SnakeCase)
+Be aware of the naming conventions required by different protocols:
+- **Gemini**: Strictly uses **`camelCase`** for almost all fields (e.g., `functionDeclarations`, `usageMetadata`). When parsing Gemini input or generating Gemini output, ensure the structures are correctly tagged with `#[serde(rename_all = "camelCase")]`.
+- **OpenAI/Ollama**: Generally use **`snake_case`**.
+- **Adapter Responsibility**: Adapters must explicitly handle the translation between these naming styles during the `UnifiedRequest` / `UnifiedResponse` conversion.
+
+### 13. Logging & Observability
+To ensure clear debugging during cross-protocol proxying:
+- **Labeling**: Logs should clearly distinguish between data source stages. Use `[Backend Raw Response]` for original data from the upstream provider and `[Adapted Response]` for the final data sent to the client.
+- **Sensitive Data**: Avoid logging full API keys or raw sensitive user data in production logs.

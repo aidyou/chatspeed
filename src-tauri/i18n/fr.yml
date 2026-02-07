@@ -274,6 +274,7 @@ tray:
   model: "Modèle"
   note: "Note intelligente"
   proxy: "Proxy"
+  proxy_switcher: "Sélecteur de proxy"
   quit: "Quitter"
   settings: "Paramètres"
   skill: "Compétence"

@@ -301,6 +301,7 @@ tray:
   model: "模型"
   note: "智記"
   proxy: "代理"
+  proxy_switcher: "代理切換"
   quit: "結束"
   settings: "設定"
   skill: "技能"

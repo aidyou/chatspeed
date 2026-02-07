@@ -242,6 +242,7 @@ tray:
   model: "モデル"
   note: "スマートノート"
   proxy: "プロキシ"
+  proxy_switcher: "プロキシ切り替え"
   quit: "終了"
   settings: "設定"
   skill: "スキル"

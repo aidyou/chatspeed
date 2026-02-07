@@ -274,6 +274,7 @@ tray:
   model: "Modell"
   note: "Smart-Notizen"
   proxy: "Proxy"
+  proxy_switcher: "Proxy-Umschalter"
   quit: "Beenden"
   settings: "Einstellungen"
   skill: "Fähigkeit"

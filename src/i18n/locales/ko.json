@@ -144,7 +144,8 @@
     "quit": "종료",
     "scraperTest": "스크래퍼 테스트",
     "setting": "설정",
-    "skill": "스킬"
+    "skill": "스킬",
+    "proxy_switcher": "프록시 전환"
   },
   "note": {
     "searchNotePlaceholder": "지식 노트 검색"
@@ -550,6 +551,7 @@
         }
       },
       "stats": {
+        "allTime": "전체",
         "autoRefresh": "자동 새로고침",
         "backendModel": "백엔드 모델",
         "cacheTokens": "캐시",
@@ -557,6 +559,13 @@
         "count": "횟수",
         "dailyTokensTitle": "일일 토큰 사용 트렌드",
         "date": "날짜",
+        "deleteAll": "모든 기록 삭제",
+        "deleteAllConfirm": "모든 프록시 통계 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+        "deleteConfirm": "{days}일 이전의 프록시 통계 기록을 삭제하시겠습니까?",
+        "deleteOlderThan30Days": "30일 이전 기록 삭제",
+        "deleteOlderThan365Days": "365일 이전 기록 삭제",
+        "deleteOlderThan7Days": "7일 이전 기록 삭제",
+        "deleteOlderThan90Days": "90일 이전 기록 삭제",
         "errorDetailTitle": "{date} 오류 상세 정보",
         "errorDistTitle": "오류 상태 코드 분포 (200 제외)",
         "errorMessage": "오류 메시지",
@@ -564,8 +573,10 @@
         "inputTokens": "입력",
         "last1Day": "최근 24시간",
         "last30Days": "최근 30일",
+        "last365Days": "최근 365일",
         "last7Days": "최근 7일",
         "last90Days": "최근 90일",
+        "modelTokenUsageTitle": "백엔드 모델 토큰 사용량 분포",
         "modelUsageTitle": "백엔드 모델 사용 분포 (횟수 기준)",
         "no": "아니요",
         "outputTokens": "출력",

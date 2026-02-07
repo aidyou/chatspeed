@@ -242,6 +242,7 @@ tray:
   model: "모델"
   note: "스마트 노트"
   proxy: "프록시"
+  proxy_switcher: "프록시 전환"
   quit: "종료"
   settings: "설정"
   skill: "기술"

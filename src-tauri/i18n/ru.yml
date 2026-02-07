@@ -274,6 +274,7 @@ tray:
   model: "Модель"
   note: "Умная заметка"
   proxy: "Прокси"
+  proxy_switcher: "Переключатель прокси"
   quit: "Выход"
   settings: "Настройки"
   skill: "Навык"
