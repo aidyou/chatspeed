@@ -140,6 +140,16 @@ pub async fn start_http_server(
         }
     });
 
+    // 0. Initialize the global proxy address from DB before starting the server task
+    {
+        let initial_port = if let Ok(store) = main_store.read() {
+            store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
+        } else {
+            CFG_CCPROXY_PORT_DEFAULT
+        };
+        *CHAT_COMPLETION_PROXY.write() = format!("http://127.0.0.1:{}", initial_port);
+    }
+
     // Create chat completion proxy routes
     // ccproxy routes are served independently on a separate port
     let ccproxy_app = ccproxy::routes(app.clone(), main_store.clone(), chat_state.clone())
