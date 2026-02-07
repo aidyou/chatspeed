@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatspeed CCProxy - API Index</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #24292e;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f6f8fa;
+    }
+
+    h1 {
+      border-bottom: 1px solid #eaecef;
+      padding-bottom: .3em;
+      color: #0366d6;
+    }
+
+    .container {
+      background-color: #fff;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(27, 31, 35, .12), 0 1px 2px rgba(27, 31, 35, .24);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 8px 12px;
+      border: 1px solid #dfe2e5;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f6f8fa;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+
+    tr:nth-child(even) {
+      background-color: #fafbfc;
+    }
+
+    tr:hover {
+      background-color: #f1f8ff;
+    }
+
+    code {
+      background-color: rgba(27, 31, 35, .05);
+      padding: .2em .4em;
+      border-radius: 3px;
+      font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 90%;
+      color: #0366d6;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 4px;
+      color: #fff;
+      vertical-align: middle;
+    }
+
+    .badge-recommended {
+      background-color: #28a745;
+    }
+
+    .badge-legacy {
+      background-color: #6a737d;
+    }
+
+    .badge-deprecated {
+      background-color: #d73a49;
+    }
+
+    .badge-switch {
+      background-color: #0366d6;
+    }
+
+    .badge-compat {
+      background-color: #6f42c1;
+    }
+
+    .badge-default {
+      background-color: #24292e;
+    }
+
+    .footer {
+      margin-top: 30px;
+      font-size: 12px;
+      color: #6a737d;
+      text-align: center;
+    }
+
+    .protocol-header {
+      background-color: #e1e4e8 !important;
+      font-weight: bold;
+      text-align: left;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Chatspeed CCProxy</h1>
+    <p>The high-performance AI proxy engine is running. Use the following endpoints to access your configured models.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Protocol</th>
+          <th>Pattern</th>
+          <th>API Address</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- System -->
+        <tr>
+          <td>System</td>
+          <td>HTTP</td>
+          <td>Direct</td>
+          <td><code>/api/version</code></td>
+          <td>Current proxy version</td>
+        </tr>
+        <tr>
+          <td>MCP</td>
+          <td>HTTP</td>
+          <td>Direct</td>
+          <td><code>/mcp/http</code></td>
+          <td><span class="badge badge-recommended">Recommended</span> Streamable</td>
+        </tr>
+        <tr>
+          <td>MCP</td>
+          <td>SSE</td>
+          <td>Direct</td>
+          <td><code>/mcp/sse</code>, <code>/sse</code></td>
+          <td><span class="badge badge-deprecated">Deprecated</span></td>
+        </tr>
+
+        <!-- OpenAI -->
+        <tr>
+          <td colspan="5" class="protocol-header">OpenAI Protocol</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Direct</td>
+          <td><code>/v1/chat/completions</code></td>
+          <td><span class="badge badge-default">Default Group</span> access</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Grouped</td>
+          <td><code>/{group}/v1/chat/completions</code></td>
+          <td>Specific group</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Compat</td>
+          <td><code>/compat/v1/chat/completions</code></td>
+          <td><span class="badge badge-compat">Global Compat</span> (Default group)</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Grouped+Compat</td>
+          <td><code>/{group}/compat/v1/chat/completions</code></td>
+          <td>Specific group compat</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Switch</td>
+          <td><code>/switch/v1/chat/completions</code></td>
+          <td><span class="badge badge-switch">Active Group</span> auto-route</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>OpenAI</td>
+          <td>Switch+Compat</td>
+          <td><code>/switch/compat/v1/chat/completions</code></td>
+          <td>Active group compat</td>
+        </tr>
+
+        <!-- Claude -->
+        <tr>
+          <td colspan="5" class="protocol-header">Claude Protocol</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Direct</td>
+          <td><code>/v1/messages</code></td>
+          <td><span class="badge badge-default">Default Group</span> access</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Grouped</td>
+          <td><code>/{group}/v1/messages</code></td>
+          <td>Specific group</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Compat</td>
+          <td><code>/compat/v1/messages</code></td>
+          <td><span class="badge badge-compat">Global Compat</span> (Default group)</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Grouped+Compat</td>
+          <td><code>/{group}/compat/v1/messages</code></td>
+          <td>Specific group compat</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Switch</td>
+          <td><code>/switch/v1/messages</code></td>
+          <td><span class="badge badge-switch">Active Group</span> auto-route</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Claude</td>
+          <td>Switch+Compat</td>
+          <td><code>/switch/compat/v1/messages</code></td>
+          <td>Active group compat</td>
+        </tr>
+
+        <!-- Gemini -->
+        <tr>
+          <td colspan="5" class="protocol-header">Gemini Protocol</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Direct</td>
+          <td><code>/v1beta/models/{model}:generateContent</code></td>
+          <td><span class="badge badge-default">Default Group</span> access</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Grouped</td>
+          <td><code>/{group}/v1beta/models/{model}:generateContent</code></td>
+          <td>Specific group</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Compat</td>
+          <td><code>/compat/v1beta/models/{model}:generateContent</code></td>
+          <td><span class="badge badge-compat">Global Compat</span> (Default group)</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Grouped+Compat</td>
+          <td><code>/{group}/compat/v1beta/models/{model}:generateContent</code></td>
+          <td>Specific group compat</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Switch</td>
+          <td><code>/switch/v1beta/models/{model}:generateContent</code></td>
+          <td><span class="badge badge-switch">Active Group</span> auto-route</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Gemini</td>
+          <td>Switch+Compat</td>
+          <td><code>/switch/compat/v1beta/models/{model}:generateContent</code></td>
+          <td>Active group compat</td>
+        </tr>
+
+        <!-- Ollama -->
+        <tr>
+          <td colspan="5" class="protocol-header">Ollama Protocol</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Direct</td>
+          <td><code>/api/chat</code></td>
+          <td><span class="badge badge-default">Default Group</span> access</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Grouped</td>
+          <td><code>/{group}/api/chat</code></td>
+          <td>Specific group</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Compat</td>
+          <td><code>/compat/api/chat</code></td>
+          <td><span class="badge badge-compat">Global Compat</span> (Default group)</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Grouped+Compat</td>
+          <td><code>/{group}/compat/api/chat</code></td>
+          <td>Specific group compat</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Switch</td>
+          <td><code>/switch/api/chat</code></td>
+          <td><span class="badge badge-switch">Active Group</span> auto-route</td>
+        </tr>
+        <tr>
+          <td>Chat</td>
+          <td>Ollama</td>
+          <td>Switch+Compat</td>
+          <td><code>/switch/compat/api/chat</code></td>
+          <td>Active group compat</td>
+        </tr>
+        <tr>
+          <td>Info</td>
+          <td>Ollama</td>
+          <td>Direct</td>
+          <td><code>/api/show</code></td>
+          <td>Get model details</td>
+        </tr>
+
+        <!-- Embeddings -->
+        <tr>
+          <td colspan="5" class="protocol-header">Embeddings</td>
+        </tr>
+        <tr>
+          <td>Embed</td>
+          <td>OpenAI</td>
+          <td>Universal</td>
+          <td><code>/v1/embeddings</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+        <tr>
+          <td>Embed</td>
+          <td>Claude</td>
+          <td>Virtual</td>
+          <td><code>/v1/claude/embeddings</code></td>
+          <td>Note: Native Claude has no Embed API</td>
+        </tr>
+        <tr>
+          <td>Embed</td>
+          <td>Gemini</td>
+          <td>Direct</td>
+          <td><code>/v1beta/models/{model}:embedContent</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+        <tr>
+          <td>Embed</td>
+          <td>Ollama</td>
+          <td>Direct</td>
+          <td><code>/api/embed</code>, <code>/api/embeddings</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+
+        <!-- Listing -->
+        <tr>
+          <td colspan="5" class="protocol-header">Listing</td>
+        </tr>
+        <tr>
+          <td>List</td>
+          <td>OpenAI</td>
+          <td>Direct</td>
+          <td><code>/v1/models</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+        <tr>
+          <td>List</td>
+          <td>Gemini</td>
+          <td>Direct</td>
+          <td><code>/v1beta/models</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+        <tr>
+          <td>List</td>
+          <td>Ollama</td>
+          <td>Direct</td>
+          <td><code>/api/tags</code></td>
+          <td>Supports all prefixes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <p>Note: <code>compat</code> is shorthand for <code>compat_mode</code>. All <code>Direct</code> endpoints can be
+        prefixed with <code>/{group_name}</code>, <code>/compat</code>, or <code>/switch</code>.</p>
+      Chatspeed AI Assistant - Desktop Hub
+    </div>
+  </div>
+</body>
+
+</html>

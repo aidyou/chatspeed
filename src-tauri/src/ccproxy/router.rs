@@ -854,7 +854,12 @@ pub async fn routes(
 
     // 3. MCP & Unauthenticated
     let unauthenticated_router = Router::new()
-        .route("/", get(|| async { "Chatspeed ccproxy is running." }))
+        .route(
+            "/",
+            get(|| async {
+                axum::response::Html(include_str!("router_welcome.html"))
+            }),
+        )
         .route(
             "/favicon.ico",
             get(|| async { (StatusCode::NOT_FOUND, "") }),

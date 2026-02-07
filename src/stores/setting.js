@@ -90,7 +90,7 @@ const defaultSettings = {
   //   - `name`: A human-readable name or description for the token,
   //             useful for managing multiple keys (e.g., "WebApp Client Key", "Mobile App Key").
   chatCompletionProxyKeys: [],
-  chatCompletionProxyPort: 11434,
+  chatCompletionProxyPort: 11435,
   chatCompletionProxyLogToFile: false,
   chatCompletionProxyLogProxyToFile: false,
   // Search
