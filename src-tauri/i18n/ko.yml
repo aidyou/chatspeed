@@ -102,6 +102,7 @@ db:
     file_not_found: "백업 파일 '%{path}'를 찾을 수 없습니다."
     invalid_encrypted_file_format: "암호화 파일 형식이 유효하지 않습니다"
     invalid_magic_number: "마법 번호가 유효하지 않습니다"
+    some_files_skipped_restart_required: "일부 파일(예: MCP 세션 데이터베이스)이 사용 중이어서 복원할 수 없습니다. 복원을 완료하려면 애플리케이션을 다시 시작하세요."
     unsupported_version: "지원되지 않는 버전입니다"
 
 http:

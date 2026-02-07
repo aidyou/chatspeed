@@ -311,7 +311,13 @@ fn register_shortcuts(
 /// # Returns
 /// Returns Ok(()) if registration is successful, or an error if registration fails
 pub fn register_desktop_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let config_store = app.state::<Arc<RwLock<MainStore>>>();
+    let config_store = match app.try_state::<Arc<RwLock<MainStore>>>() {
+        Some(store) => store,
+        None => {
+            log::warn!("MainStore not available yet during shortcut registration");
+            return Ok(()); // Skip gracefully if state not ready
+        }
+    };
     let shortcuts = get_shortcuts(config_store.inner().clone());
     register_shortcuts(app, shortcuts)
 }

@@ -20,7 +20,13 @@ use crate::{
 /// # Returns
 /// - `Result<(), String>`: A result indicating the success or failure of the operation
 pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<(), String> {
-    let main_store = app.state::<Arc<RwLock<MainStore>>>();
+    let main_store = match app.try_state::<Arc<RwLock<MainStore>>>() {
+        Some(store) => store,
+        None => {
+            log::warn!("MainStore not available yet during tray creation");
+            return Err("MainStore not initialized".to_string());
+        }
+    };
     let mut main_window_visible_shortcut = DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string();
     let mut assistant_window_visible_shortcut =
         DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string();

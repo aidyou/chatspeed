@@ -102,6 +102,7 @@ db:
     file_not_found: "No se encontró el archivo de copia de seguridad '%{path}'"
     invalid_encrypted_file_format: "Formato de archivo cifrado no válido"
     invalid_magic_number: "Número mágico no válido"
+    some_files_skipped_restart_required: "Algunos archivos (como la base de datos de sesión MCP) no se pudieron restaurar porque están actualmente en uso. Por favor, reinicie la aplicación para completar la restauración."
     unsupported_version: "Versión no compatible"
 
 http:

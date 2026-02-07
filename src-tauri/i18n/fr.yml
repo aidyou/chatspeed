@@ -102,6 +102,7 @@ db:
     file_not_found: "Fichier de sauvegarde '%{path}' non trouvé"
     invalid_encrypted_file_format: "Format de fichier chiffré invalide"
     invalid_magic_number: "Numéro magique invalide"
+    some_files_skipped_restart_required: "Certains fichiers (tels que la base de données de session MCP) n'ont pas pu être restaurés car ils sont actuellement utilisés. Veuillez redémarrer l'application pour terminer la restauration."
     unsupported_version: "Version non prise en charge"
 
 http:

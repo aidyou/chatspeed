@@ -18,19 +18,33 @@ export const useSensitiveStore = defineStore('sensitive', () => {
   const isLoading = ref(false);
   const status = ref({ healthy: true, error: null });
 
-  const fetchStatus = async () => {
+  const fetchStatus = async (retryCount = 0) => {
     try {
-      status.value = await invoke('get_sensitive_status');
+      const result = await invoke('get_sensitive_status');
+      status.value = result;
+      return true;
     } catch (error) {
-      console.error('Failed to fetch sensitive status:', error);
+      console.error(`Failed to fetch sensitive status (retry ${retryCount}):`, error);
       status.value = { healthy: false, error: String(error) };
+      
+      // Retry if backend is still initializing (max 5 retries over 2.5 seconds)
+      if (retryCount < 5) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return fetchStatus(retryCount + 1);
+      }
+      return false;
     }
   };
 
   const fetchConfig = async () => {
     isLoading.value = true;
     try {
-      await fetchStatus();
+      const statusOk = await fetchStatus();
+      if (!statusOk) {
+        console.warn('Backend not ready, using default config');
+        return;
+      }
+      
       const data = await invoke('get_sensitive_config');
       if (data) {
         config.value = {

@@ -7,7 +7,6 @@
 //! It is heavily based on the `rmcp`'s `LocalSessionManager`, but adds a persistence
 //! layer with `sled` and session expiration logic.
 
-use anyhow::Context;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::Stream;
 use rmcp::{
@@ -93,13 +92,90 @@ where
     S: rmcp::Service<RoleServer> + Send + 'static,
 {
     /// Creates a new `PersistentSessionManager`.
+    ///
+    /// This method attempts to open the sled database with the following fallback strategy:
+    /// 1. Try to open the existing database
+    /// 2. If that fails (e.g., corrupted or locked), try to remove it and create a fresh one
+    /// 3. If that also fails, use an in-memory temporary database
     pub fn new(
         service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
     ) -> Result<Self, McpError> {
         let store_dir = STORE_DIR.read();
         let db_path = store_dir.join("mcp_sessions");
-        let db = sled::open(&db_path)
-            .with_context(|| format!("Failed to open sled database at {:?}", db_path))?;
+
+        // Try to open the database with fallback strategies
+        let db = Self::open_db_with_fallback(&db_path)?;
+
+        let manager = Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            db,
+            session_config: SessionConfig::default(),
+            service_factory,
+            _phantom: PhantomData,
+        };
+
+        manager.spawn_cleanup_task();
+        Ok(manager)
+    }
+
+    /// Opens the sled database with multiple fallback strategies.
+    fn open_db_with_fallback(db_path: &std::path::Path) -> Result<sled::Db, McpError> {
+        // Strategy 1: Try to open normally
+        match sled::open(db_path) {
+            Ok(db) => {
+                log::info!("MCP session database opened successfully at {:?}", db_path);
+                return Ok(db);
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to open sled database at {:?}: {}. Trying recovery...",
+                    db_path,
+                    e
+                );
+            }
+        }
+
+        // Strategy 2: Try to remove the corrupted database and create fresh
+        if db_path.exists() {
+            log::warn!("Attempting to remove corrupted database at {:?}", db_path);
+            if let Err(e) = std::fs::remove_dir_all(db_path) {
+                log::warn!("Failed to remove corrupted database: {}", e);
+            } else {
+                // Try to open again after removal
+                match sled::open(db_path) {
+                    Ok(db) => {
+                        log::info!(
+                            "MCP session database recreated successfully at {:?}",
+                            db_path
+                        );
+                        return Ok(db);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to create fresh database at {:?}: {}. Using in-memory fallback...",
+                            db_path, e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Strategy 3: Use temporary in-memory database as last resort
+        log::warn!("Using temporary in-memory database for MCP sessions. Sessions will not persist across restarts.");
+        sled::Config::new().temporary(true).open().map_err(|e| {
+            McpError::General(format!("Failed to create temporary sled database: {}", e))
+        })
+    }
+
+    /// Creates a new `PersistentSessionManager` with a temporary in-memory database.
+    /// This is used as an absolute last resort fallback.
+    pub fn new_temporary(
+        service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
+    ) -> Result<Self, McpError> {
+        log::warn!("Creating temporary in-memory session manager as fallback.");
+        let db = sled::Config::new().temporary(true).open().map_err(|e| {
+            McpError::General(format!("Failed to create temporary sled database: {}", e))
+        })?;
 
         let manager = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),

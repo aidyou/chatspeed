@@ -102,6 +102,7 @@ db:
     file_not_found: "备份文件 '%{path}' 未找到"
     invalid_encrypted_file_format: "无效的加密文件格式"
     invalid_magic_number: "无效的魔数"
+    some_files_skipped_restart_required: "部分文件（如MCP会话数据库）因正在使用而无法还原。请重启应用程序以完成还原。"
     unsupported_version: "不支持的版本"
 
 http:

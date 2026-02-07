@@ -20,6 +20,8 @@ use tauri::Manager;
 pub struct BackupConfig {
     /// Directory path where backups will be stored
     pub backup_dir: Option<String>,
+    /// If true, skip creating the backup directory (for restore/read operations)
+    pub read_only: bool,
 }
 
 /// Manages database backup and restore operations.
@@ -62,7 +64,8 @@ impl DbBackup {
             Some(dir) => PathBuf::from(dir),
         };
 
-        if !backup_dir.exists() {
+        // Only create directory for write operations (backup), not for read operations (restore)
+        if !config.read_only && !backup_dir.exists() {
             fs::create_dir_all(&backup_dir).map_err(|e| {
                 error!("Failed to create backup directory: {}", e);
                 StoreError::IoError(
@@ -273,6 +276,9 @@ impl DbBackup {
     /// # Errors
     ///
     /// Returns a `StoreError` if restore operation fails
+    /// Restores user files from a ZIP archive.
+    ///
+    /// Returns Ok(true) if some files were skipped due to locks, Ok(false) if all files were restored.
     pub fn restore_user_files(
         &self,
         zip_path: &Path,
@@ -282,7 +288,9 @@ impl DbBackup {
         schema_dir: &Path,
         shared_dir: &Path,
         static_dir: &Path,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
+        let mut files_skipped = false; // Track if any files were skipped due to locks
+
         let file = File::open(zip_path).map_err(|e| {
             error!("Failed to open zip file: {}", e);
             StoreError::IoError(
@@ -442,28 +450,63 @@ impl DbBackup {
                         )
                     })?;
                 }
-                let mut outfile = File::create(&outpath).map_err(|e| {
-                    error!("Failed to create file {}: {}", outpath.display(), e);
-                    StoreError::IoError(
-                        t!(
-                            "db.backup.failed_to_create_file_from_zip",
-                            path = outpath.display(),
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
-                std::io::copy(&mut file, &mut outfile).map_err(|e| {
-                    error!("Failed to write file {}: {}", outpath.display(), e);
-                    StoreError::IoError(
-                        t!(
-                            "db.backup.failed_to_write_file_from_zip",
-                            path = outpath.display(),
-                            error = e.to_string()
-                        )
-                        .to_string(),
-                    )
-                })?;
+
+                // Try to create and write file, but handle file locking gracefully
+                // This is especially important for mcp_sessions/db which may be locked by sled
+                match File::create(&outpath) {
+                    Ok(mut outfile) => {
+                        if let Err(e) = std::io::copy(&mut file, &mut outfile) {
+                            // Check if this is a file locking error (error code 33 on Windows/Linux)
+                            if let Some(os_error) = e.raw_os_error() {
+                                if os_error == 33 {
+                                    // File is locked - skip it with a warning
+                                    log::warn!(
+                                        "Skipping locked file {}: {}. Please restart the application to complete restoration.",
+                                        outpath.display(),
+                                        e
+                                    );
+                                    files_skipped = true;
+                                    continue;
+                                }
+                            }
+                            // For other errors, fail
+                            error!("Failed to write file {}: {}", outpath.display(), e);
+                            return Err(StoreError::IoError(
+                                t!(
+                                    "db.backup.failed_to_write_file_from_zip",
+                                    path = outpath.display(),
+                                    error = e.to_string()
+                                )
+                                .to_string(),
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        // Check if this is a file locking error
+                        if let Some(os_error) = e.raw_os_error() {
+                            if os_error == 33 {
+                                // File is locked - skip it with a warning
+                                log::warn!(
+                                    "Skipping locked file {}: {}. Please restart the application to complete restoration.",
+                                    outpath.display(),
+                                    e
+                                );
+                                files_skipped = true;
+                                continue;
+                            }
+                        }
+                        // For other errors, fail
+                        error!("Failed to create file {}: {}", outpath.display(), e);
+                        return Err(StoreError::IoError(
+                            t!(
+                                "db.backup.failed_to_create_file_from_zip",
+                                path = outpath.display(),
+                                error = e.to_string()
+                            )
+                            .to_string(),
+                        ));
+                    }
+                }
             }
 
             // Get and set permissions
@@ -488,8 +531,12 @@ impl DbBackup {
             }
         }
 
-        info!("User files restored successfully");
-        Ok(())
+        if files_skipped {
+            log::warn!("User files restored with some files skipped due to file locks. Please restart the application to complete restoration.");
+        } else {
+            info!("User files restored successfully");
+        }
+        Ok(files_skipped)
     }
 
     /// Creates a zip archive containing all files from theme, upload, mcp_sessions, schema, shared and static directories

@@ -171,7 +171,7 @@ pub async fn start_http_server(
         loop {
             attempts += 1;
 
-            match try_available_port("0.0.0.0", server_port).await {
+            match try_available_port("127.0.0.1", server_port).await {
                 Ok(ccproxy_listener) => {
                     let ccproxy_addr = ccproxy_listener.local_addr().map_err(|e| {
                         log::error!("Failed to get CCProxy local address: {}", e);

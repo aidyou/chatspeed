@@ -102,6 +102,7 @@ db:
     file_not_found: "Arquivo de backup '%{path}' não encontrado"
     invalid_encrypted_file_format: "Formato de arquivo criptografado inválido"
     invalid_magic_number: "Número mágico inválido"
+    some_files_skipped_restart_required: "Alguns arquivos (como o banco de dados de sessão MCP) não puderam ser restaurados porque estão atualmente em uso. Por favor, reinicie o aplicativo para concluir a restauração."
     unsupported_version: "Versão não suportada"
 
 http:

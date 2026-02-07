@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::{command, AppHandle, State};
 
 use crate::ai::interaction::chat_completion::ChatState;
@@ -12,9 +12,23 @@ use crate::libs::tsid::TsidGenerator;
 use crate::tools::MCP_TOOL_NAME_SPLIT;
 // use crate::workflow::dag::WorkflowEngine;
 
-// Initialize a global TSID generator
-lazy_static::lazy_static! {
-    static ref TSID_GENERATOR: TsidGenerator = TsidGenerator::new(1).expect("Failed to create TSID generator");
+// Initialize a global TSID generator with lazy initialization to avoid startup panic
+static TSID_GENERATOR: OnceLock<TsidGenerator> = OnceLock::new();
+
+/// Gets or initializes the global TSID generator
+fn get_tsid_generator() -> &'static TsidGenerator {
+    TSID_GENERATOR.get_or_init(|| {
+        TsidGenerator::new(1).unwrap_or_else(|e| {
+            log::error!("Failed to create TSID generator with node_id 1: {}. Using fallback node_id 0.", e);
+            // Fallback to node_id 0 if node_id 1 fails
+            TsidGenerator::new(0).unwrap_or_else(|e2| {
+                log::error!("CRITICAL: TSID generator creation failed even with node_id 0: {}", e2);
+                // Last resort: create with minimal configuration
+                // This panic is acceptable here as TSID is critical for workflow IDs
+                panic!("Cannot initialize TSID generator: {:?}", e2)
+            })
+        })
+    })
 }
 
 /// A simplified tool definition for the frontend
@@ -85,7 +99,7 @@ pub async fn add_agent(
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     agent_payload: super::types::workflow::AgentPayload,
 ) -> Result<String> {
-    let new_id = TSID_GENERATOR.generate().map_err(|e| AppError::General {
+    let new_id = get_tsid_generator().generate().map_err(|e| AppError::General {
         message: e.to_string(),
     })?;
     let agent = Agent::new(
@@ -154,7 +168,7 @@ pub async fn workflow_chat_completion(
     chat_state: State<'_, Arc<ChatState>>,
     payload: super::types::workflow::WorkflowChatPayload,
 ) -> Result<String> {
-    let stream_id = TSID_GENERATOR.generate().map_err(|e| AppError::General {
+    let stream_id = get_tsid_generator().generate().map_err(|e| AppError::General {
         message: e.to_string(),
     })?;
 
@@ -203,7 +217,7 @@ pub async fn create_workflow(
     user_query: String,
     agent_id: String,
 ) -> Result<Workflow> {
-    let id = TSID_GENERATOR.generate().map_err(|e| AppError::General {
+    let id = get_tsid_generator().generate().map_err(|e| AppError::General {
         message: e.to_string(),
     })?;
     let store = main_store.read()?;

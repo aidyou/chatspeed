@@ -102,6 +102,7 @@ db:
     file_not_found: "バックアップファイル '%{path}' が見つかりません"
     invalid_encrypted_file_format: "無効な暗号化ファイル形式"
     invalid_magic_number: "無効なマジックナンバー"
+    some_files_skipped_restart_required: "一部のファイル（MCPセッションデータベースなど）は使用中のため復元できませんでした。復元を完了するには、アプリケーションを再起動してください。"
     unsupported_version: "サポートされていないバージョン"
 
 http:

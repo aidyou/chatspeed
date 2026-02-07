@@ -33,13 +33,12 @@ use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use commands::updater::install_and_restart;
 use tauri::async_runtime::{spawn, JoinHandle};
+use tauri::Emitter;
 use tauri::Manager;
 
-use crate::error::AppError;
-
 // use commands::toolbar::*;
+use crate::error::AppError;
 use ai::interaction::chat_completion::ChatState;
 use commands::ccproxy::*;
 use commands::chat::*;
@@ -53,6 +52,7 @@ use commands::note::*;
 use commands::proxy_group::*;
 use commands::sensitive::*;
 use commands::setting::*;
+use commands::updater::install_and_restart;
 use commands::window::*;
 use commands::workflow::*;
 use constants::*;
@@ -526,7 +526,7 @@ pub async fn run() -> crate::error::Result<()> {
             println!("Initializing database at: {:?}", db_path);
             println!("Platform: {}", std::env::consts::OS);
             println!("========================================");
-            
+
             let main_store_res = MainStore::new(&db_path);
 
             let main_store = match main_store_res {
@@ -541,7 +541,7 @@ pub async fn run() -> crate::error::Result<()> {
                     eprintln!("Parent directory exists: {}", db_path.parent().map_or(false, |p| p.exists()));
                     eprintln!("Attempting fallback to in-memory database...");
                     eprintln!("========================================");
-                    
+
                     // Create an in-memory database as fallback to prevent app from crashing immediately
                     let fallback_res = MainStore::new(":memory:");
                     match fallback_res {
@@ -560,7 +560,10 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             };
 
-            // Add MainStore to the app's managed state for shared access
+            // CRITICAL: Add MainStore to managed state IMMEDIATELY, before any other initialization
+            // This must be done first because windows may be created concurrently during setup,
+            // and frontend code may call commands that require MainStore state before setup completes.
+            // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
 
             // Setup language
@@ -581,7 +584,14 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             }
 
-            // Setup ChatState and manage it
+            // === STATE REGISTRATION SECTION ===
+            // IMPORTANT: The order of state registration matters!
+            // States must be registered before any code (including event listeners) tries to access them.
+            // See: docs/STATE_MANAGEMENT_REVIEW.md for the complete dependency graph
+
+            // State 2: ChatState
+            // Depends on: MainStore (already registered above)
+            // Required by: workflow listeners, commands, HTTP server
             let app_handle_for_chat_state = app.handle().clone();
             let chat_state = ChatState::new(
                 Arc::new(WindowChannels::new()),
@@ -590,7 +600,9 @@ pub async fn run() -> crate::error::Result<()> {
             );
             app.manage(chat_state.clone());
 
-            // Initialize FilterManager with pre-compiled regexes
+            // State 3: FilterManager
+            // Depends on: None (self-contained)
+            // Required by: sensitive data filtering commands
             let filter_manager = crate::sensitive::manager::FilterManager::new();
             if !filter_manager.is_healthy {
                 if let Some(err) = &filter_manager.error_message {
@@ -599,30 +611,62 @@ pub async fn run() -> crate::error::Result<()> {
             }
             app.manage(filter_manager);
 
-            // Initialize the scraper pool and manage it
+            // State 4: ScraperPool
+            // Depends on: AppHandle
+            // Required by: web scraping commands
             let scraper_pool = ScraperPool::new(app.handle().clone());
             app.manage(scraper_pool);
 
-            // Rest of non-critical tasks are spawned in background after UI initialization
+            // === END STATE REGISTRATION SECTION ===
+
+            // === EVENT LISTENERS SECTION ===
+            // IMPORTANT: Event listeners must be registered AFTER all states are managed!
+            // Reason: Event handlers may immediately try to access states via handle.state()
+            // If states are not yet registered, this will cause a panic
+            // See: src-tauri/src/workflow/helper.rs for state usage in listeners
+            crate::workflow::helper::listen_for_workflow_ready(app.handle());
+            // === END EVENT LISTENERS SECTION ===
+
+            // === BACKGROUND TASKS SECTION ===
+            // Critical tasks run in background, send event when ready
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             let chat_state_clone = chat_state.clone();
 
+
+
             tauri::async_runtime::spawn(async move {
-                // 1. Initialize environment (Move out of setup critical path)
+                 // 1. Initialize environment synchronously (Critical for get_env command)
                 environment::init_environment().await;
 
-                // 2. Register tools
+                // 2. Register tools (Can be async)
                 let tm = chat_state_clone.tool_manager.clone();
                 let _ = tm.register_available_tools(handle.clone()).await;
 
-                // 3. Start the HTTP server (With a slight delay to ensure network stack is ready)
+                // 3. Start the HTTP server
+                // The HTTP server includes:
+                // - Static file serving
+                // - CCProxy (OpenAI-compatible chat completion proxy)
+                // - MCP server management
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if let Err(e) = start_http_server(&handle, main_store_clone.clone(), chat_state_clone).await {
                     error!("Failed to start HTTP server: {}", e);
                 }
 
-                // 4. Update check (2 minutes later)
+                // Notify frontend that backend is ready
+                // Retry sending event multiple times (15x over 7.5s) to ensure frontend catches it
+                // This covers cases where frontend Init takes longer or listeners are registered late
+                for i in 0..15 {
+                    if let Err(e) = handle.emit("cs://backend-ready", ()) {
+                        log::error!("Failed to emit cs://backend-ready event (attempt {}): {}", i, e);
+                    } else {
+                        log::debug!("Emitted cs://backend-ready event (attempt {})", i);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                log::info!("Backend initialization sequence completed");
+
+                // 4. Update check (2 minutes later, non-critical)
                 let auto_update = if let Ok(c) = main_store_clone.read() {
                     c.get_config(CFG_AUTO_UPDATE, true)
                 } else {
@@ -640,9 +684,6 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             });
-
-            // Listen for the frontend to be ready before starting a workflow chat
-            crate::workflow::helper::listen_for_workflow_ready(app.handle());
 
             // Read and set window sizes
             if let Some(main_window) = app.get_webview_window("main") {

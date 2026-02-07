@@ -102,6 +102,7 @@ db:
     file_not_found: "Backup file '%{path}' not found"
     invalid_encrypted_file_format: "Invalid encrypted file format"
     invalid_magic_number: "Invalid magic number"
+    some_files_skipped_restart_required: "Some files (such as MCP session database) could not be restored because they are currently in use. Please restart the application to complete the restoration."
     unsupported_version: "Unsupported version"
 
 http:

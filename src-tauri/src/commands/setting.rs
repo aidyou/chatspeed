@@ -48,6 +48,21 @@ use tauri::{command, AppHandle};
 use crate::error::{AppError, Result};
 
 // =================================================
+// Structs
+// =================================================
+
+/// Response for restore_setting command
+#[derive(serde::Serialize)]
+pub struct RestoreSettingResponse {
+    /// Indicates if restoration was successful
+    pub success: bool,
+    /// Warning message if some files were skipped (e.g., locked MCP sessions)
+    pub warning: Option<String>,
+    /// Indicates if application restart is recommended
+    pub restart_recommended: bool,
+}
+
+// =================================================
 // About Configuration
 // =================================================
 
@@ -723,7 +738,7 @@ pub async fn backup_setting(
     }
 
     let result = tokio::spawn(async move {
-        DbBackup::new(&app, BackupConfig { backup_dir })
+        DbBackup::new(&app, BackupConfig { backup_dir, read_only: false })
             .and_then(|mut backup| backup.backup_to_directory())
     })
     .await
@@ -739,7 +754,7 @@ pub async fn restore_setting(
     app: AppHandle,
     state: State<'_, Arc<RwLock<MainStore>>>,
     backup_dir: String,
-) -> Result<()> {
+) -> Result<RestoreSettingResponse> {
     // 1. Define configuration keys that are machine-specific and should be preserved
     let machine_specific_keys = [
         "backupDir",
@@ -768,6 +783,7 @@ pub async fn restore_setting(
         &app,
         BackupConfig {
             backup_dir: Some(backup_dir.clone()),
+            read_only: true,
         },
     )
     .map_err(AppError::Db)?;
@@ -789,7 +805,7 @@ pub async fn restore_setting(
     }
 
     // 5. Restore user files (static assets, etc.)
-    db_backup
+    let files_skipped = db_backup
         .restore_user_files(
             &Path::new(&backup_dir).join("user_files.zip"),
             &Path::new(&*theme_dir),
@@ -801,12 +817,29 @@ pub async fn restore_setting(
         )
         .map_err(AppError::Db)?;
 
-    Ok(())
+    // 6. Prepare response based on whether files were skipped
+    let response = if files_skipped {
+        RestoreSettingResponse {
+            success: true,
+            warning: Some(t!(
+                "db.backup.some_files_skipped_restart_required"
+            ).to_string()),
+            restart_recommended: true,
+        }
+    } else {
+        RestoreSettingResponse {
+            success: true,
+            warning: None,
+            restart_recommended: false,
+        }
+    };
+
+    Ok(response)
 }
 
 #[tauri::command]
 pub fn get_all_backups(app: AppHandle, backup_dir: Option<String>) -> Result<Vec<String>> {
-    let db_backup = DbBackup::new(&app, BackupConfig { backup_dir })?;
+    let db_backup = DbBackup::new(&app, BackupConfig { backup_dir, read_only: true })?;
 
     let backups = db_backup.list_backups().map_err(AppError::Db)?;
     Ok(backups

@@ -102,6 +102,7 @@ db:
     file_not_found: "Sicherungsdatei '%{path}' nicht gefunden"
     invalid_encrypted_file_format: "Ungültiges Format der verschlüsselten Datei"
     invalid_magic_number: "Ungültige magische Zahl"
+    some_files_skipped_restart_required: "Einige Dateien (z. B. MCP-Sitzungsdatenbank) konnten nicht wiederhergestellt werden, da sie derzeit verwendet werden. Bitte starten Sie die Anwendung neu, um die Wiederherstellung abzuschließen."
     unsupported_version: "Nicht unterstützte Version"
 
 http:
