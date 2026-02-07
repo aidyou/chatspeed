@@ -2,6 +2,12 @@
 //! incoming HTTP requests for various AI models (OpenAI, Claude, Gemini, Ollama)
 //! to the appropriate backend logic.
 //!
+//! # !!!!!!!!!!!!!!!!!!!!! CRITICAL WARNING !!!!!!!!!!!!!!!!!!!!!
+//! **DO NOT modify the routing structure or change the existing route paths.**
+//! The hierarchical routing design (Fixed Prefixes -> Direct Routes -> Grouped Routes)
+//! is carefully ordered to prevent route shadowing and maintain client compatibility.
+//! Any changes to the router composition in `routes()` must be thoroughly tested.
+//!
 //! # Core Concepts
 //!
 //! ### Tool Compatibility Mode
@@ -12,16 +18,18 @@
 //!
 //! To use this mode, prefix the standard API path with `/compat_mode` (or `/compat`).
 //!
-//! ### Grouped Model Access
-//! `ccproxy` allows organizing models into groups (e.g., `qwen`). This is useful for routing
-//! requests to a specific set of models.
+//! ### Grouped Model Access & Dynamic Switching
+//! `ccproxy` allows organizing models into groups (e.g., `qwen`).
+//! To access a group, prefix the path with the group name, like `/qwen/v1/...`.
 //!
-//! To access a model in a group, prefix the standard API path with the group name, like `/qwen`.
+//! The special prefix `/switch` (e.g., `/switch/v1/...`) automatically routes to the
+//! currently "Active" group set in the application settings, allowing for dynamic switching
+//! without changing client configurations.
 //!
 //! # API Endpoints
 //!
-//! The following sections detail the available API endpoints. Both Tool Compatibility Mode and
-//! Grouped Model Access can be combined where applicable.
+//! The following sections detail available API endpoints. Tool Compatibility Mode,
+//! Grouped Model Access, and Dynamic Switching can be combined where applicable.
 //!
 //! ### General Endpoints
 //! - `GET /`: Returns a welcome message from the ccproxy.
@@ -30,43 +38,52 @@
 //! ### OpenAI-Compatible Endpoints
 //! These endpoints mimic the OpenAI API.
 //! - `GET /v1/models`: Lists available models.
-//!   - *Grouped Example*: `GET /qwen/v1/models`
 //! - `POST /v1/chat/completions`: Creates a chat completion.
-//!   - *Tool Compat Example*: `POST /compat_mode/v1/chat/completions`
-//!   - *Grouped Example*: `POST /qwen/v1/chat/completions`
-//!   - *Combined Example*: `POST /qwen/compat_mode/v1/chat/completions`
-//! - `POST /v1/completions`: (Legacy) Creates a text completion.
-//! - `POST /v1/embeddings`: Creates an embedding vector for a given input.
+//! - `POST /v1/embeddings`: Creates an embedding vector.
 //!
 //! ### Claude-Compatible Endpoints
 //! - `POST /v1/messages`: Creates a message with the Claude model.
+//! - `POST /v1/claude/embeddings`: Creates an embedding vector.
+//!   *(Note: Claude natively does not support embeddings; this endpoint is provided for protocol consistency).*
 //!
 //! ### Gemini-Compatible Endpoints
 //! - `GET /v1beta/models`: Lists available Gemini models.
-//! - `POST /v1beta/models/{model_id}:{action}`: Generates content.
-//!   - `{model_id}`: The name of the model (e.g., `gemini2.5-flash`).
-//!   - `{action}`: The generation method (e.g., `generateContent`, `streamGenerateContent`).
+//! - `POST /v1beta/models/{model_id}:{action}`: Standard Gemini format.
+//! - `POST /v1beta/models/{model_id}/{action}`: Support for slash-style action path.
 //!
 //! ### Ollama-Specific Endpoints
 //! - `GET /api/tags`: Lists local Ollama models.
 //! - `POST /api/show`: Returns information about a specific Ollama model.
 //! - `POST /api/chat`: Creates a chat completion with an Ollama model.
+//! - `POST /api/embed` or `/api/embeddings`: Creates embedding vectors.
+//!
+//! ### Integrated Module Endpoints (Non-ccproxy core)
+//! These routes are integrated into this router for unified access but handled by separate modules:
+//! - **MCP (Model Context Protocol)**:
+//!   - `POST /mcp/http`: Streamable HTTP entry (Recommended).
+//!   - `GET /mcp/sse`: SSE entry (Legacy).
 //!
 //! # Internal Architecture
 //!
-//! 1.  **Individual Chat Logic Handlers**:
-//!     -   `openai_chat_logic`, `claude_chat_logic`, `gemini_chat_logic`, `ollama_chat_logic`
-//!         contain the business logic for interacting with each specific AI service.
+//! 1.  **Logic Handlers**:
+//!     -   Functions like `openai_chat_logic` and `gemini_list_models_logic` act as the entry
+//!         bridge between Axum routes and backend proxy handlers.
+//!     -   They utilize `resolve_group_name` to process dynamic prefixes, ensuring `/switch`
+//!         correctly resolves to the currently active group.
 //!
-//! 2.  **Model-Specific Route Definitions**:
-//!     -   `openai_routes`, `claude_routes`, etc., define the Axum `Router` for each model type.
+//! 2.  **Protocol-Specific Route Builders**:
+//!     -   `openai_routes`, `gemini_routes`, etc., generate sub-routers for various
+//!         access modes (Direct, Grouped, and Compat).
 //!
-//! 3.  **Authentication Middleware**:
-//!     -   `authenticate_request_middleware` is used to protect endpoints and ensure valid credentials.
+//! 3.  **Middleware Layer**:
+//!     -   `authenticate_request_middleware` enforces security across all endpoints,
+//!         with a loopback bypass for local Ollama usage.
 //!
-//! 4.  **Main Router Composition**:
-//!     -   The `routes` function assembles all the individual routers into a single, unified service,
-//!         applying middleware as needed. This modular approach allows for easy expansion.
+//! 4.  **Hierarchical Router Composition**:
+//!     -   The `routes` function assembles the final `Router` using a strict priority order:
+//!         **Fixed Prefixes** (MCP/SSE) > **Direct Routes** (/v1) > **Global Compat** (/compat) > **Grouped Routes** (/{group}).
+//!     -   This ordering prevents route shadowing, ensuring that static protocol paths are
+//!         not misidentified as dynamic group names.
 //!
 
 use crate::ai::interaction::chat_completion::ChatState;
@@ -319,6 +336,36 @@ async fn claude_embedding_logic(
     .into_response())
 }
 
+async fn openai_list_models_logic(
+    state: Arc<SharedState>,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+    handle_list_models(final_group, state.main_store.clone())
+        .await
+        .map(|res| res.into_response())
+}
+
+async fn gemini_list_models_logic(
+    state: Arc<SharedState>,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+    handle_gemini_list_models(final_group, state.main_store.clone())
+        .await
+        .map(|res| res.into_response())
+}
+
+async fn ollama_list_tags_logic(
+    state: Arc<SharedState>,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+    handle_ollama_tags(final_group, state.main_store.clone())
+        .await
+        .map(|res| res.into_response())
+}
+
 // ----------------------------------------------------------------------------
 // Protocol-specific Route Builders
 // ----------------------------------------------------------------------------
@@ -326,60 +373,11 @@ async fn claude_embedding_logic(
 enum GroupMode {
     None,
     Path,
-    Fixed(String),
 }
 
 /// Creates routes for OpenAI-compatible endpoints.
 fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>> {
     match mode {
-        GroupMode::Fixed(fixed_group) => {
-            let fixed_group_for_chat = fixed_group.clone();
-            let chat_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    openai_chat_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_chat.clone()),
-                        compat_mode,
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            let fixed_group_for_list = fixed_group.clone();
-            let list_model_handler = get(move |State(state): State<Arc<SharedState>>| async move {
-                let final_group = resolve_group_name(&state, Some(fixed_group_for_list.clone()));
-                handle_list_models(final_group, state.main_store.clone())
-                    .await
-                    .map_err(|e| e.into_response())
-            });
-            let fixed_group_for_embed = fixed_group.clone();
-            let embedding_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    openai_embedding_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_embed.clone()),
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            Router::new()
-                .route("/v1/chat/completions", chat_handler)
-                .route("/v1/models", list_model_handler)
-                .route("/v1/embeddings", embedding_handler)
-        }
         GroupMode::Path => {
             let chat_handler = post(
                 move |State(state): State<Arc<SharedState>>,
@@ -394,7 +392,7 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
             );
             let list_model_handler = get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
-                    handle_list_models(Some(group_name), state.main_store.clone())
+                    openai_list_models_logic(state, Some(group_name))
                         .await
                         .map_err(|e| e.into_response())
                 },
@@ -427,7 +425,7 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                 },
             );
             let list_model_handler = get(|State(state): State<Arc<SharedState>>| async move {
-                handle_list_models(None, state.main_store.clone())
+                openai_list_models_logic(state, None)
                     .await
                     .map_err(|e| e.into_response())
             });
@@ -452,46 +450,6 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
 /// Creates routes for Claude-compatible endpoints.
 fn claude_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>> {
     match mode {
-        GroupMode::Fixed(fixed_group) => {
-            let fixed_group_for_chat = fixed_group.clone();
-            let chat_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    claude_chat_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_chat.clone()),
-                        compat_mode,
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            let fixed_group_for_embed = fixed_group.clone();
-            let embedding_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    claude_embedding_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_embed.clone()),
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            Router::new()
-                .route("/v1/messages", chat_handler)
-                .route("/v1/claude/embeddings", embedding_handler)
-        }
         GroupMode::Path => {
             let chat_handler = post(
                 move |State(state): State<Arc<SharedState>>,
@@ -550,26 +508,21 @@ fn claude_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
 /// Creates routes for Gemini-compatible endpoints.
 fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>> {
     match mode {
-        GroupMode::Fixed(fixed_group) => {
-            let fixed_group_for_chat = fixed_group.clone();
+        GroupMode::Path => {
             let chat_handler = post(
                 move |State(state): State<Arc<SharedState>>,
-                      Path(action): Path<String>,
+                      Path((group_name, model_id, action)): Path<(String, String, String)>,
                       Query(query): Query<CcproxyQuery>,
                       headers: HeaderMap,
                       body: Bytes| async move {
-                    let (model_id, action) = action
-                        .rsplit_once(':')
-                        .ok_or_else(|| CCProxyError::InvalidProtocolError(action.clone()))
-                        .map_err(|e| e.into_response())?;
                     if action == "embedContent" {
                         return gemini_embedding_logic(
                             state,
                             query,
                             headers,
                             body,
-                            Some(fixed_group_for_chat.clone()),
-                            model_id.to_string(),
+                            Some(group_name),
+                            model_id,
                         )
                         .await
                         .map_err(|e| e.into_response());
@@ -579,28 +532,16 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         query,
                         headers,
                         body,
-                        Some(fixed_group_for_chat.clone()),
+                        Some(group_name),
                         compat_mode,
-                        model_id.to_string(),
-                        action.to_string(),
+                        model_id,
+                        action,
                     )
                     .await
                     .map_err(|e| e.into_response())
                 },
             );
-            let fixed_group_for_list = fixed_group.clone();
-            let list_model_handler = get(move |State(state): State<Arc<SharedState>>| async move {
-                let final_group = resolve_group_name(&state, Some(fixed_group_for_list.clone()));
-                handle_gemini_list_models(final_group, state.main_store.clone())
-                    .await
-                    .map_err(|e| e.into_response())
-            });
-            Router::new()
-                .route("/v1beta/models/{action}", chat_handler)
-                .route("/v1beta/models", list_model_handler)
-        }
-        GroupMode::Path => {
-            let chat_handler = post(
+            let chat_handler_colon = post(
                 move |State(state): State<Arc<SharedState>>,
                       Path((group_name, model_and_action)): Path<(String, String)>,
                       Query(query): Query<CcproxyQuery>,
@@ -638,17 +579,43 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
             );
             let list_model_handler = get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
-                    handle_gemini_list_models(Some(group_name), state.main_store.clone())
+                    gemini_list_models_logic(state, Some(group_name))
                         .await
                         .map_err(|e| e.into_response())
                 },
             );
             Router::new()
-                .route("/v1beta/models/{model_and_action}", chat_handler)
+                .route("/v1beta/models/{model_id}/{action}", chat_handler)
+                .route("/v1beta/models/{model_and_action}", chat_handler_colon)
                 .route("/v1beta/models", list_model_handler)
         }
         GroupMode::None => {
             let chat_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path((model_id, action)): Path<(String, String)>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    if action == "embedContent" {
+                        return gemini_embedding_logic(state, query, headers, body, None, model_id)
+                            .await
+                            .map_err(|e| e.into_response());
+                    }
+                    gemini_chat_logic(
+                        state,
+                        query,
+                        headers,
+                        body,
+                        None,
+                        compat_mode,
+                        model_id,
+                        action,
+                    )
+                    .await
+                    .map_err(|e| e.into_response())
+                },
+            );
+            let chat_handler_colon = post(
                 move |State(state): State<Arc<SharedState>>,
                       Path(model_and_action): Path<String>,
                       Query(query): Query<CcproxyQuery>,
@@ -685,12 +652,13 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                 },
             );
             let list_model_handler = get(|State(state): State<Arc<SharedState>>| async move {
-                handle_gemini_list_models(None, state.main_store.clone())
+                gemini_list_models_logic(state, None)
                     .await
                     .map_err(|e| e.into_response())
             });
             Router::new()
-                .route("/v1beta/models/{model_and_action}", chat_handler)
+                .route("/v1beta/models/{model_id}/{action}", chat_handler)
+                .route("/v1beta/models/{model_and_action}", chat_handler_colon)
                 .route("/v1beta/models", list_model_handler)
         }
     }
@@ -699,55 +667,6 @@ fn gemini_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
 /// Creates chat routes for Ollama-compatible endpoints.
 fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>> {
     match mode {
-        GroupMode::Fixed(fixed_group) => {
-            let fixed_group_for_chat = fixed_group.clone();
-            let chat_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    ollama_chat_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_chat.clone()),
-                        compat_mode,
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            let fixed_group_for_list = fixed_group.clone();
-            let list_model_handler = get(move |State(state): State<Arc<SharedState>>| async move {
-                let final_group = resolve_group_name(&state, Some(fixed_group_for_list.clone()));
-                handle_ollama_tags(final_group, state.main_store.clone())
-                    .await
-                    .map_err(|e| e.into_response())
-            });
-            let fixed_group_for_embed = fixed_group.clone();
-            let embedding_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      Query(query): Query<CcproxyQuery>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
-                    ollama_embedding_logic(
-                        state,
-                        query,
-                        headers,
-                        body,
-                        Some(fixed_group_for_embed.clone()),
-                    )
-                    .await
-                    .map_err(|e| e.into_response())
-                },
-            );
-            Router::new()
-                .route("/api/chat", chat_handler)
-                .route("/api/tags", list_model_handler)
-                .route("/api/embeddings", embedding_handler.clone())
-                .route("/api/embed", embedding_handler)
-        }
         GroupMode::Path => {
             let chat_handler = post(
                 move |State(state): State<Arc<SharedState>>,
@@ -762,7 +681,7 @@ fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedSt
             );
             let list_model_handler = get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
-                    handle_ollama_tags(Some(group_name), state.main_store.clone())
+                    ollama_list_tags_logic(state, Some(group_name))
                         .await
                         .map_err(|e| e.into_response())
                 },
@@ -796,7 +715,7 @@ fn ollama_chat_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedSt
                 },
             );
             let list_model_handler = get(|State(state): State<Arc<SharedState>>| async move {
-                handle_ollama_tags(None, state.main_store.clone())
+                ollama_list_tags_logic(state, None)
                     .await
                     .map_err(|e| e.into_response())
             });
@@ -905,66 +824,35 @@ pub async fn routes(
     );
 
     // --- Route Assembly ---
-    // 1. Build routers for authenticated, non-Ollama protocols
+
+    // 1. Core Protocol Routers
     let normal_routes = Router::new()
         .merge(openai_routes(false, GroupMode::None))
         .merge(claude_routes(false, GroupMode::None))
         .merge(gemini_routes(false, GroupMode::None));
-
-    let grouped_normal_routes = Router::new()
-        .merge(openai_routes(false, GroupMode::Path))
-        .merge(claude_routes(false, GroupMode::Path))
-        .merge(gemini_routes(false, GroupMode::Path));
-
-    let switch_normal_routes = Router::new()
-        .merge(openai_routes(
-            false,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ))
-        .merge(claude_routes(
-            false,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ))
-        .merge(gemini_routes(
-            false,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ));
 
     let compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::None))
         .merge(claude_routes(true, GroupMode::None))
         .merge(gemini_routes(true, GroupMode::None));
 
+    let grouped_normal_routes = Router::new()
+        .merge(openai_routes(false, GroupMode::Path))
+        .merge(claude_routes(false, GroupMode::Path))
+        .merge(gemini_routes(false, GroupMode::Path));
+
     let grouped_compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::Path))
         .merge(claude_routes(true, GroupMode::Path))
         .merge(gemini_routes(true, GroupMode::Path));
 
-    let switch_compat_routes = Router::new()
-        .merge(openai_routes(
-            true,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ))
-        .merge(claude_routes(
-            true,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ))
-        .merge(gemini_routes(
-            true,
-            GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()),
-        ));
-
-    // 2. Build routers for Ollama chat
+    // 2. Ollama Routers
     let ollama_normal_chat = ollama_chat_routes(false, GroupMode::None);
-    let ollama_grouped_normal_chat = ollama_chat_routes(false, GroupMode::Path);
-    let ollama_switch_normal_chat =
-        ollama_chat_routes(false, GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()));
     let ollama_compat_chat = ollama_chat_routes(true, GroupMode::None);
+    let ollama_grouped_normal_chat = ollama_chat_routes(false, GroupMode::Path);
     let ollama_grouped_compat_chat = ollama_chat_routes(true, GroupMode::Path);
-    let ollama_switch_compat_chat =
-        ollama_chat_routes(true, GroupMode::Fixed(SWITCH_MODE_PREFIX.to_string()));
 
-    // 3. Unauthenticated routes
+    // 3. MCP & Unauthenticated
     let unauthenticated_router = Router::new()
         .route("/", get(|| async { "Chatspeed ccproxy is running." }))
         .route(
@@ -972,9 +860,6 @@ pub async fn routes(
             get(|| async { (StatusCode::NOT_FOUND, "") }),
         );
 
-    log_registered_routes();
-
-    // 4. Build and combine MCP routers
     let new_mcp_router = {
         let sse_router =
             crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
@@ -986,52 +871,26 @@ pub async fn routes(
     let legacy_sse_router =
         crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
 
+    log_registered_routes();
+
+    // 4. Combined Router with strict priority
     Router::new()
+        // A. Static / Root routes (Highest priority, prevents shadowing)
         .merge(unauthenticated_router)
-        // Standalone Ollama API routes (no grouping/compat)
         .merge(ollama_api_routes().layer(ollama_auth_middleware.clone()))
-        // MCP Routes
         .nest("/mcp", new_mcp_router)
-        .nest_service("/sse", legacy_sse_router) // Use nest_service to handle different state types
-        // --- Route Combination Logic ---
-        // 1. Switch mode with compatibility (Highest priority)
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
-            switch_compat_routes.clone().layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_SHORT_PREFIX),
-            switch_compat_routes.clone().layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_MODE_PREFIX),
-            ollama_switch_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}/{}", SWITCH_MODE_PREFIX, TOOL_COMPAT_SHORT_PREFIX),
-            ollama_switch_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
-        )
-        // 2. Switch mode
-        .nest(
-            &format!("/{}", SWITCH_MODE_PREFIX),
-            switch_normal_routes.layer(auth_middleware.clone()),
-        )
-        .nest(
-            &format!("/{}", SWITCH_MODE_PREFIX),
-            ollama_switch_normal_chat.layer(ollama_auth_middleware.clone()),
-        )
-        // 3. Non-grouped, compatibility mode
+        .nest_service("/sse", legacy_sse_router)
+        // B. Non-prefixed Protocol Routes (Handles /v1, /api, /v1beta directly)
+        .merge(normal_routes.layer(auth_middleware.clone()))
+        .merge(ollama_normal_chat.layer(ollama_auth_middleware.clone()))
+        // C. Compat Mode Routes (Fixed prefix /compat)
         .nest(
             &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
             compat_routes.clone().layer(auth_middleware.clone()),
         )
         .nest(
             &format!("/{}", TOOL_COMPAT_SHORT_PREFIX),
-            compat_routes.clone().layer(auth_middleware.clone()),
+            compat_routes.layer(auth_middleware.clone()),
         )
         .nest(
             &format!("/{}", TOOL_COMPAT_MODE_PREFIX),
@@ -1041,18 +900,17 @@ pub async fn routes(
         )
         .nest(
             &format!("/{}", TOOL_COMPAT_SHORT_PREFIX),
-            ollama_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
+            ollama_compat_chat.layer(ollama_auth_middleware.clone()),
         )
-        // 4. Grouped, compatibility mode
+        // D. Grouped Routes (Dynamic prefix /{group_name}, Lowest priority)
+        // D1. Grouped + Compat
         .nest(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
             grouped_compat_routes.clone().layer(auth_middleware.clone()),
         )
         .nest(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_SHORT_PREFIX),
-            grouped_compat_routes.clone().layer(auth_middleware.clone()),
+            grouped_compat_routes.layer(auth_middleware.clone()),
         )
         .nest(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_MODE_PREFIX),
@@ -1062,27 +920,16 @@ pub async fn routes(
         )
         .nest(
             &format!("/{{group_name}}/{}", TOOL_COMPAT_SHORT_PREFIX),
-            ollama_grouped_compat_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
+            ollama_grouped_compat_chat.layer(ollama_auth_middleware.clone()),
         )
-        // 5. Non-grouped, normal mode
-        .merge(normal_routes.clone().layer(auth_middleware.clone()))
-        .merge(
-            ollama_normal_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
-        )
-        // 6. Grouped, normal mode (Lowest priority)
+        // D2. Grouped Normal (Matches /switch/v1/... or /mygroup/v1/...)
         .nest(
             "/{group_name}",
-            grouped_normal_routes.clone().layer(auth_middleware.clone()),
+            grouped_normal_routes.layer(auth_middleware.clone()),
         )
         .nest(
             "/{group_name}",
-            ollama_grouped_normal_chat
-                .clone()
-                .layer(ollama_auth_middleware.clone()),
+            ollama_grouped_normal_chat.layer(ollama_auth_middleware.clone()),
         )
         .with_state(shared_state)
 }

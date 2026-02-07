@@ -158,20 +158,17 @@ pub async fn handle_streamed_response(
     *response.status_mut() = sse_status_code;
 
     let final_headers = response.headers_mut();
-    for (reqwest_name, reqwest_value) in response_headers_from_target.iter() {
-        let name_str = reqwest_name.as_str().to_lowercase();
+    let filtered_headers = crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
+    
+    for (name, value) in filtered_headers.iter() {
+        let name_str = name.as_str().to_lowercase();
         if name_str == "content-type"
             || name_str == "cache-control"
             || name_str == "x-request-id"
-            || name_str.starts_with("x-ratelimit-")
+            || name_str.starts_with("x-")
             || name_str == "retry-after"
         {
-            if let (Ok(axum_name), Ok(axum_value)) = (
-                http::header::HeaderName::from_bytes(reqwest_name.as_ref()),
-                http::header::HeaderValue::from_bytes(reqwest_value.as_ref()),
-            ) {
-                final_headers.insert(axum_name, axum_value);
-            }
+            final_headers.insert(name.clone(), value.clone());
         }
     }
     if !final_headers.contains_key(http::header::CONTENT_TYPE) {

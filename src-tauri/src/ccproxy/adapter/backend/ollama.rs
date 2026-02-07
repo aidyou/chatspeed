@@ -696,7 +696,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                 .into_iter()
                 .enumerate()
                 .map(|(i, e)| UnifiedEmbeddingData {
-                    index: i as u32,
+                    index: i as i32,
                     embedding: e,
                 })
                 .collect();

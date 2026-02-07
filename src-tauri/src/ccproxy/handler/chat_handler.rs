@@ -512,28 +512,21 @@ pub async fn handle_chat_completion(
         let mut response =
             (status_code, Json(json!({ "error": final_error_json }))).into_response();
 
+        let filtered_headers =
+            crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
         let final_headers = response.headers_mut();
-        for (reqwest_name, reqwest_value) in headers_from_target.iter() {
-            let name_str = reqwest_name.as_str().to_lowercase();
-            if name_str.starts_with("x-ratelimit-")
-                || name_str == "retry-after"
-                || name_str == "content-type"
-            {
-                if let Ok(axum_name) =
-                    reqwest::header::HeaderName::from_bytes(reqwest_name.as_ref())
-                {
-                    if let Ok(axum_value) =
-                        reqwest::header::HeaderValue::from_bytes(reqwest_value.as_ref())
-                    {
-                        final_headers.insert(axum_name, axum_value);
-                    }
-                }
+
+        for (name, value) in filtered_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if name_str.starts_with("x-") || name_str == "retry-after" {
+                final_headers.insert(name.clone(), value.clone());
             }
         }
-        if !final_headers.contains_key(reqwest::header::CONTENT_TYPE) {
+
+        if !final_headers.contains_key(http::header::CONTENT_TYPE) {
             final_headers.insert(
-                reqwest::header::CONTENT_TYPE,
-                reqwest::header::HeaderValue::from_static("application/json"),
+                http::header::CONTENT_TYPE,
+                http::header::HeaderValue::from_static("application/json"),
             );
         }
         return Ok(response);
@@ -619,13 +612,14 @@ pub async fn handle_chat_completion(
         .await?;
         Ok(res.into_response())
     } else {
+        let response_headers_from_target = target_response.headers().clone();
         let body_bytes = target_response
             .bytes()
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
         if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "[Proxy] {} Response Body: \n{}\n================\n\n",chat_protocol.to_owned(), String::from_utf8_lossy(&body_bytes));
+            log::info!(target: "ccproxy_logger", "[Backend Raw Response] {} Body: \n{}\n================\n\n", proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 
         let backend_response = crate::ccproxy::adapter::backend::BackendResponse {
@@ -676,9 +670,21 @@ pub async fn handle_chat_completion(
             });
         }
 
-        let response = output_adapter
+        let mut response = output_adapter
             .adapt_response(unified_response, sse_status)
-            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
-        Ok(response.into_response())
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?
+            .into_response();
+
+        let filtered_headers =
+            crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
+        let final_headers = response.headers_mut();
+        for (name, value) in filtered_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if name_str.starts_with("x-") || name_str == "retry-after" {
+                final_headers.insert(name.clone(), value.clone());
+            }
+        }
+
+        Ok(response)
     }
 }

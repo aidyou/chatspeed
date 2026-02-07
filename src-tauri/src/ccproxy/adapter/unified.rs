@@ -118,7 +118,7 @@ pub struct UnifiedEmbeddingResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedEmbeddingData {
-    pub index: u32,
+    pub index: i32,
     pub embedding: Vec<f64>,
 }
 

@@ -158,19 +158,15 @@ pub async fn handle_direct_forward(
                 t!("network.response_read_error", error = e.to_string()).to_string(),
             )
         })?;
+        let filtered_headers = crate::ccproxy::utils::http::filter_proxy_headers(&response_headers);
         let mut response = Response::builder()
             .status(status_code)
             .body(Body::from(error_body_bytes.clone()))
             .map_err(|e| {
                 CCProxyError::InternalError(format!("Failed to build error response: {}", e))
             })?;
-        for (name, value) in response_headers.iter() {
-            if let Ok(axum_name) = http::header::HeaderName::from_bytes(name.as_ref()) {
-                if let Ok(axum_value) = http::header::HeaderValue::from_bytes(value.as_ref()) {
-                    response.headers_mut().insert(axum_name, axum_value);
-                }
-            }
-        }
+
+        *response.headers_mut() = filtered_headers;
 
         // Record error for non-streaming direct forward
         if let Ok(store) = main_store_arc.read() {
@@ -195,8 +191,9 @@ pub async fn handle_direct_forward(
     }
 
     let mut response_builder = Response::builder().status(status_code);
+    let filtered_headers = crate::ccproxy::utils::http::filter_proxy_headers(&response_headers);
 
-    for (name, value) in response_headers.iter() {
+    for (name, value) in filtered_headers.iter() {
         response_builder = response_builder.header(name.as_str(), value.as_bytes());
     }
 
@@ -674,7 +671,8 @@ fn chunk_parser_and_log(
 
                                                         if log_to_file {
                                                             if let Ok(status) = sse_status.read() {
-                                                                let tool_id = status.tool_id.clone();
+                                                                let tool_id =
+                                                                    status.tool_id.clone();
 
                                                                 if let Some(tool_calls) =
                                                                     &mut recorder.tool_calls
@@ -755,16 +753,15 @@ fn chunk_parser_and_log(
                                         if recorder.tool_calls.is_none() {
                                             recorder.tool_calls = Some(Default::default());
                                         }
-                                        if let Some(recorder_tool_calls) =
-                                            &mut recorder.tool_calls
+                                        if let Some(recorder_tool_calls) = &mut recorder.tool_calls
                                         {
                                             let id = get_tool_id();
-                                            recorder_tool_calls.entry(id.to_string()).or_insert_with(
-                                                || UnifiedFunctionCallPart {
+                                            recorder_tool_calls
+                                                .entry(id.to_string())
+                                                .or_insert_with(|| UnifiedFunctionCallPart {
                                                     name: name.to_string(),
                                                     args: args_str,
-                                                },
-                                            );
+                                                });
                                         }
                                     }
                                 }

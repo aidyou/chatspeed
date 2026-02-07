@@ -113,7 +113,7 @@ pub struct OpenAIChatCompletionResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize
 pub struct OpenAIChatCompletionChoice {
-    pub index: u32,
+    pub index: i32,
     pub message: UnifiedChatMessage, // For non-streaming, role: "assistant"
     pub finish_reason: Option<String>, // e.g., "stop", "length", "tool_calls", "content_filter"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +167,7 @@ pub struct OpenAIChatCompletionStreamResponse {
 #[derive(Serialize, Deserialize, Debug, Clone)] // Added Deserialize for consistency
 pub struct OpenAIStreamChoice {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub index: Option<u32>,
+    pub index: Option<i32>,
     pub delta: UnifiedChatMessage, // Using the unified message structure for delta
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
@@ -195,7 +195,7 @@ pub struct UnifiedToolCall {
     pub r#type: Option<String>, // e.g., "function"
     pub function: OpenAIFunctionCall, // Re-using OpenAIFunctionCall
     #[serde(skip_serializing_if = "Option::is_none")] // Only relevant for streaming delta
-    pub index: Option<u32>,
+    pub index: Option<i32>,
 }
 /// Represents a tool provided in the OpenAI chat completion request.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -388,6 +388,6 @@ pub struct OpenAIEmbeddingResponse {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OpenAIEmbeddingData {
     pub object: String, // "embedding"
-    pub index: u32,
+    pub index: i32,
     pub embedding: Vec<f64>,
 }

@@ -7,6 +7,11 @@
 ### 🪄 Improvements
 
 - **Extreme Startup Robustness**: Refactored the initialization sequence to be fully asynchronous and non-blocking. Non-critical background tasks (environment path detection, tool registration, and the local HTTP server) are now deferred until after the UI has launched. This ensures the application starts instantly and never crashes, even in total offline mode or under restrictive firewalls.
+- **Hierarchical Proxy Routing Architecture**: Redesigned the proxy module's routing system with strict priority enforcement (Fixed Prefixes > Direct Protocol Routes > Global Compat > Dynamic Group Routes). This eliminates "Route Shadowing" where standard `/v1` endpoints could be incorrectly captured by dynamic groups, ensuring 100% accurate protocol dispatching.
+- **Smart Response Header Filtering**: Introduced a centralized header filtration utility that automatically strips conflicting transport headers (e.g., `Content-Length`, `Connection`, `Transfer-Encoding`). This fixes the persistent "Empty reply from server" and connection drop issues encountered with certain AI backends in direct forward mode.
+- **Gemini Protocol Enhancements**:
+  - **Action Path Expansion**: Added support for slash-style action paths (e.g., `/v1beta/models/{model}/{action}`) alongside the standard colon format, improving compatibility with various Gemini-compliant clients.
+  - **Auto-Field Translation**: Fixed tool definition parsing by implementing seamless snake_case to camelCase conversion (`functionDeclarations`), ensuring that backend models correctly identify the available tool list.
 - **Database Fail-safe Fallback**: If the primary database file is corrupted or inaccessible due to file system locks, the app now automatically falls back to an in-memory database. This prevents fatal panics and allows the application to stay operational for diagnostics.
 - **Sensitive Info Module Health Awareness**: The Filter Manager now handles initialization failures (like regex compilation issues) gracefully. Instead of crashing the app, it reports its health status to the UI, allowing the frontend to disable specific features and notify the user with clear diagnostic info.
 - **Backup Data Integrity (WAL Checkpointing)**: Implemented an explicit SQL Checkpoint mechanism before backup operations. This forces the database to flush all pending writes from the WAL log file to the main DB file, guaranteeing that backups are always up-to-date and complete.
@@ -14,6 +19,8 @@
 
 ### 🐞 Bug Fixes
 
+- **Cross-Protocol Negative Index Fix**: Resolved a critical panic where certain models (e.g., Qwen) return `index: -1` in tool calls or embedding vectors. By migrating all relevant `index` fields from `u32` to `i32`, the proxy now maintains maximum compatibility with non-standard OpenAI implementations.
+- **Proxy Log Label Calibration**: Refined proxy debug logs to clearly distinguish between "Backend Raw Response" and "Adapted Client Response," eliminating ambiguity when debugging cross-protocol translation sessions.
 - **Windows 11 Startup Fix**: Resolved a critical panic on Windows 11 by reverting certain SQLite open flags (`SQLITE_OPEN_FULL_MUTEX`) that conflicted with specific threading models in production builds.
 - **SQL Execution Errors**: Fixed a bug where `rusqlite` would throw an error when executing `PRAGMA` commands that returned result rows.
 - **Arc Ownership Fix**: Resolved a compilation error related to `Arc` move semantics in asynchronous initialization blocks.

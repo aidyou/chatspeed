@@ -2,35 +2,48 @@
 
 ## About ccproxy
 
-The @src-tauri/src/ccproxy module is an AI chat proxy that can convert between any of the following protocols: OpenAI-compatible, Gemini, Claude, and Ollama.
+The `@src-tauri/src/ccproxy` module is a high-performance AI proxy and conversion engine. It focuses on full-duplex conversion, routing, and feature enhancement between **OpenAI-compatible**, **Gemini**, **Claude**, and **Ollama** protocols.
+
+## Core Features
+
+### 1. Flexible Routing System
+
+ccproxy utilizes a hierarchical routing design supporting multiple access modes:
+
+- **Direct Access**: e.g., `/v1/chat/completions`, uses global default settings.
+- **Grouped Routing**: e.g., `/{group_name}/v1/...`, isolates model configurations for different scenarios or clients.
+- **Dynamic Switching**: Using the `/switch` prefix (e.g., `/switch/v1/...`) automatically routes requests to the currently "Active" group set in the application.
+- **Tool Compatibility Mode**: Enabled via `/compat` or `/compat_mode` (e.g., `/switch/compat/v1/...`), bringing function-calling capabilities to models that lack native support.
+
+### 2. Multi-Protocol Adapters
+
+The module implements protocol conversion through a tri-layer adapter architecture: **Input -> Backend -> Output**.
+**Data Flow Example (Claude Client -> OpenAI Backend):**
+`Client -> Claude Input (Unified format) -> OpenAI Backend (OpenAI format) -> Upstream AI -> OpenAI Backend (Unified format) -> Claude Output (Claude format) -> Client`
+
+### 3. Tool Compatibility Mode (Compat Mode)
+
+For models without native function-calling support, ccproxy injects specific prompts and utilizes XML interception to parse and convert text output back into protocol-standard tool calls, making the process seamless for clients.
+
+### 4. Embedding Proxy
+
+Standardized embedding endpoints across protocols:
+
+- **OpenAI**: `/v1/embeddings`
+- **Claude**: `/v1/claude/embeddings` (Provided by ccproxy for protocol consistency)
+- **Gemini**: Supports `:embedContent` or `/embedContent` actions.
+- **Ollama**: `/api/embed` and `/api/embeddings`.
 
 ## How It Works
 
-We'll use an example of a request from a Claude-protocol client to an OpenAI-compatible server to illustrate the data flow and the module's basic working principle. The data flow is as follows:
+Requests enter the `handle_chat_completion` function and undergo the following:
 
-1. A user sends a request to the module via the Claude protocol. The data is routed to the `handle_chat_completion` function in @src-tauri/src/ccproxy/handler/chat_handler.rs.
-2. The data is processed by the `from_claude` function in @src-tauri/src/ccproxy/adapter/input/claude_input.rs, converting it to a unified format.
-3. The data is then processed by the `adapt_request` function in @src-tauri/src/ccproxy/adapter/backend/openai.rs, which converts the unified format to the OpenAI-compatible protocol format.
-4. The converted data is sent to the OpenAI-compatible server. The returned data, depending on the request mode (synchronous or asynchronous), is processed by the `adapt_response` (sync) or `adapt_stream_chunk` (async) function in @src-tauri/src/ccproxy/adapter/backend/openai.rs and converted back to the unified format.
-5. Finally, the data is processed by the `adapt_response` (sync) or `adapt_stream_chunk` (async) function in @src-tauri/src/ccproxy/adapter/output/claude_output.rs to be converted into the Claude-specific output format and sent to the client.
+1. **Model Resolution**: Locates the backend model instance using aliases or `X-CS-*` headers.
+2. **Direct Forwarding**: If the client and backend protocols match and Compat Mode is off, it performs high-performance direct pass-through with header filtering.
+3. **Adaptation**: If protocols differ, it uses specialized `Adapters` for bi-directional formatting.
+4. **Header Filtering**: All responses are processed by `filter_proxy_headers` to remove transport-level headers (`Content-Length`, `Connection`, etc.), ensuring compatibility with the Axum framework.
 
-This completes the entire proxy request process. The entire data flow can be represented as:
+## Important Notes
 
-client -> claude protocol request -> from_claude (claude -> unified) -> adapt_request (unified -> openai) -> openai server -> `adapt_response | adapt_stream_chunk` (openai -> unified) -> `adapt_response | adapt_stream_chunk` (unified -> claude) -> client
-
-### Embedding Proxy
-
-CCProxy also supports converting Embedding requests from different protocols into the format supported by the target server.
-
-1. **OpenAI**: Supports `/v1/embeddings`.
-2. **Gemini**: Supports `/:embedContent`.
-3. **Ollama**: Supports `/api/embed` and legacy `/api/embeddings` (automatically handles response format differences).
-
-The data flow is similar to the chat completion proxy but is handled via specialized embedding adapters to ensure vector data is correctly returned.
-
-### Tool Compatibility Mode
-
-Models deployed on OpenAI-compatible servers or Ollama often have incomplete native support for tool calls, which can limit the utility of certain free models. To enhance the capabilities of these models, we have added a Tool Compatibility Mode. The principle is as follows:
-
-1.  Tool call definitions are parsed into an XML-formatted description, which is passed to the AI along with the prompt. The AI is instructed to return an XML format if it needs to call a tool.
-2.  The returned XML data is then parsed, and the tool call data within the XML is converted into a standard tool call format.
+- **Route Integration**: While the `ccproxy/router.rs` mounts routes for other components like MCP, those are independent business modules and not part of the `ccproxy` proxy engine's core logic.
+- **DO NOT modify the route mounting order.** The current hierarchy (Fixed Prefixes > Direct Routes > Global Compat > Grouped Routes) is meticulously ordered to prevent "Route Shadowing".
