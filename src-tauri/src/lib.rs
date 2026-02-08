@@ -633,29 +633,34 @@ pub async fn run() -> crate::error::Result<()> {
             let main_store_clone = main_store.clone();
             let chat_state_clone = chat_state.clone();
 
-
+            // 1. Initialize environment synchronously (Critical for get_env command)
+            // This must run before background tasks to ensure PATH is ready for any spawned processes
+            environment::init_environment();
 
             tauri::async_runtime::spawn(async move {
-                 // 1. Initialize environment synchronously (Critical for get_env command)
-                environment::init_environment().await;
-
-                // 2. Register tools (Can be async)
+                // 1. Register tools (Can be async)
                 let tm = chat_state_clone.tool_manager.clone();
                 let _ = tm.register_available_tools(handle.clone()).await;
 
-                // 3. Start the HTTP server
+                // 2. Start the HTTP server
                 // The HTTP server includes:
                 // - Static file serving
                 // - CCProxy (OpenAI-compatible chat completion proxy)
                 // - MCP server management
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if let Err(e) = start_http_server(&handle, main_store_clone.clone(), chat_state_clone).await {
-                    error!("Failed to start HTTP server: {}", e);
-                }
+                let handle_for_server = handle.clone();
+                let main_store_for_server = main_store_clone.clone();
+                let chat_state_for_server = chat_state_clone.clone();
+                
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = start_http_server(&handle_for_server, main_store_for_server, chat_state_for_server).await {
+                        error!("Failed to start HTTP server: {}", e);
+                    }
+                });
 
                 // Notify frontend that backend is ready
                 // Retry sending event multiple times (15x over 7.5s) to ensure frontend catches it
                 // This covers cases where frontend Init takes longer or listeners are registered late
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 for i in 0..15 {
                     if let Err(e) = handle.emit("cs://backend-ready", ()) {
                         log::error!("Failed to emit cs://backend-ready event (attempt {}): {}", i, e);

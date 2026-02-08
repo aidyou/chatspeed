@@ -858,7 +858,21 @@ const groupConversationsByDate = conversations => {
         return
       }
     }
-    const createdDate = new Date(conversation.createdAt)
+    let createdDate = new Date(conversation.createdAt)
+    
+    // Fix for Windows WebView2/Safari: Handle SQLite 'YYYY-MM-DD HH:MM:SS' format
+    if (isNaN(createdDate.getTime()) && typeof conversation.createdAt === 'string') {
+       // Assume UTC if no timezone provided (SQLite CURRENT_TIMESTAMP is UTC)
+       const isoString = conversation.createdAt.replace(' ', 'T') + 'Z'
+       createdDate = new Date(isoString)
+    }
+
+    // Fallback: If date is still invalid, treat as today to prevent hiding the conversation
+    if (isNaN(createdDate.getTime())) {
+      console.warn('Invalid date for conversation:', conversation.id, conversation.createdAt)
+      createdDate = new Date() 
+    }
+
     const timeDiff = now - createdDate
 
     if (timeDiff < oneDay) {
@@ -1783,7 +1797,24 @@ onMounted(async () => {
     }
   }
 
-  await chatStore.loadConversations() // Ensure this is awaited
+  // Robust retry mechanism for loading conversations
+  // This handles cases where backend initialization is slow (especially on Windows Release builds)
+  const loadConversationsWithRetry = async (attempts = 0, maxAttempts = 10) => {
+    try {
+      await chatStore.loadConversations()
+      console.log('Conversations loaded successfully')
+    } catch (error) {
+      if (attempts < maxAttempts) {
+        console.warn(`Failed to load conversations (attempt ${attempts + 1}/${maxAttempts}), retrying in 1s...`, error)
+        setTimeout(() => loadConversationsWithRetry(attempts + 1, maxAttempts), 1000)
+      } else {
+        console.error('Max retry attempts reached for loading conversations', error)
+        showMessage(t('chat.errorOnLoadConversations', { error: String(error) }), 'error')
+      }
+    }
+  }
+
+  await loadConversationsWithRetry() // Ensure this is awaited
 
   // listen send_message event
   unlistenSendMessage.value = await listen('chat_message', async event => {

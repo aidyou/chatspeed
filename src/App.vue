@@ -29,6 +29,7 @@ import { ElMessage } from 'element-plus'
 
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
+import { useChatStore } from '@/stores/chat'
 import { useSkillStore } from '@/stores/skill'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
@@ -39,6 +40,7 @@ const router = useRouter()
 const settingStore = useSettingStore()
 const mcpStore = useMcpStore()
 const modelStore = useModelStore()
+const chatStore = useChatStore()
 const skillStore = useSkillStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
@@ -124,10 +126,11 @@ onMounted(async () => {
   await settingStore.updateSettingStore()
 
   const initializeStores = () => {
-    console.log('Initializing model, skill, and mcp stores...')
+    console.log('Initializing model, skill, mcp, and chat stores...')
     modelStore.updateModelStore()
     skillStore.updateSkillStore()
     mcpStore.fetchMcpServers()
+    chatStore.loadConversations()
   }
 
   // Handle backend ready event
@@ -148,7 +151,7 @@ onMounted(async () => {
       console.log('Timeout waiting for backend-ready, forcing initialization')
       initializeStores()
     }
-  }, 2000)
+  }, 5000)
 
   setTheme()
 

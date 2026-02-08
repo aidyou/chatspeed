@@ -20,10 +20,10 @@ export const useChatStore = defineStore('chat', () => {
    */
   const loadConversations = () => {
     if (isConversationLoading) {
-      return
+      return Promise.resolve()
     }
     isConversationLoading = true
-    invokeWrapper('get_all_conversations')
+    return invokeWrapper('get_all_conversations')
       .then((result) => {
         console.log('conversations', result);
         // Assuming result is an array of conversations
@@ -35,6 +35,7 @@ export const useChatStore = defineStore('chat', () => {
         } else {
           console.error('Error loading conversations:', error);
         }
+        throw error // Re-throw to allow caller to handle retry
       })
       .finally(() => {
         isConversationLoading = false
