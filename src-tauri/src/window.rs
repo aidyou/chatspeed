@@ -257,64 +257,30 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
 }
 
 /// Toggles the visibility of the assistant window.
-///
-/// If the assistant window exists, it will be shown or hidden based on its current state.
-/// If it does not exist, a new assistant window will be created with specified configurations.
-///
-/// # Arguments
-/// - `app`: A reference to the Tauri application handle.
-///
-/// # Example
-/// ```no_run
-/// use tauri::App;
-/// toggle_assistant_window(&app);
-/// ```
 pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     let window_label = "assistant";
-    if let Some(_) = app.get_webview_window(window_label) {
-        show_and_focus_window(app, window_label);
-    } else {
-        let _ = WebviewWindowBuilder::new(
-            app,
-            window_label,
-            tauri::WebviewUrl::App(format!("/{}", window_label).into()),
-        )
-        .decorations(false)
-        .transparent(true)
-        .skip_taskbar(true)
-        .min_inner_size(445.0, 500.0)
-        .center()
-        .build();
+    if app.get_webview_window(window_label).is_none() {
+        let _ = create_assistant_window(app, false);
     }
+    show_and_focus_window(app, window_label);
 }
 
 /// Toggles the visibility of the proxy switcher window.
 pub fn toggle_proxy_switcher_window(app: &tauri::AppHandle) {
     let window_label = "proxy_switcher";
+    if app.get_webview_window(window_label).is_none() {
+        let _ = create_proxy_switcher_window(app, false);
+    }
+    
     if let Some(window) = app.get_webview_window(window_label) {
         match (window.is_visible(), window.is_focused()) {
             (Ok(true), Ok(true)) => {
                 let _ = window.hide();
             }
             _ => {
-                // In all other cases (hidden, minimized, or in the background),
-                // use the robust helper to bring it to the front.
                 show_and_focus_window(app, window_label);
             }
         }
-    } else {
-        let _ = WebviewWindowBuilder::new(
-            app,
-            window_label,
-            tauri::WebviewUrl::App("/proxy-switcher".into()),
-        )
-        .decorations(false)
-        .transparent(true)
-        .skip_taskbar(true)
-        .always_on_top(true)
-        .inner_size(360.0, 420.0)
-        .center()
-        .build();
     }
 }
 
@@ -901,4 +867,65 @@ pub fn get_screen_name(window: &Window) -> Option<String> {
             None
         }
     }
+}
+
+/// Internal helper to create a webview window with consistent styling.
+fn create_window_internal(
+    app: &tauri::AppHandle,
+    label: &str,
+    title: &str,
+    url: &str,
+    size: (f64, f64),
+    min_size: (f64, f64),
+    visible: bool,
+    skip_taskbar: bool,
+    always_on_top: bool,
+) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+
+    let mut builder = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(size.0, size.1)
+        .min_inner_size(min_size.0, min_size.1)
+        .decorations(false)
+        .transparent(true)
+        .visible(visible)
+        .skip_taskbar(skip_taskbar)
+        .always_on_top(always_on_top)
+        .center();
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.title_bar_style(tauri::TitleBarStyle::Transparent);
+        if label == "main" {
+            builder = builder.hidden_title(true);
+        }
+    }
+
+    // Windows transparency requirements
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.transparent(true);
+        builder = builder.decorations(false);
+    }
+
+    builder.build().map_err(|e| format!("Failed to create window '{}': {}", label, e))
+}
+
+pub fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
+    create_window_internal(app, "main", "ChatSpeed", "/", (600.0, 700.0), (450.0, 600.0), true, false, false)
+}
+
+pub fn create_assistant_window(app: &tauri::AppHandle, visible: bool) -> Result<WebviewWindow, String> {
+    create_window_internal(app, "assistant", "Assistant", "/assistant", (500.0, 600.0), (500.0, 400.0), visible, true, false)
+}
+
+pub fn create_workflow_window(app: &tauri::AppHandle, visible: bool) -> Result<WebviewWindow, String> {
+    create_window_internal(app, "workflow", "Workflow", "/workflow", (1024.0, 650.0), (800.0, 400.0), visible, false, false)
+}
+
+pub fn create_proxy_switcher_window(app: &tauri::AppHandle, visible: bool) -> Result<WebviewWindow, String> {
+    create_window_internal(app, "proxy_switcher", "Proxy Switcher", "/proxy-switcher", (360.0, 420.0), (360.0, 420.0), visible, true, true)
 }

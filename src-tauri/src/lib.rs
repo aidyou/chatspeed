@@ -657,21 +657,7 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 });
 
-                // Notify frontend that backend is ready
-                // Retry sending event multiple times (15x over 7.5s) to ensure frontend catches it
-                // This covers cases where frontend Init takes longer or listeners are registered late
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                for i in 0..15 {
-                    if let Err(e) = handle.emit("cs://backend-ready", ()) {
-                        log::error!("Failed to emit cs://backend-ready event (attempt {}): {}", i, e);
-                    } else {
-                        log::debug!("Emitted cs://backend-ready event (attempt {})", i);
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-                log::info!("Backend initialization sequence completed");
-
-                // 4. Update check (2 minutes later, non-critical)
+                // 3. Update check (2 minutes later, non-critical)
                 let auto_update = if let Ok(c) = main_store_clone.read() {
                     c.get_config(CFG_AUTO_UPDATE, true)
                 } else {
@@ -690,15 +676,30 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             });
 
-            // Read and set window sizes
-            if let Some(main_window) = app.get_webview_window("main") {
-                restore_window_config(&main_window, main_store.clone());
+            // Manually create the initial windows after all state has been managed and the environment is ready.
+            // This ensures that any commands called by the frontend will find the required backend state.
+            
+            // 1. Main Window (Visible)
+            match window::create_main_window(&app.handle()) {
+                Ok(win) => { restore_window_config(&win, main_store.clone()); },
+                Err(e) => { log::error!("Failed to create main window: {}", e); }
             }
-            if let Some(assistant_window) = app.get_webview_window("assistant") {
-                restore_window_config(&assistant_window, main_store.clone());
+
+            // 2. Assistant Window (Hidden)
+            match window::create_assistant_window(&app.handle(), false) {
+                Ok(win) => { restore_window_config(&win, main_store.clone()); },
+                Err(e) => { log::error!("Failed to create assistant window: {}", e); }
             }
-            if let Some(workflow_window) = app.get_webview_window("workflow") {
-                restore_window_config(&workflow_window, main_store.clone());
+
+            // 3. Workflow Window (Hidden)
+            match window::create_workflow_window(&app.handle(), false) {
+                Ok(win) => { restore_window_config(&win, main_store.clone()); },
+                Err(e) => { log::error!("Failed to create workflow window: {}", e); }
+            }
+
+            // 4. Proxy Switcher Window (Hidden)
+            if let Err(e) = window::create_proxy_switcher_window(&app.handle(), false) {
+                log::error!("Failed to create proxy switcher window: {}", e);
             }
 
             // create tray

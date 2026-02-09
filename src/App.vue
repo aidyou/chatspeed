@@ -125,34 +125,6 @@ onMounted(async () => {
   // update the setting store
   await settingStore.updateSettingStore()
 
-  const initializeStores = () => {
-    console.log('Initializing model, skill, mcp, and chat stores...')
-    modelStore.updateModelStore()
-    skillStore.updateSkillStore()
-    mcpStore.fetchMcpServers()
-    chatStore.loadConversations()
-  }
-
-  // Handle backend ready event
-  // We use a flag to ensure we only react to the event once, even if backend emits multiple times
-  let hasReceivedBackendReady = false
-  await listen('cs://backend-ready', () => {
-    if (hasReceivedBackendReady) return
-    hasReceivedBackendReady = true
-    console.log('Received backend-ready event, initializing stores')
-    initializeStores()
-  })
-
-  // Give backend time to initialize and send the event
-  // If event arrives during this delay, stores will be initialized by the listener
-  // If not, we initialize anyway after the delay (fallback)
-  setTimeout(() => {
-    if (!hasReceivedBackendReady) {
-      console.log('Timeout waiting for backend-ready, forcing initialization')
-      initializeStores()
-    }
-  }, 5000)
-
   setTheme()
 
   if (settingStore.windowLabel === 'main' || settingStore.windowLabel === 'note') {

@@ -25,7 +25,7 @@
         "transparent": true,
         "hiddenTitle": true,
         "center": true,
-        "create": true
+        "create": false
       },
       {
         "label": "note",
@@ -56,7 +56,7 @@
         "visible": false,
         "skipTaskbar": true,
         "center": true,
-        "create": true
+        "create": false
       },
       {
         "label": "toolbar",
@@ -102,7 +102,7 @@
         "transparent": true,
         "visible": false,
         "center": true,
-        "create": true
+        "create": false
       },
       {
         "label": "proxy_switcher",
@@ -116,7 +116,7 @@
         "visible": false,
         "skipTaskbar": true,
         "center": true,
-        "create": true
+        "create": false
       }
     ],
     "withGlobalTauri": true,

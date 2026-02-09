@@ -379,15 +379,16 @@
       </div>
       <template #footer>
         <div class="dialog-footer-wrap">
-          <el-form-item :label="$t('settings.proxy.form.selectedCount')">
-            <span>{{ currentProxyConfig.targets.length }}</span>
-          </el-form-item>
-          <span class="dialog-footer">
+          <div class="selected-status">
+            <span class="label">{{ $t('settings.proxy.form.selectedCount') }}</span>
+            <span class="count">{{ currentProxyConfig.targets.length }}</span>
+          </div>
+          <div class="footer-actions">
             <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
             <el-button type="primary" @click="handleProxyConfigSubmit" :loading="formLoading">
               {{ $t('common.confirm') }}
             </el-button>
-          </span>
+          </div>
         </div>
       </template>
     </el-dialog>
@@ -1440,6 +1441,25 @@ const genTableData = () => {
     flex-direction: row;
     justify-content: space-between;
     align-items: center;
+    width: 100%;
+
+    .selected-status {
+      font-size: var(--cs-font-size-sm);
+      color: var(--cs-text-color-secondary);
+      display: flex;
+      align-items: center;
+      gap: var(--cs-space-xs);
+
+      .count {
+        color: var(--cs-text-color);
+        font-weight: 500;
+      }
+    }
+
+    .footer-actions {
+      display: flex;
+      gap: var(--cs-space-sm);
+    }
   }
 }
 
