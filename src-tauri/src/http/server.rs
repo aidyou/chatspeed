@@ -53,6 +53,11 @@ pub async fn start_http_server(
     log::info!("start_http_server function entered.");
     // plugins dir
     let app_data_dir = get_app_data_dir(app)?;
+    log::debug!(
+        "app data dir: {}",
+        app_data_dir.to_str().unwrap_or_default()
+    );
+
     let schema_dir = app_data_dir.join("schema");
     // shared data dir
     let shared_data_dir = app_data_dir.join("shared");
@@ -72,6 +77,9 @@ pub async fn start_http_server(
     std::fs::create_dir_all(&theme_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    // make default backup dir
+    let backup_dir = app_data_dir.join("backup");
+    std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
     // define cors config
     let cors = CorsLayer::new()

@@ -22,7 +22,7 @@ rem Note: This script is specifically designed for Windows platform.
 rem For other platforms, please refer to the project documentation.
 rem
 rem Usage:
-rem   .\build.bat
+rem   .\win_build.bat
 rem
 rem The script will handle all necessary environment setup and build
 rem steps automatically.
