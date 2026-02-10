@@ -34,7 +34,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use tauri::async_runtime::{spawn, JoinHandle};
-use tauri::Emitter;
 use tauri::Manager;
 
 // use commands::toolbar::*;
@@ -650,7 +649,7 @@ pub async fn run() -> crate::error::Result<()> {
                 let handle_for_server = handle.clone();
                 let main_store_for_server = main_store_clone.clone();
                 let chat_state_for_server = chat_state_clone.clone();
-                
+
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = start_http_server(&handle_for_server, main_store_for_server, chat_state_for_server).await {
                         error!("Failed to start HTTP server: {}", e);
@@ -676,9 +675,14 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             });
 
-            // Manually create the initial windows after all state has been managed and the environment is ready.
-            // This ensures that any commands called by the frontend will find the required backend state.
-            
+            // IMPORTANT: Manual window creation sequence.
+            // This is critical for Windows compatibility to resolve race conditions where the frontend
+            // process might launch and invoke commands before the backend's `setup` hook has finished
+            // registering managed states. Auto-creating windows in `tauri.conf.json` via `"create": true`
+            // can lead to "state not managed" panics or UI initialization failures in high-performance builds.
+            // For any future windows, ensure `"create": false` is set in the configuration and
+            // initialize them manually here or via specific logic after backend readiness is guaranteed.
+
             // 1. Main Window (Visible)
             match window::create_main_window(&app.handle()) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },

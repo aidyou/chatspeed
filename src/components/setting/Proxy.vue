@@ -322,7 +322,7 @@
           </div>
 
           <div class="providers-list-container">
-            <el-scrollbar class="providers-scrollbar">
+            <el-scrollbar class="providers-scrollbar" max-height="400px">
               <div v-if="filteredProviders.length === 0" class="no-models-found">
                 {{ $t('settings.proxy.form.noMatchingModels') }}
               </div>
@@ -1327,7 +1327,13 @@ const genTableData = () => {
 }
 
 .form-container {
-  max-height: calc(70vh - 120px);
+  /* Use Flex layout to fill the dialog body */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--cs-space-sm) var(--cs-space-md);
+  padding-bottom: 0;
+  overflow: hidden;
 }
 
 .search-input-dialog {
@@ -1338,15 +1344,14 @@ const genTableData = () => {
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-md);
-  height: min(400px, 40vh);
-  /* Responsive height: max 400px or 40% viewport height */
+  min-height: 150px; 
+  /* Removed flex:1 and max-height from here to let el-scrollbar handle it */
   display: flex;
   flex-direction: column;
 }
 
 .providers-scrollbar {
-  flex: 1;
-  /* Let scrollbar fill remaining space */
+  width: 100%;
 }
 
 .no-models-found {
@@ -1419,12 +1424,26 @@ const genTableData = () => {
 }
 
 .proxy-edit-dialog {
+  /* Enforce Flex Layout for the Dialog itself */
+  display: flex;
+  flex-direction: column;
+  margin-top: 8vh !important;
+  max-height: 85vh; /* Safe max height */
+  
+  :deep(.el-dialog__header) {
+    flex-shrink: 0;
+  }
+
   :deep(.el-dialog__body) {
-    padding-top: 0px;
-    padding-bottom: 0px;
+    flex: 1;
+    overflow: hidden; /* Prevent body overflow */
+    padding: 0; /* Padding moved to .form-container */
+    display: flex;
+    flex-direction: column;
   }
 
   :deep(.el-dialog__footer) {
+    flex-shrink: 0;
     padding-top: var(--cs-space-sm);
     background: var(--cs-bg-color-light);
     position: relative;
