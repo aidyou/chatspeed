@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# Chatspeed Release Script - 简化版
-# 自动更新版本号并创建发布标签
+# Chatspeed Release Script - Simplified Version
+# Automatically updates version numbers and creates release tags
 
-set -e  # 遇到错误立即退出
+set -e  # Exit immediately on error
 
-# 颜色定义
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[ NC' # No Color
 
-# 打印带颜色的消息
+# Print colored messages
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -29,13 +29,13 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 验证版本号格式
+# Validate version format
 validate_version() {
     local version=$1
-    # 移除可能的 v 前缀
+    # Remove possible 'v' prefix
     version=${version#v}
 
-    # 验证语义化版本格式
+    # Validate semantic version format (x.y.z)
     if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
         print_error "Invalid version format: $version"
         print_error "Expected format: x.y.z or x.y.z-prerelease (e.g., 1.0.0, 1.0.0-beta.1)"
@@ -45,7 +45,7 @@ validate_version() {
     echo $version
 }
 
-# 获取当前版本
+# Get current version from configuration
 get_current_version() {
     if [[ -f "src-tauri/tauri.conf.json" ]]; then
         grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
@@ -54,7 +54,7 @@ get_current_version() {
     fi
 }
 
-# 更新 tauri.conf.json 中的版本
+# Update version in tauri.conf.json
 update_tauri_config() {
     local version=$1
     local file="src-tauri/tauri.conf.json"
@@ -64,19 +64,19 @@ update_tauri_config() {
         exit 1
     fi
 
-    # 使用 sed 更新版本号
+    # Use sed to update version number
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
         sed -i '' "s/\"version\": *\"[^\"]*\"/\"version\": \"$version\"/" "$file"
     else
-        # Linux
+        # Linux/Windows
         sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"$version\"/" "$file"
     fi
 
     print_success "Updated version in $file to $version"
 }
 
-# 更新 Cargo.toml 中的版本
+# Update version in Cargo.toml
 update_cargo_toml() {
     local version=$1
     local file="src-tauri/Cargo.toml"
@@ -86,24 +86,55 @@ update_cargo_toml() {
         exit 1
     fi
 
-    # 使用 sed 更新版本号
+    # Use sed to update version number
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
         sed -i '' "s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version     = \"$version\"/" "$file"
     else
-        # Linux
+        # Linux/Windows
         sed -i "s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version     = \"$version\"/" "$file"
     fi
 
     print_success "Updated version in $file to $version"
 }
 
-# 验证文件中的版本是否正确更新
+# Update version in vcpkg.json
+update_vcpkg_json() {
+    local version=$1
+    local file="vcpkg.json"
+
+    if [[ ! -f "$file" ]]; then
+        print_warning "vcpkg.json not found, skipping version update for this file."
+        return
+    fi
+
+    # Use sed to update version number
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        sed -i '' "s/\"version\": *\"[^\"]*\"/\"version\": \"$version\"/" "$file"
+    else
+        # Linux/Windows
+        sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"$version\"/" "$file"
+    fi
+
+    print_success "Updated version in $file to $version"
+}
+
+# Verify that all versions were correctly updated
 verify_version_update() {
     local expected_version=$1
 
     local tauri_version=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
     local cargo_version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+
+    # Check vcpkg.json version if file exists
+    if [[ -f "vcpkg.json" ]]; then
+        local vcpkg_version=$(grep '"version"' vcpkg.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+        if [[ "$vcpkg_version" != "$expected_version" ]]; then
+            print_error "Version mismatch in vcpkg.json: expected $expected_version, got $vcpkg_version"
+            exit 1
+        fi
+    fi
 
     if [[ "$tauri_version" != "$expected_version" ]]; then
         print_error "Version mismatch in tauri.conf.json: expected $expected_version, got $tauri_version"
@@ -118,24 +149,24 @@ verify_version_update() {
     print_success "Version verification passed: $expected_version"
 }
 
-# 提交版本更改
+# Commit all version-related changes
 commit_version_changes() {
     local version=$1
 
-    # 运行 cargo 命令更新 Cargo.lock
+    # Run cargo to update Cargo.lock
     print_info "Updating Cargo.lock file..."
     cd src-tauri
     cargo metadata --format-version 1 > /dev/null 2>&1 || cargo generate-lockfile
     cd ..
 
-    # 检查是否有未提交的更改
-    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock; then
+    # Check if there are uncommitted changes in version files
+    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock vcpkg.json; then
         print_info "Committing version changes..."
 
-        # 添加版本文件到暂存区
-        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+        # Stage version files
+        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock vcpkg.json
 
-        # 提交更改
+        # Commit with chore prefix
         git commit -m "chore: bump version to $version"
 
         print_success "Committed version changes"
@@ -144,15 +175,13 @@ commit_version_changes() {
     fi
 }
 
-# 获取目标远程仓库（优先 GitHub）
+# Get target remote repository (prioritize 'github' or 'origin' with github.com URL)
 get_target_remote() {
-    # 优先查找名为 github 的远程仓库
     if git remote get-url github >/dev/null 2>&1; then
         echo "github"
         return
     fi
 
-    # 检查 origin 是否指向 GitHub
     if git remote get-url origin >/dev/null 2>&1; then
         local origin_url=$(git remote get-url origin)
         if [[ "$origin_url" == *"github.com"* ]]; then
@@ -161,7 +190,6 @@ get_target_remote() {
         fi
     fi
 
-    # 查找其他指向 GitHub 的远程仓库
     for remote in $(git remote); do
         local url=$(git remote get-url "$remote" 2>/dev/null || echo "")
         if [[ "$url" == *"github.com"* ]]; then
@@ -170,10 +198,10 @@ get_target_remote() {
         fi
     done
 
-    # 如果没找到 GitHub 远程仓库，使用 origin 作为默认
     echo "origin"
 }
 
+# Create a local tag and push everything to remote
 create_and_push_tag() {
     local version=$1
     local tag="v$version"
@@ -181,17 +209,15 @@ create_and_push_tag() {
 
     print_info "Target remote: $remote ($(git remote get-url $remote))"
 
-    # 检查远程标签是否已存在
+    # Handle existing remote tags
     if git ls-remote --tags "$remote" | grep -q "refs/tags/$tag$"; then
         print_warning "Tag $tag already exists on remote $remote"
         read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            # 删除远程标签
             print_info "Deleting remote tag $tag..."
-            git push "$remote" ":refs/tags/$tag" || print_warning "Failed to delete remote tag (may not exist)"
+            git push "$remote" ":refs/tags/$tag" || print_warning "Failed to delete remote tag"
 
-            # 删除本地标签
             if git tag -l | grep -q "^$tag$"; then
                 git tag -d "$tag"
                 print_info "Deleted existing local tag $tag"
@@ -202,14 +228,14 @@ create_and_push_tag() {
         fi
     fi
 
-    # 检查本地标签是否已存在
+    # Handle existing local tags
     if git tag -l | grep -q "^$tag$"; then
         print_warning "Tag $tag already exists locally"
         git tag -d "$tag"
         print_info "Deleted existing local tag $tag"
     fi
 
-    # 推送版本提交到远程
+    # Push the version commit first
     print_info "Pushing version commit to remote $remote..."
     if git push "$remote" HEAD; then
         print_success "Successfully pushed version commit to $remote"
@@ -218,28 +244,23 @@ create_and_push_tag() {
         exit 1
     fi
 
-    # 等待一下确保提交已经到达远程
     sleep 2
 
-    # 创建标签（指向当前 HEAD）
+    # Create tag on current HEAD
     print_info "Creating tag $tag on current HEAD..."
     git tag "$tag" HEAD
     print_success "Created tag $tag"
 
-    # 验证标签指向正确的提交
+    # Verify tag points to the correct commit
     local tag_commit=$(git rev-list -n 1 "$tag")
     local head_commit=$(git rev-parse HEAD)
 
     if [[ "$tag_commit" != "$head_commit" ]]; then
         print_error "Tag $tag does not point to current HEAD"
-        print_error "Tag commit: $tag_commit"
-        print_error "HEAD commit: $head_commit"
         exit 1
     fi
 
-    print_info "Tag $tag points to commit: $tag_commit"
-
-    # 推送标签
+    # Push the tag
     print_info "Pushing tag $tag to remote $remote..."
     if git push "$remote" "$tag"; then
         print_success "Successfully pushed tag $tag to $remote"
@@ -250,7 +271,7 @@ create_and_push_tag() {
     fi
 }
 
-# 显示使用说明
+# Display usage guide
 show_usage() {
     echo "Usage: $0 [version]"
     echo ""
@@ -262,22 +283,23 @@ show_usage() {
     echo "The script will:"
     echo "  1. Update version in src-tauri/tauri.conf.json"
     echo "  2. Update version in src-tauri/Cargo.toml"
-    echo "  3. Create a Git tag (v{version})"
-    echo "  4. Push tag to remote repository"
+    echo "  3. Update version in vcpkg.json (if exists)"
+    echo "  4. Create a Git tag (v{version})"
+    echo "  5. Push tag to remote repository"
 }
 
-# 主函数
+# Main entry point
 main() {
     print_info "Chatspeed Release Script"
     print_info "========================"
 
-    # 检查是否在项目根目录
+    # Verify project structure
     if [[ ! -f "src-tauri/tauri.conf.json" ]] || [[ ! -f "src-tauri/Cargo.toml" ]]; then
         print_error "Please run this script from the project root directory"
         exit 1
     fi
 
-    # 检查 Git 仓库
+    # Verify git repository
     if ! git rev-parse --git-dir > /dev/null 2>&1; then
         print_error "Not a Git repository"
         exit 1
@@ -286,9 +308,9 @@ main() {
     local version=""
     local current_version=$(get_current_version)
 
-    # 处理命令行参数
+    # Parse arguments
     if [[ $# -eq 0 ]]; then
-        # 交互模式
+        # Interactive mode
         print_info "Current version: $current_version"
         echo -n "Enter new version (e.g., 1.0.0 or 1.0.0-beta.1): "
         read version
@@ -309,10 +331,10 @@ main() {
         exit 1
     fi
 
-    # 验证版本号
+    # Sanitize version string
     version=$(validate_version "$version")
 
-    # 显示操作摘要
+    # Display summary
     echo ""
     print_info "Release Summary:"
     print_info "  Current version: $current_version"
@@ -320,7 +342,7 @@ main() {
     print_info "  Tag: v$version"
     echo ""
 
-    # 确认操作
+    # User confirmation
     read -p "Do you want to proceed with the release? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -328,27 +350,24 @@ main() {
         exit 0
     fi
 
-    # 执行发布流程
     print_info "Starting release process..."
 
-    # 更新版本文件
+    # Update all config files
     update_tauri_config "$version"
     update_cargo_toml "$version"
+    update_vcpkg_json "$version"
 
-    # 验证更新
+    # Validate updates
     verify_version_update "$version"
 
-    # 提交版本更改
+    # Commit and tag
     commit_version_changes "$version"
-
-    # 创建和推送标签
     create_and_push_tag "$version"
 
     echo ""
     print_success "🎉 Release $version completed successfully!"
     print_info "GitHub Actions will now build and create the release automatically."
-    print_info "Check the progress at: https://github.com/aidyou/chatspeed/actions"
+    print_info "Check progress at: https://github.com/aidyou/chatspeed/actions"
 }
 
-# 运行主函数
 main "$@"
