@@ -1,5 +1,8 @@
 简体中文 | [English](./README.md)
 
+> [!IMPORTANT]
+> **紧急更新提示**：由于 **1.2.5** 版本中存在一个严重的逻辑疏忽，导致自动更新功能失效。如果您当前正在使用 **1.2.5** 版本，请前往 Releases 页面 [**手动下载并安装最新版本**](https://github.com/aidyou/chatspeed/releases/latest)，以恢复自动更新能力并获取后续修复。对于给您带来的不便，我们深表歉意。
+
 # ChatSpeed
 
 **由 Rust 精心打造，一款开源、高性能的 AI 助手，是您强大的编程伴侣与智能桌面中枢。**

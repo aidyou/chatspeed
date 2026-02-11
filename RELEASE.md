@@ -2,7 +2,7 @@
 
 # Release Notes
 
-## [1.2.6]
+## [1.2.7]
 
 ### 🚀 New Features
 

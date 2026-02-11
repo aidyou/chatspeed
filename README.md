@@ -1,5 +1,8 @@
 [简体中文](./README.zh-CN.md) | English
 
+> [!IMPORTANT]
+> **Urgent Update Notice**: Due to a critical bug in version **1.2.5**, the automatic update feature is non-functional. If you are currently using version **1.2.5**, please [manually download and install the latest version](https://github.com/aidyou/chatspeed/releases/latest) from the Releases page to restore update capabilities and receive future fixes. We sincerely apologize for this oversight.
+
 # ChatSpeed
 
 **Forged in Rust, this open-source, high-performance AI assistant is your powerful programming companion and smart desktop hub.**
