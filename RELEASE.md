@@ -14,6 +14,10 @@
 
 - **Internationalization (i18n) Expansion**: Completed translations for proxy listen settings in German, Spanish, French, Japanese, Korean, Portuguese, Russian, and Traditional Chinese.
 
+### 🐞 Bug Fixes
+
+- **Application Updater**: Fixed a critical issue where the update manager was not correctly registered in the system state, preventing the "Install and Restart" functionality from working.
+
 ---
 
 ## [1.2.5]

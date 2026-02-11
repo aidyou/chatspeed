@@ -616,6 +616,12 @@ pub async fn run() -> crate::error::Result<()> {
             let scraper_pool = ScraperPool::new(app.handle().clone());
             app.manage(scraper_pool);
 
+            // State 5: UpdateManager
+            // Depends on: AppHandle
+            // Required by: updater commands and background update task
+            let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
+            app.manage(update_manager.clone());
+
             // === END STATE REGISTRATION SECTION ===
 
             // === EVENT LISTENERS SECTION ===
@@ -631,6 +637,7 @@ pub async fn run() -> crate::error::Result<()> {
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             let chat_state_clone = chat_state.clone();
+            let update_manager_clone = update_manager.clone();
 
             // 1. Initialize environment synchronously (Critical for get_env command)
             // This must run before background tasks to ensure PATH is ready for any spawned processes
@@ -665,9 +672,8 @@ pub async fn run() -> crate::error::Result<()> {
 
                 if auto_update {
                     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    let update_manager = UpdateManager::new(handle.clone());
                     loop {
-                        if let Err(e) = update_manager.check_and_download_update().await {
+                        if let Err(e) = update_manager_clone.check_and_download_update().await {
                             log::error!("Failed to check for updates: {}", e);
                         }
                         tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
