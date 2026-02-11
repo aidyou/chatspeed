@@ -91,6 +91,7 @@ const defaultSettings = {
   //             useful for managing multiple keys (e.g., "WebApp Client Key", "Mobile App Key").
   chatCompletionProxyKeys: [],
   chatCompletionProxyPort: 11435,
+  chatCompletionProxyListen: '127.0.0.1',
   chatCompletionProxyLogToFile: false,
   chatCompletionProxyLogProxyToFile: false,
   // Search

@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "WAN (0.0.0.0)",
+        "listenAddress": "Dirección de escucha",
+        "listenAddressTip": "Los cambios requieren un reinicio del servicio",
+        "localOnly": "Local (127.0.0.1)",
         "logOrgToFile": "Registrar solicitudes y respuestas originales",
         "logOrgToFileTip": "Registrar solicitudes y respuestas originales en un archivo para depuración y análisis",
         "logProxyToFile": "Registrar solicitudes y respuestas del proxy",

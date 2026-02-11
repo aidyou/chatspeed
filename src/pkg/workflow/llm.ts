@@ -3,8 +3,30 @@
  * Handles communication with the Large Language Model and parsing of its responses.
  */
 
+import { createOpenAI } from '@ai-sdk/openai'
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
+// ... (rest of imports)
+
+/**
+ * Creates a model instance compatible with the Chatspeed CCProxy.
+ *
+ * @param modelId - The model identifier to use (e.g., 'gpt-4o', 'claude-3-5-sonnet').
+ * @param port - The local CCProxy port (retrieved from setting store).
+ * @param apiKey - Optional authentication key for the proxy service.
+ * @returns A LanguageModelV1 instance for use with AI SDK core functions.
+ */
+export const createChatspeedModel = (
+  modelId: string,
+  port: number,
+  apiKey: string = 'chatspeed-proxy'
+) => {
+  const provider = createOpenAI({
+    baseURL: `http://localhost:${port}/v1`,
+    apiKey: apiKey
+  })
+  return provider(modelId)
+}
 import type {
   ChatResponse,
   LLMStreamHandlers,

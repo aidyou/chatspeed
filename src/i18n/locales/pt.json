@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "WAN (0.0.0.0)",
+        "listenAddress": "Endereço de escuta",
+        "listenAddressTip": "As alterações exigem a reinicialização do serviço",
+        "localOnly": "Local (127.0.0.1)",
         "logOrgToFile": "Registrar solicitações e respostas originais",
         "logOrgToFileTip": "Registrar solicitações e respostas originais em um arquivo para depuração e análise",
         "logProxyToFile": "Registrar solicitações e respostas do proxy",

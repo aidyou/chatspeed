@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "WAN (0.0.0.0)",
+        "listenAddress": "Abhöradresse",
+        "listenAddressTip": "Änderungen erfordern einen Neustart des Dienstes",
+        "localOnly": "Lokal (127.0.0.1)",
         "logOrgToFile": "Originalanfragen und -antworten protokollieren",
         "logOrgToFileTip": "Originalanfragen und -antworten zur Fehlerbehebung und Analyse in einer Datei protokollieren",
         "logProxyToFile": "Proxy-Anfragen und -antworten protokollieren",

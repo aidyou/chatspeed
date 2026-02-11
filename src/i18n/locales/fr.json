@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "WAN (0.0.0.0)",
+        "listenAddress": "Adresse d'écoute",
+        "listenAddressTip": "Les modifications nécessitent un redémarrage du service",
+        "localOnly": "Local (127.0.0.1)",
         "logOrgToFile": "Enregistrer les requêtes et les réponses originales",
         "logOrgToFileTip": "Enregistrer les requêtes et les réponses originales dans un fichier pour le débogage et l'analyse",
         "logProxyToFile": "Enregistrer les requêtes et les réponses du proxy",

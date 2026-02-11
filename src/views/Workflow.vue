@@ -336,7 +336,7 @@ const selectWorkflow = async id => {
       selectedAgent.value = agent
 
       try {
-        currentEngine.value = await WorkflowEngine.load(agent, id)
+        currentEngine.value = await WorkflowEngine.load(agent, id, settingStore.chatCompletionProxyPort)
       } catch (error) {
         console.error('Failed to load workflow:', error)
       }
@@ -355,7 +355,11 @@ const startNewWorkflow = async () => {
     currentEngine.value = null
 
     // Start new workflow
-    currentEngine.value = await WorkflowEngine.startNew(selectedAgent.value, inputMessage.value)
+    currentEngine.value = await WorkflowEngine.startNew(
+      selectedAgent.value,
+      inputMessage.value,
+      settingStore.chatCompletionProxyPort
+    )
 
     // Update store with new workflow
     await workflowStore.loadWorkflows()

@@ -2,6 +2,8 @@
  * Core type definitions for the workflow system
  */
 
+import type { ModelMessage } from 'ai'
+
 // Agent configuration
 export interface Agent {
   id: string
@@ -18,6 +20,12 @@ export interface Agent {
   maxContexts: number
   createdAt: Date
   updatedAt: Date
+}
+
+// Workflow modes
+export enum WorkflowMode {
+  AUTONOMOUS = 'autonomous',
+  PLANNING = 'planning'
 }
 
 // Workflow state machine states
@@ -196,6 +204,7 @@ export interface ChatResponse {
 // Context management types
 export interface ConversationContext {
   messages: WorkflowMessage[]
+  sdkMessages: ModelMessage[]
   totalTokens: number
   maxTokens: number
   systemPrompt: string

@@ -188,6 +188,25 @@
             <div class="item">
               <div class="label">
                 <div class="label-text">
+                  {{ $t('settings.proxy.settings.listenAddress') }}
+                  <small class="important">{{
+                    $t('settings.proxy.settings.listenAddressTip')
+                  }}</small>
+                </div>
+              </div>
+              <div class="value">
+                <el-select
+                  v-model="settings.chatCompletionProxyListen"
+                  @change="saveProxySettings('chatCompletionProxyListen')"
+                  style="width: 150px">
+                  <el-option :label="$t('settings.proxy.settings.localOnly')" value="127.0.0.1" />
+                  <el-option :label="$t('settings.proxy.settings.allInterfaces')" value="0.0.0.0" />
+                </el-select>
+              </div>
+            </div>
+            <div class="item">
+              <div class="label">
+                <div class="label-text">
                   {{ $t('settings.proxy.settings.logOrgToFile') }}
                   <el-space>
                     <small>{{ $t('settings.proxy.settings.logOrgToFileTip') }}</small>
@@ -1344,7 +1363,7 @@ const genTableData = () => {
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-md);
-  min-height: 150px; 
+  min-height: 150px;
   /* Removed flex:1 and max-height from here to let el-scrollbar handle it */
   display: flex;
   flex-direction: column;
@@ -1429,7 +1448,7 @@ const genTableData = () => {
   flex-direction: column;
   margin-top: 8vh !important;
   max-height: 85vh; /* Safe max height */
-  
+
   :deep(.el-dialog__header) {
     flex-shrink: 0;
   }

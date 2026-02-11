@@ -30,9 +30,9 @@ use tower_http::{
 
 use crate::{ai::interaction::chat_completion::ChatState, ccproxy, db::MainStore};
 use crate::{
-    CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT, CHAT_COMPLETION_PROXY, HTTP_SERVER,
-    HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR, HTTP_SERVER_UPLOAD_DIR,
-    SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
+    CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT, CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT,
+    CHAT_COMPLETION_PROXY, HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
+    HTTP_SERVER_UPLOAD_DIR, SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
 };
 
 static INIT: Once = Once::new();
@@ -150,10 +150,16 @@ pub async fn start_http_server(
 
     // 0. Initialize the global proxy address from DB before starting the server task
     {
-        let initial_port = if let Ok(store) = main_store.read() {
-            store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
+        let (initial_port, _initial_listen) = if let Ok(store) = main_store.read() {
+            (
+                store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
+                store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
+            )
         } else {
-            CFG_CCPROXY_PORT_DEFAULT
+            (
+                CFG_CCPROXY_PORT_DEFAULT,
+                CFG_CCPROXY_LISTEN_DEFAULT.to_string(),
+            )
         };
         *CHAT_COMPLETION_PROXY.write() = format!("http://127.0.0.1:{}", initial_port);
     }
@@ -164,10 +170,16 @@ pub async fn start_http_server(
         .await
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
         .layer(cors); // Apply CORS to the ccproxy routes
-    let server_port = if let Ok(store) = main_store.read() {
-        store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT)
+    let (server_port, server_listen) = if let Ok(store) = main_store.read() {
+        (
+            store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
+            store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
+        )
     } else {
-        CFG_CCPROXY_PORT_DEFAULT
+        (
+            CFG_CCPROXY_PORT_DEFAULT,
+            CFG_CCPROXY_LISTEN_DEFAULT.to_string(),
+        )
     };
 
     // Start chat completion proxy server with retry mechanism
@@ -179,7 +191,7 @@ pub async fn start_http_server(
         loop {
             attempts += 1;
 
-            match try_available_port("127.0.0.1", server_port).await {
+            match try_available_port(&server_listen, server_port).await {
                 Ok(ccproxy_listener) => {
                     let ccproxy_addr = ccproxy_listener.local_addr().map_err(|e| {
                         log::error!("Failed to get CCProxy local address: {}", e);

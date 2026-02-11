@@ -2,6 +2,20 @@
 
 # Release Notes
 
+## [1.2.6]
+
+### 🚀 New Features
+
+- **Configurable Proxy Listen Address**: Added a new security setting to control CCProxy visibility.
+  - Users can now toggle between **Local (127.0.0.1)** for maximum security and **WAN (0.0.0.0)** for hosting AI services across the network.
+  - Updated the Proxy Settings UI with intuitive "Local" and "WAN" options across all 10 supported languages.
+
+### 🪄 Improvements
+
+- **Internationalization (i18n) Expansion**: Completed translations for proxy listen settings in German, Spanish, French, Japanese, Korean, Portuguese, Russian, and Traditional Chinese.
+
+---
+
 ## [1.2.5]
 
 ### 🪄 Improvements

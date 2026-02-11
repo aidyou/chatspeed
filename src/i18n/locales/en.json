@@ -98,6 +98,15 @@
     "translationSkillPromptEmpty": "Prompt for translation skill cannot be empty",
     "useSkills": "Use Skills",
     "addAttachment": "Add Attachment",
+    "workflow": {
+      "planning": "Planning...",
+      "executing": "Executing task: {task}",
+      "approvalRequired": "Approval Required",
+      "approve": "Approve",
+      "deny": "Deny",
+      "taskCompleted": "Task Completed",
+      "error": "Workflow Error: {error}"
+    },
     "dragOrClickToSelectFile": "Drag file here or click to select",
     "selectFile": "Select File",
     "supportedImageFormats": "Images: JPG, PNG, GIF, WEBP, SVG, BMP",
@@ -525,6 +534,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "All (0.0.0.0)",
+        "listenAddress": "Listen Address",
+        "listenAddressTip": "Changes require a service restart",
+        "localOnly": "Local (127.0.0.1)",
         "logOrgToFile": "Log original requests and responses",
         "logOrgToFileTip": "Log original requests and responses to a file for debugging and analysis",
         "logProxyToFile": "Log proxy requests and responses",

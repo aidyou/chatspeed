@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "広域ネットワーク (0.0.0.0)",
+        "listenAddress": "リッスンアドレス",
+        "listenAddressTip": "変更を有効にするにはサービスの再起動が必要です",
+        "localOnly": "ローカル (127.0.0.1)",
         "logOrgToFile": "オリジナルのリクエストとレスポンスをログに記録する",
         "logOrgToFileTip": "デバッグと分析のために、オリジナルのリクエストとレスポンスをファイルにログに記録します",
         "logProxyToFile": "プロキシのリクエストとレスポンスをログに記録する",

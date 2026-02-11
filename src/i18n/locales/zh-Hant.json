@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "廣域網 (0.0.0.0)",
+        "listenAddress": "監聽地址",
+        "listenAddressTip": "變更後須重啟服務才能生效",
+        "localOnly": "本機 (127.0.0.1)",
         "logOrgToFile": "記錄原始請求和回應",
         "logOrgToFileTip": "記錄原始請求和回應到檔案，用於偵錯和分析",
         "logProxyToFile": "記錄代理請求和回應",

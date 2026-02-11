@@ -98,6 +98,15 @@
       "autoDetection": "自动检测"
     },
     "addAttachment": "添加附件",
+    "workflow": {
+      "planning": "正在规划...",
+      "executing": "正在执行任务：{task}",
+      "approvalRequired": "需要审批",
+      "approve": "批准",
+      "deny": "拒绝",
+      "taskCompleted": "任务已完成",
+      "error": "工作流错误：{error}"
+    },
     "dragOrClickToSelectFile": "拖拽文件到此处或点击选择",
     "selectFile": "选择文件",
     "supportedImageFormats": "图片格式：JPG、PNG、GIF、WEBP、SVG、BMP",
@@ -525,6 +534,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "广域网 (0.0.0.0)",
+        "listenAddress": "监听地址",
+        "listenAddressTip": "变更后须重启服务才能生效",
+        "localOnly": "本机 (127.0.0.1)",
         "logOrgToFile": "记录原始请求和响应",
         "logOrgToFileTip": "记录原始请求和响应到文件，用于调试和分析",
         "logProxyToFile": "记录代理请求和响应",

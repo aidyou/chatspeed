@@ -525,6 +525,10 @@
         }
       },
       "settings": {
+        "allInterfaces": "광역 네트워크 (0.0.0.0)",
+        "listenAddress": "리슨 주소",
+        "listenAddressTip": "변경 사항을 적용하려면 서비스를 재시작해야 합니다",
+        "localOnly": "로컬 (127.0.0.1)",
         "logOrgToFile": "원본 요청 및 응답 기록",
         "logOrgToFileTip": "디버깅 및 분석을 위해 원본 요청 및 응답을 파일에 기록합니다.",
         "logProxyToFile": "프록시 요청 및 응답 기록",
