@@ -2,6 +2,18 @@
 
 # Release Notes
 
+## [1.2.9]
+
+### 🪄 Improvements
+
+- **Activity-Based Conversation Sorting**: Optimized the conversation list to sort by the most recent message time, making it easier to find active chats.
+
+### 🐞 Bug Fixes
+
+- **Data Restoration Exclusion Fix**: Resolved an issue where directory exclusions (e.g., `.git`) during database restoration were case-sensitive, potentially failing to exclude them on certain filesystems.
+
+---
+
 ## [1.2.8]
 
 ### 🚀 New Features

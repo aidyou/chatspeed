@@ -246,6 +246,16 @@ export const useChatStore = defineStore('chat', () => {
             content: finalContent,
             metadata
           }]
+
+          // Update conversation's active time and move it to the top
+          const index = conversations.value.findIndex(c => c.id === conversationId);
+          if (index !== -1) {
+            const conv = conversations.value.splice(index, 1)[0];
+            // Use current time as the new active time (represented by createdAt in frontend)
+            conv.createdAt = new Date().toISOString();
+            conversations.value.unshift(conv);
+          }
+
           resolve(messageId)
         })
         .catch((error) => {

@@ -62,13 +62,18 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT id, title, created_at, is_favorite FROM conversations order by id desc",
+            "SELECT c.id, c.title, c.is_favorite, 
+                    COALESCE(MAX(m.timestamp), c.created_at) as active_time 
+             FROM conversations c 
+             LEFT JOIN messages m ON c.id = m.conversation_id 
+             GROUP BY c.id 
+             ORDER BY active_time DESC",
         )?;
         let conversations = stmt.query_map([], |row| {
             Ok(Conversation {
                 id: row.get("id")?,
                 title: row.get("title")?,
-                created_at: row.get("created_at")?,
+                created_at: row.get("active_time")?,
                 is_favorite: row.get("is_favorite")?,
             })
         })?;
