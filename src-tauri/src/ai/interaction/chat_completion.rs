@@ -82,6 +82,8 @@ pub struct ChatState {
     pub dispatcher_input_tx: Sender<Arc<ChatResponse>>,
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub pending_workflow_chat_completions: Arc<DashMap<String, PendingWorkflow>>,
+    /// Temporary keys for workflow sessions, mapping workflow_id -> key
+    pub workflow_keys: Arc<DashMap<String, String>>,
 }
 
 impl ChatState {
@@ -104,6 +106,7 @@ impl ChatState {
             dispatcher_input_tx,
             main_store,
             pending_workflow_chat_completions: Arc::new(DashMap::new()),
+            workflow_keys: Arc::new(DashMap::new()),
         });
 
         let processor_state_clone = Arc::clone(&state);

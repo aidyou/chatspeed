@@ -4,11 +4,7 @@
       <template #center>
         <el-menu mode="horizontal" :default-active="settingType" class="menu">
           <template v-for="(item, index) in menuItems" :key="index">
-            <el-menu-item
-              class="upperLayer"
-              :index="item.id"
-              @click="switchSetting(item.id)"
-              v-show="!item.hide">
+            <el-menu-item class="upperLayer" :index="item.id" @click="switchSetting(item.id)" v-show="!item.hide">
               <cs :name="item.icon" />
               <span>{{ item.label }}</span>
             </el-menu-item>
@@ -86,7 +82,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
-  // { label: t('settings.type.agent'), icon: 'agent', id: 'agent' },
+  { label: t('settings.type.agent'), icon: 'agent', id: 'agent' },
   { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' }
@@ -186,7 +182,7 @@ const switchSetting = id => {
       }
 
       .el-menu--horizontal {
-        > .el-menu-item {
+        >.el-menu-item {
           &.is-active {
             border-bottom: none;
             // background-color: var(--cs-active-bg-color);

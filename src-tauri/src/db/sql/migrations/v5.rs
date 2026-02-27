@@ -29,7 +29,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             message TEXT NOT NULL,
             metadata TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES workflows(id)
+            FOREIGN KEY (session_id) REFERENCES workflows(id) ON DELETE CASCADE
         )"
     ),
     (

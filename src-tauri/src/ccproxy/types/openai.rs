@@ -209,7 +209,8 @@ pub struct UnifiedToolCall {
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>, // e.g., "function"
-    pub function: OpenAIFunctionCall, // Re-using OpenAIFunctionCall
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<OpenAIFunctionCall>, // Re-using OpenAIFunctionCall
     #[serde(skip_serializing_if = "Option::is_none")] // Only relevant for streaming delta
     pub index: Option<i32>,
 }

@@ -468,6 +468,24 @@
         </div>
       </div>
       <div class="item">
+        <div class="label">{{ $t('settings.general.workflowWindowVisibleShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input v-model="settings.workflowWindowVisibleShortcut" readonly
+              :placeholder="$t('settings.general.pressKeysToSet')"
+              @keydown.prevent="e => captureShortcut(e, 'workflowWindowVisibleShortcut')" @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="clearShortcut('workflowWindowVisibleShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleShortcut') }}</div>
         <div class="value">
           <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"

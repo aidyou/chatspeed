@@ -116,6 +116,39 @@ pub fn get_all_config(state: State<Arc<RwLock<MainStore>>>) -> Result<HashMap<St
             Value::String(DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string()),
         );
     }
+    // toggle note window visible shortcut
+    if config_store
+        .config
+        .get_setting(CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
+        .is_none()
+    {
+        settings.insert(
+            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            Value::String(DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string()),
+        );
+    }
+    // toggle proxy switcher window visible shortcut
+    if config_store
+        .config
+        .get_setting(CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
+        .is_none()
+    {
+        settings.insert(
+            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            Value::String(DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string()),
+        );
+    }
+    // toggle workflow window visible shortcut
+    if config_store
+        .config
+        .get_setting(CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT)
+        .is_none()
+    {
+        settings.insert(
+            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            Value::String(DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string()),
+        );
+    }
     Ok(settings)
 }
 
@@ -630,7 +663,12 @@ pub fn delete_ai_skill(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<
 pub async fn update_shortcut(app: tauri::AppHandle, key: &str, value: &str) -> Result<()> {
     crate::shortcut::update_shortcut(&app, value, key).map_err(|e| AppError::General {
         message: t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
-    })
+    })?;
+
+    // Refresh tray menu to show new shortcuts
+    let _ = create_tray(&app, Some(TRAY_ID.to_string()));
+
+    Ok(())
 }
 
 /// Uploads a logo image to the server.
@@ -733,13 +771,21 @@ pub async fn backup_setting(
     // 1. Ensure all data is flushed from WAL to the main DB file before copying.
     // This is critical when WAL mode is enabled.
     {
-        let store = state.read().map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
+        let store = state
+            .read()
+            .map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
         store.checkpoint().map_err(AppError::Db)?;
     }
 
     let result = tokio::spawn(async move {
-        DbBackup::new(&app, BackupConfig { backup_dir, read_only: false })
-            .and_then(|mut backup| backup.backup_to_directory())
+        DbBackup::new(
+            &app,
+            BackupConfig {
+                backup_dir,
+                read_only: false,
+            },
+        )
+        .and_then(|mut backup| backup.backup_to_directory())
     })
     .await
     .map_err(|e| AppError::General {
@@ -757,16 +803,16 @@ pub async fn restore_setting(
 ) -> Result<RestoreSettingResponse> {
     // 1. Define configuration keys that are machine-specific and should be preserved
     let machine_specific_keys = [
-        "backupDir",
+        "backup_dir",
         CFG_WINDOW_POSITION,
         CFG_WINDOW_SIZE,
         CFG_ASSISTANT_WINDOW_SIZE,
         CFG_WORKFLOW_WINDOW_SIZE,
         CFG_WORKFLOW_WINDOW_POSITION,
-        "proxyType",
-        "proxyServer",
-        "proxyUsername",
-        "proxyPassword",
+        "proxy_type",
+        "proxy_server",
+        "proxy_username",
+        "proxy_password",
     ];
 
     // 2. Prepare paths and backup instance
@@ -821,9 +867,7 @@ pub async fn restore_setting(
     let response = if files_skipped {
         RestoreSettingResponse {
             success: true,
-            warning: Some(t!(
-                "db.backup.some_files_skipped_restart_required"
-            ).to_string()),
+            warning: Some(t!("db.backup.some_files_skipped_restart_required").to_string()),
             restart_recommended: true,
         }
     } else {
@@ -839,7 +883,13 @@ pub async fn restore_setting(
 
 #[tauri::command]
 pub fn get_all_backups(app: AppHandle, backup_dir: Option<String>) -> Result<Vec<String>> {
-    let db_backup = DbBackup::new(&app, BackupConfig { backup_dir, read_only: true })?;
+    let db_backup = DbBackup::new(
+        &app,
+        BackupConfig {
+            backup_dir,
+            read_only: true,
+        },
+    )?;
 
     let backups = db_backup.list_backups().map_err(AppError::Db)?;
     Ok(backups

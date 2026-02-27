@@ -18,7 +18,7 @@ use crate::ai::traits::chat::{
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
 use crate::ai::util::{init_extra_params, process_custom_headers, update_or_create_metadata};
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
-use crate::db::ModelConfig;
+use crate::db::{AiModel, ModelConfig};
 use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
@@ -555,47 +555,64 @@ impl AiChatTrait for OpenAIChat {
         extra_params: Option<Value>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError> {
-        let model_detail = self
-            .main_store
-            .read()
-            .map_err(|e| {
-                let err = AiError::InitFailed(
-                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                );
-                let error_payload = JsonErrorPayload {
-                    status: 500,
-                    message: &err.to_string(),
-                };
-                let chunk =
-                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
-                callback(ChatResponse::new_with_arc(
-                    chat_id.clone(),
-                    chunk,
-                    MessageType::Error,
-                    extra_params.clone(),
-                    Some(FinishReason::Error),
-                ));
-                err
-            })?
-            .config
-            .get_ai_model_by_id(provider_id)
-            .map_err(|e| {
-                let err = AiError::InitFailed(e.to_string());
-                let error_payload = JsonErrorPayload {
-                    status: 500,
-                    message: &err.to_string(),
-                };
-                let chunk =
-                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
-                callback(ChatResponse::new_with_arc(
-                    chat_id.clone(),
-                    chunk,
-                    MessageType::Error,
-                    extra_params.clone(),
-                    Some(FinishReason::Error),
-                ));
-                err
-            })?;
+        let mut final_model = model.to_string();
+        let mut proxy_group: Option<String> = None;
+
+        let model_detail = if provider_id == 0 {
+            // Proxy Mode: Parse group and alias from model string (format: "group@alias")
+            // This is primarily used by the workflow system to route requests through internal proxy groups.
+            if let Some((group, alias)) = model.split_once('@') {
+                proxy_group = Some(group.to_string());
+                final_model = alias.to_string();
+            }
+            // Return a default model config for proxy mode
+            AiModel {
+                name: "Internal Proxy".to_string(),
+                api_protocol: "openai".to_string(),
+                ..Default::default()
+            }
+        } else {
+            self.main_store
+                .read()
+                .map_err(|e| {
+                    let err = AiError::InitFailed(
+                        t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
+                    );
+                    let error_payload = JsonErrorPayload {
+                        status: 500,
+                        message: &err.to_string(),
+                    };
+                    let chunk =
+                        serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        chunk,
+                        MessageType::Error,
+                        extra_params.clone(),
+                        Some(FinishReason::Error),
+                    ));
+                    err
+                })?
+                .config
+                .get_ai_model_by_id(provider_id)
+                .map_err(|e| {
+                    let err = AiError::InitFailed(e.to_string());
+                    let error_payload = JsonErrorPayload {
+                        status: 500,
+                        message: &err.to_string(),
+                    };
+                    let chunk =
+                        serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        chunk,
+                        MessageType::Error,
+                        extra_params.clone(),
+                        Some(FinishReason::Error),
+                    ));
+                    err
+                })?
+        };
 
         let params = init_extra_params(model_detail.metadata.clone());
 
@@ -615,7 +632,7 @@ impl AiChatTrait for OpenAIChat {
             });
 
         let mut payload = json!({
-            "model": model,
+            "model": final_model,
             "messages": messages,
             "stream": stream_enabled,
         });
@@ -717,10 +734,16 @@ impl AiChatTrait for OpenAIChat {
 
         let internal_api_key = INTERNAL_CCPROXY_API_KEY.read().clone();
         let mut headers_json = json!({
-            "X-CS-Provider-Id": provider_id.to_string(),
-            "X-CS-Model-Id": model,
-            "X-CS-Internal-Request": "true",
+            "x-cs-model-id": final_model,
+            "x-cs-internal-request": "true",
         });
+
+        // Only include provider ID if it's not the internal proxy indicator (0)
+        if provider_id != 0 {
+            if let Some(obj) = headers_json.as_object_mut() {
+                obj.insert("x-cs-provider-id".to_string(), json!(provider_id.to_string()));
+            }
+        }
 
         // Add custom headers from model metadata
         let custom_headers = process_custom_headers(&model_detail.metadata, &chat_id);
@@ -737,11 +760,17 @@ impl AiChatTrait for OpenAIChat {
             Some(headers_json),
         );
 
-        let endpoint = self.get_endpoint(&messages, &tools, &model_detail.models, model);
+        let base_endpoint =
+            self.get_endpoint(&messages, &tools, &model_detail.models, &final_model);
+        let endpoint = if let Some(group) = proxy_group {
+            format!("/{}{}", group, base_endpoint)
+        } else {
+            base_endpoint.to_string()
+        };
 
         let response = self
             .client
-            .post_request(&config, endpoint, payload, stream_enabled)
+            .post_request(&config, &endpoint, payload, stream_enabled)
             .await
             .map_err(|e| {
                 let err = AiError::ApiRequestFailed {

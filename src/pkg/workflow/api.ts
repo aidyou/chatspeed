@@ -34,11 +34,16 @@ export interface WorkflowSnapshot {
   messages: WorkflowMessage[]
 }
 
+export interface WorkflowResponse {
+  workflow: Workflow
+  sessionKey: string
+}
+
 // =================================================
 //  API Functions
 // =================================================
 
-export const createWorkflow = (userQuery: string, agentId: string): Promise<Workflow> => {
+export const createWorkflow = (userQuery: string, agentId: string): Promise<WorkflowResponse> => {
   return invoke('create_workflow', { userQuery, agentId })
 }
 
@@ -54,6 +59,10 @@ export const updateWorkflowStatus = (workflowId: string, status: string): Promis
 
 export const getWorkflowSnapshot = (workflowId: string): Promise<WorkflowSnapshot> => {
   return invoke('get_workflow_snapshot', { workflowId })
+}
+
+export const getWorkflowSessionKey = (workflowId: string): Promise<string> => {
+  return invoke('get_workflow_session_key', { workflowId })
 }
 
 export const updateWorkflowTodoList = (workflowId: string, todoList: string): Promise<void> => {

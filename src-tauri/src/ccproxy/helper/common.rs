@@ -897,11 +897,8 @@ impl ModelResolver {
 /// - http-referer
 /// - Any header starting with "x-" (custom headers)
 pub fn should_forward_header(name_str: &str) -> bool {
-    // 1. Block internal routing headers
-    if name_str == "x-cs-provider-id"
-        || name_str == "x-cs-model-id"
-        || name_str == "x-cs-internal-request"
-    {
+    // 1. Block internal routing headers and all application-specific metadata (x-cs-*)
+    if name_str.starts_with("x-cs-") {
         return false;
     }
 

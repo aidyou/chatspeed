@@ -137,7 +137,7 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Opens the proxy switcher window
+/// Opens the proxy switcher window via event system
 ///
 /// # Arguments
 /// - `app_handle` - Tauri application handle
@@ -150,7 +150,20 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
 /// ```
 #[command]
 pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
-    crate::window::toggle_proxy_switcher_window(&app_handle);
+    // Get the main window to emit the event
+    let main_window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| AppError::General {
+            message: t!("main.window_not_ready").to_string(),
+        })?;
+
+    // Emit an event to create the window on the main thread
+    main_window
+        .emit("create-proxy-switcher-window", ())
+        .map_err(|e| AppError::General {
+            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+        })?;
+
     Ok(())
 }
 
@@ -167,22 +180,7 @@ pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
 /// ```
 #[command]
 pub fn show_window(app_handle: tauri::AppHandle, window_label: &str) -> Result<()> {
-    if let Some(window) = app_handle.get_webview_window(window_label) {
-        if !window.is_visible().map_err(|e| AppError::General {
-            message: t!(
-                "main.failed_to_check_window_visibility",
-                error = e.to_string()
-            )
-            .to_string(),
-        })? {
-            window.show().map_err(|e| AppError::General {
-                message: t!("main.failed_to_show_window", error = e.to_string()).to_string(),
-            })?;
-        }
-        window.set_focus().map_err(|e| AppError::General {
-            message: t!("main.failed_to_set_window_focus", error = e.to_string()).to_string(),
-        })?;
-    }
+    crate::window::show_and_focus_window(&app_handle, window_label);
     Ok(())
 }
 

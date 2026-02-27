@@ -565,6 +565,12 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
         }));
     });
 
+    // Register proxy switcher window creation event
+    let app_handle_clone = app_handle.clone();
+    main_window.listen("create-proxy-switcher-window", move |_| {
+        toggle_proxy_switcher_window(&app_handle_clone);
+    });
+
     // Register URL window creation event
     main_window.listen("create-url-window", move |event| {
         let app = app_handle.clone();

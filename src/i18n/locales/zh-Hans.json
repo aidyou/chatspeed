@@ -146,6 +146,7 @@
     "about": "关于",
     "agent": "智能体",
     "assistant": "桌面助手",
+    "workflow": "工作流",
     "mcp": "MCP",
     "model": "AI引擎",
     "note": "智记",
@@ -184,7 +185,11 @@
       "edit": "编辑智能体",
       "fetchFailed": "获取智能体失败",
       "maxContexts": "最大上下文长度",
-      "models": "模型",
+      "models": "模型配置",
+      "modeProvider": "供应商",
+      "modeProxy": "代理",
+      "group": "代理分组",
+      "aliasName": "模型别名",
       "name": "智能体名称",
       "nameRequired": "请输入智能体名称",
       "noAgents": "未找到智能体",
@@ -238,6 +243,7 @@
       "networkSettings": "网络设置",
       "noteWindowVisibleShortcut": "打开智记窗口",
       "proxySwitcherWindowVisibleShortcut": "代理切换窗口",
+      "workflowWindowVisibleShortcut": "工作流窗口",
       "pressKeysToSet": "请点击后按下快捷键组合……",
       "primaryLanguage": "第一语言",
       "primaryLanguageTooltip": "主要作为语言翻译自动识别失败时的首选项",
@@ -765,8 +771,13 @@
     }
   },
   "workflow": {
+    "autoApproveTooltip": "自动批准工具（不包括交互式工具）",
+    "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
+    "editWorkflowTitle": "编辑工作流标题",
+    "newWorkflow": "新建工作流",
     "todoList": {
       "title": "待办事项"
-    }
+    },
+    "workflowTitle": "工作流标题"
   }
 }

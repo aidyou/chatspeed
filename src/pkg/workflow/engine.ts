@@ -4,6 +4,7 @@ import {
   addWorkflowMessage,
   createWorkflow,
   getWorkflowSnapshot,
+  getWorkflowSessionKey,
   updateWorkflowStatus
 } from './api'
 import { createChatspeedModel } from './llm'
@@ -14,6 +15,7 @@ import { askUserTool } from './tools/askUser'
 import { taskCompleteTool } from './tools/taskCompleteTool'
 import { setTodoListForWorkflow, setTodoListWorkflowId, todoListTool } from './tools/todoList'
 import { webAnalyticsTool, setWebAnalyticsContext } from './tools/webAnalytics'
+import { useWorkflowStore } from '@/stores/workflow'
 import {
   type Agent,
   type ConversationContext,
@@ -33,14 +35,16 @@ export class WorkflowEngine {
   public readonly sessionId: string
   private context: ConversationContext
   private readonly proxyPort: number
+  private readonly sessionKey: string
 
   /**
    * Private constructor to ensure initialization via static factory methods.
    */
-  private constructor(agent: Agent, sessionId: string, proxyPort: number) {
+  private constructor(agent: Agent, sessionId: string, proxyPort: number, sessionKey: string) {
     this.stateMachine = new WorkflowStateMachine()
     this.sessionId = sessionId
     this.proxyPort = proxyPort
+    this.sessionKey = sessionKey
 
     // Initialize tools
     setTodoListWorkflowId(sessionId)
@@ -62,6 +66,61 @@ export class WorkflowEngine {
     }
 
     this.setupEventHandlers()
+    this.startMessageProcessor()
+  }
+
+  private unwatch: (() => void) | null = null
+
+  /**
+   * Starts a background loop to process messages from the shared workflow store queue.
+   */
+  private startMessageProcessor(): void {
+    const workflowStore = useWorkflowStore()
+
+    // Watch for new messages in the queue
+    this.unwatch = workflowStore.$subscribe((_mutation: any, state: any) => {
+      if (state.messageQueue.length > 0 && state.currentWorkflowId === this.sessionId) {
+        this.processMessageQueue()
+      }
+    })
+  }
+
+  /**
+   * Clean up resources
+   */
+  public destroy(): void {
+    if (this.unwatch) {
+      this.unwatch()
+      this.unwatch = null
+    }
+  }
+
+  private async processMessageQueue(): Promise<void> {
+    const workflowStore = useWorkflowStore()
+
+    const queuedMessages = [...workflowStore.messageQueue]
+    // Clear the queue immediately to avoid double processing
+    workflowStore.messageQueue = []
+
+    for (const msg of queuedMessages) {
+      await this.addMessage({
+        sessionId: this.sessionId,
+        role: msg.role,
+        message: msg.message
+      })
+    }
+
+    // Trigger transition based on current state
+    const currentState = this.stateMachine.getState()
+    if (currentState === WorkflowState.ERROR) {
+      this.stateMachine.transition('RETRY')
+    } else if (currentState === WorkflowState.COMPLETED) {
+      this.stateMachine.transition('TASK_CONTINUE')
+    } else if (currentState === WorkflowState.IDLE) {
+      this.stateMachine.transition('START_EXECUTION')
+    } else if (currentState === WorkflowState.PAUSED) {
+      this.stateMachine.transition('RESUME')
+    }
   }
 
   /**
@@ -76,8 +135,8 @@ export class WorkflowEngine {
     userQuery: string,
     proxyPort: number
   ): Promise<WorkflowEngine> {
-    const workflow = await createWorkflow(userQuery, agent.id)
-    const engine = new WorkflowEngine(agent, workflow.id, proxyPort)
+    const response = await createWorkflow(userQuery, agent.id)
+    const engine = new WorkflowEngine(agent, response.workflow.id, proxyPort, response.sessionKey)
 
     const userMessage: OmitWorkflowMessage = {
       sessionId: engine.sessionId,
@@ -104,8 +163,11 @@ export class WorkflowEngine {
     workflowId: string,
     proxyPort: number
   ): Promise<WorkflowEngine> {
-    const snapshot = await getWorkflowSnapshot(workflowId)
-    const engine = new WorkflowEngine(agent, workflowId, proxyPort)
+    const [snapshot, sessionKey] = await Promise.all([
+      getWorkflowSnapshot(workflowId),
+      getWorkflowSessionKey(workflowId)
+    ])
+    const engine = new WorkflowEngine(agent, workflowId, proxyPort, sessionKey)
 
     engine.context.messages = snapshot.messages.map(m => ({
       id: m.id,
@@ -131,8 +193,10 @@ export class WorkflowEngine {
     const sdkMsgs: ModelMessage[] = []
 
     for (const m of this.context.messages) {
-      if (m.role === 'tool' && m.metadata?.tool) {
-        const toolCallId = (m.metadata.toolCallId as string) || `call_${m.id}`
+      if (m.role === 'tool') {
+        const toolCallId = (m.metadata?.toolCallId as string) || `call_${m.id}`
+        const toolName = (m.metadata?.tool as string) || 'unknown_tool'
+        const result = m.metadata?.result ?? m.message
 
         sdkMsgs.push({
           role: 'tool',
@@ -140,27 +204,38 @@ export class WorkflowEngine {
             {
               type: 'tool-result',
               toolCallId: toolCallId,
-              toolName: m.metadata.tool as string,
-              result: m.metadata.result
+              toolName: toolName,
+              result: result
             }
           ]
         })
-      } else if (m.role === 'assistant' && m.metadata?.toolCalls) {
-        sdkMsgs.push({
-          role: 'assistant',
-          content: [
-            { type: 'text', text: m.message },
-            ...(m.metadata.toolCalls as any[]).map(tc => ({
-              type: 'tool-call',
-              toolCallId: tc.id,
-              toolName: tc.name,
-              args: tc.arguments
-            }))
-          ]
-        })
+      } else if (m.role === 'assistant') {
+        const content: any[] = []
+        if (m.message && m.message.trim() !== '') {
+          content.push({ type: 'text', text: m.message })
+        }
+
+        if (m.metadata?.toolCalls) {
+          const toolCalls = (m.metadata.toolCalls as any[]).map(tc => ({
+            type: 'tool-call',
+            toolCallId: tc.id,
+            toolName: tc.name,
+            args: tc.arguments
+          }))
+          content.push(...toolCalls)
+        }
+
+        // AI SDK assistant message must have content
+        if (content.length > 0) {
+          sdkMsgs.push({
+            role: 'assistant',
+            content: content
+          })
+        }
       } else {
+        // system or user
         sdkMsgs.push({
-          role: m.role as 'user' | 'assistant' | 'system',
+          role: m.role as 'user' | 'system',
           content: m.message
         })
       }
@@ -190,10 +265,31 @@ export class WorkflowEngine {
   private setupEventHandlers(): void {
     this.stateMachine.on('stateChanged', (data?: any) => {
       const event = data
-      updateWorkflowStatus(this.sessionId, event.payload.newState).catch(console.error)
+      const newState = event.payload.newState as WorkflowState
+
+      // Map internal state machine states to standard database status strings
+      let dbStatus: string
+      switch (newState) {
+        case WorkflowState.COMPLETED:
+          dbStatus = 'completed'
+          break
+        case WorkflowState.ERROR:
+          dbStatus = 'error'
+          break
+        case WorkflowState.PAUSED:
+          dbStatus = 'paused'
+          break
+        case WorkflowState.IDLE:
+          dbStatus = 'pending'
+          break
+        default:
+          dbStatus = 'running'
+          break
+      }
+
+      updateWorkflowStatus(this.sessionId, dbStatus).catch(console.error)
 
       // Trigger run() when entering states that require active processing
-      const newState = event.payload.newState
       if (newState === WorkflowState.PLANNING || newState === WorkflowState.THINKING) {
         this.run()
       }
@@ -224,41 +320,53 @@ export class WorkflowEngine {
    */
   private async handlePlanning(): Promise<void> {
     const { agent } = this.context
-    const model = createChatspeedModel(agent.planModel.model, this.proxyPort)
+    const model = createChatspeedModel(
+      agent.planModel.model,
+      this.proxyPort,
+      this.sessionKey,
+      this.sessionId,
+      agent.planModel.id
+    )
 
-    const { output: object } = await generateText({
-      model,
-      system: agent.planningPrompt || 'Generate a plan.',
-      prompt: this.context.messages[this.context.messages.length - 1].message,
-      output: {
-        schema: z.object({
-          plan: z.array(
-            z.object({
-              id: z.string(),
-              title: z.string(),
-              description: z.string().optional(),
-              status: z.enum(['pending', 'in_progress', 'completed', 'failed'])
-            })
-          )
-        })
-      }
-    })
+    try {
+      const { output: object } = await generateText({
+        model,
+        system: agent.planningPrompt || 'Generate a plan.',
+        prompt: this.context.messages[this.context.messages.length - 1].message,
+        output: {
+          schema: z.object({
+            plan: z.array(
+              z.object({
+                id: z.string(),
+                title: z.string(),
+                description: z.string().optional(),
+                status: z.enum(['pending', 'in_progress', 'completed', 'failed'])
+              })
+            )
+          })
+        }
+      })
 
-    // Update the global todo manager so UI can pick it up
-    setTodoListForWorkflow(this.sessionId, object.plan as any)
+      // Update the global todo manager so UI can pick it up
+      setTodoListForWorkflow(this.sessionId, object.plan as any)
 
-    await this.addMessage({
-      sessionId: this.sessionId,
-      role: 'assistant',
-      message: `I have created a plan to address your request. Please review and approve it.\n\n\`\`\`json\n${JSON.stringify(
-        object.plan,
-        null,
-        2
-      )}\n\`\`\``,
-      metadata: { todoList: object.plan }
-    })
+      await this.addMessage({
+        sessionId: this.sessionId,
+        role: 'assistant',
+        message: `I have created a plan to address your request. Please review and approve it.\n\n\`\`\`json\n${JSON.stringify(
+          object.plan,
+          null,
+          2
+        )}\n\`\`\``,
+        metadata: { todoList: object.plan }
+      })
 
-    this.stateMachine.transition('PLAN_READY')
+      this.stateMachine.transition('PLAN_READY')
+    } catch (error: any) {
+      console.error('Planning error:', error)
+      this.stateMachine.transition('ERROR_OCCURRED', { error: error.message || String(error) })
+      throw error
+    }
   }
 
   /**
@@ -266,74 +374,98 @@ export class WorkflowEngine {
    */
   private async handleAutonomous(): Promise<void> {
     const { agent } = this.context
-    const model = createChatspeedModel(agent.actModel.model, this.proxyPort)
+    const model = createChatspeedModel(
+      agent.actModel.model,
+      this.proxyPort,
+      this.sessionKey,
+      this.sessionId,
+      agent.actModel.id
+    )
     const sdkTools = getAllSdkTools(this.toolRegistry)
 
-    const result = streamText({
-      model,
-      system: agent.systemPrompt,
-      messages: this.context.sdkMessages,
-      tools: sdkTools,
-      maxSteps: 15,
-      onStepFinish: async ({ text, toolCalls, toolResults }) => {
-        // 1. Check if any tool call requires approval
-        for (const call of toolCalls) {
-          const toolDef = this.toolRegistry.get(call.toolName)
-          const needsApproval = toolDef?.requiresApproval && !agent.autoApprove.includes(toolDef.id)
+    try {
+      let hasReceivedContent = false
+      let hasReceivedTools = false
 
-          if (needsApproval) {
-            this.stateMachine.setContext({
-              currentAction: {
-                name: call.toolName,
-                arguments: call.args,
-                toolCallId: call.toolCallId
+      const result = streamText({
+        model,
+        system: agent.systemPrompt,
+        messages: this.context.sdkMessages,
+        tools: sdkTools,
+        maxSteps: 15,
+        onStepFinish: async ({ text, toolCalls, toolResults }) => {
+          if (text) hasReceivedContent = true
+          if (toolCalls.length > 0) hasReceivedTools = true
+
+          // 1. Check if any tool call requires approval
+          for (const call of toolCalls) {
+            const toolDef = this.toolRegistry.get(call.toolName)
+            const needsApproval = toolDef?.requiresApproval && !agent.autoApprove.includes(toolDef.id)
+
+            if (needsApproval) {
+              this.stateMachine.setContext({
+                currentAction: {
+                  name: call.toolName,
+                  arguments: call.args,
+                  toolCallId: call.toolCallId
+                }
+              })
+              this.stateMachine.transition('NEED_APPROVAL')
+            }
+          }
+
+          // 2. Persist assistant message with tool calls metadata
+          if (text || toolCalls.length > 0) {
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'assistant',
+              message: text || '',
+              metadata: {
+                toolCalls: toolCalls.map(tc => ({
+                  id: tc.toolCallId,
+                  name: tc.toolName,
+                  arguments: tc.args
+                }))
               }
             })
-            this.stateMachine.transition('NEED_APPROVAL')
+          }
+
+          // 3. Persist tool results
+          for (const res of toolResults) {
+            await this.addMessage({
+              sessionId: this.sessionId,
+              role: 'tool',
+              message: `Observation from ${res.toolName}: ${JSON.stringify(res.result)}`,
+              metadata: {
+                tool: res.toolName,
+                parameters: res.args,
+                result: res.result,
+                toolCallId: res.toolCallId
+              }
+            })
           }
         }
+      })
 
-        // 2. Persist assistant message with tool calls metadata
-        if (text || toolCalls.length > 0) {
-          await this.addMessage({
-            sessionId: this.sessionId,
-            role: 'assistant',
-            message: text || '',
-            metadata: {
-              toolCalls: toolCalls.map(tc => ({
-                id: tc.toolCallId,
-                name: tc.toolName,
-                arguments: tc.args
-              }))
-            }
-          })
-        }
-
-        // 3. Persist tool results
-        for (const res of toolResults) {
-          await this.addMessage({
-            sessionId: this.sessionId,
-            role: 'tool',
-            message: `Observation from ${res.toolName}: ${JSON.stringify(res.result)}`,
-            metadata: {
-              tool: res.toolName,
-              parameters: res.args,
-              result: res.result,
-              toolCallId: res.toolCallId
-            }
-          })
-        }
+      // Consume the stream to trigger execution
+      for await (const chunk of result.textStream) {
+        if (chunk) hasReceivedContent = true
       }
-    })
 
-    // Consume the stream to trigger execution
-    for await (const _ of result.textStream) {
-      // Stream can be used for real-time UI updates
-    }
+      await result.finishPromise
 
-    await result.finishPromise
-    if (this.stateMachine.getState() === WorkflowState.THINKING) {
-      this.stateMachine.transition('TASK_COMPLETE')
+      // If we are still in THINKING state, but haven't received anything at all,
+      // it's likely a silent failure (e.g. 404 handled internally by the provider)
+      if (this.stateMachine.getState() === WorkflowState.THINKING) {
+        if (!hasReceivedContent && !hasReceivedTools) {
+          throw new Error('No response received from the model. Please check your configuration.')
+        }
+        this.stateMachine.transition('TASK_COMPLETE')
+      }
+    } catch (error: any) {
+      console.error('Autonomous execution error:', error)
+      this.stateMachine.transition('ERROR_OCCURRED', { error: error.message || String(error) })
+      throw error
     }
   }
 

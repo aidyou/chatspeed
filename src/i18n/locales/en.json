@@ -145,6 +145,7 @@
   "menu": {
     "about": "About",
     "assistant": "Assistant",
+    "workflow": "Workflow",
     "agent": "Agent",
     "mcp": "MCP",
     "model": "AI Engine",
@@ -184,7 +185,11 @@
       "edit": "Edit Agent",
       "fetchFailed": "Failed to fetch agent",
       "maxContexts": "Max Contexts Length",
-      "models": "Models",
+      "models": "Model Configuration",
+      "modeProvider": "Provider",
+      "modeProxy": "Proxy",
+      "group": "Proxy Group",
+      "aliasName": "Model Alias",
       "name": "Agent Name",
       "nameRequired": "Please enter agent name",
       "noAgents": "No agents found",
@@ -238,6 +243,7 @@
       "networkSettings": "Network Settings",
       "noteWindowVisibleShortcut": "Open Note Window",
       "proxySwitcherWindowVisibleShortcut": "Proxy Switcher Window",
+      "workflowWindowVisibleShortcut": "Workflow Window",
       "pressKeysToSet": "Click then press the shortcut key combination...",
       "primaryLanguage": "Primary Language",
       "primaryLanguageTooltip": "Mainly used as the first choice when language translation automatic recognition fails.",
@@ -757,8 +763,13 @@
     }
   },
   "workflow": {
+    "autoApproveTooltip": "Auto-approve tools (excluding interactive tools)",
+    "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
+    "editWorkflowTitle": "Edit Workflow Title",
+    "newWorkflow": "New Workflow",
     "todoList": {
       "title": "To-do List"
-    }
+    },
+    "workflowTitle": "Workflow Title"
   }
 }

@@ -36,7 +36,7 @@ export enum WorkflowState {
   EXECUTING_TOOL = 'executing_tool',
   THINKING = 'thinking',
   PAUSED = 'paused',
-  FINISHED = 'finished',
+  COMPLETED = 'completed',
   ERROR = 'error'
 }
 

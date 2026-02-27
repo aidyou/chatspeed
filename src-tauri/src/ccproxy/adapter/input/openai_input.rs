@@ -142,11 +142,11 @@ pub fn from_openai(
         top_logprobs: req.top_logprobs,
         logit_bias: req.logit_bias.clone(),
         // Claude-specific parameters - map OpenAI user to Claude metadata.user_id
-        metadata: req.user.clone().map(
-            |user_id| crate::ccproxy::adapter::unified::UnifiedMetadata {
+        metadata: req.user.clone().map(|user_id| {
+            crate::ccproxy::adapter::unified::UnifiedMetadata {
                 user_id: Some(user_id),
-            },
-        ),
+            }
+        }),
         thinking: if req.reasoning_effort.is_some() || req.reasoning_split.unwrap_or(false) {
             Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                 include_thoughts: Some(true),
@@ -218,37 +218,42 @@ fn convert_openai_content(
 
     if let Some(tool_calls) = tool_calls {
         for tc in tool_calls {
-            let tool_name = tc.function.name.unwrap_or_default();
-            let tool_id = tc.id.unwrap_or_default();
-            let arguments_str = tc.function.arguments.unwrap_or_else(|| "{}".to_string());
+            if let Some(function) = &tc.function {
+                let tool_name = function.name.clone().unwrap_or_default();
+                let tool_id = tc.id.clone().unwrap_or_default();
+                let arguments_str = function
+                    .arguments
+                    .clone()
+                    .unwrap_or_else(|| "{}".to_string());
 
-            match serde_json::from_str(&arguments_str) {
-                Ok(parsed_args) => {
-                    blocks.push(UnifiedContentBlock::ToolUse {
-                        id: tool_id,
-                        name: tool_name,
-                        input: parsed_args,
-                    });
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to parse OpenAI tool arguments as JSON for tool '{}': {}. Original arguments: {}",
-                        tool_name,
-                        e,
-                        arguments_str
-                    );
-                    // [Gemini] Replicate Claude's error feedback mechanism
-                    blocks.extend(vec![
-                        UnifiedContentBlock::Text {
-                            text: format!(
-                                "<cs:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</cs:failed_tool_call>",
-                                tool_name, arguments_str
-                            ),
-                        },
-                        UnifiedContentBlock::Text {
-                            text: TOOL_ARG_ERROR_REMINDER.to_string(),
-                        },
-                    ]);
+                match serde_json::from_str(&arguments_str) {
+                    Ok(parsed_args) => {
+                        blocks.push(UnifiedContentBlock::ToolUse {
+                            id: tool_id,
+                            name: tool_name,
+                            input: parsed_args,
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to parse OpenAI tool arguments as JSON for tool '{}': {}. Original arguments: {}",
+                            tool_name,
+                            e,
+                            arguments_str
+                        );
+                        // [Gemini] Replicate Claude's error feedback mechanism
+                        blocks.extend(vec![
+                            UnifiedContentBlock::Text {
+                                text: format!(
+                                    "<cs:failed_tool_call>\n<name>{}</name>\n<input>{}</input>\n</cs:failed_tool_call>",
+                                    tool_name, arguments_str
+                                ),
+                            },
+                            UnifiedContentBlock::Text {
+                                text: TOOL_ARG_ERROR_REMINDER.to_string(),
+                            },
+                        ]);
+                    }
                 }
             }
         }

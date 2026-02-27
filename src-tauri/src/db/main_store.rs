@@ -203,12 +203,9 @@ impl MainStore {
         })?;
 
         // Enable WAL mode for better concurrency in production
-        if let Err(e) = conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(())) {
-            log::warn!("Failed to enable WAL mode: {}", e);
-        }
-        if let Err(e) = conn.execute("PRAGMA synchronous=NORMAL;", []) {
-            log::warn!("Failed to set synchronous mode: {}", e);
-        }
+        let _ = conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(()));
+        let _ = conn.execute("PRAGMA synchronous=NORMAL;", []);
+        let _ = conn.execute("PRAGMA foreign_keys=ON;", []);
         // Set busy timeout to handle concurrent access gracefully
         if let Err(e) = conn.busy_timeout(std::time::Duration::from_secs(5)) {
             log::warn!("Failed to set busy timeout: {}", e);
@@ -322,6 +319,7 @@ impl MainStore {
         // 2. Enable WAL mode
         let _ = new_conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(()));
         let _ = new_conn.execute("PRAGMA synchronous=NORMAL;", []);
+        let _ = new_conn.execute("PRAGMA foreign_keys=ON;", []);
         let _ = new_conn.busy_timeout(std::time::Duration::from_secs(5));
 
         // 3. Initialize/Migrate if needed (safety check)

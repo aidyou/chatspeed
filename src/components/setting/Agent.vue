@@ -121,84 +121,200 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
-          <el-form-item :label="$t('settings.agent.planModel')" prop="planModel">
-            <el-select
-              v-model="agentForm.planModel.id"
-              :placeholder="$t('settings.agent.selectProvider')"
-              filterable
-              @change="onPlanModelIdChange"
-              style="width: 45%; margin-right: var(--cs-space-sm)">
-              <el-option
-                v-for="provider in modelStore.getAvailableProviders"
-                :key="provider.id"
-                :label="provider.name"
-                :value="provider.id" />
-            </el-select>
-            <el-select
-              v-model="agentForm.planModel.model"
-              :placeholder="$t('settings.agent.selectPlanModel')"
-              filterable
-              style="width: 45%"
-              :disabled="!agentForm.planModel.id">
-              <el-option
-                v-for="model in planModelList"
-                :key="model.id"
-                :label="model.name || model.id"
-                :value="model.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="$t('settings.agent.actModel')" prop="actModel">
-            <el-select
-              v-model="agentForm.actModel.id"
-              :placeholder="$t('settings.agent.selectProvider')"
-              filterable
-              @change="onActModelIdChange"
-              style="width: 45%; margin-right: var(--cs-space-sm)">
-              <el-option
-                v-for="provider in modelStore.getAvailableProviders"
-                :key="provider.id"
-                :label="provider.name"
-                :value="provider.id" />
-            </el-select>
-            <el-select
-              v-model="agentForm.actModel.model"
-              :placeholder="$t('settings.agent.selectActModel')"
-              filterable
-              style="width: 45%"
-              :disabled="!agentForm.actModel.id">
-              <el-option
-                v-for="model in actModelList"
-                :key="model.id"
-                :label="model.name || model.id"
-                :value="model.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="$t('settings.agent.visionModel')" prop="visionModel">
-            <el-select
-              v-model="agentForm.visionModel.id"
-              :placeholder="$t('settings.agent.selectProvider')"
-              filterable
-              @change="onVisionModelIdChange"
-              style="width: 45%; margin-right: var(--cs-space-sm)">
-              <el-option
-                v-for="provider in modelStore.getAvailableProviders"
-                :key="provider.id"
-                :label="provider.name"
-                :value="provider.id" />
-            </el-select>
-            <el-select
-              v-model="agentForm.visionModel.model"
-              :placeholder="$t('settings.agent.selectVisionModel')"
-              filterable
-              style="width: 45%"
-              :disabled="!agentForm.visionModel.id">
-              <el-option
-                v-for="model in visionModelList"
-                :key="model.id"
-                :label="model.name || model.id"
-                :value="model.id" />
-            </el-select>
-          </el-form-item>
+          <!-- Plan Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="planModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.planModel')" prop="planModel">
+              <template v-if="planModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.planModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onPlanModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.planModel.model"
+                  :placeholder="$t('settings.agent.selectPlanModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.planModel.id">
+                  <el-option
+                    v-for="model in planModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="planProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onPlanProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="planProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onPlanProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!planProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(planProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
+
+          <!-- Act Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="actModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.actModel')" prop="actModel">
+              <template v-if="actModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.actModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onActModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.actModel.model"
+                  :placeholder="$t('settings.agent.selectActModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.actModel.id">
+                  <el-option
+                    v-for="model in actModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="actProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onActProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="actProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onActProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!actProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(actProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
+
+          <!-- Vision Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="visionModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.visionModel')" prop="visionModel">
+              <template v-if="visionModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.visionModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onVisionModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.visionModel.model"
+                  :placeholder="$t('settings.agent.selectVisionModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.visionModel.id">
+                  <el-option
+                    v-for="model in visionModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="visionProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onVisionProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="visionProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onVisionProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!visionProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(visionProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
@@ -249,11 +365,16 @@ import { Sortable } from 'sortablejs-vue3'
 import { showMessage } from '@/libs/util'
 import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
+import { useProxyGroupStore } from '@/stores/proxy_group'
+import { useSettingStore } from '@/stores/setting'
+import { FrontendAppError } from '@/libs/tauri'
 
 const { t } = useI18n()
 
 const modelStore = useModelStore()
 const agentStore = useAgentStore()
+const proxyGroupStore = useProxyGroupStore()
+const settingStore = useSettingStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 
 const formRef = ref(null)
@@ -278,6 +399,19 @@ const defaultFormData = {
 // Reactive object to hold the form data for the agent
 const agentForm = ref({ ...defaultFormData })
 
+// Model modes: 'provider' or 'proxy'
+const planModelMode = ref('provider')
+const actModelMode = ref('provider')
+const visionModelMode = ref('provider')
+
+// Proxy temporary selections
+const planProxyGroup = ref('')
+const planProxyAlias = ref('')
+const actProxyGroup = ref('')
+const actProxyAlias = ref('')
+const visionProxyGroup = ref('')
+const visionProxyAlias = ref('')
+
 // Validation rules for the agent form
 const agentRules = {
   name: [{ required: true, message: t('settings.agent.nameRequired') }],
@@ -286,21 +420,21 @@ const agentRules = {
 
 // Computed properties for dependent model dropdowns
 const planModelList = computed(() => {
-  if (agentForm.value.planModel?.id) {
+  if (agentForm.value.planModel?.id && typeof agentForm.value.planModel.id === 'number') {
     return modelStore.getModelProviderById(agentForm.value.planModel.id)?.models || []
   }
   return []
 })
 
 const actModelList = computed(() => {
-  if (agentForm.value.actModel?.id) {
+  if (agentForm.value.actModel?.id && typeof agentForm.value.actModel.id === 'number') {
     return modelStore.getModelProviderById(agentForm.value.actModel.id)?.models || []
   }
   return []
 })
 
 const visionModelList = computed(() => {
-  if (agentForm.value.visionModel?.id) {
+  if (agentForm.value.visionModel?.id && typeof agentForm.value.visionModel.id === 'number') {
     return modelStore.getModelProviderById(agentForm.value.visionModel.id)?.models || []
   }
   return []
@@ -315,6 +449,49 @@ const onActModelIdChange = () => {
 }
 const onVisionModelIdChange = () => {
   agentForm.value.visionModel.model = ''
+}
+
+// Proxy handlers
+const getProxyAliases = groupName => {
+  if (!groupName) return []
+  const groupData = settingStore.settings.chatCompletionProxy[groupName]
+  return groupData ? Object.keys(groupData) : []
+}
+
+const onPlanProxyGroupChange = () => {
+  planProxyAlias.value = ''
+}
+const onActProxyGroupChange = () => {
+  actProxyAlias.value = ''
+}
+const onVisionProxyGroupChange = () => {
+  visionProxyAlias.value = ''
+}
+
+const onPlanProxyAliasChange = value => {
+  agentForm.value.planModel.model = `${planProxyGroup.value}@${value}`
+}
+const onActProxyAliasChange = value => {
+  agentForm.value.actModel.model = `${actProxyGroup.value}@${value}`
+}
+const onVisionProxyAliasChange = value => {
+  agentForm.value.visionModel.model = `${visionProxyGroup.value}@${value}`
+}
+
+/**
+ * Parses a model field into mode and temporary proxy variables
+ */
+const parseModelField = (field, modeRef, groupRef, aliasRef) => {
+  if (field.id === 0 && field.model.includes('@')) {
+    modeRef.value = 'proxy'
+    const [group, ...rest] = field.model.split('@')
+    groupRef.value = group
+    aliasRef.value = rest.join('@')
+  } else {
+    modeRef.value = 'provider'
+    groupRef.value = ''
+    aliasRef.value = ''
+  }
 }
 
 /**
@@ -334,6 +511,11 @@ const editAgent = async id => {
       }
       editId.value = id
       agentForm.value = agentData
+
+      // Parse model modes
+      parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
+      parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
+      parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
     } catch (error) {
       if (error instanceof FrontendAppError) {
         showMessage(t('settings.agent.fetchFailed', { error: error.toFormattedString() }), 'error')
@@ -350,6 +532,9 @@ const editAgent = async id => {
   } else {
     editId.value = null
     agentForm.value = { ...defaultFormData }
+    planModelMode.value = 'provider'
+    actModelMode.value = 'provider'
+    visionModelMode.value = 'provider'
     // Default auto-approve web tools for new agents
     agentForm.value.autoApprove = availableTools.value
       .filter(tool => tool.category === 'Web')
@@ -374,6 +559,12 @@ const copyAgent = async id => {
     const agentToCopy = await agentStore.copyAgent(id)
     agentForm.value = agentToCopy
     editId.value = null // Ensure editId is cleared for copy
+
+    // Parse model modes for the copy
+    parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
+    parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
+    parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
+
     agentDialogVisible.value = true
   } catch (error) {
     if (error instanceof FrontendAppError) {
@@ -400,8 +591,23 @@ const copyAgent = async id => {
 const updateAgent = () => {
   formRef.value.validate(async valid => {
     if (valid) {
+      // Final data preparation: Ensure ID is 0 for proxy mode
+      const finalForm = JSON.parse(JSON.stringify(agentForm.value))
+      if (planModelMode.value === 'proxy') {
+        finalForm.planModel.id = 0
+        finalForm.planModel.model = `${planProxyGroup.value}@${planProxyAlias.value}`
+      }
+      if (actModelMode.value === 'proxy') {
+        finalForm.actModel.id = 0
+        finalForm.actModel.model = `${actProxyGroup.value}@${actProxyAlias.value}`
+      }
+      if (visionModelMode.value === 'proxy') {
+        finalForm.visionModel.id = 0
+        finalForm.visionModel.model = `${visionProxyGroup.value}@${visionProxyAlias.value}`
+      }
+
       try {
-        await agentStore.saveAgent({ ...agentForm.value, id: editId.value })
+        await agentStore.saveAgent({ ...finalForm, id: editId.value })
         showMessage(
           t(editId.value ? 'settings.agent.updateSuccess' : 'settings.agent.addSuccess'),
           'success'
@@ -492,6 +698,7 @@ const onDragEnd = () => {
 // Load models when component is mounted
 onMounted(() => {
   modelStore.updateModelStore()
+  proxyGroupStore.getList()
 })
 </script>
 
@@ -508,6 +715,24 @@ onMounted(() => {
 
     .el-tabs__nav-wrap:after {
       background-color: var(--cs-border-color);
+    }
+
+    .model-config-item {
+      margin-bottom: var(--cs-space-md);
+      padding: var(--cs-space-sm);
+      border: 1px solid var(--cs-border-color);
+      border-radius: var(--cs-border-radius-md);
+      background-color: var(--cs-bg-color-light);
+
+      .model-mode-selector {
+        margin-bottom: var(--cs-space-sm);
+        display: flex;
+        justify-content: center;
+      }
+
+      .el-form-item {
+        margin-bottom: 0;
+      }
     }
   }
 }

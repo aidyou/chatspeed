@@ -1,4 +1,5 @@
 use crate::{
+    ai::interaction::chat_completion::ChatState,
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
         helper::CcproxyQuery,
@@ -17,6 +18,7 @@ pub async fn authenticate_request(
     headers: HeaderMap,
     query: CcproxyQuery,
     main_store: Arc<std::sync::RwLock<MainStore>>,
+    chat_state: Arc<ChatState>,
     is_local: bool,
 ) -> ProxyResult<()> {
     if is_local {
@@ -83,6 +85,16 @@ pub async fn authenticate_request(
     if token_to_check.is_empty() {
         log::warn!("Proxy authentication: Bearer token, x-api-key header, or query parameter `key` is missing or empty.");
         return Err(CCProxyError::MissingToken);
+    }
+
+    // Check if it's a temporary workflow session key
+    if let Some(workflow_id) = headers.get("x-cs-workflow-id").and_then(|v| v.to_str().ok()) {
+        if let Some(stored_key) = chat_state.workflow_keys.get(workflow_id) {
+            if token_to_check == *stored_key {
+                log::debug!("Workflow session authenticated successfully.");
+                return Ok(());
+            }
+        }
     }
 
     let proxy_keys: ChatCompletionProxyKeysConfig = main_store

@@ -44,10 +44,10 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     tool_calls.push(crate::ccproxy::types::openai::UnifiedToolCall {
                         id: Some(id),
                         r#type: Some("function".to_string()),
-                        function: crate::ccproxy::types::openai::OpenAIFunctionCall {
+                        function: Some(crate::ccproxy::types::openai::OpenAIFunctionCall {
                             name: Some(name),
                             arguments: Some(input.to_string()),
-                        },
+                        }),
                         index: None,
                     });
                 }

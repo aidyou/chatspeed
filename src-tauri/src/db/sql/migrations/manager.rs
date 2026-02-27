@@ -1,4 +1,4 @@
-use crate::db::sql::migrations::{v1, v2, v3, v4};
+use crate::db::sql::migrations::{v1, v2, v3, v4, v5};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -26,11 +26,11 @@ const MIGRATIONS: &[Migration] = &[
         description: "v4 migration: Add ccproxy_stats table",
         sql: v4::MIGRATION_SQL,
     },
-    // Migration {
-    //     version: 5,
-    //     description: "v5 migration: Add workflows table",
-    //     sql: v5::MIGRATION_SQL,
-    // },
+    Migration {
+        version: 5,
+        description: "v5 migration: Add workflows table",
+        sql: v5::MIGRATION_SQL,
+    },
 ];
 
 /// Executes a given set of SQL statements within a transaction and updates the db version.

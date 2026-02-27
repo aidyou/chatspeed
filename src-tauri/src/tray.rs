@@ -5,8 +5,10 @@ use crate::{
     commands::window::quit_window,
     constants::{
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT, CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+        CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
         DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT,
+        DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT, DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
     },
     db::MainStore,
 };
@@ -31,6 +33,9 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     let mut assistant_window_visible_shortcut =
         DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string();
     let mut note_window_visible_shortcut = DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string();
+    let mut proxy_switcher_window_visible_shortcut =
+        DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string();
+    let mut workflow_window_visible_shortcut = DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string();
     // Get shortcut config
     if let Ok(c) = main_store.read() {
         // Main window shortcut
@@ -45,6 +50,14 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         note_window_visible_shortcut = c.get_config(
             CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
             DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        proxy_switcher_window_visible_shortcut = c.get_config(
+            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+            DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+        );
+        workflow_window_visible_shortcut = c.get_config(
+            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+            DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
         );
     }
 
@@ -63,6 +76,15 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         &rust_i18n::t!("tray.assistant"),
         true,
         Some(assistant_window_visible_shortcut),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let workflow_window_menu_item = tauri::menu::MenuItem::with_id(
+        app,
+        "workflow",
+        &rust_i18n::t!("tray.workflow"),
+        true,
+        Some(workflow_window_visible_shortcut),
     )
     .map_err(|e| e.to_string())?;
 
@@ -120,18 +142,18 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "proxy_switcher",
         &rust_i18n::t!("tray.proxy_switcher"),
         true,
-        None::<&str>,
+        Some(proxy_switcher_window_visible_shortcut),
     )
     .map_err(|e| e.to_string())?;
 
-    // let agent_window_menu_item = tauri::menu::MenuItem::with_id(
-    //     app,
-    //     "agent",
-    //     &rust_i18n::t!("tray.agent"),
-    //     true,
-    //     None::<&str>,
-    // )
-    // .map_err(|e| e.to_string())?;
+    let agent_window_menu_item = tauri::menu::MenuItem::with_id(
+        app,
+        "agent",
+        &rust_i18n::t!("tray.agent"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
 
     let about_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
@@ -154,6 +176,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     let menu = tauri::menu::MenuBuilder::new(app)
         .item(&main_window_menu_item)
         .item(&assistant_window_menu_item)
+        .item(&workflow_window_menu_item)
         .item(&note_window_menu_item)
         .separator()
         .item(&settings_window_menu_item)
@@ -161,16 +184,16 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         .item(&skill_window_menu_item)
         .item(&mcp_window_menu_item)
         .item(&proxy_window_menu_item)
+        .item(&agent_window_menu_item)
         .separator()
         .item(&proxy_switcher_window_menu_item)
-        // .item(&agent_window_menu_item)
         .separator()
         .item(&about_window_menu_item)
         .item(&quit_item)
         .build()
         .map_err(|e| e.to_string())?;
 
-    let tray_id = tray_id.unwrap_or(crate::TRAY_ID.to_string());
+    let tray_id = tray_id.unwrap_or(crate::constants::TRAY_ID.to_string());
     // Remove existing tray if exists
     if let Some(tray) = app.tray_by_id(&tray_id) {
         #[cfg(debug_assertions)]
@@ -218,19 +241,9 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
     dbg!(&event);
     let menu_id = event.id().as_ref().to_string();
     match menu_id.as_str() {
-        "main" | "assistant" => {
+        "main" | "assistant" | "workflow" => {
             if let Some(_) = app.get_webview_window(&menu_id) {
                 crate::window::show_and_focus_window(&app, &menu_id);
-                // if let Ok(is_visible) = window.is_visible() {
-                //     if !is_visible {
-                //         if let Err(e) = window.show() {
-                //             log::error!("Failed to show {:?} window: {}", menu_id, e);
-                //         }
-                //     }
-                // }
-                // if let Err(e) = window.set_focus() {
-                //     log::error!("Failed to focus {:?} window: {}", menu_id, e);
-                // }
             }
         }
         "note" => {

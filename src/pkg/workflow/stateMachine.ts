@@ -110,7 +110,7 @@ export class WorkflowStateMachine extends EventEmitter {
 
     this.addTransition({
       from: WorkflowState.THINKING,
-      to: WorkflowState.FINISHED,
+      to: WorkflowState.COMPLETED,
       event: 'TASK_COMPLETE'
     })
 
@@ -165,9 +165,9 @@ export class WorkflowStateMachine extends EventEmitter {
       event: 'RETRY'
     })
 
-    // From FINISHED
+    // From COMPLETED
     this.addTransition({
-      from: WorkflowState.FINISHED,
+      from: WorkflowState.COMPLETED,
       to: WorkflowState.THINKING,
       event: 'TASK_CONTINUE'
     })
@@ -190,7 +190,8 @@ export class WorkflowStateMachine extends EventEmitter {
         WorkflowState.THINKING,
         WorkflowState.EXECUTING_TOOL,
         WorkflowState.WAITING_FOR_APPROVAL,
-        WorkflowState.PAUSED
+        WorkflowState.PAUSED,
+        WorkflowState.ERROR
       ],
       to: WorkflowState.ERROR,
       event: 'ERROR_OCCURRED'

@@ -278,6 +278,7 @@ tray:
   note: "智记"
   proxy: "代理"
   proxy_switcher: "代理切换"
+  workflow: "工作流"
   quit: "退出"
   settings: "设置"
   skill: "技能"

@@ -211,10 +211,10 @@ impl BackendAdapter for OpenAIBackendAdapter {
                             primary_tool_calls.push(UnifiedToolCall {
                                 id: Some(id.clone()),
                                 r#type: Some("function".to_string()),
-                                function: OpenAIFunctionCall {
+                                function: Some(OpenAIFunctionCall {
                                     name: Some(name.clone()),
                                     arguments: Some(input.to_string()),
-                                },
+                                }),
                                 index: None,
                             });
                         }
@@ -726,13 +726,15 @@ impl BackendAdapter for OpenAIBackendAdapter {
         if !backend_response.tool_compat_mode {
             if let Some(tool_calls) = first_choice.message.tool_calls {
                 for tc in tool_calls {
-                    content_blocks.push(UnifiedContentBlock::ToolUse {
-                        id: tc.id.clone().unwrap_or_default(),
-                        name: tc.function.name.unwrap_or_default(),
-                        input: serde_json::from_str(
-                            &tc.function.arguments.unwrap_or_default().replace("'", "\""),
-                        )?,
-                    });
+                    if let Some(function) = &tc.function {
+                        content_blocks.push(UnifiedContentBlock::ToolUse {
+                            id: tc.id.clone().unwrap_or_default(),
+                            name: function.name.clone().unwrap_or_default(),
+                            input: serde_json::from_str(
+                                &function.arguments.clone().unwrap_or_default().replace("'", "\""),
+                            )?,
+                        });
+                    }
                 }
             }
         }
@@ -1100,7 +1102,7 @@ impl OpenAIBackendAdapter {
         tc: &UnifiedToolCall,
         unified_chunks: &mut Vec<UnifiedStreamChunk>,
     ) {
-        if let Some(name) = &tc.function.name {
+        if let Some(name) = tc.function.as_ref().and_then(|f| f.name.as_ref()) {
             if !name.is_empty() {
                 let tool_id = tc.id.clone().unwrap_or_else(|| get_tool_id());
 
@@ -1137,7 +1139,7 @@ impl OpenAIBackendAdapter {
             }
         }
 
-        if let Some(args) = &tc.function.arguments {
+        if let Some(args) = tc.function.as_ref().and_then(|f| f.arguments.as_ref()) {
             if !args.is_empty() {
                 let mut tool_id = String::new();
                 if let Ok(mut status) = sse_status.write() {

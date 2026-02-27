@@ -15,7 +15,7 @@ export class ToolRegistry {
    */
   public register(tool: ToolDefinition): void {
     if (this.tools.has(tool.id)) {
-      console.warn(`Tool with id '${tool.id}' is already registered. Overwriting.`)
+      console.debug(`Tool with id '${tool.id}' is already registered. Overwriting.`)
     }
     this.tools.set(tool.id, tool)
   }

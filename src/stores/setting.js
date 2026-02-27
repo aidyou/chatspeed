@@ -31,6 +31,7 @@ const defaultSettings = {
   assistantWindowVisibleShortcut: 'ALT+Z',
   assistantWindowVisibleAndPasteShortcut: 'ALT+S',
   proxySwitcherWindowVisibleShortcut: 'Alt+Shift+P',
+  workflowWindowVisibleShortcut: 'Alt+W',
   moveWindowLeftShortcut: 'Alt+Shift+ArrowLeft',
   moveWindowRightShortcut: 'Alt+Shift+ArrowRight',
   centerWindowShortcut: 'Alt+Shift+C',
@@ -145,7 +146,8 @@ export const useSettingStore = defineStore('setting', () => {
       key === 'moveWindowRightShortcut' ||
       key === 'centerWindowShortcut' ||
       key === 'noteWindowVisibleShortcut' ||
-      key === 'proxySwitcherWindowVisibleShortcut'
+      key === 'proxySwitcherWindowVisibleShortcut' ||
+      key === 'workflowWindowVisibleShortcut'
     ) {
       try {
         await invokeWrapper('update_shortcut', { key: dbKey, value })

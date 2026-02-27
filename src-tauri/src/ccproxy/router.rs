@@ -953,7 +953,15 @@ async fn authenticate_request_middleware(
     is_local: bool,
 ) -> Result<Response, Response> {
     let path = req.uri().path().to_string();
-    match authenticate_request(headers, query, state.main_store.clone(), is_local).await {
+    match authenticate_request(
+        headers,
+        query,
+        state.main_store.clone(),
+        state.chat_state.clone(),
+        is_local,
+    )
+    .await
+    {
         Ok(_) => Ok(next.run(req).await),
         Err(e) => {
             log::warn!("Authentication failed for path {}: {:?}", path, e);

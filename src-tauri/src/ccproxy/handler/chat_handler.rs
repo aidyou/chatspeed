@@ -242,16 +242,23 @@ pub async fn handle_chat_completion(
         log::info!(target: "ccproxy_logger", "message id:{}\n{} Origin Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&client_request_body));
     }
 
-    let proxy_model = if let (Some(provider_id), Some(model_id)) = (
-        client_headers
-            .get("X-CS-Provider-Id")
+    let proxy_model = if let Some(provider_id) = client_headers
+        .get("x-cs-provider-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        let model_id = client_headers
+            .get("x-cs-model-id")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<i64>().ok()),
-        client_headers
-            .get("X-CS-Model-Id")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string()),
-    ) {
+            .map(|s| s.to_string())
+            .or_else(|| {
+                get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)
+                    .ok()
+            })
+            .ok_or_else(|| {
+                CCProxyError::ModelAliasNotFound("Missing model id in header or body".to_string())
+            })?;
+
         ModelResolver::get_ai_model_by_provider_and_model(
             main_store_arc.clone(),
             provider_id,
@@ -259,17 +266,20 @@ pub async fn handle_chat_completion(
         )
         .await?
     } else {
-        let proxy_alias =
+        let proxy_alias_raw =
             get_proxy_alias_from_body(&chat_protocol, &client_request_body, &route_model_alias)?;
+
+        // Support "group@alias" format in the model field
+        let (proxy_alias, group_name) = if let Some((g, a)) = proxy_alias_raw.split_once('@') {
+            (a.to_string(), Some(g.to_string()))
+        } else {
+            (proxy_alias_raw, group_name)
+        };
 
         let group_name = group_name.as_deref();
 
-        ModelResolver::get_ai_model_by_alias(
-            main_store_arc.clone(),
-            proxy_alias.clone(),
-            group_name,
-        )
-        .await?
+        ModelResolver::get_ai_model_by_alias(main_store_arc.clone(), proxy_alias, group_name)
+            .await?
     };
 
     //======================================================

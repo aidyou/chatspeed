@@ -99,6 +99,7 @@ const props = defineProps({
 
 const availableMenus = [
   'assistant',
+  { name: 'workflow', icon: "skill-plan3" },
   'note',
   'divider',
   'setting',
@@ -106,9 +107,9 @@ const availableMenus = [
   'skill',
   'mcp',
   'proxy',
+  'agent',
   'divider',
   { name: 'proxy_switcher', icon: 'switch' },
-  // 'agent',
   'divider',
   { name: 'scraperTest', icon: 'extract' },
   'divider',
@@ -248,7 +249,10 @@ const handleCommand = async command => {
         await invoke('open_note_window')
         break
       case 'assistant':
-        await invoke('show_window', { label: 'assistant' })
+        await invoke('show_window', { windowLabel: 'assistant' })
+        break
+      case 'workflow':
+        await invoke('show_window', { windowLabel: 'workflow' })
         break
       case 'setting':
         await invoke('open_setting_window', { settingType: 'general' })

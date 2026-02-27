@@ -211,19 +211,36 @@ pub async fn workflow_call_tool(
 //  Workflow Database Commands
 // =================================================
 
+#[derive(Serialize)]
+pub struct WorkflowResponse {
+    pub workflow: Workflow,
+    pub session_key: String,
+}
+
 #[command]
 pub async fn create_workflow(
+    chat_state: State<'_, Arc<ChatState>>,
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     user_query: String,
     agent_id: String,
-) -> Result<Workflow> {
+) -> Result<WorkflowResponse> {
     let id = get_tsid_generator().generate().map_err(|e| AppError::General {
         message: e.to_string(),
     })?;
+
+    // Generate a random session key for this workflow
+    let session_key = uuid::Uuid::new_v4().to_string();
+    chat_state.workflow_keys.insert(id.clone(), session_key.clone());
+
     let store = main_store.read()?;
-    store
+    let workflow = store
         .create_workflow(&id, &user_query, &agent_id)
-        .map_err(AppError::Db)
+        .map_err(AppError::Db)?;
+
+    Ok(WorkflowResponse {
+        workflow,
+        session_key,
+    })
 }
 
 #[command]
@@ -300,6 +317,21 @@ pub async fn delete_workflow(
 ) -> Result<()> {
     let store = main_store.read()?;
     store.delete_workflow(&workflow_id).map_err(AppError::Db)
+}
+
+#[command]
+pub async fn get_workflow_session_key(
+    chat_state: State<'_, Arc<ChatState>>,
+    workflow_id: String,
+) -> Result<String> {
+    // If a key already exists, return it. Otherwise, generate a new one.
+    // This allows resuming sessions securely.
+    let key = chat_state
+        .workflow_keys
+        .entry(workflow_id)
+        .or_insert_with(|| uuid::Uuid::new_v4().to_string());
+
+    Ok(key.value().clone())
 }
 
 #[command]

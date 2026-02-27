@@ -117,7 +117,7 @@
                 </div>
                 <div class="icons">
                   <el-tooltip
-                    content="Auto-approve tools (excluding interactive tools)"
+                    :content="$t('workflow.autoApproveTooltip')"
                     placement="top">
                     <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }">
                       <cs name="tool" class="small" />
@@ -305,6 +305,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (currentEngine.value) {
     // Clean up current workflow engine if exists
+    currentEngine.value.destroy()
     currentEngine.value = null
   }
   unlistenFocusInput.value()
@@ -323,7 +324,10 @@ const selectWorkflow = async id => {
   }
 
   // Clean up current engine
-  currentEngine.value = null
+  if (currentEngine.value) {
+    currentEngine.value.destroy()
+    currentEngine.value = null
+  }
 
   // Select the workflow in store
   await workflowStore.selectWorkflow(id)
@@ -336,7 +340,7 @@ const selectWorkflow = async id => {
       selectedAgent.value = agent
 
       try {
-        currentEngine.value = await WorkflowEngine.load(agent, id, settingStore.chatCompletionProxyPort)
+        currentEngine.value = await WorkflowEngine.load(agent, id, settingStore.settings.chatCompletionProxyPort)
       } catch (error) {
         console.error('Failed to load workflow:', error)
       }
@@ -352,13 +356,16 @@ const startNewWorkflow = async () => {
 
   try {
     // Clean up current engine
-    currentEngine.value = null
+    if (currentEngine.value) {
+      currentEngine.value.destroy()
+      currentEngine.value = null
+    }
 
     // Start new workflow
     currentEngine.value = await WorkflowEngine.startNew(
       selectedAgent.value,
       inputMessage.value,
-      settingStore.chatCompletionProxyPort
+      settingStore.settings.chatCompletionProxyPort
     )
 
     // Update store with new workflow
