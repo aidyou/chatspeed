@@ -7,12 +7,16 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCategory {
     Web,
+    FileSystem,
+    System,
 }
 
 impl Display for ToolCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolCategory::Web => write!(f, "Web"),
+            ToolCategory::FileSystem => write!(f, "FileSystem"),
+            ToolCategory::System => write!(f, "System"),
         }
     }
 }

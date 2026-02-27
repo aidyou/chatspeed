@@ -64,6 +64,10 @@ pub enum ToolError {
     /// Error accessing the underlying data store.
     #[error("{}", t!("tools.error.store", details = .0))]
     Store(String),
+
+    /// Security violation (e.g., path outside of authorized workspace).
+    #[error("Security violation: {0}")]
+    Security(String),
 }
 
 impl From<String> for ToolError {

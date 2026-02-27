@@ -11,6 +11,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             todo_list TEXT,
             status TEXT DEFAULT 'pending',
             agent_id TEXT REFERENCES agents(id),
+            allowed_paths TEXT,                -- JSON array of authorized directory paths
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )"
@@ -28,6 +29,8 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             role TEXT NOT NULL,
             message TEXT NOT NULL,
             metadata TEXT,
+            step_type TEXT,                    -- Enum: 'think', 'act', 'observe'
+            step_index INTEGER DEFAULT 0,      -- The index of the step in the current session
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES workflows(id) ON DELETE CASCADE
         )"
@@ -35,5 +38,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "idx_workflow_messages_session_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_messages_session_id ON workflow_messages(session_id)"
+    ),
+    // Add unified models JSON column to agents
+    (
+        "agents_v5_models",
+        "ALTER TABLE agents ADD COLUMN models TEXT"
     ),
 ];

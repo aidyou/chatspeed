@@ -26,12 +26,14 @@ pub struct Agent {
     pub available_tools: Option<String>,
     /// JSON array of tools that can be executed without user confirmation
     pub auto_approve: Option<String>,
-    /// Model for planning phase
+    /// Model for planning phase (Legacy, stored in models JSON now)
     pub plan_model: Option<String>,
-    /// Model for action phase
+    /// Model for action phase (Legacy, stored in models JSON now)
     pub act_model: Option<String>,
-    /// Vision model (reserved)
+    /// Vision model (Legacy, stored in models JSON now)
     pub vision_model: Option<String>,
+    /// Unified models configuration (JSON string)
+    pub models: Option<String>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -55,6 +57,7 @@ impl Agent {
         plan_model: Option<String>,
         act_model: Option<String>,
         vision_model: Option<String>,
+        models: Option<String>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
@@ -69,6 +72,7 @@ impl Agent {
             plan_model,
             act_model,
             vision_model,
+            models,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -93,6 +97,7 @@ impl From<&Row<'_>> for Agent {
             plan_model: row.get("plan_model").ok(),
             act_model: row.get("act_model").ok(),
             vision_model: row.get("vision_model").ok(),
+            models: row.get("models").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -124,8 +129,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 agent.id,
                 agent.name,
@@ -138,6 +143,7 @@ impl MainStore {
                 agent.plan_model,
                 agent.act_model,
                 agent.vision_model,
+                agent.models,
                 agent.max_contexts,
             ],
         )?;
@@ -170,8 +176,8 @@ impl MainStore {
 
         // Update the agent
         tx.execute(
-            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, max_contexts = ?11, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?12",
+            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, models = ?11, max_contexts = ?12, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?13",
             params![
                 agent.name,
                 agent.description,
@@ -183,6 +189,7 @@ impl MainStore {
                 agent.plan_model,
                 agent.act_model,
                 agent.vision_model,
+                agent.models,
                 agent.max_contexts,
                 agent.id,
             ],

@@ -16,6 +16,7 @@ export interface Workflow {
   todoList: string | null
   status: string
   agentId: string
+  allowedPaths?: string[] | null
   createdAt: string
   updatedAt: string
 }
@@ -26,6 +27,8 @@ export interface WorkflowMessage {
   role: string
   message: string
   metadata?: Record<string, unknown> | null
+  stepType?: string | null
+  stepIndex?: number
   createdAt?: string
 }
 
@@ -43,14 +46,25 @@ export interface WorkflowResponse {
 //  API Functions
 // =================================================
 
-export const createWorkflow = (userQuery: string, agentId: string): Promise<WorkflowResponse> => {
-  return invoke('create_workflow', { userQuery, agentId })
+export const createWorkflow = (
+  userQuery: string,
+  agentId: string,
+  allowedPaths: string[] | null = null
+): Promise<WorkflowResponse> => {
+  return invoke('create_workflow', { userQuery, agentId, allowedPaths })
 }
 
 export const addWorkflowMessage = (
   message: Omit<WorkflowMessage, 'id' | 'createdAt'>
 ): Promise<WorkflowMessage> => {
-  return invoke('add_workflow_message', { ...message })
+  return invoke('add_workflow_message', {
+    sessionId: message.sessionId,
+    role: message.role,
+    message: message.message,
+    metadata: message.metadata,
+    stepType: message.stepType || null,
+    stepIndex: message.stepIndex || 0
+  })
 }
 
 export const updateWorkflowStatus = (workflowId: string, status: string): Promise<void> => {

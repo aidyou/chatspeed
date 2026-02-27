@@ -20,6 +20,7 @@ pub struct Workflow {
     pub todo_list: Option<String>,
     pub status: String,
     pub agent_id: String,
+    pub allowed_paths: Option<Value>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -32,6 +33,8 @@ pub struct WorkflowMessage {
     pub role: String,
     pub message: String,
     pub metadata: Option<Value>,
+    pub step_type: Option<String>,
+    pub step_index: i32,
     pub created_at: Option<String>,
 }
 
@@ -47,6 +50,9 @@ pub struct WorkflowSnapshot {
 
 impl From<&Row<'_>> for Workflow {
     fn from(row: &Row<'_>) -> Self {
+        let allowed_paths_str: Option<String> = row.get("allowed_paths").ok();
+        let allowed_paths = allowed_paths_str.and_then(|s| serde_json::from_str(&s).ok());
+
         Self {
             id: row.get("id").unwrap_or_default(),
             title: row.get("title").ok(),
@@ -54,6 +60,7 @@ impl From<&Row<'_>> for Workflow {
             todo_list: row.get("todo_list").ok(),
             status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
             agent_id: row.get("agent_id").unwrap_or_default(),
+            allowed_paths,
             created_at: row.get("created_at").unwrap_or_default(),
             updated_at: row.get("updated_at").unwrap_or_default(),
         }
@@ -83,6 +90,8 @@ impl From<&Row<'_>> for WorkflowMessage {
             role: row.get("role").unwrap_or_default(),
             message: row.get("message").unwrap_or_default(),
             metadata,
+            step_type: row.get("step_type").ok(),
+            step_index: row.get("step_index").unwrap_or_default(),
             created_at: row.get("created_at").ok(),
         }
     }
@@ -99,15 +108,18 @@ impl MainStore {
         id: &str,
         user_query: &str,
         agent_id: &str,
+        allowed_paths: Option<Value>,
     ) -> Result<Workflow, StoreError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
+        let allowed_paths_str = allowed_paths.and_then(|v| serde_json::to_string(&v).ok());
+
         conn.execute(
-            "INSERT INTO workflows (id, user_query, agent_id, status) VALUES (?1, ?2, ?3, 'running')",
-            params![&id, user_query, agent_id],
+            "INSERT INTO workflows (id, user_query, agent_id, status, allowed_paths) VALUES (?1, ?2, ?3, 'running', ?4)",
+            params![&id, user_query, agent_id, &allowed_paths_str],
         )?;
 
         let workflow = conn.query_row(
@@ -135,8 +147,8 @@ impl MainStore {
             .and_then(|v| serde_json::to_string(v).ok());
 
         conn.execute(
-            "INSERT INTO workflow_messages (session_id, role, message, metadata) VALUES (?1, ?2, ?3, ?4)",
-            params![&msg.session_id, &msg.role, &msg.message, &metadata],
+            "INSERT INTO workflow_messages (session_id, role, message, metadata, step_type, step_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![&msg.session_id, &msg.role, &msg.message, &metadata, &msg.step_type, &msg.step_index],
         )?;
 
         let new_id = conn.last_insert_rowid();

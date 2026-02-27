@@ -15,3 +15,9 @@ pub use tool_manager::{NativeToolResult, ToolDefinition, ToolManager, MCP_TOOL_N
 pub use types::{ToolCallResult, ToolCategory};
 pub use web_fetch::WebFetch;
 pub use web_search::WebSearch;
+mod fs; pub use fs::*;
+mod shell; pub use shell::*;
+mod search; pub use search::*;
+mod interaction; pub use interaction::*;
+mod skill; pub use skill::*;
+mod todo_manager; pub use todo_manager::*;

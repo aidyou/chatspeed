@@ -28,7 +28,7 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 5,
-        description: "v5 migration: Add workflows table",
+        description: "v5 migration: Add workflows table and models column to agents",
         sql: v5::MIGRATION_SQL,
     },
 ];

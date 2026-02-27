@@ -36,6 +36,7 @@ export class WorkflowEngine {
   private context: ConversationContext
   private readonly proxyPort: number
   private readonly sessionKey: string
+  private currentStepIndex: number = 0
 
   /**
    * Private constructor to ensure initialization via static factory methods.
@@ -106,7 +107,8 @@ export class WorkflowEngine {
       await this.addMessage({
         sessionId: this.sessionId,
         role: msg.role,
-        message: msg.message
+        message: msg.message,
+        stepIndex: this.currentStepIndex
       })
     }
 
@@ -141,7 +143,8 @@ export class WorkflowEngine {
     const userMessage: OmitWorkflowMessage = {
       sessionId: engine.sessionId,
       role: 'user',
-      message: userQuery
+      message: userQuery,
+      stepIndex: 0
     }
     await engine.addMessage(userMessage)
 
@@ -175,8 +178,15 @@ export class WorkflowEngine {
       role: m.role as any,
       message: m.message,
       metadata: m.metadata,
+      stepType: m.stepType as any,
+      stepIndex: m.stepIndex || 0,
       createdAt: m.createdAt ? new Date(m.createdAt) : new Date()
     }))
+
+    // Determine current step index
+    if (engine.context.messages.length > 0) {
+      engine.currentStepIndex = Math.max(...engine.context.messages.map(m => m.stepIndex || 0))
+    }
 
     // Convert to SDK compatible messages
     engine.syncSdkMessages()
@@ -256,6 +266,8 @@ export class WorkflowEngine {
       role: newApiMessage.role as any,
       message: newApiMessage.message,
       metadata: newApiMessage.metadata || undefined,
+      stepType: newApiMessage.stepType as any,
+      stepIndex: newApiMessage.stepIndex || 0,
       createdAt: newApiMessage.createdAt ? new Date(newApiMessage.createdAt) : new Date()
     })
 
@@ -358,7 +370,9 @@ export class WorkflowEngine {
           null,
           2
         )}\n\`\`\``,
-        metadata: { todoList: object.plan }
+        metadata: { todoList: object.plan },
+        stepType: 'think',
+        stepIndex: this.currentStepIndex
       })
 
       this.stateMachine.transition('PLAN_READY')
@@ -394,6 +408,8 @@ export class WorkflowEngine {
         tools: sdkTools,
         maxSteps: 15,
         onStepFinish: async ({ text, toolCalls, toolResults }) => {
+          this.currentStepIndex++
+
           if (text) hasReceivedContent = true
           if (toolCalls.length > 0) hasReceivedTools = true
 
@@ -426,7 +442,9 @@ export class WorkflowEngine {
                   name: tc.toolName,
                   arguments: tc.args
                 }))
-              }
+              },
+              stepType: toolCalls.length > 0 ? 'act' : 'think',
+              stepIndex: this.currentStepIndex
             })
           }
 
@@ -441,7 +459,9 @@ export class WorkflowEngine {
                 parameters: res.args,
                 result: res.result,
                 toolCallId: res.toolCallId
-              }
+              },
+              stepType: 'observe',
+              stepIndex: this.currentStepIndex
             })
           }
         }

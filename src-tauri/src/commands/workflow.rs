@@ -114,6 +114,7 @@ pub async fn add_agent(
         agent_payload.plan_model,
         agent_payload.act_model,
         agent_payload.vision_model,
+        agent_payload.models,
         agent_payload.max_contexts,
     );
     let store = main_store.read()?;
@@ -223,6 +224,7 @@ pub async fn create_workflow(
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     user_query: String,
     agent_id: String,
+    allowed_paths: Option<Value>,
 ) -> Result<WorkflowResponse> {
     let id = get_tsid_generator().generate().map_err(|e| AppError::General {
         message: e.to_string(),
@@ -234,7 +236,7 @@ pub async fn create_workflow(
 
     let store = main_store.read()?;
     let workflow = store
-        .create_workflow(&id, &user_query, &agent_id)
+        .create_workflow(&id, &user_query, &agent_id, allowed_paths)
         .map_err(AppError::Db)?;
 
     Ok(WorkflowResponse {
@@ -250,6 +252,8 @@ pub async fn add_workflow_message(
     role: String,
     message: String,
     metadata: Option<Value>,
+    step_type: Option<String>,
+    step_index: i32,
 ) -> Result<WorkflowMessage> {
     let msg = WorkflowMessage {
         id: None,
@@ -257,6 +261,8 @@ pub async fn add_workflow_message(
         role,
         message,
         metadata,
+        step_type,
+        step_index,
         created_at: None,
     };
     let store = main_store.read()?;

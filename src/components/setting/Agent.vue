@@ -315,6 +315,201 @@
               </template>
             </el-form-item>
           </div>
+
+          <!-- Coding Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="codingModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.codingModel')" prop="codingModel">
+              <template v-if="codingModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.codingModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onCodingModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.codingModel.model"
+                  :placeholder="$t('settings.agent.selectCodingModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.codingModel.id">
+                  <el-option
+                    v-for="model in codingModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="codingProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onCodingProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="codingProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onCodingProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!codingProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(codingProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
+
+          <!-- Copywriting Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="copywritingModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.copywritingModel')" prop="copywritingModel">
+              <template v-if="copywritingModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.copywritingModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onCopywritingModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.copywritingModel.model"
+                  :placeholder="$t('settings.agent.selectCopywritingModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.copywritingModel.id">
+                  <el-option
+                    v-for="model in copywritingModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="copywritingProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onCopywritingProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="copywritingProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onCopywritingProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!copywritingProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(copywritingProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
+
+          <!-- Browsing Model -->
+          <div class="model-config-item">
+            <div class="model-mode-selector">
+              <el-radio-group v-model="browsingModelMode" size="small">
+                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-form-item :label="$t('settings.agent.browsingModel')" prop="browsingModel">
+              <template v-if="browsingModelMode === 'provider'">
+                <el-select
+                  v-model="agentForm.browsingModel.id"
+                  :placeholder="$t('settings.agent.selectProvider')"
+                  filterable
+                  @change="onBrowsingModelIdChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="provider in modelStore.getAvailableProviders"
+                    :key="provider.id"
+                    :label="provider.name"
+                    :value="provider.id" />
+                </el-select>
+                <el-select
+                  v-model="agentForm.browsingModel.model"
+                  :placeholder="$t('settings.agent.selectBrowsingModel')"
+                  filterable
+                  style="width: 45%"
+                  :disabled="!agentForm.browsingModel.id">
+                  <el-option
+                    v-for="model in browsingModelList"
+                    :key="model.id"
+                    :label="model.name || model.id"
+                    :value="model.id" />
+                </el-select>
+              </template>
+              <template v-else>
+                <el-select
+                  v-model="browsingProxyGroup"
+                  :placeholder="$t('settings.agent.group')"
+                  filterable
+                  @change="onBrowsingProxyGroupChange"
+                  style="width: 45%; margin-right: var(--cs-space-sm)">
+                  <el-option
+                    v-for="group in proxyGroupStore.list"
+                    :key="group.name"
+                    :label="group.name"
+                    :value="group.name" />
+                </el-select>
+                <el-select
+                  v-model="browsingProxyAlias"
+                  :placeholder="$t('settings.agent.aliasName')"
+                  filterable
+                  @change="onBrowsingProxyAliasChange"
+                  style="width: 45%"
+                  :disabled="!browsingProxyGroup">
+                  <el-option
+                    v-for="alias in getProxyAliases(browsingProxyGroup)"
+                    :key="alias"
+                    :label="alias"
+                    :value="alias" />
+                </el-select>
+              </template>
+            </el-form-item>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
@@ -393,6 +588,9 @@ const defaultFormData = {
   planModel: { id: '', model: '' },
   actModel: { id: '', model: '' },
   visionModel: { id: '', model: '' },
+  codingModel: { id: '', model: '' },
+  copywritingModel: { id: '', model: '' },
+  browsingModel: { id: '', model: '' },
   maxContexts: 128000
 }
 
@@ -403,6 +601,9 @@ const agentForm = ref({ ...defaultFormData })
 const planModelMode = ref('provider')
 const actModelMode = ref('provider')
 const visionModelMode = ref('provider')
+const codingModelMode = ref('provider')
+const copywritingModelMode = ref('provider')
+const browsingModelMode = ref('provider')
 
 // Proxy temporary selections
 const planProxyGroup = ref('')
@@ -411,6 +612,12 @@ const actProxyGroup = ref('')
 const actProxyAlias = ref('')
 const visionProxyGroup = ref('')
 const visionProxyAlias = ref('')
+const codingProxyGroup = ref('')
+const codingProxyAlias = ref('')
+const copywritingProxyGroup = ref('')
+const copywritingProxyAlias = ref('')
+const browsingProxyGroup = ref('')
+const browsingProxyAlias = ref('')
 
 // Validation rules for the agent form
 const agentRules = {
@@ -440,6 +647,27 @@ const visionModelList = computed(() => {
   return []
 })
 
+const codingModelList = computed(() => {
+  if (agentForm.value.codingModel?.id && typeof agentForm.value.codingModel.id === 'number') {
+    return modelStore.getModelProviderById(agentForm.value.codingModel.id)?.models || []
+  }
+  return []
+})
+
+const copywritingModelList = computed(() => {
+  if (agentForm.value.copywritingModel?.id && typeof agentForm.value.copywritingModel.id === 'number') {
+    return modelStore.getModelProviderById(agentForm.value.copywritingModel.id)?.models || []
+  }
+  return []
+})
+
+const browsingModelList = computed(() => {
+  if (agentForm.value.browsingModel?.id && typeof agentForm.value.browsingModel.id === 'number') {
+    return modelStore.getModelProviderById(agentForm.value.browsingModel.id)?.models || []
+  }
+  return []
+})
+
 // Handlers to reset model selection when provider changes
 const onPlanModelIdChange = () => {
   agentForm.value.planModel.model = ''
@@ -449,6 +677,15 @@ const onActModelIdChange = () => {
 }
 const onVisionModelIdChange = () => {
   agentForm.value.visionModel.model = ''
+}
+const onCodingModelIdChange = () => {
+  agentForm.value.codingModel.model = ''
+}
+const onCopywritingModelIdChange = () => {
+  agentForm.value.copywritingModel.model = ''
+}
+const onBrowsingModelIdChange = () => {
+  agentForm.value.browsingModel.model = ''
 }
 
 // Proxy handlers
@@ -467,6 +704,15 @@ const onActProxyGroupChange = () => {
 const onVisionProxyGroupChange = () => {
   visionProxyAlias.value = ''
 }
+const onCodingProxyGroupChange = () => {
+  codingProxyAlias.value = ''
+}
+const onCopywritingProxyGroupChange = () => {
+  copywritingProxyAlias.value = ''
+}
+const onBrowsingProxyGroupChange = () => {
+  browsingProxyAlias.value = ''
+}
 
 const onPlanProxyAliasChange = value => {
   agentForm.value.planModel.model = `${planProxyGroup.value}@${value}`
@@ -477,12 +723,21 @@ const onActProxyAliasChange = value => {
 const onVisionProxyAliasChange = value => {
   agentForm.value.visionModel.model = `${visionProxyGroup.value}@${value}`
 }
+const onCodingProxyAliasChange = value => {
+  agentForm.value.codingModel.model = `${codingProxyGroup.value}@${value}`
+}
+const onCopywritingProxyAliasChange = value => {
+  agentForm.value.copywritingModel.model = `${copywritingProxyGroup.value}@${value}`
+}
+const onBrowsingProxyAliasChange = value => {
+  agentForm.value.browsingModel.model = `${browsingProxyGroup.value}@${value}`
+}
 
 /**
  * Parses a model field into mode and temporary proxy variables
  */
 const parseModelField = (field, modeRef, groupRef, aliasRef) => {
-  if (field.id === 0 && field.model.includes('@')) {
+  if (field && field.id === 0 && field.model.includes('@')) {
     modeRef.value = 'proxy'
     const [group, ...rest] = field.model.split('@')
     groupRef.value = group
@@ -510,12 +765,30 @@ const editAgent = async id => {
         return
       }
       editId.value = id
-      agentForm.value = agentData
+      agentForm.value = { ...defaultFormData, ...agentData }
 
-      // Parse model modes
+      // Unpack unified 'models' JSON field if it exists
+      if (agentData.models) {
+        try {
+          const modelsObj = JSON.parse(agentData.models)
+          if (modelsObj.plan) agentForm.value.planModel = modelsObj.plan
+          if (modelsObj.act) agentForm.value.actModel = modelsObj.act
+          if (modelsObj.vision) agentForm.value.visionModel = modelsObj.vision
+          if (modelsObj.coding) agentForm.value.codingModel = modelsObj.coding
+          if (modelsObj.copywriting) agentForm.value.copywritingModel = modelsObj.copywriting
+          if (modelsObj.browsing) agentForm.value.browsingModel = modelsObj.browsing
+        } catch (e) {
+          console.error('Failed to parse models JSON:', e)
+        }
+      }
+
+      // Parse model modes for UI
       parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
       parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
       parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
+      parseModelField(agentForm.value.codingModel, codingModelMode, codingProxyGroup, codingProxyAlias)
+      parseModelField(agentForm.value.copywritingModel, copywritingModelMode, copywritingProxyGroup, copywritingProxyAlias)
+      parseModelField(agentForm.value.browsingModel, browsingModelMode, browsingProxyGroup, browsingProxyAlias)
     } catch (error) {
       if (error instanceof FrontendAppError) {
         showMessage(t('settings.agent.fetchFailed', { error: error.toFormattedString() }), 'error')
@@ -535,6 +808,9 @@ const editAgent = async id => {
     planModelMode.value = 'provider'
     actModelMode.value = 'provider'
     visionModelMode.value = 'provider'
+    codingModelMode.value = 'provider'
+    copywritingModelMode.value = 'provider'
+    browsingModelMode.value = 'provider'
     // Default auto-approve web tools for new agents
     agentForm.value.autoApprove = availableTools.value
       .filter(tool => tool.category === 'Web')
@@ -544,26 +820,40 @@ const editAgent = async id => {
   agentDialogVisible.value = true
 }
 
-const onAgentDialogClose = () => {
-  editId.value = null
-  agentForm.value = { ...defaultFormData }
-  formRef.value?.resetFields()
-}
-
 /**
  * Creates a copy of the specified agent and opens the dialog for editing.
  * @param {string} id - The ID of the agent to copy.
  */
 const copyAgent = async id => {
   try {
-    const agentToCopy = await agentStore.copyAgent(id)
-    agentForm.value = agentToCopy
+    const agentData = await agentStore.getAgent(id)
+    if (!agentData) return
+    
+    agentForm.value = { ...defaultFormData, ...agentData }
     editId.value = null // Ensure editId is cleared for copy
+
+    // Unpack unified 'models' JSON field if it exists
+    if (agentData.models) {
+      try {
+        const modelsObj = JSON.parse(agentData.models)
+        if (modelsObj.plan) agentForm.value.planModel = modelsObj.plan
+        if (modelsObj.act) agentForm.value.actModel = modelsObj.act
+        if (modelsObj.vision) agentForm.value.visionModel = modelsObj.vision
+        if (modelsObj.coding) agentForm.value.codingModel = modelsObj.coding
+        if (modelsObj.copywriting) agentForm.value.copywritingModel = modelsObj.copywriting
+        if (modelsObj.browsing) agentForm.value.browsingModel = modelsObj.browsing
+      } catch (e) {
+        console.error('Failed to parse models JSON:', e)
+      }
+    }
 
     // Parse model modes for the copy
     parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
     parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
     parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
+    parseModelField(agentForm.value.codingModel, codingModelMode, codingProxyGroup, codingProxyAlias)
+    parseModelField(agentForm.value.copywritingModel, copywritingModelMode, copywritingProxyGroup, copywritingProxyAlias)
+    parseModelField(agentForm.value.browsingModel, browsingModelMode, browsingProxyGroup, browsingProxyAlias)
 
     agentDialogVisible.value = true
   } catch (error) {
@@ -593,18 +883,30 @@ const updateAgent = () => {
     if (valid) {
       // Final data preparation: Ensure ID is 0 for proxy mode
       const finalForm = JSON.parse(JSON.stringify(agentForm.value))
-      if (planModelMode.value === 'proxy') {
-        finalForm.planModel.id = 0
-        finalForm.planModel.model = `${planProxyGroup.value}@${planProxyAlias.value}`
+      
+      const prepareModel = (field, mode, group, alias) => {
+        if (mode === 'proxy') {
+          field.id = 0
+          field.model = `${group}@${alias}`
+        }
       }
-      if (actModelMode.value === 'proxy') {
-        finalForm.actModel.id = 0
-        finalForm.actModel.model = `${actProxyGroup.value}@${actProxyAlias.value}`
-      }
-      if (visionModelMode.value === 'proxy') {
-        finalForm.visionModel.id = 0
-        finalForm.visionModel.model = `${visionProxyGroup.value}@${visionProxyAlias.value}`
-      }
+
+      prepareModel(finalForm.planModel, planModelMode.value, planProxyGroup.value, planProxyAlias.value)
+      prepareModel(finalForm.actModel, actModelMode.value, actProxyGroup.value, actProxyAlias.value)
+      prepareModel(finalForm.visionModel, visionModelMode.value, visionProxyGroup.value, visionProxyAlias.value)
+      prepareModel(finalForm.codingModel, codingModelMode.value, codingProxyGroup.value, codingProxyAlias.value)
+      prepareModel(finalForm.copywritingModel, copywritingModelMode.value, copywritingProxyGroup.value, copywritingProxyAlias.value)
+      prepareModel(finalForm.browsingModel, browsingModelMode.value, browsingProxyGroup.value, browsingProxyAlias.value)
+
+      // Consolidate all into 'models' field
+      finalForm.models = JSON.stringify({
+        plan: finalForm.planModel,
+        act: finalForm.actModel,
+        vision: finalForm.visionModel,
+        coding: finalForm.codingModel,
+        copywriting: finalForm.copywritingModel,
+        browsing: finalForm.browsingModel
+      })
 
       try {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })

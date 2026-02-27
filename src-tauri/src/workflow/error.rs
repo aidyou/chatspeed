@@ -106,6 +106,7 @@ impl From<crate::tools::ToolError> for WorkflowError {
             crate::tools::ToolError::Serialization(error) => WorkflowError::Serialization(error),
             crate::tools::ToolError::StateChangeFailed(msg) => WorkflowError::Other(msg),
             crate::tools::ToolError::Store(msg) => WorkflowError::Store(msg),
+            crate::tools::ToolError::Security(msg) => WorkflowError::Execution(format!("[Security] {}", msg)),
         }
     }
 }

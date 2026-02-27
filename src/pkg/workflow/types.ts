@@ -49,6 +49,7 @@ export interface Workflow {
   status: 'pending' | 'running' | 'paused' | 'completed'
   agentId: string
   currentState: WorkflowState
+  allowedPaths?: string[]
   createdAt: Date
   updatedAt: Date
 }
@@ -70,6 +71,8 @@ export interface WorkflowMessage {
   role: 'assistant' | 'tool' | 'user' | 'system'
   message: string
   metadata?: Record<string, unknown>
+  stepType?: 'think' | 'act' | 'observe' | null
+  stepIndex?: number
   createdAt?: Date
 }
 
