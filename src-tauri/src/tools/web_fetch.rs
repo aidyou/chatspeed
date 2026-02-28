@@ -30,9 +30,13 @@ impl ToolDefinition for WebFetch {
         ToolCategory::Web
     }
 
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Both
+    }
+
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "WebFetch"
+        crate::tools::TOOL_WEB_FETCH
     }
 
     /// Returns the description of the function.
@@ -42,7 +46,6 @@ impl ToolDefinition for WebFetch {
 **Usage Guidelines:**
 -  Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
 -  When using information from this tool, cite the source URL in your answer.
--  You MUST include a disclaimer in your final response. This disclaimer **MUST be translated into the user's language**. Use the following English template as a basis: 'Note: This response is based on content retrieved from the webpage, and its accuracy cannot be independently verified.' For example, if the user's language is Chinese, the disclaimer should be: '注意：此回复基于从提供的网页内容，其准确性无法独立验证。'
 
 **Limitations:**
 -  Avoid using this tool on multimedia files (typically URLs ending in .pdf, .ppt, .docx, .xlsx, .mp3, .mp4, etc.) as they cannot be processed - focus on HTML pages and text-based content instead
@@ -85,9 +88,9 @@ impl ToolDefinition for WebFetch {
     /// Executes the web scraper tool.
     async fn call(&self, params: Value) -> NativeToolResult {
         // Get the URL from parameters
-        let url = params["url"].as_str().ok_or_else(|| {
-            ToolError::InvalidParams(t!("tools.url_must_be_string").to_string())
-        })?;
+        let url = params["url"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidParams(t!("tools.url_must_be_string").to_string()))?;
 
         // Check if URL is empty
         if url.is_empty() {
@@ -128,18 +131,20 @@ impl ToolDefinition for WebFetch {
             keep_link,
             keep_image,
         });
-        
+
         // Execute the scraper engine and propagate errors directly
-        let content = engine::run(self.app_handle.clone(), request).await.map_err(|e| {
-            ToolError::ExecutionFailed(
-                t!(
-                    "tools.web_scraper_failed",
-                    url = url,
-                    details = e.to_string()
+        let content = engine::run(self.app_handle.clone(), request)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
-            )
-        })?;
+            })?;
 
         let format_webpage = |content: &str| -> String {
             format!(

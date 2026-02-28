@@ -1,349 +1,331 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use serde_json::Value;
-use std::sync::{Arc, OnceLock};
-use tauri::{command, AppHandle, State};
-
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::ai::interaction::chat_completion::PendingWorkflow;
-use crate::db::{Agent, MainStore, Workflow, WorkflowMessage, WorkflowSnapshot};
-use crate::error::{AppError, Result};
+use crate::db::{Agent, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
-use crate::tools::MCP_TOOL_NAME_SPLIT;
-// use crate::workflow::dag::WorkflowEngine;
+use crate::workflow::react::executor::WorkflowExecutor;
+use crate::workflow::react::gateway::{Gateway, TauriGateway};
+use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, State};
 
-// Initialize a global TSID generator with lazy initialization to avoid startup panic
-static TSID_GENERATOR: OnceLock<TsidGenerator> = OnceLock::new();
+// ==========================================
+// 1. Agent Configuration Commands
+// ==========================================
 
-/// Gets or initializes the global TSID generator
-fn get_tsid_generator() -> &'static TsidGenerator {
-    TSID_GENERATOR.get_or_init(|| {
-        TsidGenerator::new(1).unwrap_or_else(|e| {
-            log::error!("Failed to create TSID generator with node_id 1: {}. Using fallback node_id 0.", e);
-            // Fallback to node_id 0 if node_id 1 fails
-            TsidGenerator::new(0).unwrap_or_else(|e2| {
-                log::error!("CRITICAL: TSID generator creation failed even with node_id 0: {}", e2);
-                // Last resort: create with minimal configuration
-                // This panic is acceptable here as TSID is critical for workflow IDs
-                panic!("Cannot initialize TSID generator: {:?}", e2)
-            })
-        })
-    })
-}
-
-/// A simplified tool definition for the frontend
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FrontendTool {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub category: String, // "Web", "MCP", etc.
-}
-
-/// Gets all available tools for the frontend
-#[command]
-pub async fn get_available_tools(
-    chat_state: State<'_, Arc<ChatState>>,
-) -> Result<Vec<FrontendTool>> {
-    let mut frontend_tools = Vec::new();
-    let tool_manager = &chat_state.tool_manager;
-
-    // 1. Get Native Tools
-    let native_tools = tool_manager.get_native_tools().await;
-    for tool in native_tools {
-        frontend_tools.push(FrontendTool {
-            id: tool.name().to_string(),
-            name: tool.name().to_string(),
-            description: tool.description().to_string(),
-            category: tool.category().to_string(),
-        });
-    }
-
-    // 2. Get MCP Tools
-    let mcp_tools = tool_manager.get_all_mcp_tools().await;
-    for (server_name, tools_vec) in mcp_tools.iter() {
-        for tool_decl in tools_vec {
-            if tool_decl.disabled {
-                continue;
-            }
-            frontend_tools.push(FrontendTool {
-                // The unique ID for an MCP tool is its composite name
-                id: format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, tool_decl.name),
-                // For display, we can just use the short name
-                name: tool_decl.name.clone(),
-                description: tool_decl.description.clone(),
-                category: "MCP".to_string(),
-            });
-        }
-    }
-
-    Ok(frontend_tools)
-}
-
-// #[command]
-// pub async fn run_dag_workflow(app_handle: AppHandle, workflow_config: &str) -> Result<()> {
-//     let engine = WorkflowEngine::new(app_handle).await?;
-
-//     let _ = engine.execute(workflow_config).await?;
-
-//     log::debug!(
-//         "Workflow execution result: {:#?}",
-//         engine.context.get_last_output().await
-//     );
-//     Ok(())
-// }
-
-/// Adds a new agent
-#[command]
+#[tauri::command]
 pub async fn add_agent(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent_payload: super::types::workflow::AgentPayload,
-) -> Result<String> {
-    let new_id = get_tsid_generator().generate().map_err(|e| AppError::General {
-        message: e.to_string(),
-    })?;
-    let agent = Agent::new(
-        new_id,
-        agent_payload.name,
-        agent_payload.description,
-        agent_payload.system_prompt,
-        agent_payload.agent_type,
-        agent_payload.planning_prompt,
-        agent_payload.available_tools,
-        agent_payload.auto_approve,
-        agent_payload.plan_model,
-        agent_payload.act_model,
-        agent_payload.vision_model,
-        agent_payload.models,
-        agent_payload.max_contexts,
-    );
-    let store = main_store.read()?;
-    store.add_agent(&agent).map_err(AppError::Db)
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    agent: Agent,
+) -> Result<String, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
-/// Updates an existing agent
-#[command]
+#[tauri::command]
 pub async fn update_agent(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent_payload: super::types::workflow::AgentPayload,
-) -> Result<()> {
-    let agent: Agent = agent_payload.into();
-    let store = main_store.read()?;
-    store.update_agent(&agent).map_err(AppError::Db)
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    agent: Agent,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store.update_agent(&agent).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-/// Deletes an agent
-#[command]
+#[tauri::command]
 pub async fn delete_agent(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     id: String,
-) -> Result<()> {
-    let store = main_store.read()?;
-    store.delete_agent(&id).map_err(AppError::Db)
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store.delete_agent(&id).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-/// Gets an agent by ID
-#[command]
+#[tauri::command]
 pub async fn get_agent(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     id: String,
-) -> Result<Option<Agent>> {
-    let store = main_store.read()?;
-    store.get_agent(&id).map_err(AppError::Db)
+) -> Result<Option<Agent>, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let agent = store.get_agent(&id).map_err(|e| e.to_string())?;
+    Ok(agent)
 }
 
-/// Gets all agents
-#[command]
+#[tauri::command]
 pub async fn get_all_agents(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-) -> Result<Vec<Agent>> {
-    let store = main_store.read()?;
-    store.get_all_agents().map_err(AppError::Db)
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+) -> Result<Vec<Agent>, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let agents = store.get_all_agents().map_err(|e| e.to_string())?;
+    Ok(agents)
 }
 
-/// Executes a chat completion for the workflow engine, acting as a proxy.
-/// It forwards tool calls from the LLM back to the frontend for execution.
-#[command]
-pub async fn workflow_chat_completion(
-    app_handle: AppHandle,
-    chat_state: State<'_, Arc<ChatState>>,
-    payload: super::types::workflow::WorkflowChatPayload,
-) -> Result<String> {
-    let stream_id = get_tsid_generator().generate().map_err(|e| AppError::General {
-        message: e.to_string(),
-    })?;
-
-    // Create the pending workflow context
-    let pending_workflow = PendingWorkflow {
-        app_handle,
-        payload,
-    };
-
-    // Store it in the dashmap, keyed by the stream_id
-    // It will be handled at @src-tauri/src/workflow/helper.rs
-    chat_state
-        .pending_workflow_chat_completions
-        .insert(stream_id.clone(), pending_workflow);
-
-    // Return the stream_id to the frontend
-    Ok(stream_id)
+#[tauri::command]
+pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Result<Value, String> {
+    // Core Native Tools + Adapted MCP Tools (Dynamic Metadata from Global Manager)
+    // The unified manager now returns everything in a single list.
+    let native_meta = chat_state.tool_manager.get_all_native_tool_metadata().await;
+    Ok(json!(native_meta))
 }
 
-/// Executes a tool call for the workflow engine using the ChatState tool manager
-#[command]
-pub async fn workflow_call_tool(
-    chat_state: State<'_, Arc<ChatState>>,
-    tool_name: String,
-    arguments: Option<Value>,
-) -> Result<Value> {
-    let tool_manager = &chat_state.tool_manager;
+// ==========================================
+// 2. Workflow Session Persistence Commands
+// ==========================================
 
-    // Parse arguments or use empty object
-    let args = arguments.unwrap_or_else(|| json!({}));
-
-    // Execute the tool call using the tool manager
-    match tool_manager.tool_call(&tool_name, args).await {
-        Ok(result) => Ok(result),
-        Err(e) => Err(AppError::Tool(e)),
-    }
-}
-
-// =================================================
-//  Workflow Database Commands
-// =================================================
-
-#[derive(Serialize)]
-pub struct WorkflowResponse {
-    pub workflow: Workflow,
-    pub session_key: String,
-}
-
-#[command]
+#[tauri::command]
 pub async fn create_workflow(
-    chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    user_query: String,
-    agent_id: String,
-    allowed_paths: Option<Value>,
-) -> Result<WorkflowResponse> {
-    let id = get_tsid_generator().generate().map_err(|e| AppError::General {
-        message: e.to_string(),
-    })?;
-
-    // Generate a random session key for this workflow
-    let session_key = uuid::Uuid::new_v4().to_string();
-    chat_state.workflow_keys.insert(id.clone(), session_key.clone());
-
-    let store = main_store.read()?;
-    let workflow = store
-        .create_workflow(&id, &user_query, &agent_id, allowed_paths)
-        .map_err(AppError::Db)?;
-
-    Ok(WorkflowResponse {
-        workflow,
-        session_key,
-    })
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow: Workflow,
+) -> Result<String, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let created = store
+        .create_workflow(
+            &workflow.id,
+            &workflow.user_query,
+            &workflow.agent_id,
+            workflow.allowed_paths,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(created.id)
 }
 
-#[command]
-pub async fn add_workflow_message(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    session_id: String,
-    role: String,
-    message: String,
-    metadata: Option<Value>,
-    step_type: Option<String>,
-    step_index: i32,
-) -> Result<WorkflowMessage> {
-    let msg = WorkflowMessage {
-        id: None,
-        session_id,
-        role,
-        message,
-        metadata,
-        step_type,
-        step_index,
-        created_at: None,
-    };
-    let store = main_store.read()?;
-    store.add_workflow_message(&msg).map_err(AppError::Db)
-}
-
-#[command]
-pub async fn update_workflow_status(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    workflow_id: String,
-    status: String,
-) -> Result<()> {
-    let store = main_store.read()?;
-    store
-        .update_workflow_status(&workflow_id, &status)
-        .map_err(AppError::Db)
-}
-
-#[command]
-pub async fn get_workflow_snapshot(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    workflow_id: String,
-) -> Result<WorkflowSnapshot> {
-    let store = main_store.read()?;
-    store
-        .get_workflow_snapshot(&workflow_id)
-        .map_err(AppError::Db)
-}
-
-#[command]
-pub async fn update_workflow_title(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    workflow_id: String,
-    title: String,
-) -> Result<()> {
-    let store = main_store.read()?;
-    store
-        .update_workflow_title(&workflow_id, &title)
-        .map_err(AppError::Db)
-}
-
-#[command]
-pub async fn update_workflow_todo_list(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    workflow_id: String,
-    todo_list: String,
-) -> Result<()> {
-    let store = main_store.read()?;
-    store
-        .update_workflow_todo_list(&workflow_id, &todo_list)
-        .map_err(AppError::Db)
-}
-
-#[command]
-pub async fn delete_workflow(
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    workflow_id: String,
-) -> Result<()> {
-    let store = main_store.read()?;
-    store.delete_workflow(&workflow_id).map_err(AppError::Db)
-}
-
-#[command]
-pub async fn get_workflow_session_key(
-    chat_state: State<'_, Arc<ChatState>>,
-    workflow_id: String,
-) -> Result<String> {
-    // If a key already exists, return it. Otherwise, generate a new one.
-    // This allows resuming sessions securely.
-    let key = chat_state
-        .workflow_keys
-        .entry(workflow_id)
-        .or_insert_with(|| uuid::Uuid::new_v4().to_string());
-
-    Ok(key.value().clone())
-}
-
-#[command]
+#[tauri::command]
 pub async fn list_workflows(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+) -> Result<Vec<Workflow>, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let list = store.list_workflows().map_err(|e| e.to_string())?;
+    Ok(list)
+}
+
+#[tauri::command]
+pub async fn delete_workflow(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .delete_workflow(&session_id)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_workflow_snapshot(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<Value, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let snapshot = store
+        .get_workflow_snapshot(&session_id)
+        .map_err(|e| e.to_string())?;
+    Ok(json!(snapshot))
+}
+
+#[tauri::command]
+pub async fn update_workflow_title(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_title(&session_id, &title)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_status(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    status: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_status(&session_id, &status)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ==========================================
+// 3. ReAct Runtime Control Commands
+// ==========================================
+
+#[tauri::command]
+pub async fn workflow_start(
+    app: AppHandle,
     main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-) -> Result<Vec<Workflow>> {
-    let store = main_store.read()?;
-    store.list_workflows().map_err(AppError::Db)
+    chat_state: State<'_, Arc<ChatState>>,
+    tsid_generator: State<'_, Arc<TsidGenerator>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    factory: State<'_, Arc<dyn SubAgentFactory>>,
+    session_id: String,
+    agent_id: String,
+    initial_prompt: Option<String>,
+) -> Result<String, String> {
+    log::debug!("[Workflow Command] workflow_start: session_id={}", session_id);
+
+    let main_store = main_store.inner().clone();
+    let chat_state_arc = chat_state.inner().clone();
+    let tsid_generator = tsid_generator.inner().clone();
+    let gateway = gateway.inner().clone();
+    let factory = factory.inner().clone();
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+
+    let agent_config = {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        store
+            .get_agent(&agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", agent_id))?
+    };
+
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
+    gateway
+        .register_session_tx(session_id.clone(), signal_tx)
+        .await;
+
+    let global_tool_manager = chat_state_arc.tool_manager.clone();
+
+    let mut executor = WorkflowExecutor::new(
+        session_id.clone(),
+        main_store,
+        chat_state_arc,
+        gateway as Arc<dyn Gateway>,
+        factory,
+        agent_config,
+        vec![std::env::current_dir().unwrap_or_default()],
+        app_data_dir,
+        None,
+        signal_rx,
+        tsid_generator,
+        global_tool_manager,
+    );
+
+    executor.init().await.map_err(|e| e.to_string())?;
+
+    if let Some(prompt) = initial_prompt {
+        executor
+            .context
+            .add_message("user".into(), prompt, None, 0, None)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Register for external control
+    let shared_executor = Arc::new(tokio::sync::Mutex::new(executor));
+    BACKGROUND_TASKS.insert(
+        session_id.clone(),
+        BackgroundTask::SubAgent(shared_executor.clone()),
+    );
+
+    let session_id_for_spawn = session_id.clone();
+    tokio::spawn(async move {
+        log::debug!(
+            "[Workflow Engine] Entering run_loop for session {}",
+            session_id_for_spawn
+        );
+        let mut guard = shared_executor.lock().await;
+        if let Err(e) = guard.run_loop().await {
+            log::error!(
+                "Workflow execution error in session {}: {:?}",
+                session_id_for_spawn,
+                e
+            );
+        }
+        log::debug!(
+            "[Workflow Engine] Exited run_loop for session {}",
+            session_id_for_spawn
+        );
+        BACKGROUND_TASKS.remove(&session_id_for_spawn);
+    });
+
+    Ok(session_id)
+}
+
+#[tauri::command]
+pub async fn workflow_signal(
+    gateway: State<'_, Arc<TauriGateway>>,
+    session_id: String,
+    signal: String,
+) -> Result<(), String> {
+    gateway
+        .inject_input(&session_id, signal)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn workflow_stop(
+    gateway: State<'_, Arc<TauriGateway>>,
+    session_id: String,
+) -> Result<(), String> {
+    log::info!("Stopping workflow session: {}", session_id);
+    
+    // 1. Inject an asynchronous signal. This is non-blocking and doesn't require executor lock.
+    let _ = gateway.inject_input(&session_id, "stop".to_string()).await;
+
+    // 2. Mark as cancelled in BACKGROUND_TASKS if it's still there (best effort)
+    // We don't wait for the lock here to avoid hanging the UI.
+    // The executor's run_loop will see the signal and stop itself.
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workflow_get_tasks() -> Result<Value, String> {
+    let mut tasks = Vec::new();
+    for entry in BACKGROUND_TASKS.iter() {
+        let (id, task) = entry.pair();
+        let task_type = match task {
+            BackgroundTask::SubAgent(_) => "Agent",
+            BackgroundTask::ShellCommand { .. } => "Shell",
+        };
+        tasks.push(json!({ "id": id, "type": task_type }));
+    }
+    Ok(json!(tasks))
+}
+
+// --- Legacy placeholders ---
+
+#[tauri::command]
+pub async fn add_workflow_message(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    message: WorkflowMessage,
+) -> Result<WorkflowMessage, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let msg = store
+        .add_workflow_message(&message)
+        .map_err(|e| e.to_string())?;
+    Ok(msg)
+}
+
+#[tauri::command]
+pub async fn get_workflow_session_key() -> Result<String, String> {
+    Ok("".into())
+}
+
+#[tauri::command]
+pub async fn update_workflow_todo_list(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    todo_list: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_todo_list(&session_id, &todo_list)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workflow_chat_completion() -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn workflow_call_tool() -> Result<(), String> {
+    Ok(())
 }

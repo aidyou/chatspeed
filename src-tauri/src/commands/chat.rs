@@ -412,7 +412,7 @@ pub async fn chat_completion(
         .unwrap_or(true);
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
-        let mut available_tools = chat_state.tool_manager.get_tool_calling_spec(None).await?;
+        let mut available_tools = chat_state.tool_manager.get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None).await?;
         if !network_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL

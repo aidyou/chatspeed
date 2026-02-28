@@ -50,8 +50,19 @@ export const createWorkflow = (
   userQuery: string,
   agentId: string,
   allowedPaths: string[] | null = null
-): Promise<WorkflowResponse> => {
-  return invoke('create_workflow', { userQuery, agentId, allowedPaths })
+): Promise<string> => {
+  const id = `session_${Date.now()}`
+  return invoke('create_workflow', {
+    workflow: {
+      id,
+      userQuery,
+      agentId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      allowedPaths
+    }
+  })
 }
 
 export const addWorkflowMessage = (

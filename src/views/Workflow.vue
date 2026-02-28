@@ -79,11 +79,28 @@
             <div class="content-container">
               <div class="content" v-if="message.role === 'user'">
                 <pre class="simple-text">{{ message.message }}</pre>
+                <div class="msg-ops">
+                  <el-tooltip :content="$t('common.delete')" placement="top">
+                    <span class="op-icon" @click="onDeleteMessage(message.id)">
+                      <cs name="trash" size="12px" />
+                    </span>
+                  </el-tooltip>
+                </div>
               </div>
               <markdown
                 v-else
-                :content="message.message"
-                :tool-calls="message.metadata?.tool_calls || []" />
+                :content="getParsedMessage(message).content"
+                :tool-calls="getParsedMessage(message).toolCalls || message.metadata?.tool_calls || []" />
+            </div>
+          </div>
+
+          <!-- Active Chatting State -->
+          <div v-if="isChatting && chatState.content" class="message assistant">
+            <div class="avatar">
+              <cs name="ai-common" />
+            </div>
+            <div class="content-container chatting">
+              <markdown :content="chatState.content" />
             </div>
           </div>
         </div>
@@ -101,7 +118,9 @@
               type="textarea"
               :autosize="{ minRows: 1, maxRows: 10 }"
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
-              @keydown.enter="onKeyEnter" />
+              @keydown.enter="onKeyEnter"
+              @compositionstart="onCompositionStart"
+              @compositionend="onCompositionEnd" />
 
             <div class="input-footer">
               <div class="footer-left">
@@ -164,6 +183,14 @@
         <el-button type="primary" @click="onSaveEditWorkflow">{{ $t('common.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <ApprovalDialog
+      v-model="approvalVisible"
+      :action="approvalAction"
+      :details="approvalDetails"
+      :loading="approvalLoading"
+      @approve="onApproveAction"
+      @reject="onRejectAction" />
   </div>
 </template>
 
@@ -173,6 +200,7 @@ import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invokeWrapper } from '@/libs/tauri'
+import { showMessage } from '@/libs/util'
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
@@ -183,11 +211,11 @@ import Titlebar from '@/components/window/Titlebar.vue'
 import Markdown from '@/components/chat/Markdown.vue'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
 import TodoList from '@/components/workflow/TodoList.vue'
+import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 
-// Import workflow engine
-import { WorkflowEngine } from '@/pkg/workflow/engine'
-import { WorkflowState } from '@/pkg/workflow/types'
+// Import types
 import { getTodoListForWorkflow } from '@/pkg/workflow/tools/todoList'
+import { MarkdownStreamParser } from '@/libs/markdown-stream-parser'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -196,9 +224,24 @@ const settingStore = useSettingStore()
 const windowStore = useWindowStore()
 
 const unlistenFocusInput = ref(null)
-const currentEngine = ref(null)
+const unlistenWorkflowEvents = ref(null)
 const osType = ref('') // To store OS type from backend
 const hoveredWorkflowIndex = ref(null) // For workflow hover effects
+
+// approval dialog
+const approvalVisible = ref(false)
+const approvalAction = ref('')
+const approvalDetails = ref('')
+const approvalRequestId = ref('')
+const approvalLoading = ref(false)
+
+// Chatting state for real-time streaming
+const chattingParser = new MarkdownStreamParser()
+const isChatting = computed(() => workflowStore.isRunning)
+const chatState = ref({
+  content: '',
+  blocks: []
+})
 
 // edit workflow dialog
 const editWorkflowDialogVisible = ref(false)
@@ -211,8 +254,23 @@ const searchQuery = ref('')
 const inputMessage = ref('')
 const selectedAgent = ref(null)
 const autoApproveTools = ref(true)
+const composing = ref(false)
+const compositionJustEnded = ref(false)
 const messagesRef = ref(null)
 const inputRef = ref(null)
+
+const onCompositionStart = () => {
+  composing.value = true
+}
+
+const onCompositionEnd = () => {
+  composing.value = false
+  compositionJustEnded.value = true
+  setTimeout(() => {
+    compositionJustEnded.value = false
+  }, 100)
+}
+
 const isAlwaysOnTop = computed(() => windowStore.workflowWindowAlwaysOnTop)
 
 const workflows = computed(() => workflowStore.workflows)
@@ -235,8 +293,16 @@ const filteredWorkflows = computed(() => {
 })
 
 const canSendMessage = computed(
-  () => inputMessage.value.trim() !== '' && !isRunning.value && selectedAgent.value
+  () => inputMessage.value.trim() !== '' && selectedAgent.value && currentWorkflow.value?.status !== 'error'
 )
+
+// Watch for state changes to handle UI side effects
+watch(() => currentWorkflow.value?.status, (newStatus) => {
+  // If state is no longer Paused, we should hide any open approval dialog
+  if (newStatus !== 'paused' && approvalVisible.value) {
+    approvalVisible.value = false
+  }
+})
 
 const canSwitchWorkflow = computed(() => {
   // Can't switch if a workflow is currently running
@@ -263,6 +329,31 @@ watch(
   },
   { deep: true }
 )
+
+// Helper to parse message content (handles raw JSON from ReAct Think steps)
+const getParsedMessage = (message) => {
+  if (message.role !== 'assistant') {
+    return { content: message.message, toolCalls: message.metadata?.toolCalls || [] }
+  }
+
+  try {
+    // Check if it's a JSON response from OpenAI-style models
+    if (message.message.trim().startsWith('{')) {
+      const parsed = JSON.parse(message.message)
+      return {
+        content: parsed.content || '',
+        toolCalls: parsed.tool_calls || parsed.toolCall || []
+      }
+    }
+  } catch (e) {
+    // Not JSON, fall back to raw message
+  }
+
+  return { 
+    content: message.message, 
+    toolCalls: message.metadata?.toolCalls || message.metadata?.tool_calls || [] 
+  }
+}
 
 const scrollToBottom = () => {
   if (messagesRef.value) {
@@ -303,10 +394,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  if (currentEngine.value) {
-    // Clean up current workflow engine if exists
-    currentEngine.value.destroy()
-    currentEngine.value = null
+  if (unlistenWorkflowEvents.value) {
+    unlistenWorkflowEvents.value()
   }
   unlistenFocusInput.value()
   window.removeEventListener('keydown', onGlobalKeyDown)
@@ -317,81 +406,239 @@ const onToggleSidebar = () => {
   windowStore.setWorkflowSidebarShow(!sidebarCollapsed.value)
 }
 
+const setupWorkflowEvents = async sessionId => {
+  if (unlistenWorkflowEvents.value) {
+    unlistenWorkflowEvents.value()
+    unlistenWorkflowEvents.value = null
+  }
+
+  const eventName = `workflow://event/${sessionId}`
+  unlistenWorkflowEvents.value = await listen(eventName, event => {
+    const payload = event.payload
+    console.log('Workflow Event:', payload)
+
+    if (payload.type === 'state') {
+      workflowStore.updateWorkflowStatus(sessionId, payload.state)
+      
+      // If we move out of Thinking/Executing, reset the parser
+      if (payload.state !== 'thinking' && payload.state !== 'executing') {
+        chattingParser.reset()
+        chatState.value.content = ''
+        chatState.value.blocks = []
+      }
+    } else if (payload.type === 'chunk') {
+      // Direct text chunk from LLM or StreamParser
+      chatState.value.content += payload.content
+      chatState.value.blocks = chattingParser.process(payload.content)
+      
+      nextTick(() => scrollToBottom())
+    } else if (payload.type === 'message') {
+      // ReAct engine sends incremental messages or chunks
+      workflowStore.addMessage({
+        sessionId: sessionId,
+        role: payload.role,
+        message: payload.content,
+        stepType: payload.step_type,
+        stepIndex: payload.step_index,
+        metadata: payload.metadata
+      })
+      
+      // Message finalized, clear chatting buffer
+      chattingParser.reset()
+      chatState.value.content = ''
+      chatState.value.blocks = []
+    } else if (payload.type === 'confirm') {
+      approvalRequestId.value = payload.id
+      approvalAction.value = payload.action
+      approvalDetails.value = payload.details
+      approvalVisible.value = true
+    }
+  })
+}
+
 const selectWorkflow = async id => {
   if (!canSwitchWorkflow.value) {
     console.warn('Cannot switch workflow while another is running')
     return
   }
 
-  // Clean up current engine
-  if (currentEngine.value) {
-    currentEngine.value.destroy()
-    currentEngine.value = null
-  }
-
   // Select the workflow in store
   await workflowStore.selectWorkflow(id)
 
-  // Load the workflow engine if it exists
   if (workflowStore.currentWorkflow) {
     const agent = agentStore.agents.find(a => a.id === workflowStore.currentWorkflow.agentId)
     if (agent) {
-      // Update the selected agent in the selector
       selectedAgent.value = agent
-
-      try {
-        currentEngine.value = await WorkflowEngine.load(agent, id, settingStore.settings.chatCompletionProxyPort)
-      } catch (error) {
-        console.error('Failed to load workflow:', error)
-      }
+      // Setup event listeners for the existing session
+      await setupWorkflowEvents(id)
     }
   }
 }
 
-const startNewWorkflow = async () => {
+const startNewWorkflow = async (prompt) => {
   if (!selectedAgent.value) {
     console.error('No agent selected')
     return
   }
 
+  if (!prompt || !prompt.trim()) return
+
   try {
-    // Clean up current engine
-    if (currentEngine.value) {
-      currentEngine.value.destroy()
-      currentEngine.value = null
-    }
+    console.log('Initiating workflow creation...')
+    // 1. Create workflow in DB first to get a session_id
+    const res = await invokeWrapper('create_workflow', {
+      workflow: {
+        id: `session_${Date.now()}`,
+        userQuery: prompt,
+        agentId: selectedAgent.value.id,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    })
 
-    // Start new workflow
-    currentEngine.value = await WorkflowEngine.startNew(
-      selectedAgent.value,
-      inputMessage.value,
-      settingStore.settings.chatCompletionProxyPort
-    )
+    const newWorkflowId = typeof res === 'string' ? res : (res.id || res)
+    console.log('Workflow session created:', newWorkflowId)
 
-    // Update store with new workflow
+    // 2. Add user message to local UI
+    await workflowStore.addMessage({
+      sessionId: newWorkflowId,
+      role: 'user',
+      message: prompt
+    })
+
+    // 3. Sync UI state
     await workflowStore.loadWorkflows()
-    await workflowStore.selectWorkflow(currentEngine.value.sessionId)
+    await workflowStore.selectWorkflow(newWorkflowId)
+    await setupWorkflowEvents(newWorkflowId)
 
-    inputMessage.value = ''
+    // 4. Trigger engine
+    console.log('Calling workflow_start backend command...')
+    await invokeWrapper('workflow_start', {
+      sessionId: newWorkflowId,
+      agentId: selectedAgent.value.id,
+      initialPrompt: prompt
+    })
+    console.log('Workflow engine started successfully')
+    nextTick(() => scrollToBottom())
   } catch (error) {
-    console.error('Failed to start new workflow:', error)
+    console.error('Failed to start workflow:', error)
+    showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
   }
 }
 
-const onSendMessage = () => {
+const onApproveAction = async () => {
+  approvalLoading.value = true
+  try {
+    const signal = JSON.stringify({
+      type: 'approval',
+      approved: true,
+      id: approvalRequestId.value,
+      tool_name: approvalAction.value,
+      tool_args: {} // Should ideally be passed from backend if needed
+    })
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal
+    })
+    approvalVisible.value = false
+  } catch (error) {
+    console.error('Failed to approve action:', error)
+  } finally {
+    approvalLoading.value = false
+  }
+}
+
+const onRejectAction = async () => {
+  approvalLoading.value = true
+  try {
+    const signal = JSON.stringify({
+      type: 'approval',
+      approved: false,
+      id: approvalRequestId.value,
+      tool_name: approvalAction.value
+    })
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal
+    })
+    approvalVisible.value = false
+  } catch (error) {
+    console.error('Failed to reject action:', error)
+  } finally {
+    approvalLoading.value = false
+  }
+}
+
+const onDeleteMessage = async (messageId) => {
+  if (!currentWorkflowId.value || !messageId) return
+  
+  try {
+    // 1. Remove from local store
+    await workflowStore.deleteMessage(currentWorkflowId.value, messageId)
+    // 2. Refresh UI list
+    await workflowStore.loadMessages(currentWorkflowId.value)
+  } catch (error) {
+    console.error('Failed to delete message:', error)
+  }
+}
+
+const onSendMessage = async () => {
   if (!canSendMessage.value) return
 
+  const message = inputMessage.value
+  inputMessage.value = ''
+  console.log('Sending message to workflow:', message)
+
   if (!currentWorkflowId.value) {
-    // Start new workflow
-    startNewWorkflow()
+    // Start brand new workflow
+    await startNewWorkflow(message)
   } else {
-    // Add message to current workflow
-    workflowStore.addMessageToQueue({ role: 'user', message: inputMessage.value })
-    inputMessage.value = ''
+    // 1. Add to UI and DB
+    await workflowStore.addMessage({
+      sessionId: currentWorkflowId.value,
+      role: 'user',
+      message: message
+    })
+    
+    nextTick(() => scrollToBottom())
+
+    // 2. Decide: Signal or Re-start?
+    if (isRunning.value) {
+      // Just send signal to the running loop
+      try {
+        const signal = JSON.stringify({
+          type: 'user_input',
+          content: message
+        })
+        const res = await invokeWrapper('workflow_signal', {
+          sessionId: currentWorkflowId.value,
+          signal: signal
+        })
+        console.log('Signal sent successfully:', res)
+      } catch (error) {
+        console.error('Failed to send signal:', error)
+      }
+    } else {
+      // Engine is stopped (Completed or Error). 
+      // Re-trigger workflow_start to "wake up" the Agent.
+      try {
+        await invokeWrapper('workflow_start', {
+          sessionId: currentWorkflowId.value,
+          agentId: selectedAgent.value.id,
+          initialPrompt: message 
+        })
+      } catch (error) {
+        console.error('Failed to resume workflow:', error)
+        showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+      }
+    }
   }
 }
 
 const onKeyEnter = event => {
+  if (composing.value || compositionJustEnded.value) return
+  
   const shouldSend =
     settingStore.settings.sendMessageKey === 'Enter' ? !event.shiftKey : event.shiftKey
   if (shouldSend) {
@@ -400,11 +647,16 @@ const onKeyEnter = event => {
   }
 }
 
-const onStop = () => {
-  if (currentEngine.value) {
-    // Pause the workflow
-    currentEngine.value.stateMachine.transition('PAUSE')
-    workflowStore.setRunning(false)
+const onStop = async () => {
+  if (currentWorkflowId.value) {
+    try {
+      await invokeWrapper('workflow_stop', {
+        sessionId: currentWorkflowId.value
+      })
+      workflowStore.setRunning(false)
+    } catch (error) {
+      console.error('Failed to stop workflow:', error)
+    }
   }
 }
 
@@ -423,7 +675,7 @@ const onSaveEditWorkflow = async () => {
 
   try {
     await invokeWrapper('update_workflow_title', {
-      workflowId: editWorkflowId.value,
+      sessionId: editWorkflowId.value,
       title: editWorkflowTitle.value
     })
 
@@ -444,11 +696,10 @@ const onDeleteWorkflow = id => {
     cancelButtonText: t('common.cancel')
   }).then(async () => {
     try {
-      await invokeWrapper('delete_workflow', { workflowId: id })
+      await invokeWrapper('delete_workflow', { sessionId: id })
 
       // If deleting the current workflow, clear it
       if (id === currentWorkflowId.value) {
-        currentEngine.value = null
         workflowStore.clearCurrentWorkflow()
       }
 
@@ -467,7 +718,6 @@ const onDeleteWorkflow = id => {
 
 const createNewWorkflow = () => {
   // Clear current workflow
-  currentEngine.value = null
   workflowStore.clearCurrentWorkflow()
 
   // Clear input and focus
@@ -704,6 +954,13 @@ const onGlobalKeyDown = event => {
             .content {
               display: flex;
               justify-content: flex-end;
+              position: relative;
+
+              &:hover {
+                .msg-ops {
+                  opacity: 1;
+                }
+              }
 
               .simple-text {
                 background-color: var(--cs-bg-color-light);
@@ -713,6 +970,36 @@ const onGlobalKeyDown = event => {
                 border: 1px solid var(--cs-border-color);
                 box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
                 margin: 0;
+              }
+
+              .msg-ops {
+                position: absolute;
+                left: -30px;
+                top: 50%;
+                transform: translateY(-50%);
+                opacity: 0;
+                transition: opacity 0.2s ease;
+                display: flex;
+                gap: 4px;
+
+                .op-icon {
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  width: 24px;
+                  height: 24px;
+                  border-radius: 50%;
+                  cursor: pointer;
+                  color: var(--cs-text-color-secondary);
+                  background-color: var(--cs-bg-color);
+                  border: 1px solid var(--cs-border-color);
+
+                  &:hover {
+                    color: var(--el-color-danger);
+                    border-color: var(--el-color-danger-light-3);
+                    background-color: var(--el-color-danger-light-9);
+                  }
+                }
               }
             }
           }

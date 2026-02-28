@@ -109,7 +109,7 @@ fn run_chat_task(pending_workflow: PendingWorkflow, stream_id: String) {
         // Tool and Chat Setup
         let tool_manager = &chat_state.tool_manager;
         let all_rust_tools = tool_manager
-            .get_tool_calling_spec(None)
+            .get_tool_calling_spec(None, None)
             .await
             .unwrap_or_default();
         let available_rust_tools: Vec<MCPToolDeclaration> = all_rust_tools

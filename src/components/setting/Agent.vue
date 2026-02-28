@@ -8,20 +8,14 @@
         </span>
       </el-tooltip>
     </div>
-    <Sortable
-      v-if="agents.length > 0"
-      class="list"
-      item-key="id"
-      :list="agents"
-      :options="{
-        animation: 150,
-        ghostClass: 'ghost',
-        dragClass: 'drag',
-        draggable: '.draggable',
-        forceFallback: true,
-        bubbleScroll: true
-      }"
-      @end="onDragEnd">
+    <Sortable v-if="agents.length > 0" class="list" item-key="id" :list="agents" :options="{
+      animation: 150,
+      ghostClass: 'ghost',
+      dragClass: 'drag',
+      draggable: '.draggable',
+      forceFallback: true,
+      bubbleScroll: true
+    }" @end="onDragEnd">
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
@@ -29,33 +23,20 @@
             {{ element.name }}
           </div>
 
-          <!-- manage icons -->
           <div class="value">
-            <el-tooltip
-              :content="$t('settings.agent.edit')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
+            <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
               transition="none">
               <div class="icon" @click="editAgent(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip
-              :content="$t('settings.agent.copy')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
+            <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
               transition="none">
               <div class="icon" @click="copyAgent(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip
-              :content="$t('settings.agent.delete')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
+            <el-tooltip :content="$t('settings.agent.delete')" placement="top" :hide-after="0" :enterable="false"
               transition="none">
               <div class="icon" @click="deleteAgent(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
@@ -72,16 +53,9 @@
     </div>
   </div>
 
-  <!-- add/edit agent dialog -->
-  <el-dialog
-    v-model="agentDialogVisible"
-    width="600px"
-    class="agent-edit-dialog"
-    :show-close="false"
-    :close-on-click-modal="false"
-    :close-on-press-escape="false"
-    @closed="onAgentDialogClose">
-    <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="120px">
+  <el-dialog v-model="agentDialogVisible" width="640px" class="agent-edit-dialog" :show-close="false"
+    :close-on-click-modal="false" :close-on-press-escape="false" @closed="onAgentDialogClose">
+    <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="100px">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.agent.name')" prop="name">
@@ -89,456 +63,119 @@
           </el-form-item>
           <el-form-item :label="$t('settings.agent.agentType')" prop="agentType">
             <el-radio-group v-model="agentForm.agentType">
-              <el-radio-button value="autonomous">{{
-                $t('settings.agent.autonomousMode')
-              }}</el-radio-button>
-              <el-radio-button value="planning">{{
-                $t('settings.agent.planningMode')
-              }}</el-radio-button>
+              <el-radio-button value="autonomous">{{ $t('settings.agent.autonomousMode') }}</el-radio-button>
+              <el-radio-button value="planning">{{ $t('settings.agent.planningMode') }}</el-radio-button>
             </el-radio-group>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
-            <el-input v-model="agentForm.description" type="textarea" :rows="3" />
+            <el-input v-model="agentForm.description" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
-            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="6" />
+            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" />
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.agentType === 'planning'"
-            :label="$t('settings.agent.planningPrompt')"
+          <el-form-item v-if="agentForm.agentType === 'planning'" :label="$t('settings.agent.planningPrompt')"
             prop="planningPrompt">
-            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="6" />
+            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.maxContexts')" prop="maxContexts">
-            <el-input-number
-              v-model="agentForm.maxContexts"
-              :min="1000"
-              :max="1000000"
-              :step="1000"
-              controls-position="right"
-              style="width: 100%" />
+            <el-input-number v-model="agentForm.maxContexts" :min="1000" :max="1000000" :step="1000"
+              controls-position="right" style="width: 100%" />
           </el-form-item>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
-          <!-- Plan Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="planModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.planModel')" prop="planModel">
-              <template v-if="planModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.planModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onPlanModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.planModel.model"
-                  :placeholder="$t('settings.agent.selectPlanModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.planModel.id">
-                  <el-option
-                    v-for="model in planModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="planProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onPlanProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="planProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onPlanProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!planProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(planProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
-          </div>
-
-          <!-- Act Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="actModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.actModel')" prop="actModel">
-              <template v-if="actModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.actModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onActModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.actModel.model"
-                  :placeholder="$t('settings.agent.selectActModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.actModel.id">
-                  <el-option
-                    v-for="model in actModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="actProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onActProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="actProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onActProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!actProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(actProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
-          </div>
-
-          <!-- Vision Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="visionModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.visionModel')" prop="visionModel">
-              <template v-if="visionModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.visionModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onVisionModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.visionModel.model"
-                  :placeholder="$t('settings.agent.selectVisionModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.visionModel.id">
-                  <el-option
-                    v-for="model in visionModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="visionProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onVisionProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="visionProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onVisionProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!visionProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(visionProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
-          </div>
-
-          <!-- Coding Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="codingModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.codingModel')" prop="codingModel">
-              <template v-if="codingModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.codingModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onCodingModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.codingModel.model"
-                  :placeholder="$t('settings.agent.selectCodingModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.codingModel.id">
-                  <el-option
-                    v-for="model in codingModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="codingProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onCodingProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="codingProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onCodingProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!codingProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(codingProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
-          </div>
-
-          <!-- Copywriting Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="copywritingModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.copywritingModel')" prop="copywritingModel">
-              <template v-if="copywritingModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.copywritingModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onCopywritingModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.copywritingModel.model"
-                  :placeholder="$t('settings.agent.selectCopywritingModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.copywritingModel.id">
-                  <el-option
-                    v-for="model in copywritingModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="copywritingProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onCopywritingProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="copywritingProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onCopywritingProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!copywritingProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(copywritingProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
-          </div>
-
-          <!-- Browsing Model -->
-          <div class="model-config-item">
-            <div class="model-mode-selector">
-              <el-radio-group v-model="browsingModelMode" size="small">
-                <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
-                <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
-              </el-radio-group>
-            </div>
-            <el-form-item :label="$t('settings.agent.browsingModel')" prop="browsingModel">
-              <template v-if="browsingModelMode === 'provider'">
-                <el-select
-                  v-model="agentForm.browsingModel.id"
-                  :placeholder="$t('settings.agent.selectProvider')"
-                  filterable
-                  @change="onBrowsingModelIdChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="provider in modelStore.getAvailableProviders"
-                    :key="provider.id"
-                    :label="provider.name"
-                    :value="provider.id" />
-                </el-select>
-                <el-select
-                  v-model="agentForm.browsingModel.model"
-                  :placeholder="$t('settings.agent.selectBrowsingModel')"
-                  filterable
-                  style="width: 45%"
-                  :disabled="!agentForm.browsingModel.id">
-                  <el-option
-                    v-for="model in browsingModelList"
-                    :key="model.id"
-                    :label="model.name || model.id"
-                    :value="model.id" />
-                </el-select>
-              </template>
-              <template v-else>
-                <el-select
-                  v-model="browsingProxyGroup"
-                  :placeholder="$t('settings.agent.group')"
-                  filterable
-                  @change="onBrowsingProxyGroupChange"
-                  style="width: 45%; margin-right: var(--cs-space-sm)">
-                  <el-option
-                    v-for="group in proxyGroupStore.list"
-                    :key="group.name"
-                    :label="group.name"
-                    :value="group.name" />
-                </el-select>
-                <el-select
-                  v-model="browsingProxyAlias"
-                  :placeholder="$t('settings.agent.aliasName')"
-                  filterable
-                  @change="onBrowsingProxyAliasChange"
-                  style="width: 45%"
-                  :disabled="!browsingProxyGroup">
-                  <el-option
-                    v-for="alias in getProxyAliases(browsingProxyGroup)"
-                    :key="alias"
-                    :label="alias"
-                    :value="alias" />
-                </el-select>
-              </template>
-            </el-form-item>
+          <div class="models-layout">
+            <el-row :gutter="12">
+              <el-col :span="12" v-for="role in modelRoles" :key="role.key">
+                <div class="model-item-compact">
+                  <div class="header">
+                    <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
+                    <el-radio-group v-model="modelModes[role.key]" size="small">
+                      <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
+                      <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
+                    </el-radio-group>
+                  </div>
+                  <div class="body">
+                    <div class="selectors-row">
+                      <template v-if="modelModes[role.key] === 'provider'">
+                        <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
+                          @change="onModelIdChange(role.key)" style="width: 100px">
+                          <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                            :label="provider.name" :value="provider.id" />
+                        </el-select>
+                        <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
+                          :disabled="!agentForm[role.key + 'Model'].id" style="flex: 1">
+                          <el-option v-for="model in getModelList(role.key)" :key="model.id"
+                            :label="model.name || model.id" :value="model.id" />
+                        </el-select>
+                      </template>
+                      <template v-else>
+                        <el-select v-model="proxyGroups[role.key]" size="small" filterable
+                          @change="onProxyGroupChange(role.key)" style="width: 100px">
+                          <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
+                            :value="group.name" />
+                        </el-select>
+                        <el-select v-model="proxyAliases[role.key]" size="small" filterable
+                          :disabled="!proxyGroups[role.key]" @change="val => onProxyAliasChange(role.key, val)"
+                          style="flex: 1">
+                          <el-option v-for="alias in getProxyAliases(proxyGroups[role.key])" :key="alias" :label="alias"
+                            :value="alias" />
+                        </el-select>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
           </div>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
           <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools">
-            <el-select
-              v-model="agentForm.availableTools"
-              :placeholder="$t('settings.agent.selectAvailableTools')"
-              multiple
-              filterable>
-              <el-option
-                v-for="tool in availableTools"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+            <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
+              multiple filterable>
+              <el-option v-for="tool in sortedAvailableTools" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove">
-            <el-select
-              v-model="agentForm.autoApprove"
-              :placeholder="$t('settings.agent.selectAutoApproveTools')"
-              multiple
-              filterable>
-              <el-option
-                v-for="tool in availableTools.filter(t => agentForm.availableTools.includes(t.id))"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+            <el-select v-model="agentForm.autoApprove" :placeholder="$t('settings.agent.selectAutoApproveTools')"
+              multiple filterable>
+              <el-option v-for="tool in autoApproveOptions" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="agentForm.availableTools.includes('bash')" :label="$t('settings.agent.security')"
+          name="security">
+          <div class="shell-policy-header">
+            <h3>{{ $t('settings.agent.shellPolicy') }}</h3>
+            <div class="shell-policy-actions">
+              <el-button type="primary" size="small" @click="addShellPolicyRule">
+                {{ $t('settings.agent.shellPolicyAdd') }}
+              </el-button>
+              <el-button type="info" size="small" @click="importDefaultShellPolicies" plain>
+                {{ $t('settings.agent.shellPolicyImportDefault') }}
+              </el-button>
+              <el-button v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0" type="danger" size="small"
+                @click="clearShellPolicyRules" plain>
+                {{ $t('settings.agent.shellPolicyClear') }}
+              </el-button>
+            </div>
+          </div>
+          <div class="shell-policy-list" ref="shellPolicyListRef">
+            <div v-for="(rule, index) in agentForm.shellPolicy" :key="index" class="shell-policy-item">
+              <el-input v-model="rule.pattern" size="small" :placeholder="$t('settings.agent.shellPolicyPattern')"
+                style="flex: 1" />
+              <el-select v-model="rule.decision" size="small" style="width: 130px">
+                <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
+                <el-option :label="$t('settings.agent.shellDecisionReview')" value="review" />
+                <el-option :label="$t('settings.agent.shellDecisionDeny')" value="deny" />
+              </el-select>
+              <el-button type="danger" size="small" circle @click="removeShellPolicyRule(index)">
+                <cs name="trash" size="12px" />
+              </el-button>
+            </div>
+          </div>
         </el-tab-pane>
       </el-tabs>
     </el-form>
@@ -552,7 +189,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, reactive, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { Sortable } from 'sortablejs-vue3'
@@ -562,7 +199,6 @@ import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
-import { FrontendAppError } from '@/libs/tauri'
 
 const { t } = useI18n()
 
@@ -573,9 +209,19 @@ const settingStore = useSettingStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 
 const formRef = ref(null)
+const shellPolicyListRef = ref(null)
 const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
+
+const modelRoles = [
+  { key: 'plan' },
+  { key: 'act' },
+  { key: 'vision' },
+  { key: 'coding' },
+  { key: 'copywriting' },
+  { key: 'browsing' }
+]
 
 const defaultFormData = {
   name: '',
@@ -585,6 +231,7 @@ const defaultFormData = {
   planningPrompt: `Please act as an expert project manager. Analyze the user's request and provide a clear, step-by-step plan to achieve the goal. The plan should be a list of tasks. For each task, describe what needs to be done and why it's necessary. Ensure the plan is logical, efficient, and covers all aspects of the request. Your final output should only be the plan itself, without any conversational text before or after it.`,
   availableTools: [],
   autoApprove: [],
+  shellPolicy: [],
   planModel: { id: '', model: '' },
   actModel: { id: '', model: '' },
   visionModel: { id: '', model: '' },
@@ -594,165 +241,278 @@ const defaultFormData = {
   maxContexts: 128000
 }
 
-// Reactive object to hold the form data for the agent
+const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
+
 const agentForm = ref({ ...defaultFormData })
 
-// Model modes: 'provider' or 'proxy'
-const planModelMode = ref('provider')
-const actModelMode = ref('provider')
-const visionModelMode = ref('provider')
-const codingModelMode = ref('provider')
-const copywritingModelMode = ref('provider')
-const browsingModelMode = ref('provider')
+// Model config temporary state
+const modelModes = reactive({ plan: 'provider', act: 'provider', vision: 'provider', coding: 'provider', copywriting: 'provider', browsing: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
+const proxyAliases = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
 
-// Proxy temporary selections
-const planProxyGroup = ref('')
-const planProxyAlias = ref('')
-const actProxyGroup = ref('')
-const actProxyAlias = ref('')
-const visionProxyGroup = ref('')
-const visionProxyAlias = ref('')
-const codingProxyGroup = ref('')
-const codingProxyAlias = ref('')
-const copywritingProxyGroup = ref('')
-const copywritingProxyAlias = ref('')
-const browsingProxyGroup = ref('')
-const browsingProxyAlias = ref('')
+// Computed property: available tools sorted by name
+const sortedAvailableTools = computed(() => {
+  return [...availableTools.value].sort((a, b) => {
+    return a.name.localeCompare(b.name, 'zh-Hans')
+  })
+})
 
-// Validation rules for the agent form
+// Computed property: auto-approve tool options (filtered and sorted)
+const autoApproveOptions = computed(() => {
+  if (!agentForm.value || !agentForm.value.availableTools) return []
+  return sortedAvailableTools.value.filter(t =>
+    agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
+  )
+})
+
+// Tool ID to name mapping
+const toolNameMap = computed(() => {
+  const map = {}
+  availableTools.value.forEach(tool => {
+    map[tool.id] = tool.name
+  })
+  return map
+})
+
+// Function to sort tool IDs by their names
+const sortToolIdsByName = (toolIds) => {
+  if (!toolIds || !Array.isArray(toolIds)) return []
+  return [...toolIds].sort((a, b) => {
+    const nameA = toolNameMap.value[a] || ''
+    const nameB = toolNameMap.value[b] || ''
+    return nameA.localeCompare(nameB, 'zh-Hans')
+  })
+}
+
+// Watch for availableTools array changes to maintain sorting
+watch(() => agentForm.value.availableTools, (newVal) => {
+  if (!newVal || !Array.isArray(newVal)) return
+
+  const sorted = sortToolIdsByName(newVal)
+  // Check if sorting is needed
+  let needsSorting = false
+  if (sorted.length !== newVal.length) {
+    needsSorting = true
+  } else {
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i] !== newVal[i]) {
+        needsSorting = true
+        break
+      }
+    }
+  }
+
+  if (needsSorting) {
+    // Use nextTick to avoid modifying data during render
+    nextTick(() => {
+      agentForm.value.availableTools = sorted
+    })
+  }
+}, { deep: true })
+
+// Watch for autoApprove array changes to maintain sorting
+watch(() => agentForm.value.autoApprove, (newVal) => {
+  if (!newVal || !Array.isArray(newVal)) return
+
+  const sorted = sortToolIdsByName(newVal)
+  // Check if sorting is needed
+  let needsSorting = false
+  if (sorted.length !== newVal.length) {
+    needsSorting = true
+  } else {
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i] !== newVal[i]) {
+        needsSorting = true
+        break
+      }
+    }
+  }
+
+  if (needsSorting) {
+    // Use nextTick to avoid modifying data during render
+    nextTick(() => {
+      agentForm.value.autoApprove = sorted
+    })
+  }
+}, { deep: true })
+
+const DEFAULT_SHELL_POLICIES = [
+  { pattern: '^ls($| .*)', decision: 'allow' },
+  { pattern: '^pwd$', decision: 'allow' },
+  { pattern: '^cat .*', decision: 'allow' },
+  { pattern: '^git status$', decision: 'allow' },
+  { pattern: '^git log($| .*)', decision: 'allow' },
+  { pattern: '^git diff($| .*)', decision: 'allow' },
+  { pattern: '^grep .*', decision: 'allow' },
+  { pattern: '^find .*', decision: 'allow' },
+  { pattern: '^file($| .*)', decision: 'allow' },
+  { pattern: '^stat($| .*)', decision: 'allow' },
+  { pattern: '^head($| .*)', decision: 'allow' },
+  { pattern: '^tail($| .*)', decision: 'allow' },
+  { pattern: '^wc($| .*)', decision: 'allow' },
+  { pattern: '^du($| .*)', decision: 'allow' },
+  { pattern: '^df($| .*)', decision: 'allow' },
+  { pattern: '^ps($| .*)', decision: 'allow' },
+  { pattern: '^free($| .*)', decision: 'allow' },
+  { pattern: '^uname($| .*)', decision: 'allow' },
+  { pattern: '^whoami$', decision: 'allow' },
+  { pattern: '^id($| .*)', decision: 'allow' },
+  { pattern: '^env$', decision: 'allow' },
+  { pattern: '^printenv($| .*)', decision: 'allow' },
+  { pattern: '^date($| .*)', decision: 'allow' },
+  { pattern: '^cal($| .*)', decision: 'allow' },
+  { pattern: '^which($| .*)', decision: 'allow' },
+  { pattern: '^whereis($| .*)', decision: 'allow' },
+  { pattern: '^type($| .*)', decision: 'allow' },
+  { pattern: '^command($| .*)', decision: 'allow' },
+  { pattern: '^hostname$', decision: 'allow' },
+  { pattern: '^nproc$', decision: 'allow' },
+  { pattern: '^lscpu$', decision: 'allow' },
+  { pattern: '^lsmod$', decision: 'allow' },
+  { pattern: '^lsusb$', decision: 'allow' },
+  { pattern: '^lspci$', decision: 'allow' },
+  { pattern: '^lsblk($| .*)', decision: 'allow' },
+  { pattern: '^blkid($| .*)', decision: 'allow' },
+  { pattern: '^mount($| .*)', decision: 'allow' },
+  { pattern: '^getfacl($| .*)', decision: 'allow' },
+  { pattern: '^md5sum($| .*)', decision: 'allow' },
+  { pattern: '^sha256sum($| .*)', decision: 'allow' },
+  { pattern: '^base64($| .*)', decision: 'allow' },
+  { pattern: '^hexdump($| .*)', decision: 'allow' },
+  { pattern: '^od($| .*)', decision: 'allow' },
+  { pattern: '^git show($| .*)', decision: 'allow' },
+  { pattern: '^git branch($| .*)', decision: 'allow' },
+  { pattern: '^git remote($| .*)', decision: 'allow' },
+  { pattern: '^git tag($| .*)', decision: 'allow' },
+  { pattern: '^git rev-parse($| .*)', decision: 'allow' },
+  { pattern: '^git config --list($| .*)', decision: 'allow' },
+  { pattern: '^docker ps($| .*)', decision: 'allow' },
+  { pattern: '^docker images($| .*)', decision: 'allow' },
+  { pattern: '^docker inspect($| .*)', decision: 'allow' },
+  { pattern: '^systemctl status($| .*)', decision: 'allow' },
+  { pattern: '^iptables -L($| .*)', decision: 'allow' },
+  { pattern: '^ufw status($| .*)', decision: 'allow' },
+  { pattern: '^ss($| .*)', decision: 'allow' },
+  { pattern: '^netstat($| .*)', decision: 'allow' },
+  { pattern: '^ping($| .*)', decision: 'allow' },
+  { pattern: '^traceroute($| .*)', decision: 'allow' },
+  { pattern: '^dig($| .*)', decision: 'allow' },
+  { pattern: '^nslookup($| .*)', decision: 'allow' },
+  { pattern: '^tar -t.*', decision: 'allow' },
+  { pattern: '^zip -l($| .*)', decision: 'allow' },
+  { pattern: '^unzip -l($| .*)', decision: 'allow' },
+]
+
+
+const addShellPolicyRule = () => {
+  if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
+  agentForm.value.shellPolicy.push({ pattern: '', decision: 'review' })
+
+  // Use setTimeout to avoid ResizeObserver loop errors
+  // Wait for Vue's DOM update to complete
+  nextTick(() => {
+    // Use requestAnimationFrame to ensure DOM is fully rendered
+    requestAnimationFrame(() => {
+      if (shellPolicyListRef.value) {
+        // Scroll to bottom
+        shellPolicyListRef.value.scrollTop = shellPolicyListRef.value.scrollHeight
+
+        // Focus the pattern input field of the last rule
+        // Use another microtask to ensure scrolling is complete
+        setTimeout(() => {
+          const patternInputs = shellPolicyListRef.value.querySelectorAll('.shell-policy-item .el-input:first-child input')
+          if (patternInputs.length > 0) {
+            const lastPatternInput = patternInputs[patternInputs.length - 1]
+            lastPatternInput.focus()
+          }
+        }, 0)
+      }
+    })
+  })
+}
+
+const removeShellPolicyRule = index => {
+  agentForm.value.shellPolicy.splice(index, 1)
+}
+
+const clearShellPolicyRules = () => {
+  ElMessageBox.confirm(
+    t('settings.agent.shellPolicyClearConfirm'),
+    t('settings.agent.shellPolicyClearTitle'),
+    {
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning'
+    }
+  ).then(() => {
+    agentForm.value.shellPolicy = []
+  })
+}
+
+const importDefaultShellPolicies = () => {
+  ElMessageBox.confirm(
+    t('settings.agent.shellPolicyImportDefaultConfirm'),
+    t('settings.agent.shellPolicyImportDefaultTitle'),
+    {
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      type: 'info'
+    }
+  ).then(() => {
+    if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
+    // Add default policies if not already present
+    DEFAULT_SHELL_POLICIES.forEach(defaultRule => {
+      const exists = agentForm.value.shellPolicy.some(rule =>
+        rule.pattern === defaultRule.pattern && rule.decision === defaultRule.decision
+      )
+      if (!exists) {
+        agentForm.value.shellPolicy.push({ ...defaultRule })
+      }
+    })
+  })
+}
+
 const agentRules = {
   name: [{ required: true, message: t('settings.agent.nameRequired') }],
   systemPrompt: [{ required: true, message: t('settings.agent.systemPromptRequired') }]
 }
 
-// Computed properties for dependent model dropdowns
-const planModelList = computed(() => {
-  if (agentForm.value.planModel?.id && typeof agentForm.value.planModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.planModel.id)?.models || []
-  }
-  return []
-})
-
-const actModelList = computed(() => {
-  if (agentForm.value.actModel?.id && typeof agentForm.value.actModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.actModel.id)?.models || []
-  }
-  return []
-})
-
-const visionModelList = computed(() => {
-  if (agentForm.value.visionModel?.id && typeof agentForm.value.visionModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.visionModel.id)?.models || []
-  }
-  return []
-})
-
-const codingModelList = computed(() => {
-  if (agentForm.value.codingModel?.id && typeof agentForm.value.codingModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.codingModel.id)?.models || []
-  }
-  return []
-})
-
-const copywritingModelList = computed(() => {
-  if (agentForm.value.copywritingModel?.id && typeof agentForm.value.copywritingModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.copywritingModel.id)?.models || []
-  }
-  return []
-})
-
-const browsingModelList = computed(() => {
-  if (agentForm.value.browsingModel?.id && typeof agentForm.value.browsingModel.id === 'number') {
-    return modelStore.getModelProviderById(agentForm.value.browsingModel.id)?.models || []
-  }
-  return []
-})
-
-// Handlers to reset model selection when provider changes
-const onPlanModelIdChange = () => {
-  agentForm.value.planModel.model = ''
-}
-const onActModelIdChange = () => {
-  agentForm.value.actModel.model = ''
-}
-const onVisionModelIdChange = () => {
-  agentForm.value.visionModel.model = ''
-}
-const onCodingModelIdChange = () => {
-  agentForm.value.codingModel.model = ''
-}
-const onCopywritingModelIdChange = () => {
-  agentForm.value.copywritingModel.model = ''
-}
-const onBrowsingModelIdChange = () => {
-  agentForm.value.browsingModel.model = ''
+const getModelList = key => {
+  const id = agentForm.value[key + 'Model']?.id
+  return id ? modelStore.getModelProviderById(id)?.models || [] : []
 }
 
-// Proxy handlers
+const onModelIdChange = key => {
+  agentForm.value[key + 'Model'].model = ''
+}
+
 const getProxyAliases = groupName => {
   if (!groupName) return []
   const groupData = settingStore.settings.chatCompletionProxy[groupName]
   return groupData ? Object.keys(groupData) : []
 }
 
-const onPlanProxyGroupChange = () => {
-  planProxyAlias.value = ''
-}
-const onActProxyGroupChange = () => {
-  actProxyAlias.value = ''
-}
-const onVisionProxyGroupChange = () => {
-  visionProxyAlias.value = ''
-}
-const onCodingProxyGroupChange = () => {
-  codingProxyAlias.value = ''
-}
-const onCopywritingProxyGroupChange = () => {
-  copywritingProxyAlias.value = ''
-}
-const onBrowsingProxyGroupChange = () => {
-  browsingProxyAlias.value = ''
+const onProxyGroupChange = key => {
+  proxyAliases[key] = ''
 }
 
-const onPlanProxyAliasChange = value => {
-  agentForm.value.planModel.model = `${planProxyGroup.value}@${value}`
-}
-const onActProxyAliasChange = value => {
-  agentForm.value.actModel.model = `${actProxyGroup.value}@${value}`
-}
-const onVisionProxyAliasChange = value => {
-  agentForm.value.visionModel.model = `${visionProxyGroup.value}@${value}`
-}
-const onCodingProxyAliasChange = value => {
-  agentForm.value.codingModel.model = `${codingProxyGroup.value}@${value}`
-}
-const onCopywritingProxyAliasChange = value => {
-  agentForm.value.copywritingModel.model = `${copywritingProxyGroup.value}@${value}`
-}
-const onBrowsingProxyAliasChange = value => {
-  agentForm.value.browsingModel.model = `${browsingProxyGroup.value}@${value}`
+const onProxyAliasChange = (key, value) => {
+  agentForm.value[key + 'Model'].model = `${proxyGroups[key]}@${value}`
 }
 
-/**
- * Parses a model field into mode and temporary proxy variables
- */
-const parseModelField = (field, modeRef, groupRef, aliasRef) => {
-  if (field && field.id === 0 && field.model.includes('@')) {
-    modeRef.value = 'proxy'
+const parseModelField = (field, key) => {
+  if (field && field.id === 0 && field.model?.includes('@')) {
+    modelModes[key] = 'proxy'
     const [group, ...rest] = field.model.split('@')
-    groupRef.value = group
-    aliasRef.value = rest.join('@')
+    proxyGroups[key] = group
+    proxyAliases[key] = rest.join('@')
   } else {
-    modeRef.value = 'provider'
-    groupRef.value = ''
-    aliasRef.value = ''
+    modelModes[key] = 'provider'
+    proxyGroups[key] = ''
+    proxyAliases[key] = ''
   }
 }
 
-/**
- * Opens the agent dialog for editing or creating a new agent.
- * @param {string|null} id - The ID of the agent to edit, or null to create a new agent.
- */
 const editAgent = async id => {
   formRef.value?.resetFields()
   activeTab.value = 'basic'
@@ -760,244 +520,168 @@ const editAgent = async id => {
   if (id) {
     try {
       const agentData = await agentStore.getAgent(id)
-      if (!agentData) {
-        showMessage(t('settings.agent.notFound'), 'error')
-        return
-      }
+      if (!agentData) return
       editId.value = id
       agentForm.value = { ...defaultFormData, ...agentData }
+
+      // Ensure tool arrays are sorted by name
+      if (agentForm.value.availableTools && Array.isArray(agentForm.value.availableTools)) {
+        agentForm.value.availableTools = sortToolIdsByName(agentForm.value.availableTools)
+      }
+      if (agentForm.value.autoApprove && Array.isArray(agentForm.value.autoApprove)) {
+        agentForm.value.autoApprove = sortToolIdsByName(agentForm.value.autoApprove)
+      }
 
       // Unpack unified 'models' JSON field if it exists
       if (agentData.models) {
         try {
           const modelsObj = JSON.parse(agentData.models)
-          if (modelsObj.plan) agentForm.value.planModel = modelsObj.plan
-          if (modelsObj.act) agentForm.value.actModel = modelsObj.act
-          if (modelsObj.vision) agentForm.value.visionModel = modelsObj.vision
-          if (modelsObj.coding) agentForm.value.codingModel = modelsObj.coding
-          if (modelsObj.copywriting) agentForm.value.copywritingModel = modelsObj.copywriting
-          if (modelsObj.browsing) agentForm.value.browsingModel = modelsObj.browsing
-        } catch (e) {
-          console.error('Failed to parse models JSON:', e)
-        }
+          modelRoles.forEach(role => {
+            if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key]
+          })
+        } catch (e) { console.error(e) }
       }
 
-      // Parse model modes for UI
-      parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
-      parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
-      parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
-      parseModelField(agentForm.value.codingModel, codingModelMode, codingProxyGroup, codingProxyAlias)
-      parseModelField(agentForm.value.copywritingModel, copywritingModelMode, copywritingProxyGroup, copywritingProxyAlias)
-      parseModelField(agentForm.value.browsingModel, browsingModelMode, browsingProxyGroup, browsingProxyAlias)
-    } catch (error) {
-      if (error instanceof FrontendAppError) {
-        showMessage(t('settings.agent.fetchFailed', { error: error.toFormattedString() }), 'error')
-        console.error('Error fetching agent:', error.originalError)
+      // Unpack 'shellPolicy' JSON field if it exists
+      if (agentData.shellPolicy) {
+        try {
+          // Handle both stringified JSON and already parsed array
+          if (typeof agentData.shellPolicy === 'string' && agentData.shellPolicy.trim()) {
+            const policyObj = JSON.parse(agentData.shellPolicy)
+            if (Array.isArray(policyObj)) {
+              agentForm.value.shellPolicy = policyObj
+            }
+          } else if (Array.isArray(agentData.shellPolicy)) {
+            // Already an array, use directly
+            agentForm.value.shellPolicy = agentData.shellPolicy
+          }
+        } catch (e) {
+          console.error('Failed to parse shellPolicy JSON:', e)
+          // Fallback to default policies
+          agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+        }
       } else {
-        showMessage(
-          t('settings.agent.fetchFailed', { error: error.message || String(error) }),
-          'error'
-        )
-        console.error('Error fetching agent:', error)
+        // No shell policy, use defaults
+        agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
       }
-      return
-    }
+
+      modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
+    } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
   } else {
     editId.value = null
     agentForm.value = { ...defaultFormData }
-    planModelMode.value = 'provider'
-    actModelMode.value = 'provider'
-    visionModelMode.value = 'provider'
-    codingModelMode.value = 'provider'
-    copywritingModelMode.value = 'provider'
-    browsingModelMode.value = 'provider'
-    // Default auto-approve web tools for new agents
-    agentForm.value.autoApprove = availableTools.value
-      .filter(tool => tool.category === 'Web')
-      .map(tool => tool.id)
+    modelRoles.forEach(role => modelModes[role.key] = 'provider')
+    agentForm.value.availableTools = availableTools.value.map(tool => tool.id)
+    agentForm.value.autoApprove = availableTools.value.filter(tool => READ_ONLY_TOOLS.includes(tool.id)).map(tool => tool.id)
+    agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
   }
 
   agentDialogVisible.value = true
 }
 
-/**
- * Creates a copy of the specified agent and opens the dialog for editing.
- * @param {string} id - The ID of the agent to copy.
- */
 const copyAgent = async id => {
   try {
     const agentData = await agentStore.getAgent(id)
     if (!agentData) return
-    
     agentForm.value = { ...defaultFormData, ...agentData }
-    editId.value = null // Ensure editId is cleared for copy
-
-    // Unpack unified 'models' JSON field if it exists
+    editId.value = null
     if (agentData.models) {
       try {
         const modelsObj = JSON.parse(agentData.models)
-        if (modelsObj.plan) agentForm.value.planModel = modelsObj.plan
-        if (modelsObj.act) agentForm.value.actModel = modelsObj.act
-        if (modelsObj.vision) agentForm.value.visionModel = modelsObj.vision
-        if (modelsObj.coding) agentForm.value.codingModel = modelsObj.coding
-        if (modelsObj.copywriting) agentForm.value.copywritingModel = modelsObj.copywriting
-        if (modelsObj.browsing) agentForm.value.browsingModel = modelsObj.browsing
+        modelRoles.forEach(role => { if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key] })
+      } catch (e) { console.error(e) }
+    }
+
+    // Unpack 'shellPolicy' JSON field if it exists
+    if (agentData.shellPolicy) {
+      try {
+        // Handle both stringified JSON and already parsed array
+        if (typeof agentData.shellPolicy === 'string' && agentData.shellPolicy.trim()) {
+          const policyObj = JSON.parse(agentData.shellPolicy)
+          if (Array.isArray(policyObj)) {
+            agentForm.value.shellPolicy = policyObj
+          }
+        } else if (Array.isArray(agentData.shellPolicy)) {
+          // Already an array, use directly
+          agentForm.value.shellPolicy = agentData.shellPolicy
+        }
       } catch (e) {
-        console.error('Failed to parse models JSON:', e)
+        console.error('Failed to parse shellPolicy JSON during copy:', e)
+        // Fallback to default policies
+        agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
       }
-    }
-
-    // Parse model modes for the copy
-    parseModelField(agentForm.value.planModel, planModelMode, planProxyGroup, planProxyAlias)
-    parseModelField(agentForm.value.actModel, actModelMode, actProxyGroup, actProxyAlias)
-    parseModelField(agentForm.value.visionModel, visionModelMode, visionProxyGroup, visionProxyAlias)
-    parseModelField(agentForm.value.codingModel, codingModelMode, codingProxyGroup, codingProxyAlias)
-    parseModelField(agentForm.value.copywritingModel, copywritingModelMode, copywritingProxyGroup, copywritingProxyAlias)
-    parseModelField(agentForm.value.browsingModel, browsingModelMode, browsingProxyGroup, browsingProxyAlias)
-
-    agentDialogVisible.value = true
-  } catch (error) {
-    if (error instanceof FrontendAppError) {
-      showMessage(
-        t('settings.agent.fetchFailed', {
-          error: error.toFormattedString()
-        }),
-        'error'
-      )
-      console.error('Error copying agent:', error.originalError)
     } else {
-      showMessage(
-        t('settings.agent.fetchFailed', { error: error.message || String(error) }),
-        'error'
-      )
-      console.error('Error copying agent:', error)
+      // No shell policy, use defaults
+      agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
     }
-  }
+
+    modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
+    agentDialogVisible.value = true
+  } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
 }
 
-/**
- * Validates the form and updates or adds an agent based on the current form data.
- */
 const updateAgent = () => {
   formRef.value.validate(async valid => {
     if (valid) {
-      // Final data preparation: Ensure ID is 0 for proxy mode
       const finalForm = JSON.parse(JSON.stringify(agentForm.value))
-      
-      const prepareModel = (field, mode, group, alias) => {
-        if (mode === 'proxy') {
-          field.id = 0
-          field.model = `${group}@${alias}`
-        }
+
+      // 1. Filter out empty shell policy rules
+      let filteredPolicy = []
+      if (finalForm.shellPolicy && Array.isArray(finalForm.shellPolicy)) {
+        filteredPolicy = finalForm.shellPolicy.filter(rule =>
+          rule.pattern && rule.pattern.trim() !== ''
+        )
       }
 
-      prepareModel(finalForm.planModel, planModelMode.value, planProxyGroup.value, planProxyAlias.value)
-      prepareModel(finalForm.actModel, actModelMode.value, actProxyGroup.value, actProxyAlias.value)
-      prepareModel(finalForm.visionModel, visionModelMode.value, visionProxyGroup.value, visionProxyAlias.value)
-      prepareModel(finalForm.codingModel, codingModelMode.value, codingProxyGroup.value, codingProxyAlias.value)
-      prepareModel(finalForm.copywritingModel, copywritingModelMode.value, copywritingProxyGroup.value, copywritingProxyAlias.value)
-      prepareModel(finalForm.browsingModel, browsingModelMode.value, browsingProxyGroup.value, browsingProxyAlias.value)
+      // 2. Stringify shellPolicy for Rust/SQLite backend compatibility
+      finalForm.shellPolicy = JSON.stringify(filteredPolicy)
 
-      // Consolidate all into 'models' field
+      // 3. Prepare and stringify models
+      modelRoles.forEach(role => {
+        if (modelModes[role.key] === 'proxy') {
+          finalForm[role.key + 'Model'].id = 0
+          finalForm[role.key + 'Model'].model = `${proxyGroups[role.key]}@${proxyAliases[role.key]}`
+        }
+      })
       finalForm.models = JSON.stringify({
-        plan: finalForm.planModel,
-        act: finalForm.actModel,
-        vision: finalForm.visionModel,
-        coding: finalForm.codingModel,
-        copywriting: finalForm.copywritingModel,
-        browsing: finalForm.browsingModel
+        plan: finalForm.planModel, act: finalForm.actModel, vision: finalForm.visionModel,
+        coding: finalForm.codingModel, copywriting: finalForm.copywritingModel, browsing: finalForm.browsingModel
       })
 
       try {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })
-        showMessage(
-          t(editId.value ? 'settings.agent.updateSuccess' : 'settings.agent.addSuccess'),
-          'success'
-        )
+        showMessage(t(editId.value ? 'settings.agent.updateSuccess' : 'settings.agent.addSuccess'), 'success')
         agentDialogVisible.value = false
-      } catch (error) {
-        if (error instanceof FrontendAppError) {
-          showMessage(
-            t('settings.agent.saveFailed', {
-              error: error.toFormattedString()
-            }),
-            'error'
-          )
-          console.error('Error saving agent:', error.originalError)
-        } else {
-          showMessage(
-            t('settings.agent.saveFailed', { error: error.message || String(error) }),
-            'error'
-          )
-          console.error('Error saving agent:', error)
-        }
-      }
-    } else {
-      console.log('error submit!')
-      return false
+      } catch (error) { showMessage(t('settings.agent.saveFailed'), 'error') }
     }
   })
 }
 
-/**
- * Confirms and deletes the specified agent.
- * @param {string} id - The ID of the agent to delete.
- */
 const deleteAgent = id => {
   ElMessageBox.confirm(t('settings.agent.deleteConfirm'), t('settings.agent.deleteTitle'), {
-    confirmButtonText: t('common.confirm'),
-    cancelButtonText: t('common.cancel'),
-    type: 'warning'
+    confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), type: 'warning'
   }).then(async () => {
     try {
       await agentStore.deleteAgent(id)
       showMessage(t('settings.agent.deleteSuccess'), 'success')
-    } catch (error) {
-      if (error instanceof FrontendAppError) {
-        showMessage(
-          t('settings.agent.deleteFailed', {
-            error: error.toFormattedString()
-          }),
-          'error'
-        )
-        console.error('Error deleting agent:', error.originalError)
-      } else {
-        showMessage(
-          t('settings.agent.deleteFailed', { error: error.message || String(error) }),
-          'error'
-        )
-        console.error('Error deleting agent:', error)
-      }
-    }
+    } catch (error) { showMessage(t('settings.agent.deleteFailed'), 'error') }
   })
 }
 
-/**
- * Handles the end of a drag event to reorder agents.
- */
 const onDragEnd = () => {
-  agentStore.updateAgentOrder(agents.value).catch(error => {
-    if (error instanceof FrontendAppError) {
-      showMessage(
-        t('settings.agent.reorderFailed', {
-          error: error.toFormattedString()
-        }),
-        'error'
-      )
-      console.error('Error reordering agents:', error.originalError)
-    } else {
-      showMessage(
-        t('settings.agent.reorderFailed', { error: error.message || String(error) }),
-        'error'
-      )
-      console.error('Error reordering agents:', error)
-    }
-    // Revert visual change by fetching the original order
+  agentStore.updateAgentOrder(agents.value).catch(() => {
+    showMessage(t('settings.agent.reorderFailed'), 'error')
     agentStore.fetchAgents()
   })
 }
 
-// Load models when component is mounted
+const onAgentDialogClose = () => {
+  // Reset active tab to basic when dialog closes
+  activeTab.value = 'basic'
+  // Clear form validation errors
+  formRef.value?.resetFields()
+}
+
 onMounted(() => {
   modelStore.updateModelStore()
   proxyGroupStore.getList()
@@ -1005,36 +689,99 @@ onMounted(() => {
 </script>
 
 <style lang="scss">
-.ghost {
-  background: rgba(255, 255, 255, 0.1);
-}
+.agent-edit-dialog {
+  .el-dialog__header {
+    display: none;
+  }
 
-.el-overlay {
-  .agent-edit-dialog {
-    .el-dialog__header {
-      display: none;
+  .el-tabs__nav-wrap:after {
+    background-color: var(--cs-border-color);
+  }
+
+  .models-layout {
+    padding: 4px;
+  }
+
+  .model-item-compact {
+    margin-bottom: 12px;
+    padding: 8px;
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background-color: var(--cs-bg-color-light);
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+
+      .title {
+        font-weight: bold;
+        font-size: 13px;
+        color: var(--cs-text-color-primary);
+      }
     }
 
-    .el-tabs__nav-wrap:after {
-      background-color: var(--cs-border-color);
-    }
+    .body {
+      display: flex;
+      flex-direction: column;
 
-    .model-config-item {
-      margin-bottom: var(--cs-space-md);
-      padding: var(--cs-space-sm);
-      border: 1px solid var(--cs-border-color);
-      border-radius: var(--cs-border-radius-md);
-      background-color: var(--cs-bg-color-light);
-
-      .model-mode-selector {
-        margin-bottom: var(--cs-space-sm);
+      .selectors-row {
         display: flex;
-        justify-content: center;
+        gap: 4px;
       }
+    }
+  }
 
-      .el-form-item {
-        margin-bottom: 0;
+  .shell-policy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--cs-space-md);
+
+    h3 {
+      margin: 0;
+      font-size: var(--cs-font-size-md);
+      color: var(--cs-text-color-primary);
+    }
+
+    .shell-policy-actions {
+      display: flex;
+      gap: var(--cs-space-sm);
+      align-items: center;
+    }
+  }
+
+  .shell-policy-list {
+    max-height: 300px;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-top: var(--cs-space-sm);
+
+    /* Custom scrollbar */
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: var(--cs-bg-color-light);
+      border-radius: 3px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: var(--cs-border-color);
+      border-radius: 3px;
+
+      &:hover {
+        background: var(--cs-text-color-secondary);
       }
+    }
+
+    .shell-policy-item {
+      display: flex;
+      gap: var(--cs-space-sm);
+      margin-bottom: var(--cs-space-sm);
+      align-items: center;
     }
   }
 }

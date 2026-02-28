@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use std::collections::HashMap;
-use std::sync::Arc;
 use crate::workflow::react::types::GatewayPayload;
 use crate::workflow::react::error::WorkflowEngineError;
 
@@ -11,15 +10,17 @@ pub trait Gateway: Send + Sync {
     /// Sends an event to the external world (e.g., UI, WebSocket)
     async fn send(&self, session_id: &str, payload: GatewayPayload) -> Result<(), WorkflowEngineError>;
 
-    /// Receives a signal from the external world (e.g., user input, approval)
-    async fn receive_input(&self, session_id: &str) -> Result<String, WorkflowEngineError>;
+    /// This should be called by a Tauri command to inject user input or approvals
+    async fn inject_input(&self, session_id: &str, input: String) -> Result<(), WorkflowEngineError>;
+    
+    /// Registers a sender for a specific session to receive external signals
+    async fn register_session_tx(&self, session_id: String, tx: tokio::sync::mpsc::Sender<String>);
 }
 
 /// A Gateway implementation specifically for Tauri
 pub struct TauriGateway {
     app_handle: AppHandle,
     /// Map of session_id -> mpsc sender for inputs. 
-    /// We use a Mutex of a HashMap of Senders.
     input_senders: Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>,
 }
 
@@ -30,38 +31,37 @@ impl TauriGateway {
             input_senders: Mutex::new(HashMap::new()),
         }
     }
-
-    /// Creates a new input channel for a session and returns the receiver
-    pub async fn create_session_channel(&self, session_id: &str) -> tokio::sync::mpsc::Receiver<String> {
-        let (tx, rx) = tokio::sync::mpsc::channel(10);
-        let mut senders = self.input_senders.lock().await;
-        senders.insert(session_id.to_string(), tx);
-        rx
-    }
-
-    /// This should be called by a Tauri command to inject user input
-    pub async fn inject_input(&self, session_id: &str, input: String) -> Result<(), WorkflowEngineError> {
-        let senders = self.input_senders.lock().await;
-        if let Some(tx) = senders.get(session_id) {
-            tx.send(input).await.map_err(|e| WorkflowEngineError::Gateway(e.to_string()))?;
-            Ok(())
-        } else {
-            Err(WorkflowEngineError::Gateway(format!("No input channel for session {}", session_id)))
-        }
-    }
 }
 
 #[async_trait]
 impl Gateway for TauriGateway {
     async fn send(&self, session_id: &str, payload: GatewayPayload) -> Result<(), WorkflowEngineError> {
         let event_name = format!("workflow://event/{}", session_id);
+        log::debug!(
+            "[Workflow Gateway] Emitting event to {}: {:?}",
+            event_name,
+            payload
+        );
         self.app_handle.emit(&event_name, &payload)
             .map_err(|e| WorkflowEngineError::Gateway(e.to_string()))?;
         Ok(())
     }
 
-    async fn receive_input(&self, session_id: &str) -> Result<String, WorkflowEngineError> {
-        let mut rx = self.create_session_channel(session_id).await;
-        rx.recv().await.ok_or_else(|| WorkflowEngineError::Gateway("Input channel closed".to_string()))
+    async fn inject_input(&self, session_id: &str, input: String) -> Result<(), WorkflowEngineError> {
+        log::debug!("[Workflow Gateway] Injecting input for session {}: {}", session_id, input);
+        let senders = self.input_senders.lock().await;
+        if let Some(tx) = senders.get(session_id) {
+            tx.send(input).await.map_err(|e| WorkflowEngineError::Gateway(e.to_string()))?;
+            Ok(())
+        } else {
+            log::warn!("[Workflow Gateway] Failed to inject input: No sender for session {}", session_id);
+            Err(WorkflowEngineError::Gateway(format!("No input channel for session {}", session_id)))
+        }
+    }
+
+    async fn register_session_tx(&self, session_id: String, tx: tokio::sync::mpsc::Sender<String>) {
+        log::debug!("[Workflow Gateway] Registering input sender for session {}", session_id);
+        let mut senders = self.input_senders.lock().await;
+        senders.insert(session_id, tx);
     }
 }

@@ -10,15 +10,22 @@ pub struct ContextManager {
     pub messages: Vec<WorkflowMessage>,
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub max_tokens: usize,
+    pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
 }
 
 impl ContextManager {
-    pub fn new(session_id: String, main_store: Arc<std::sync::RwLock<MainStore>>, max_tokens: usize) -> Self {
+    pub fn new(
+        session_id: String,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
+        max_tokens: usize,
+        tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    ) -> Self {
         Self {
             session_id,
             messages: Vec::new(),
             main_store,
             max_tokens,
+            tsid_generator,
         }
     }
 
@@ -51,8 +58,9 @@ impl ContextManager {
         step_index: i32,
         metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
+        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
         let msg = WorkflowMessage {
-            id: None,
+            id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
             role,
             message: content,
@@ -98,8 +106,9 @@ impl ContextManager {
         self.messages = self.messages[split_idx..].to_vec();
 
         // Prepend the new summary
+        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
         let summary_msg = WorkflowMessage {
-            id: None,
+            id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
             role: "system".to_string(),
             message: format!("## Previous Context Snapshot\n{}", summary),

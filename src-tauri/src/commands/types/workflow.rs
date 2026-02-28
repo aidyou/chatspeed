@@ -17,6 +17,7 @@ pub struct AgentPayload {
     pub act_model: Option<String>,
     pub vision_model: Option<String>,
     pub models: Option<String>,
+    pub shell_policy: Option<String>,
     pub max_contexts: Option<i32>,
 }
 
@@ -35,6 +36,7 @@ impl From<AgentPayload> for Agent {
             payload.act_model,
             payload.vision_model,
             payload.models,
+            payload.shell_policy,
             payload.max_contexts,
         )
     }

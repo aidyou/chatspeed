@@ -198,127 +198,6 @@ impl WebSearch {
             )),
         }
     }
-
-    // pub async fn scrape_content(
-    //     &self,
-    //     mut results: Vec<SearchResult>,
-    // ) -> Result<Vec<SearchResult>, ToolError> {
-    //     if results.is_empty() {
-    //         return Ok(results);
-    //     }
-
-    //     let main_store = self
-    //         .app_handle
-    //         .state::<Arc<std::sync::RwLock<MainStore>>>()
-    //         .inner();
-    //     let concurrency = {
-    //         let store = main_store
-    //             .read()
-    //             .map_err(|e| ToolError::Store(e.to_string()))?;
-    //         store.get_config(crate::constants::CFG_SCRAPER_CONCURRENCY_COUNT, 3_u64) as usize
-    //     };
-    //     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-
-    //     let mut scrape_tasks = Vec::new();
-
-    //     for (index, result) in results.iter().enumerate() {
-    //         if result.content.as_deref().unwrap_or("").is_empty() && !result.url.is_empty() {
-    //             let app_handle = self.app_handle.clone();
-    //             let url = result.url.clone();
-    //             let permit = semaphore
-    //                 .clone()
-    //                 .acquire_owned()
-    //                 .await
-    //                 .map_err(|e| ToolError::Execution(e.to_string()))?;
-
-    //             let task = tokio::spawn(async move {
-    //                 let _permit = permit;
-
-    //                 // 1. Wrap the core scraping logic in an async block
-    //                 let scrape_future = async {
-    //                     let request = crate::scraper::types::ScrapeRequest::Content(
-    //                         crate::scraper::types::ContentOptions {
-    //                             url: url.clone(), // clone url for logging on timeout
-    //                             content_format: StrapeContentFormat::Markdown,
-    //                             keep_link: false,
-    //                             keep_image: false,
-    //                         },
-    //                     );
-
-    //                     if let Ok(scraped_json_str) =
-    //                         crate::scraper::engine::run(app_handle, request).await
-    //                     {
-    //                         match serde_json::from_str::<Value>(&scraped_json_str) {
-    //                             Ok(scraped_data) => {
-    //                                 return (
-    //                                     index,
-    //                                     scraped_data["content"]
-    //                                         .as_str()
-    //                                         .map(|s| s.trim().to_string()),
-    //                                     scraped_data["url"].as_str().map(String::from),
-    //                                 );
-    //                             }
-    //                             Err(e) => {
-    //                                 log::error!(
-    //                                     "Failed to parse scraped JSON: {}, rawdata: {}",
-    //                                     e,
-    //                                     scraped_json_str
-    //                                 );
-    //                             }
-    //                         }
-    //                     }
-    //                     (index, None, None)
-    //                 };
-
-    //                 // 2. Wrap the future with tokio::time::timeout
-    //                 let timeout_duration = std::time::Duration::from_secs(10);
-    //                 if let Ok(result) = tokio::time::timeout(timeout_duration, scrape_future).await
-    //                 {
-    //                     // If completed within 10 seconds, return its result
-    //                     result
-    //                 } else {
-    //                     // If timeout occurs
-    //                     log::warn!("Scraping task for url {} timed out after 10 seconds.", &url);
-    //                     // Return a tuple indicating failure
-    //                     (index, None, None)
-    //                 }
-    //             });
-    //             scrape_tasks.push(task);
-    //         }
-    //     }
-
-    //     let scraped_contents = join_all(scrape_tasks).await;
-
-    //     for task_result in scraped_contents {
-    //         if let Ok((index, opt_content, opt_url)) = task_result {
-    //             if let Some(result) = results.get_mut(index) {
-    //                 if opt_content.as_deref().map_or(false, |s| !s.is_empty()) {
-    //                     result.content = opt_content;
-    //                     result.snippet = None; // If content is not empty, remove snippet
-    //                 }
-
-    //                 if let Some(url) = opt_url {
-    //                     result.url = url;
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     #[cfg(debug_assertions)]
-    //     log::debug!("Current results: {}", results.len());
-
-    //     // Filter out video and image domains
-    //     results.retain(|result| {
-    //         !VIDEO_AND_IMAGE_DOMAINS
-    //             .iter()
-    //             .any(|domain| result.url.contains(domain))
-    //     });
-
-    //     #[cfg(debug_assertions)]
-    //     log::debug!("Filtered results: {}", results.len());
-
-    //     Ok(results)
-    // }
 }
 
 #[async_trait]
@@ -327,103 +206,19 @@ impl ToolDefinition for WebSearch {
         ToolCategory::Web
     }
 
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Both
+    }
+
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "WebSearch"
+        crate::tools::TOOL_WEB_SEARCH
     }
 
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
-        r#"# Use this tool to perform **web searches** for information beyond the model’s knowledge cutoff or related to **current events**.
-It must provide **factual, multi-source validated** answers, especially for sensitive or analytical domains (e.g., finance, law, technology).
-
-## Workflow
-1. **Understand Intent**
-    - Identify the user’s actual goal and domain.
-    - If the question is ambiguous, ask for clarification.
-    - Break down complex or multi-part questions into focused sub-queries.
-
-2. **Build the Query**
-    - Convert the intent into **targeted, keyword-based queries**.
-    - Use **composite keywords** for precision.
-    - Avoid overly broad queries; if results are irrelevant, narrow the scope.
-    - If too few results, broaden or use synonyms.
-
-3. **Execute Search**
-    - Run the search and review snippets.
-    - Select **relevant and authoritative URLs**.
-    - Prefer results that match the **user’s query language**.
-    - If local-language results are insufficient, expand to English or other relevant languages.
-
-4. **Mandatory Fetch**
-    - You **MUST** use the `WebFetch` tool to retrieve **full-page content** from selected URLs **before generating any final answer**.
-    - Snippets are for evaluation only; **never base conclusions solely on snippets**.
-    - Validate that fetched pages contain **meaningful and relevant text** (not menus, ads, or redirects).
-    - For complex or uncertain topics, **fetch and cross-reference at least two reliable sources**.
-
-5. **Synthesize and Answer**
-    - Integrate verified information from fetched pages.
-    - Identify overlapping content, remove duplicates, and ensure consistency.
-    - When multiple sources disagree, follow the **multi-source verification rule** (see below).
-    - Present key findings clearly (e.g., bullet list, timeline, or table).
-    - Mention which sources were used (by site or domain).
-    - Never invent or alter factual data.
-
-## Domain-Specific Handling
-### 🧠 General Knowledge
-- Use authoritative and reputable sources (e.g., Wikipedia, official documentation, major media).
-- Cross-check at least two independent pages if the answer involves factual detail or statistics.
-
-### 💻 Programming & Technical Topics
-- Prioritize **official documentation**, **project repositories (GitHub, GitLab)**, and **recognized developer forums** (Stack Overflow, MDN, etc.).
-- Fetch full content before summarizing.
-- If multiple code examples conflict, favor the one:
-    1. From official documentation, or
-    2. With clear reasoning and verified context (not copy-paste snippets).
-- Never output incomplete or unverified code from snippets.
-
-### 💰 Finance & Market Data
-- Financial information must be **cross-validated from at least two independent authoritative sources**.
-- If the two sources disagree:
-    1. Fetch a **third** reliable source for verification.
-    2. If discrepancies persist, use the **most authoritative source** as the final reference.
-        - Example priority: **official exchanges > professional financial media > general websites**.
-- Always indicate data recency (e.g., “as of Oct 22, 2025”).
-- Never mix outdated data with current results.
-
-## Query Guidelines
-- **Keyword Optimization**
-    Focus on essential terms; remove filler words.
-
-- **Temporal Precision**
-    Convert relative time references (“today”, “yesterday”) into **specific calendar dates** based on the current date.
-    Example: “today’s news” → “news October 22, 2025”.
-
-- **Context Awareness**
-    - Adapt to the user’s **language and region**.
-    - For specialized fields (finance, science, law), include contextual keywords or trusted domains (e.g., `财经`, `site:eastmoney.com`).
-
-- **Recency Filter**
-    Use `time_period` (`day`, `week`, etc.) to focus on recent information.
-
-## Source Evaluation
-- Prioritize **official, reputable, or expert** sources.
-- Always cross-check multiple pages for factual accuracy.
-- Highlight discrepancies or uncertainty when sources conflict.
-- Present a balanced synthesis, not a single-source summary.
-
-## Error Handling
-- **Timeouts:** Retry the same query up to **2 times**.
-- **No Results:** Modify query (broaden or change keywords, adjust `time_period`) and retry up to **3 times**.
-- **Fetch Failures:**
-    - Retry up to **2 times** per URL.
-    - If all fetches fail, summarize available snippet data **with a disclaimer** that full content could not be retrieved.
-
-## Output Requirements
-- Present findings in **clear, structured form** (e.g., bullet list, table, or concise paragraphs).
-- Include **source domains** when possible.
-- Maintain **neutral, professional tone**.
-- Do not fabricate, speculate, or overstate conclusions."#
+        "Search the web for up-to-date information, current events, or data beyond your knowledge cutoff. \
+        Returns a list of search results including titles, snippets, and source URLs."
     }
 
     /// Returns the function calling spec.

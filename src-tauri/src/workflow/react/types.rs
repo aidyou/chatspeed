@@ -24,16 +24,29 @@ pub enum StepType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayEvent {
-    pub session_id: String,
-    pub payload: GatewayPayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayPayload {
-    Text { content: String },
-    State { state: WorkflowState },
-    Confirm { id: String, action: String, details: String },
-    Error { message: String },
+    /// Incremental chunk of text (for streaming thoughts or content)
+    Chunk {
+        content: String,
+    },
+    /// Full message update
+    Message {
+        role: String,
+        content: String,
+        step_type: Option<StepType>,
+        step_index: i32,
+        metadata: Option<serde_json::Value>,
+    },
+    State {
+        state: WorkflowState,
+    },
+    Confirm {
+        id: String,
+        action: String,
+        details: String,
+    },
+    Error {
+        message: String,
+    },
 }

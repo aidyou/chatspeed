@@ -8,11 +8,23 @@ impl ObservationReinforcer {
     pub fn reinforce(tool_name: &str, result: &Result<Value, ToolError>) -> String {
         match result {
             Ok(val) => {
-                let raw_res = serde_json::to_string(val).unwrap_or_default();
+                // If the value is a ToolCallResult (as Value), try to extract 'content' first
+                let raw_res = if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                    content.to_string()
+                } else if let Some(structured) = val.get("structured_content") {
+                    if structured.is_null() {
+                        "".to_string()
+                    } else {
+                        serde_json::to_string_pretty(structured).unwrap_or_default()
+                    }
+                } else {
+                    serde_json::to_string(val).unwrap_or_default()
+                };
+
                 if raw_res == "[]" || raw_res == "{}" || raw_res.is_empty() {
                     format!("Tool '{}' executed successfully but returned no data. <system-reminder>If you expected data, try adjusting your search terms or checking if the target exists.</system-reminder>", tool_name)
-                } else if raw_res.len() > 5000 {
-                    format!("[Result too long, truncated] {}\n<system-reminder>The output was truncated due to length. Use more specific search patterns or read the file in parts if needed.</system-reminder>", &raw_res[..5000])
+                } else if raw_res.len() > 10000 {
+                    format!("[Result too long, truncated] {}\n<system-reminder>The output was truncated. Use more specific search patterns or read smaller chunks if needed.</system-reminder>", &raw_res[..10000])
                 } else {
                     raw_res
                 }

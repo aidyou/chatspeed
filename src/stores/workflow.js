@@ -36,10 +36,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const selectWorkflow = async (workflowId) => {
+    console.log('workflowStore: selecting workflow', workflowId);
     currentWorkflowId.value = workflowId;
     error.value = null;
     try {
-      const snapshot = await invokeWrapper('get_workflow_snapshot', { workflowId });
+      const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
+      console.log('workflowStore: snapshot loaded', snapshot);
       messages.value = snapshot.messages || [];
 
       // Initialize todo manager with the workflow's todo list
@@ -62,10 +64,27 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const createWorkflow = async (userQuery, agentId) => {
     error.value = null;
     try {
-      const newWorkflow = await invokeWrapper('create_workflow', { userQuery, agentId });
-      workflows.value.unshift(newWorkflow);
-      await selectWorkflow(newWorkflow.id);
-      return newWorkflow;
+      const id = `session_${Date.now()}`;
+      const newWorkflow = await invokeWrapper('create_workflow', {
+        workflow: {
+          id,
+          userQuery,
+          agentId,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      });
+      // Backend returns the ID string, we should fetch or construct the object
+      const workflowObj = {
+        id: typeof newWorkflow === 'string' ? newWorkflow : id,
+        userQuery,
+        agentId,
+        status: 'pending'
+      };
+      workflows.value.unshift(workflowObj);
+      await selectWorkflow(workflowObj.id);
+      return workflowObj;
     } catch (err) {
       await _handleError(err);
     }
@@ -79,23 +98,60 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isRunning.value = running;
   };
 
+  const addMessage = (message) => {
+    // Check if message already exists by id (if available) or metadata
+    const exists = messages.value.some(m =>
+      (message.id && m.id === message.id) ||
+      (m.stepIndex === message.stepIndex && m.role === message.role && m.stepType === message.stepType && m.message === message.message)
+    );
+    if (!exists) {
+      messages.value.push(message);
+    }
+  };
+
   const updateWorkflowStatus = async (workflowId, status) => {
     error.value = null;
     try {
-      await invokeWrapper('update_workflow_status', { workflowId, status });
+      // Avoid database update if it's an internal engine state transition that doesn't need persistence
+      if (['thinking', 'executing', 'paused', 'completed', 'error'].includes(status.toLowerCase())) {
+        const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+        if (workflowIndex !== -1) {
+          workflows.value[workflowIndex].status = status;
+        }
 
-      // Update local workflow if it's the current one
-      const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
-      if (workflowIndex !== -1) {
-        workflows.value[workflowIndex].status = status;
+        // Update running state based on status
+        const s = status.toLowerCase();
+        if (s === 'thinking' || s === 'executing' || s === 'running') {
+          isRunning.value = true;
+        } else {
+          isRunning.value = false;
+        }
+      } else {
+        await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }
+    } catch (err) {
+      await _handleError(err);
+    }
+  };
 
-      // Update running state based on status
-      if (status === 'running') {
-        isRunning.value = true;
-      } else if (status === 'completed' || status === 'error' || status === 'paused') {
-        isRunning.value = false;
-      }
+  const loadMessages = async (workflowId) => {
+    console.log('workflowStore: loading messages for', workflowId);
+    error.value = null;
+    try {
+      const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
+      messages.value = snapshot.messages || [];
+    } catch (err) {
+      await _handleError(err);
+    }
+  };
+
+  const deleteMessage = async (workflowId, messageId) => {
+    error.value = null;
+    try {
+      await invokeWrapper('delete_message', { id: messageId });
+      // The backend uses 'delete_message' command which takes 'id'
+      // After deletion, we could either filter locally or reload
+      messages.value = messages.value.filter(m => m.id !== messageId);
     } catch (err) {
       await _handleError(err);
     }
@@ -118,9 +174,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     loadWorkflows,
     selectWorkflow,
     createWorkflow,
+    addMessage,
     addMessageToQueue,
     setRunning,
     updateWorkflowStatus,
+    loadMessages,
+    deleteMessage,
     clearCurrentWorkflow,
   };
 });

@@ -1,5 +1,4 @@
 /// Version 5 migration SQL statements
-/// Predefined Workflow tables (Currently inactive)
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
     // Workflows table
     (
@@ -43,5 +42,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "agents_v5_models",
         "ALTER TABLE agents ADD COLUMN models TEXT"
+    ),
+    // Add shell_policy JSON column to agents
+    (
+        "agents_v5_shell_policy",
+        "ALTER TABLE agents ADD COLUMN shell_policy TEXT"
     ),
 ];

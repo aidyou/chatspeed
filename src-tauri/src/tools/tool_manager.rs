@@ -1,13 +1,11 @@
 use async_trait::async_trait;
 use rust_i18n::t;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, RwLock};
 
-// use crate::commands::chat::setup_chat_proxy;
-// use crate::constants::CFG_CHP_SERVER;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::constants::CFG_SEARCH_ENGINE;
 use crate::db::MainStore;
@@ -16,12 +14,11 @@ use crate::mcp::client::{
     StreamableHttpClient,
 };
 use crate::tools::error::ToolError;
-use crate::tools::{ToolCallResult, ToolCategory};
+use crate::tools::{ToolCallResult, ToolCategory, ToolScope, MCP_TOOL_NAME_SPLIT};
 
 // use super::tools::SearchDedup;
 // use super::tools::{ChatCompletion, ModelName};
 
-pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
 
 /// The result type of a function call.
@@ -38,6 +35,12 @@ pub trait ToolDefinition: Send + Sync {
     fn description(&self) -> &str;
 
     fn category(&self) -> ToolCategory;
+
+    /// Gets the intended scope of this tool.
+    /// Default is Both (Chat and Workflow).
+    fn scope(&self) -> ToolScope {
+        ToolScope::Both
+    }
 
     /// Returns the function calling specification in JSON format.
     ///
@@ -56,6 +59,62 @@ pub trait ToolDefinition: Send + Sync {
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
     async fn call(&self, params: Value) -> NativeToolResult;
+}
+
+/// A wrapper that adapts an MCP tool to the ToolDefinition trait.
+/// This allows MCP tools to be registered and called just like native tools.
+pub struct McpToolWrapper {
+    pub server_name: String,
+    pub tool_decl: MCPToolDeclaration,
+    pub client: Arc<dyn McpClient>,
+    pub combined_name: String,
+}
+
+#[async_trait]
+impl ToolDefinition for McpToolWrapper {
+    fn name(&self) -> &str {
+        &self.combined_name
+    }
+
+    fn description(&self) -> &str {
+        &self.tool_decl.description
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Mcp
+    }
+
+    fn scope(&self) -> ToolScope {
+        ToolScope::Both
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        let mut spec = self.tool_decl.clone();
+        spec.name = self.combined_name.clone();
+        spec
+    }
+
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let res = self
+            .client
+            .call(&self.tool_decl.name, params)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "MCP call to server '{}' tool '{}' failed: {}",
+                    self.server_name, self.tool_decl.name, e
+                ))
+            })?;
+
+        // MCP results often come back as a JSON object with a 'content' field for display
+        // We extract that if present for high-signal text observations.
+        Ok(ToolCallResult::success(
+            res.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            Some(res),
+        ))
+    }
 }
 
 /// Manages the registration and execution of workflow functions.
@@ -128,6 +187,81 @@ impl ToolManager {
             .await?;
 
         // =================================================
+        // FileSystem & Search tools
+        // =================================================
+        self.register_tool(Arc::new(crate::tools::ReadFile)).await?;
+        self.register_tool(Arc::new(crate::tools::WriteFile))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::EditFile)).await?;
+        self.register_tool(Arc::new(crate::tools::ListDir)).await?;
+        self.register_tool(Arc::new(crate::tools::Glob)).await?;
+        self.register_tool(Arc::new(crate::tools::Grep)).await?;
+
+        // =================================================
+        // System & Workflow tools
+        // =================================================
+        let tsid = app_handle
+            .state::<Arc<crate::libs::tsid::TsidGenerator>>()
+            .inner()
+            .clone();
+        let path_guard = Arc::new(crate::workflow::react::security::PathGuard::new(vec![]));
+        self.register_tool(Arc::new(crate::tools::ShellExecute::new(
+            path_guard,
+            tsid.clone(),
+            vec![],
+        )))
+        .await?;
+
+        self.register_tool(Arc::new(crate::tools::TodoCreateTool {
+            session_id: "".into(),
+            main_store: main_store.clone(),
+        }))
+        .await?;
+        self.register_tool(Arc::new(crate::tools::TodoListTool {
+            session_id: "".into(),
+            main_store: main_store.clone(),
+        }))
+        .await?;
+        self.register_tool(Arc::new(crate::tools::TodoUpdateTool {
+            session_id: "".into(),
+            main_store: main_store.clone(),
+        }))
+        .await?;
+        self.register_tool(Arc::new(crate::tools::TodoGetTool {
+            session_id: "".into(),
+            main_store: main_store.clone(),
+        }))
+        .await?;
+
+        let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
+        let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
+        let skills = scanner.scan().unwrap_or_default();
+        self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
+            .await?;
+
+        let factory = app_handle
+            .state::<Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>()
+            .inner()
+            .clone();
+        self.register_tool(Arc::new(
+            crate::workflow::react::orchestrator::TaskTool::new(factory, tsid),
+        ))
+        .await?;
+        self.register_tool(Arc::new(
+            crate::workflow::react::orchestrator::TaskOutputTool,
+        ))
+        .await?;
+        self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
+            .await?;
+
+        // Interaction tools
+        self.register_tool(Arc::new(crate::tools::AnswerUser))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::AskUser)).await?;
+        self.register_tool(Arc::new(crate::tools::FinishTask))
+            .await?;
+
+        // =================================================
         // Chat completion
         // =================================================
         // register chat completion tool
@@ -148,27 +282,6 @@ impl ToolManager {
         // } else {
         //     String::new()
         // };
-
-        // =================================================
-        // ReAct
-        // =================================================
-        // if ChatSpeedBot server is available, register search and fetch tools
-        // if !chp_server.is_empty() {
-        //     // register search dedup tool
-        //     self.register_tool(Arc::new(SearchDedup::new())).await?;
-
-        //     // register search tool
-        //     self.register_tool(Arc::new(Search::new(chp_server.clone())))
-        //         .await?;
-
-        //     // register fetch tool
-        //     self.register_tool(Arc::new(Crawler::new(chp_server.clone())))
-        //         .await?;
-
-        //     // register plot tool
-        //     self.register_tool(Arc::new(Plot::new(chp_server.clone())))
-        //         .await?;
-        // }
 
         // =================================================
         // MCP Tools
@@ -243,12 +356,20 @@ impl ToolManager {
             .ok_or_else(|| ToolError::FunctionNotFound(name.to_string()))
     }
 
-    pub async fn get_native_tools(&self) -> Vec<Arc<dyn ToolDefinition>> {
-        self.tools.read().await.values().cloned().collect()
-    }
-
-    pub async fn get_all_mcp_tools(&self) -> HashMap<String, Vec<MCPToolDeclaration>> {
-        self.mcp_tools.read().await.clone()
+    /// Returns metadata for all registered native tools.
+    /// This is used by the UI to discover available capabilities and their scopes.
+    pub async fn get_all_native_tool_metadata(&self) -> Vec<Value> {
+        let tools = self.tools.read().await;
+        let mut meta = Vec::new();
+        for tool in tools.values() {
+            meta.push(json!({
+                "id": tool.name(),
+                "name": tool.name(),
+                "category": tool.category().to_string(),
+                "scope": tool.scope()
+            }));
+        }
+        meta
     }
 
     /// Call a native tool by its name.
@@ -265,78 +386,52 @@ impl ToolManager {
     }
 
     /// Call a native tool or mcp tool by its name.
-    /// if the tool name contains <MCP_TOOL_NAME_SPLIT>, it is a mcp tool, will call mcp_tool_call,
-    /// otherwise, call native_tool_call.
-    ///
-    /// # Arguments
-    /// * `name` - The name of the function to execute.
-    /// * `params` - The parameters to pass to the function.
-    ///
-    /// # Returns
-    /// * `ToolResult` - The result of the function execution.
+    /// Since all tools are unified in the tools map, this directly delegates to native_tool_call.
     pub async fn tool_call(&self, name: &str, params: Value) -> ToolResult {
-        if name.contains(MCP_TOOL_NAME_SPLIT) {
-            self.call_mcp_tool_by_combined_name(name, params).await
-        } else {
-            self.native_tool_call(name, params).await.map(|v| v.into())
-        }
+        self.native_tool_call(name, params).await.map(|v| v.into())
     }
 
-    /// Gets the names of all registered tools.
-    ///
-    /// # Returns
-    /// * `Vec<String>` - A vector of function names.
-    async fn get_registered_tools(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        {
-            let tools = self.tools.read().await;
-            names.extend(tools.keys().cloned());
-        }
-        names
-    }
-
-    /// Get the calling spec of all registered tools, it's contained all native tools and MCP tools.
-    ///
-    /// # Returns
-    /// * `Result<String, ToolError>` - The calling spec of all registered tools
+    /// Get the calling spec of all registered tools, filtered by scope and exclusions.
+    /// This includes both native tools and MCP tools (via wrappers).
     pub async fn get_tool_calling_spec(
         &self,
+        scope_filter: Option<ToolScope>,
         exclude: Option<HashSet<String>>,
     ) -> Result<Vec<MCPToolDeclaration>, ToolError> {
         let mut specs = Vec::new();
         let excluded: HashSet<String> = exclude.unwrap_or_default();
-        for tool_names in self.get_registered_tools().await {
-            if let Ok(tool) = self.get_tool(&tool_names).await {
+
+        // Collect all tools from the unified map
+        {
+            let tools = self.tools.read().await;
+            for tool in tools.values() {
+                // Apply scope filter if provided
+                if let Some(filter) = scope_filter {
+                    match filter {
+                        ToolScope::Chat => {
+                            // Chat only sees Chat or Both
+                            if tool.scope() != ToolScope::Chat && tool.scope() != ToolScope::Both {
+                                continue;
+                            }
+                        }
+                        ToolScope::Workflow => {
+                            // Workflow can see Chat + Workflow + Both
+                        }
+                        ToolScope::Both => {
+                            // Strictly Both
+                            if tool.scope() != ToolScope::Both {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Apply exclusion filter
                 if !excluded.contains(tool.name()) {
                     specs.push(tool.tool_calling_spec());
                 }
             }
         }
-
-        // Collect MCP tool specs *after* getting core function specs
-        // This involves reading mcp_tools, which is fine after releasing the tools lock
-        // The MCP tool will be remove after the MCP server is disabled. So we don't need to filter it here.
-        let mcp_tool_specs: Vec<MCPToolDeclaration> = {
-            let mcp_tools_guard = self.mcp_tools.read().await;
-            mcp_tools_guard
-                .iter()
-                .flat_map(|(server_name, tools_vec)| {
-                    tools_vec
-                        .iter()
-                        .filter(|td| !td.disabled)
-                        .map(move |original_td| {
-                            let mut new_td = original_td.clone(); // Clone the original MCPToolDeclaration
-                            new_td.name = format!(
-                                "{}{}{}",
-                                &server_name, MCP_TOOL_NAME_SPLIT, original_td.name
-                            ); // Modify the name of the clone
-                            new_td // Return the modified clone
-                        })
-                })
-                .collect()
-        };
-
-        specs.extend(mcp_tool_specs);
 
         Ok(specs)
     }
@@ -652,15 +747,12 @@ impl ToolManager {
             log::debug!("register_mcp_server_inner: client.name() = {}", &name);
         }
 
-        // Adhere to a consistent locking order (mcp_tools -> mcp_servers) to prevent deadlocks.
+        // Adhere to a consistent locking order (mcp_tools -> mcp_servers -> tools) to prevent deadlocks.
         let mut mcp_tools_guard = self.mcp_tools.write().await;
         let mut servers_guard = self.mcp_servers.write().await;
+        let mut tools_guard = self.tools.write().await;
 
         if servers_guard.contains_key(&name) {
-            // This case might happen if registration is triggered multiple times quickly
-            // before the first one completes its async tool listing.
-            // Depending on desired behavior, could log a warning and update, or return error.
-            // For now, let's log and allow update (though client Arc should be the same).
             log::warn!("MCP server {} is already in mcp_servers map during inner registration. Overwriting.", &name);
         }
         servers_guard.insert(name.clone(), client.clone()); // client.clone() is cheap (Arc clone)
@@ -681,10 +773,21 @@ impl ToolManager {
                     tool_count
                 );
             }
-            // Always insert if Some, even if 'declarations' is an empty Vec.
-            // This allows the frontend to distinguish between "server not found in mcp_tools"
-            // and "server found, but has no tools".
-            mcp_tools_guard.insert(name.clone(), declarations);
+
+            // 1. Update the legacy mcp_tools map for UI/metadata
+            mcp_tools_guard.insert(name.clone(), declarations.clone());
+
+            // 2. Register each tool as a first-class ToolDefinition in the main tools map
+            for decl in declarations {
+                let combined_name = format!("{}{}{}", &name, MCP_TOOL_NAME_SPLIT, &decl.name);
+                let wrapper = Arc::new(McpToolWrapper {
+                    server_name: name.clone(),
+                    tool_decl: decl,
+                    client: client.clone(),
+                    combined_name: combined_name.clone(),
+                });
+                tools_guard.insert(combined_name, wrapper);
+            }
         } else {
             // tools_declarations was None, e.g. if list_tools failed.
             #[cfg(debug_assertions)]
@@ -711,10 +814,15 @@ impl ToolManager {
     pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), ToolError> {
         // Scope the locks to ensure they are released before awaiting .stop()
         {
-            // Remove MCP tools from internal state first
+            // 1. Remove from legacy mcp_tools map
             let mut mcp_tools = self.mcp_tools.write().await;
             mcp_tools.remove(name);
-        } // mcp_tools write lock is released here
+
+            // 2. Remove all associated wrappers from the main tools map
+            let mut tools_guard = self.tools.write().await;
+            let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
+            tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
+        }
 
         // Get the server Arc to stop it *after* removing it from the map
         // and releasing the FunctionManager's mcp_servers lock.
@@ -800,8 +908,29 @@ impl ToolManager {
                     })
                     .collect();
 
-                let mut mcp_tools_guard = self.mcp_tools.write().await;
-                mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag);
+                {
+                    let mut mcp_tools_guard = self.mcp_tools.write().await;
+                    let mut tools_guard = self.tools.write().await;
+
+                    // 1. Update legacy map
+                    mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag.clone());
+
+                    // 2. Update unified tools map (Remove old and add new)
+                    let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
+                    tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
+
+                    for decl in tools_with_disabled_flag {
+                        let combined_name =
+                            format!("{}{}{}", name, MCP_TOOL_NAME_SPLIT, &decl.name);
+                        let wrapper = Arc::new(McpToolWrapper {
+                            server_name: name.to_string(),
+                            tool_decl: decl,
+                            client: client.clone(),
+                            combined_name: combined_name.clone(),
+                        });
+                        tools_guard.insert(combined_name, wrapper);
+                    }
+                }
 
                 // On success, notify that it's "Running" again.
                 self.mcp_status_event_sender
@@ -944,13 +1073,36 @@ impl ToolManager {
 
         // Phase 2: Update the in-memory cache for mcp_tools.
         let mut mcp_tools_guard = self.mcp_tools.write().await;
+        let mut tools_guard = self.tools.write().await;
+
         if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
             // find the tool in the list by name
             if let Some(tool_decl) = tools.iter_mut().find(|td| td.name == mcp_tool_name) {
-                // set the disabled flag
+                // 1. Update the legacy declaration
                 tool_decl.disabled = is_disabled;
+
+                // 2. Update the wrapper in the unified tools map
+                let combined_name = format!(
+                    "{}{}{}",
+                    mcp_server_name, MCP_TOOL_NAME_SPLIT, mcp_tool_name
+                );
+
+                // We need the client to create a new wrapper. We can try to get it from the existing wrapper if it exists.
+                if let Some(_existing_tool) = tools_guard.get(&combined_name) {
+                    // Try to downcast to McpToolWrapper or just get the client from the server map
+                    if let Ok(client) = self.get_mcp_server(mcp_server_name).await {
+                        let wrapper = Arc::new(McpToolWrapper {
+                            server_name: mcp_server_name.to_string(),
+                            tool_decl: tool_decl.clone(),
+                            client,
+                            combined_name: combined_name.clone(),
+                        });
+                        tools_guard.insert(combined_name, wrapper);
+                    }
+                }
+
                 log::debug!(
-                    "In-memory mcp_tools cache updated: tool {} on server {} set to disabled={}",
+                    "In-memory caches updated: tool {} on server {} set to disabled={}",
                     mcp_tool_name,
                     mcp_server_name,
                     is_disabled
@@ -996,63 +1148,143 @@ impl ToolManager {
             })
     }
 
-    /// Calls a tool on a specified MCP (Model Control Protocol) server.
-    ///
-    /// This function is designed to locate and execute an MCP tool using a composite name string.
-    /// This mechanism simplifies calling MCP tools from external systems, such as Chat Completion.
-    ///
-    /// # Arguments
-    /// * `name_with_split` - A specially formatted string to uniquely identify an MCP server and a tool on it.
-    ///   The format is `mcp_server_name<MCP_TOOL_NAME_SPLIT>tool_name`.
-    ///   For example: "my_mcp_server__MCP_SPLIT__specific_tool".
-    ///   - `mcp_server_name` is the name of a registered MCP server.
-    ///   - `<MCP_TOOL_NAME_SPLIT>` is the delimiter defined by the `MCP_TOOL_NAME_SPLIT` constant.
-    ///   - `specific_tool` is the name of the tool on the target MCP server.
-    /// * `params` - The parameters to pass to the target tool, as a `serde_json::Value`.
-    ///
-    /// # Returns
-    /// * `ToolResult` - `Ok(Value)` containing the result of the tool execution on success.
-    ///
-    /// # Errors
-    /// * `ToolError::Execution`:
-    ///   - If `name_with_split` is improperly formatted (e.g., cannot be split correctly, or parts are empty),
-    ///     an error with a message like "mcp.client.invalid_tool_name" is returned.
-    ///   - If the underlying `McpClient::call` method fails (e.g., network issues, tool execution error on the server),
-    ///     an error with a message like "mcp.client.failed_to_call_tool" is returned. This error message
-    ///     will include the server name, tool name, parameters, and the underlying error details.
-    /// * `ToolError::FunctionNotFound` - If the specified `mcp_server_name` cannot be found.
-    async fn call_mcp_tool_by_combined_name(
-        &self,
-        name_with_split: &str,
-        params: Value,
-    ) -> ToolResult {
-        // Unlike regular functions that are directly looked up and invoked by name,
-        // MCP (Model Control Protocol) tool calls require a two-step process:
-        // 1. Locate the MCP server within the FunctionManager.
-        // 2. Invoke the specific tool on that server.
-        // To simplify invoking MCP tools, especially from external systems like Chat Completion,
-        // a composite name format is used: `mcp_server_name<MCP_TOOL_NAME_SPLIT>tool_name`.
-        // The `<MCP_TOOL_NAME_SPLIT>` is a defined constant (MCP_TOOL_NAME_SPLIT).
-        // This allows callers to use a single string, e.g., "cstoolbox__MCP_SPLIT__web_search",
-        // to specify both the MCP server ("cstoolbox") and the tool ("web_search").
-        // This function parses this composite name and dispatches the call accordingly.
-        let (mcp_server_name, tool_name) = name_with_split
-            .split_once(MCP_TOOL_NAME_SPLIT)
-            .filter(|(server_part, tool_part)| !server_part.is_empty() && !tool_part.is_empty())
-            .ok_or_else(|| {
-                ToolError::InvalidParams(
-                    t!("mcp.client.invalid_tool_name", name = name_with_split).to_string(),
-                )
-            })?;
-
-        self.mcp_tool_call(mcp_server_name, tool_name, params).await
-    }
-
-    /// Subscribes to MCP status events.
-    ///
-    /// This function returns a broadcast receiver that can be used to listen for status events.
     pub fn subscribe_mcp_status_events(&self) -> broadcast::Receiver<(String, McpStatus)> {
         self.mcp_status_event_sender.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::{ToolCallResult, ToolCategory, ToolScope};
+    use serde_json::json;
+
+    // A mock tool for testing
+    struct MockTool {
+        name: String,
+        scope: ToolScope,
+    }
+
+    #[async_trait]
+    impl ToolDefinition for MockTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "Mock"
+        }
+        fn category(&self) -> ToolCategory {
+            ToolCategory::System
+        }
+        fn scope(&self) -> ToolScope {
+            self.scope
+        }
+        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+            MCPToolDeclaration {
+                name: self.name.clone(),
+                description: "Mock".into(),
+                input_schema: json!({}),
+                output_schema: None,
+                disabled: false,
+            }
+        }
+        async fn call(&self, _params: Value) -> NativeToolResult {
+            Ok(ToolCallResult::success(Some("ok".into()), None))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_scope_filtering() {
+        let manager = ToolManager::new();
+
+        // Register a Chat tool
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "chat_only".into(),
+                scope: ToolScope::Chat,
+            }))
+            .await
+            .unwrap();
+        // Register a Workflow tool
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "wf_only".into(),
+                scope: ToolScope::Workflow,
+            }))
+            .await
+            .unwrap();
+        // Register a Both tool
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "both".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .unwrap();
+
+        // 1. Filter for Chat: Should get chat_only + both
+        let chat_specs = manager
+            .get_tool_calling_spec(Some(ToolScope::Chat), None)
+            .await
+            .unwrap();
+        let names: HashSet<_> = chat_specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains("chat_only"));
+        assert!(names.contains("both"));
+        assert!(!names.contains("wf_only"));
+
+        // 2. Filter for Workflow: Should get everything (WF + Chat + Both)
+        let wf_specs = manager
+            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .await
+            .unwrap();
+        let names: HashSet<_> = wf_specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains("wf_only"));
+        assert!(names.contains("chat_only"));
+        assert!(names.contains("both"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_wrapper_integration() {
+        let manager = ToolManager::new();
+
+        // Mock data for registration
+        let server_name = "test_server";
+        let tool_decl = MCPToolDeclaration {
+            name: "test_tool".into(),
+            description: "Desc".into(),
+            input_schema: json!({}),
+            output_schema: None,
+            disabled: false,
+        };
+
+        // We can't easily mock McpClient without extra traits, but we can manually
+        // trigger register_mcp_server_inner with a dummy client if needed.
+        // For simplicity, let's verify if the registry handles combined names correctly.
+
+        let combined_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, "test_tool");
+
+        // Manually register a wrapper to see if calling spec works
+        let wrapper = Arc::new(McpToolWrapper {
+            server_name: server_name.into(),
+            tool_decl: tool_decl.clone(),
+            client: Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: "test".into(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ), // Dummy
+            combined_name: combined_name.clone(),
+        });
+
+        manager.register_tool(wrapper).await.unwrap();
+
+        let specs = manager.get_tool_calling_spec(None, None).await.unwrap();
+        let names: HashSet<_> = specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(combined_name.as_str()));
     }
 }
 

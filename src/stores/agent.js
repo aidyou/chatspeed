@@ -10,9 +10,13 @@ import { ref } from 'vue';
  * @property {string} systemPrompt - The system prompt for the agent.
  * @property {string[]} availableTools - A list of tool IDs available to the agent.
  * @property {string[]} autoApprove - A list of tool IDs that are auto-approved.
- * @property {string} planModel - The model used for planning.
- * @property {string} actModel - The model used for acting.
- * @property {string} visionModel - The model used for vision tasks.
+ * @property {Object} planModel - The model used for planning.
+ * @property {Object} actModel - The model used for acting.
+ * @property {Object} visionModel - The model used for vision tasks.
+ * @property {Object} codingModel - The model used for coding tasks.
+ * @property {Object} copywritingModel - The model used for writing tasks.
+ * @property {Object} browsingModel - The model used for browsing tasks.
+ * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
  */
 
@@ -21,14 +25,12 @@ import { ref } from 'vue';
  * @property {string} id - The unique identifier of the tool.
  * @property {string} name - The name of the tool.
  * @property {string} description - The description of the tool.
- * @property {string} category - The category of the tool (e.g., "Web", "MCP").
+ * @property {string} category - The category of the tool (e.g., "Web", "FS", "System").
  */
 
 /**
  * Transforms agent data from the backend (snake_case, JSON strings)
  * to the frontend format (camelCase, objects).
- * @param {Object} backendAgent - The agent object from the backend.
- * @returns {Agent} The transformed agent object for the frontend.
  */
 const _transformFromBackend = (backendAgent) => {
   if (!backendAgent) return null;
@@ -36,24 +38,48 @@ const _transformFromBackend = (backendAgent) => {
   const parseModel = (modelStr) => {
     try {
       if (modelStr && typeof modelStr === 'string') return JSON.parse(modelStr);
+      if (modelStr && typeof modelStr === 'object') return modelStr;
     } catch (e) {
       console.error('Failed to parse model string:', modelStr, e);
     }
     return { id: '', model: '' };
   };
 
+  let models = {
+    plan: parseModel(backendAgent.plan_model),
+    act: parseModel(backendAgent.act_model),
+    vision: parseModel(backendAgent.vision_model),
+    coding: { id: '', model: '' },
+    copywriting: { id: '', model: '' },
+    browsing: { id: '', model: '' }
+  };
+
+  if (backendAgent.models) {
+    try {
+      const unifiedModels = JSON.parse(backendAgent.models);
+      models = { ...models, ...unifiedModels };
+    } catch (e) {
+      console.error('Failed to parse unified models JSON:', e);
+    }
+  }
+
   return {
     id: backendAgent.id,
     name: backendAgent.name,
-    description: backendAgent.description,
+    description: backendAgent.description || '',
     systemPrompt: backendAgent.system_prompt,
     agentType: backendAgent.agent_type || 'autonomous',
     planningPrompt: backendAgent.planning_prompt || '',
     availableTools: backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : [],
     autoApprove: backendAgent.auto_approve ? JSON.parse(backendAgent.auto_approve) : [],
-    planModel: parseModel(backendAgent.plan_model),
-    actModel: parseModel(backendAgent.act_model),
-    visionModel: parseModel(backendAgent.vision_model),
+    planModel: models.plan,
+    actModel: models.act,
+    visionModel: models.vision,
+    codingModel: models.coding,
+    copywritingModel: models.copywriting,
+    browsingModel: models.browsing,
+    shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
+    models: backendAgent.models || '',
     maxContexts: backendAgent.max_contexts || 128000
   };
 };
@@ -61,16 +87,27 @@ const _transformFromBackend = (backendAgent) => {
 /**
  * Transforms agent data from the frontend (camelCase, objects)
  * to the backend format (snake_case, JSON strings).
- * @param {Agent} frontendAgent - The agent object from the frontend.
- * @returns {Object} The transformed agent payload for the backend.
  */
 const _transformToBackend = (frontendAgent) => {
   const stringifyModel = (modelObj) => {
-    if (modelObj?.id && modelObj.model) {
+    if (modelObj?.id !== undefined && modelObj.model) {
       return JSON.stringify(modelObj);
     }
     return '';
   };
+
+  // If models field isn't already a consolidated string, create it
+  let modelsJson = frontendAgent.models;
+  if (!modelsJson) {
+    modelsJson = JSON.stringify({
+      plan: frontendAgent.planModel,
+      act: frontendAgent.actModel,
+      vision: frontendAgent.visionModel,
+      coding: frontendAgent.codingModel,
+      copywriting: frontendAgent.copywritingModel,
+      browsing: frontendAgent.browsingModel
+    });
+  }
 
   return {
     id: frontendAgent.id,
@@ -81,20 +118,19 @@ const _transformToBackend = (frontendAgent) => {
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
+    shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
     plan_model: stringifyModel(frontendAgent.planModel),
     act_model: stringifyModel(frontendAgent.actModel),
     vision_model: stringifyModel(frontendAgent.visionModel),
+    models: modelsJson,
     max_contexts: frontendAgent.maxContexts
   };
 };
 
 
 export const useAgentStore = defineStore('agent', () => {
-  /** @type {import('vue').Ref<Agent[]>} */
   const agents = ref([]);
-  /** @type {import('vue').Ref<Tool[]>} */
   const availableTools = ref([]);
-
   const loading = ref(false);
   const error = ref(null);
 
@@ -110,9 +146,6 @@ export const useAgentStore = defineStore('agent', () => {
     throw err;
   };
 
-  /**
-   * Fetches all agents from the backend.
-   */
   const fetchAgents = async () => {
     loading.value = true;
     error.value = null;
@@ -126,14 +159,12 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  /**
-   * Fetches all available tools from the backend.
-   */
   const fetchAvailableTools = async () => {
     loading.value = true;
     error.value = null;
     try {
       const result = await invokeWrapper('get_available_tools');
+      // Each result item now includes {id, name, category}
       availableTools.value = result || [];
     } catch (err) {
       _handleError(err, 'Failed to fetch available tools');
@@ -142,11 +173,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  /**
-   * Fetches a single agent by its ID.
-   * @param {string} id - The ID of the agent to fetch.
-   * @returns {Promise<Agent|null>} The agent data.
-   */
   const getAgent = async (id) => {
     loading.value = true;
     error.value = null;
@@ -160,19 +186,15 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  /**
-   * Saves an agent (creates a new one or updates an existing one).
-   * @param {Agent} payload - The agent data from the form.
-   * @returns {Promise<void>}
-   */
   const saveAgent = async (payload) => {
     loading.value = true;
     error.value = null;
     try {
-      const agentPayload = _transformToBackend(payload);
-      const command = agentPayload.id ? 'update_agent' : 'add_agent';
-      await invokeWrapper(command, { agentPayload });
-      await fetchAgents(); // Refresh the list
+      const agent = _transformToBackend(payload);
+      const command = agent.id ? 'update_agent' : 'add_agent';
+      // Corrected payload key to match Rust command 'agent' parameter
+      await invokeWrapper(command, { agent });
+      await fetchAgents();
     } catch (err) {
       _handleError(err, 'Failed to save agent');
     } finally {
@@ -180,10 +202,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  /**
-   * Deletes an agent by its ID.
-   * @param {string} id - The ID of the agent to delete.
-   */
   const deleteAgent = async (id) => {
     loading.value = true;
     error.value = null;
@@ -200,11 +218,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  /**
-   * Fetches an agent and prepares it for copying.
-   * @param {string} id - The ID of the agent to copy.
-   * @returns {Promise<Agent>} A new agent object ready for the edit form.
-   */
   const copyAgent = async (id) => {
     const agentToCopy = await getAgent(id);
     if (!agentToCopy) {
@@ -212,23 +225,18 @@ export const useAgentStore = defineStore('agent', () => {
     }
     return {
       ...agentToCopy,
-      id: null, // Remove ID to indicate it's a new agent
+      id: null,
       name: `${agentToCopy.name}-Copy`,
     };
   };
 
-  /**
-   * Updates the order of agents.
-   * NOTE: Backend command 'update_agent_order' is assumed to exist.
-   * @param {Agent[]} orderedAgents - The array of agents in the new order.
-   */
   const updateAgentOrder = async (orderedAgents) => {
     loading.value = true;
     error.value = null;
     try {
       const agentIds = orderedAgents.map(a => a.id);
       await invokeWrapper('update_agent_order', { agentIds });
-      agents.value = [...orderedAgents]; // Update local state to reflect new order
+      agents.value = [...orderedAgents];
     } catch (err) {
       _handleError(err, 'Failed to update agent order');
     } finally {

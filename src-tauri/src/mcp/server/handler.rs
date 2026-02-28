@@ -106,7 +106,7 @@ impl McpProxyHandler {
         let all_tools = self
             .chat_state
             .tool_manager
-            .get_tool_calling_spec(Some(exclude_tools))
+            .get_tool_calling_spec(None, Some(exclude_tools))
             .await
             .unwrap_or_default();
 
@@ -191,7 +191,7 @@ impl ServerHandler for McpProxyHandler {
         let all_tools = self
             .chat_state
             .tool_manager
-            .get_tool_calling_spec(Some(exclude_tools))
+            .get_tool_calling_spec(None, Some(exclude_tools))
             .await
             .unwrap_or_default();
 

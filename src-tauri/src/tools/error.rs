@@ -76,3 +76,45 @@ impl From<String> for ToolError {
         ToolError::ExecutionFailed(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_string_conversion() {
+        let error = ToolError::from("test error".to_string());
+        match error {
+            ToolError::ExecutionFailed(msg) => assert_eq!(msg, "test error"),
+            _ => panic!("Expected ExecutionFailed variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_variants() {
+        // Test that each variant can be created and contains the expected message
+        let config = ToolError::Config("config error".into());
+        assert!(matches!(config, ToolError::Config(_)));
+
+        let security = ToolError::Security("security violation".into());
+        assert!(matches!(security, ToolError::Security(_)));
+
+        let io = ToolError::IoError("io error".into());
+        assert!(matches!(io, ToolError::IoError(_)));
+
+        let invalid_params = ToolError::InvalidParams("invalid params".into());
+        assert!(matches!(invalid_params, ToolError::InvalidParams(_)));
+
+        let execution_failed = ToolError::ExecutionFailed("execution failed".into());
+        assert!(matches!(execution_failed, ToolError::ExecutionFailed(_)));
+    }
+
+    #[test]
+    fn test_error_display() {
+        // Test that Display trait works (via #[derive(Error)])
+        let error = ToolError::ExecutionFailed("test".into());
+        let display = format!("{}", error);
+        // Display will show the i18n-translated message, but at least ensure it doesn't panic
+        assert!(!display.is_empty());
+    }
+}

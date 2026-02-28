@@ -259,6 +259,10 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_status,
             update_workflow_title,
             update_workflow_todo_list,
+            workflow_start,
+            workflow_signal,
+            workflow_stop,
+            workflow_get_tasks,
 
             // dev tools
             test_scrape,
@@ -623,6 +627,24 @@ pub async fn run() -> crate::error::Result<()> {
             // Required by: updater commands and background update task
             let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
             app.manage(update_manager.clone());
+
+            // State 6: TsidGenerator
+            let tsid_generator = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("Failed to init TSID generator"));
+            app.manage(tsid_generator.clone());
+
+            // State 7: TauriGateway (Singleton for ReAct signals)
+            let gateway = Arc::new(crate::workflow::react::gateway::TauriGateway::new(app.handle().clone()));
+            app.manage(gateway.clone());
+
+            // State 8: SubAgentFactory
+            let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
+                main_store: main_store.clone(),
+                chat_state: chat_state.clone(),
+                gateway: gateway.clone(),
+                app_data_dir: app.path().app_data_dir().unwrap_or_default(),
+                tsid_generator: tsid_generator.clone(),
+            });
+            app.manage(factory);
 
             // === END STATE REGISTRATION SECTION ===
 
