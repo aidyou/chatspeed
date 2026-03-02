@@ -104,9 +104,10 @@
 
                   <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
                     <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending">
-                      <div class="tool-line header">
-                        <cs name="loading" class="status-icon rotating" />
-                        <span class="tool-title">{{ call.title }}</span>
+                      <div class="tool-line title-wrap">
+                        <span class="tool-title">
+                          <cs name="loading" class="status-icon rotating" /> {{ call.title }}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -560,23 +561,39 @@ const enhancedMessages = computed(() => {
       pendingToolCalls
     }
   }).filter(m => {
-    // 1. Hide answer_user and finish_task results (observations)
+    // 1. Visibility logic for tool results (Observations)
     if (m.role === 'tool') {
       const meta = m.metadata || {}
       const toolCall = meta.tool_call || {}
       const name = toolCall.name || (toolCall.function && toolCall.function.name) || ''
+
+      // Hide internal orchestration tools
       if (name === 'answer_user' || name === 'finish_task') return false
+
+      // Keep everything else (including todo_* results, which provide feedback)
+      return true
     }
 
-    // 2. Standard visibility logic
-    if (m.role !== 'assistant') return true
+    // 2. Visibility logic for Assistant messages
+    if (m.role === 'assistant') {
+      // Show if there is any text content (message, parsed content, or reasoning)
+      const hasTextContent = (m.message && m.message.trim()) || 
+                            (m.parsed && m.parsed.content && m.parsed.content.trim()) || 
+                            (m.reasoning && m.reasoning.trim())
 
-    // For assistant messages, check if there's anything to display
-    const hasTextContent = m.message?.trim() || m.parsed?.content?.trim() || m.reasoning?.trim()
+      if (hasTextContent) return true
 
-    // Only show if there's text/thought content OR if there are pending tool calls to show
-    return !!hasTextContent || (m.pendingToolCalls && m.pendingToolCalls.length > 0)
+      // Show if there are pending tool calls (even if no text)
+      if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true
+
+      // Hide empty assistant turns (often used just for thinking/routing)
+      return false
+    }
+
+    // 3. User messages always shown
+    return true
   })
+
 })
 // Get todo list from the store
 const todoList = computed(() => workflowStore.todoList)
@@ -705,7 +722,7 @@ const scrollToBottom = () => {
     const el = messagesRef.value
     // Check if user is near bottom (with 100px threshold)
     const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
-    
+
     if (isAtBottom) {
       nextTick(() => {
         el.scrollTop = el.scrollHeight
