@@ -8,15 +8,16 @@ use std::str::FromStr;
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
-use crate::ai::interaction::constants::{
-    TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
-};
 use crate::ai::network::{ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, TokenUsage};
 use crate::ai::traits::chat::{
-    ChatResponse, FinishReason, MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration,
+    ChatMetadata, ChatResponse, FinishReason, MCPToolDeclaration, MessageType, ModelDetails,
+    ToolCallDeclaration,
 };
 use crate::ai::traits::{chat::AiChatTrait, stoppable::Stoppable};
-use crate::ai::util::{init_extra_params, process_custom_headers, update_or_create_metadata};
+use crate::ai::util::{
+    init_request_params, init_request_params_value, merge_custom_params, merge_custom_params_value,
+    process_custom_headers,
+};
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
 use crate::db::{AiModel, ModelConfig};
 use crate::{
@@ -54,7 +55,7 @@ impl OpenAIChat {
         chat_id: String,
         response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-        metadata_option: Option<Value>,
+        metadata_option: Option<ChatMetadata>,
         provider_name: String, // Added to correctly attribute errors
         is_stream: bool,       // Added to distinguish between stream and non-stream responses
     ) -> Result<String, AiError> {
@@ -112,7 +113,7 @@ impl OpenAIChat {
                             chat_id.clone(),
                             chunk,
                             MessageType::Error,
-                            metadata_option.clone(),
+                            metadata_option.as_ref().and_then(|m| m.to_value()),
                             Some(FinishReason::Error),
                         ));
                         err
@@ -144,7 +145,7 @@ impl OpenAIChat {
                                     chat_id.clone(),
                                     content,
                                     MessageType::Reasoning,
-                                    metadata_option.clone(),
+                                    metadata_option.as_ref().and_then(|m| m.to_value()),
                                     None,
                                 ));
                             }
@@ -158,7 +159,7 @@ impl OpenAIChat {
                                     chat_id.clone(),
                                     content,
                                     msg_type,
-                                    metadata_option.clone(),
+                                    metadata_option.as_ref().and_then(|m| m.to_value()),
                                     None,
                                 ));
                             }
@@ -181,8 +182,6 @@ impl OpenAIChat {
                                 // Append current part's arguments
                                 if let Some(args_chunk) = part.arguments {
                                     if !args_chunk.is_empty() {
-                                        // acc_call.arguments was initialized as Some(String::new()) in or_insert_with
-                                        // So it's safe to unwrap here
                                         if let Some(existing_args) = acc_call.arguments.as_mut() {
                                             existing_args.push_str(&args_chunk);
                                         }
@@ -225,7 +224,7 @@ impl OpenAIChat {
                         chat_id.clone(),
                         chunk,
                         MessageType::Error,
-                        metadata_option.clone(),
+                        metadata_option.as_ref().and_then(|m| m.to_value()),
                         None,
                     ));
                     return Err(err);
@@ -253,16 +252,16 @@ impl OpenAIChat {
             chat_id.clone(),
             String::new(),
             MessageType::Finished,
-            Some(update_or_create_metadata(
-                metadata_option,
-                TOKENS,
-                json!({
-                    TOKENS_TOTAL: token_usage.total_tokens,
-                    TOKENS_PROMPT: token_usage.prompt_tokens,
-                    TOKENS_COMPLETION: token_usage.completion_tokens,
-                    TOKENS_PER_SECOND: token_usage.tokens_per_second
-                }),
-            )),
+            {
+                let mut meta = metadata_option.unwrap_or_default();
+                meta.update_usage(
+                    token_usage.total_tokens,
+                    token_usage.prompt_tokens,
+                    token_usage.completion_tokens,
+                    token_usage.tokens_per_second,
+                );
+                meta.to_value()
+            },
             Some(finish_reason),
         ));
 
@@ -279,7 +278,7 @@ impl OpenAIChat {
         chat_id: String,
         response: Response,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
-        metadata_option: Option<Value>,
+        metadata_option: Option<ChatMetadata>,
         provider_name: String,
     ) -> Result<String, AiError> {
         // Read response body as text
@@ -335,7 +334,7 @@ impl OpenAIChat {
                 chat_id.clone(),
                 reasoning_content.to_string(),
                 MessageType::Reasoning,
-                metadata_option.clone(),
+                metadata_option.as_ref().and_then(|m| m.to_value()),
                 None,
             ));
         }
@@ -345,7 +344,7 @@ impl OpenAIChat {
                 chat_id.clone(),
                 content.to_string(),
                 MessageType::Text,
-                metadata_option.clone(),
+                metadata_option.as_ref().and_then(|m| m.to_value()),
                 None,
             ));
         }
@@ -355,16 +354,16 @@ impl OpenAIChat {
             chat_id.clone(),
             String::new(),
             MessageType::Finished,
-            Some(update_or_create_metadata(
-                metadata_option,
-                TOKENS,
-                json!({
-                    TOKENS_TOTAL: token_usage.total_tokens,
-                    TOKENS_PROMPT: token_usage.prompt_tokens,
-                    TOKENS_COMPLETION: token_usage.completion_tokens,
-                    TOKENS_PER_SECOND: token_usage.tokens_per_second
-                }),
-            )),
+            {
+                let mut meta = metadata_option.unwrap_or_default();
+                meta.update_usage(
+                    token_usage.total_tokens,
+                    token_usage.prompt_tokens,
+                    token_usage.completion_tokens,
+                    token_usage.tokens_per_second,
+                );
+                meta.to_value()
+            },
             Some(FinishReason::Complete),
         ));
 
@@ -381,7 +380,7 @@ impl OpenAIChat {
         accumulated_tool_calls: &mut HashMap<u32, ToolCallDeclaration>,
         full_response: &str,
         chat_id: &str,
-        metadata_option: &Option<Value>,
+        metadata_option: &Option<ChatMetadata>,
         provider_name: &str,
         callback: &F,
     ) {
@@ -410,7 +409,7 @@ impl OpenAIChat {
                     chat_id.to_string(),
                     serialized_assistant_action,
                     MessageType::ToolCalls,
-                    metadata_option.clone(),
+                    metadata_option.as_ref().and_then(|m| m.to_value()),
                     None,
                 ));
             }
@@ -431,7 +430,7 @@ impl OpenAIChat {
                     chat_id.to_string(),
                     chunk,
                     MessageType::Error,
-                    metadata_option.clone(),
+                    metadata_option.as_ref().and_then(|m| m.to_value()),
                     Some(FinishReason::Error),
                 ));
                 return;
@@ -449,7 +448,7 @@ impl OpenAIChat {
                         chat_id.to_string(),
                         serialized_tcd,
                         MessageType::ToolResults,
-                        metadata_option.clone(),
+                        metadata_option.as_ref().and_then(|m| m.to_value()),
                         None,
                     ));
                     #[cfg(debug_assertions)]
@@ -480,7 +479,7 @@ impl OpenAIChat {
                         chat_id.to_string(),
                         chunk,
                         MessageType::Error,
-                        metadata_option.clone(),
+                        metadata_option.as_ref().and_then(|m| m.to_value()),
                         Some(FinishReason::Error),
                     ));
                 }
@@ -536,15 +535,6 @@ impl_stoppable!(OpenAIChat);
 #[async_trait]
 impl AiChatTrait for OpenAIChat {
     /// Implements chat functionality for OpenAI API
-    ///
-    /// # Arguments
-    /// * `provider_id` - provider id
-    /// * `model` - The model to use
-    /// * `chat_id` - Unique identifier for the chat session
-    /// * `messages` - The chat messages
-    /// * `tools` - Optional tools to use
-    /// * `extra_params` - Additional parameters including proxy settings
-    /// * `callback` - Function for sending updates to the client
     async fn chat(
         &self,
         provider_id: i64,
@@ -552,7 +542,7 @@ impl AiChatTrait for OpenAIChat {
         chat_id: String,
         messages: Vec<Value>,
         tools: Option<Vec<MCPToolDeclaration>>,
-        extra_params: Option<Value>,
+        metadata: Option<ChatMetadata>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError> {
         let mut final_model = model.to_string();
@@ -560,7 +550,6 @@ impl AiChatTrait for OpenAIChat {
 
         let model_detail = if provider_id == 0 {
             // Proxy Mode: Parse group and alias from model string (format: "group@alias")
-            // This is primarily used by the workflow system to route requests through internal proxy groups.
             if let Some((group, alias)) = model.split_once('@') {
                 proxy_group = Some(group.to_string());
                 final_model = alias.to_string();
@@ -588,7 +577,7 @@ impl AiChatTrait for OpenAIChat {
                         chat_id.clone(),
                         chunk,
                         MessageType::Error,
-                        extra_params.clone(),
+                        metadata.as_ref().and_then(|m| m.to_value()),
                         Some(FinishReason::Error),
                     ));
                     err
@@ -607,29 +596,28 @@ impl AiChatTrait for OpenAIChat {
                         chat_id.clone(),
                         chunk,
                         MessageType::Error,
-                        extra_params.clone(),
+                        metadata.as_ref().and_then(|m| m.to_value()),
                         Some(FinishReason::Error),
                     ));
                     err
                 })?
         };
 
-        let params = init_extra_params(model_detail.metadata.clone());
+        let mut merged_metadata = metadata.unwrap_or_default();
+        // Priority: User Metadata > Model Config
+        merged_metadata.merge_with_model_config(&model_detail);
+
+        let params = init_request_params(&Some(merged_metadata.clone()));
 
         let url = crate::constants::get_static_var(&crate::constants::CHAT_COMPLETION_PROXY);
 
-        // Determine if stream is enabled.
-        // Priority: extra_params > model_metadata > default (true)
-        let stream_enabled = extra_params
-            .as_ref()
-            .and_then(|v| v.get("stream"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| {
-                params
-                    .get("stream")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true)
-            });
+        // Priority for stream: metadata > model_metadata > default (true)
+        let stream_enabled = merged_metadata.stream.unwrap_or_else(|| {
+            init_request_params_value(model_detail.metadata.clone())
+                .get("stream")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+        });
 
         let mut payload = json!({
             "model": final_model,
@@ -637,98 +625,73 @@ impl AiChatTrait for OpenAIChat {
             "stream": stream_enabled,
         });
 
-        // Add optional parameters if they exist and are not null
+        // Add custom body parameters from model metadata
+        merge_custom_params_value(&mut payload, &model_detail.metadata);
+        // Add custom body parameters from user metadata (ChatMetadata)
+        merge_custom_params(&mut payload, &Some(merged_metadata.clone()));
+
+        // Inject standard parameters with range validation
         if let Some(obj) = payload.as_object_mut() {
-            // Handle max_tokens if provided
-            if model_detail.max_tokens > 0 {
-                obj.insert("max_tokens".to_string(), json!(model_detail.max_tokens));
-            }
-
-            // Handle temperature if provided
-            // OpenAI temperature range is typically 0 to 2.
-            // You might want to add validation here, e.g., if temperature_val >= 0.0 && temperature_val <= 2.0
-            if model_detail.temperature >= 0.0 && model_detail.temperature <= 2.0 {
-                obj.insert("temperature".to_string(), json!(model_detail.temperature));
-            }
-
-            // Zero -> unset
-            if model_detail.top_p > 0.0 && model_detail.top_p <= 1.0 {
-                obj.insert("top_p".to_string(), json!(model_detail.top_p));
-            }
-
-            // frequency_penalty: OpenAI default is 0.0. Range: -2.0 to 2.0.
-            if let Some(v) = params
-                .get("frequency_penalty")
-                .as_ref()
-                .and_then(|v| v.as_f64())
-            {
-                if v != 0.0 {
-                    obj.insert("frequency_penalty".to_string(), json!(v));
+            // max_tokens: must be positive
+            if let Some(v) = merged_metadata.max_tokens {
+                if v > 0 {
+                    obj.insert("max_tokens".to_string(), json!(v));
                 }
             }
 
-            // presence_penalty: OpenAI default is 0.0. Range: -2.0 to 2.0.
-            if let Some(v) = params
-                .get("presence_penalty")
-                .as_ref()
-                .and_then(|v| v.as_f64())
-            {
-                if v != 0.0 {
-                    obj.insert("presence_penalty".to_string(), json!(v));
+            // temperature: OpenAI range is typically 0.0 to 2.0
+            if let Some(v) = merged_metadata.temperature {
+                if v >= 0.0 && v <= 2.0 {
+                    obj.insert("temperature".to_string(), json!(v));
                 }
             }
 
-            // Handle response_format if provided
-            // OpenAI expects an object like {"type": "text"} or {"type": "json_object"}
-            if let Some(rf_val) = params.get("response_format") {
-                if let Some(rf_str) = rf_val.as_str() {
-                    // If user provides a string like "text" or "json_object"
-                    obj.insert("response_format".to_string(), json!({ "type": rf_str }));
-                } else if rf_val.is_object() {
-                    // If user provides the full object e.g. {"type": "json_object"}
-                    obj.insert("response_format".to_string(), rf_val.clone());
+            // top_p: range 0.0 to 1.0, zero means unset
+            if let Some(v) = merged_metadata.top_p {
+                if v > 0.0 && v <= 1.0 {
+                    obj.insert("top_p".to_string(), json!(v));
                 }
-                // If not a known string or an object, it's omitted, letting OpenAI use its default.
-                // Consider logging a warning for unsupported formats if necessary.
             }
 
-            if let Some(stop_val) = params.get("stop_sequences").cloned() {
-                if !stop_val.is_null() {
-                    obj.insert("stop".to_string(), stop_val);
+            // Other OpenAI params from initialized request params
+            if let Some(v) = params.get("frequency_penalty") {
+                if v.as_f64() != Some(0.0) {
+                    obj.insert("frequency_penalty".to_string(), v.clone());
                 }
             }
-            if let Some(n_val) = params.get("candidate_count").cloned() {
-                if let Some(n) = n_val.as_u64() {
-                    // Check if it's a number and > 0
-                    if n > 0 {
-                        obj.insert("n".to_string(), json!(n));
+            if let Some(v) = params.get("presence_penalty") {
+                if v.as_f64() != Some(0.0) {
+                    obj.insert("presence_penalty".to_string(), v.clone());
+                }
+            }
+            if let Some(v) = params.get("response_format") {
+                obj.insert("response_format".to_string(), v.clone());
+            }
+            if let Some(v) = params.get("stop") {
+                if !v.is_null() {
+                    obj.insert("stop".to_string(), v.clone());
+                }
+            }
+            if let Some(v) = params.get("n") {
+                if !v.is_null() {
+                    obj.insert("n".to_string(), v.clone());
+                }
+            }
+            if let Some(v) = params.get("user") {
+                if !v.is_null() {
+                    obj.insert("user".to_string(), v.clone());
+                }
+            }
+
+            if let Some(tools_list) = tools.as_ref() {
+                let openai_tools: Vec<Value> =
+                    tools_list.iter().map(|tool| tool.to_openai()).collect();
+                if !openai_tools.is_empty() {
+                    obj.insert("tools".to_string(), json!(openai_tools));
+                    if let Some(choice) = params.get("tool_choice") {
+                        obj.insert("tool_choice".to_string(), choice.clone());
                     }
                 }
-            }
-            if let Some(user_val) = params.get("user_id").cloned() {
-                if !user_val.is_null() {
-                    obj.insert("user".to_string(), user_val);
-                }
-            }
-
-            match tools.as_ref() {
-                Some(tools) => {
-                    let openai_tools = tools
-                        .into_iter()
-                        .map(|tool| tool.to_openai())
-                        .collect::<Vec<Value>>();
-                    if !openai_tools.is_empty() {
-                        obj.insert("tools".to_string(), json!(openai_tools));
-                        // Only add tool_choice if it's explicitly provided in the params.
-                        // Avoids sending a default "auto" which may not be supported by all models.
-                        if let Some(tool_choice_val) = params.get("tool_choice").cloned() {
-                            if tool_choice_val.as_str().map_or(true, |s| !s.is_empty()) {
-                                obj.insert("tool_choice".to_string(), tool_choice_val);
-                            }
-                        }
-                    }
-                }
-                None => {}
             }
         }
 
@@ -738,15 +701,16 @@ impl AiChatTrait for OpenAIChat {
             "x-cs-internal-request": "true",
         });
 
-        // Only include provider ID if it's not the internal proxy indicator (0)
         if provider_id != 0 {
             if let Some(obj) = headers_json.as_object_mut() {
-                obj.insert("x-cs-provider-id".to_string(), json!(provider_id.to_string()));
+                obj.insert(
+                    "x-cs-provider-id".to_string(),
+                    json!(provider_id.to_string()),
+                );
             }
         }
 
-        // Add custom headers from model metadata
-        let custom_headers = process_custom_headers(&model_detail.metadata, &chat_id);
+        let custom_headers = process_custom_headers(&Some(merged_metadata.clone()), &chat_id);
         if let Some(headers_obj) = headers_json.as_object_mut() {
             for (k, v) in custom_headers {
                 headers_obj.insert(k, json!(v));
@@ -774,13 +738,13 @@ impl AiChatTrait for OpenAIChat {
             .await
             .map_err(|e| {
                 let err = AiError::ApiRequestFailed {
-                    status_code: 0, // N/A for network errors before HTTP response
+                    status_code: 0,
                     provider: model_detail.api_protocol.clone(),
                     details: e.to_string(),
                 };
 
                 let error_payload = JsonErrorPayload {
-                    status: 503, // Service Unavailable or network error
+                    status: 503,
                     message: &err.to_string(),
                 };
                 let chunk =
@@ -790,7 +754,7 @@ impl AiChatTrait for OpenAIChat {
                     chat_id.clone(),
                     chunk,
                     MessageType::Error,
-                    extra_params.clone(),
+                    merged_metadata.to_value(),
                     Some(FinishReason::Error),
                 ));
                 err
@@ -801,7 +765,7 @@ impl AiChatTrait for OpenAIChat {
                 .raw_response
                 .as_ref()
                 .map(|r| r.status().as_u16())
-                .unwrap_or(500); // Default to 500 if no status
+                .unwrap_or(500);
 
             let err = AiError::ApiRequestFailed {
                 status_code,
@@ -819,7 +783,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                extra_params,
+                merged_metadata.to_value(),
                 Some(FinishReason::Error),
             ));
             return Err(err);
@@ -830,16 +794,14 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 raw_response,
                 callback,
-                extra_params,
+                Some(merged_metadata),
                 model_detail.name.clone(),
                 stream_enabled,
             )
             .await
         } else {
-            // This case occurs when the request fails in a way that a response object isn't available,
-            // but it wasn't caught by the initial network error mapping. The content field contains the error details.
             let err = AiError::ApiRequestFailed {
-                status_code: 0, // N/A for network errors before HTTP response
+                status_code: 0,
                 provider: model_detail.name.clone(),
                 details: response.content.clone(),
             };
@@ -854,7 +816,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                extra_params,
+                merged_metadata.to_value(),
                 Some(FinishReason::Error),
             ));
             return Err(err);
@@ -866,16 +828,17 @@ impl AiChatTrait for OpenAIChat {
         api_protocol: String,
         api_url: Option<&str>,
         api_key: Option<&str>,
-        extra_args: Option<Value>,
+        extra_args: Option<ChatMetadata>,
     ) -> Result<Vec<ModelDetails>, AiError> {
+        let metadata_value = extra_args.and_then(|m| m.to_value());
         let model_details = match ChatProtocol::from_str(&api_protocol) {
             Ok(ChatProtocol::Claude) => {
-                super::list_models::claude_list_models(api_url, api_key, extra_args).await
+                super::list_models::claude_list_models(api_url, api_key, metadata_value).await
             }
             Ok(ChatProtocol::Gemini) => {
-                super::list_models::gemini_list_models(api_url, api_key, extra_args).await
+                super::list_models::gemini_list_models(api_url, api_key, metadata_value).await
             }
-            _ => super::list_models::openai_list_models(api_url, api_key, extra_args).await,
+            _ => super::list_models::openai_list_models(api_url, api_key, metadata_value).await,
         }?;
 
         Ok(model_details)

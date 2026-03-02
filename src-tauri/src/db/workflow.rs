@@ -32,9 +32,13 @@ pub struct WorkflowMessage {
     pub session_id: String,
     pub role: String,
     pub message: String,
+    pub reasoning: Option<String>,
     pub metadata: Option<Value>,
     pub step_type: Option<String>,
     pub step_index: i32,
+    #[serde(default)]
+    pub is_error: bool,
+    pub error_type: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -50,8 +54,11 @@ pub struct WorkflowSnapshot {
 
 impl From<&Row<'_>> for Workflow {
     fn from(row: &Row<'_>) -> Self {
-        let allowed_paths_str: Option<String> = row.get("allowed_paths").ok();
-        let allowed_paths = allowed_paths_str.and_then(|s| serde_json::from_str(&s).ok());
+        // Try to get as string first, then parse JSON
+        let allowed_paths: Option<Value> = row.get::<_, Option<String>>("allowed_paths")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok());
 
         Self {
             id: row.get("id").unwrap_or_default(),
@@ -89,9 +96,12 @@ impl From<&Row<'_>> for WorkflowMessage {
             session_id: row.get("session_id").unwrap_or_default(),
             role: row.get("role").unwrap_or_default(),
             message: row.get("message").unwrap_or_default(),
+            reasoning: row.get("reasoning").ok(),
             metadata,
             step_type: row.get("step_type").ok(),
             step_index: row.get("step_index").unwrap_or_default(),
+            is_error: row.get("is_error").unwrap_or(false),
+            error_type: row.get("error_type").ok(),
             created_at: row.get("created_at").ok(),
         }
     }
@@ -147,8 +157,8 @@ impl MainStore {
             .and_then(|v| serde_json::to_string(v).ok());
 
         conn.execute(
-            "INSERT INTO workflow_messages (session_id, role, message, metadata, step_type, step_index) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![&msg.session_id, &msg.role, &msg.message, &metadata, &msg.step_type, &msg.step_index],
+            "INSERT INTO workflow_messages (session_id, role, message, reasoning, metadata, step_type, step_index, is_error, error_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![&msg.session_id, &msg.role, &msg.message, &msg.reasoning, &metadata, &msg.step_type, &msg.step_index, &msg.is_error, &msg.error_type],
         )?;
 
         let new_id = conn.last_insert_rowid();
@@ -215,6 +225,25 @@ impl MainStore {
         Ok(())
     }
 
+    /// Updates the allowed paths of a workflow.
+    pub fn update_workflow_allowed_paths(
+        &self,
+        workflow_id: &str,
+        allowed_paths: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE workflows SET allowed_paths = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![allowed_paths, workflow_id],
+        )?;
+
+        Ok(())
+    }
+
     /// Updates the status of a workflow.
     pub fn update_workflow_status(
         &self,
@@ -270,5 +299,30 @@ impl MainStore {
         )?;
 
         Ok(())
+    }
+
+    /// Gets the todo list for a workflow as a JSON array.
+    pub fn get_todo_list_for_workflow(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<Value>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let todo_list_str: Option<String> = conn
+            .query_row(
+                "SELECT todo_list FROM workflows WHERE id = ?1",
+                params![workflow_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let todos = todo_list_str
+            .and_then(|s| serde_json::from_str::<Vec<Value>>(&s).ok())
+            .unwrap_or_default();
+
+        Ok(todos)
     }
 }

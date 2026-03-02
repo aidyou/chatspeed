@@ -178,6 +178,7 @@ impl OutputAdapter for GeminiOutputAdapter {
                 tool_type: _,
                 id,
                 name,
+                ..
             } => {
                 if let Ok(mut status) = sse_status.write() {
                     status
@@ -190,7 +191,7 @@ impl OutputAdapter for GeminiOutputAdapter {
                 }
                 Ok(vec![])
             }
-            UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+            UnifiedStreamChunk::ToolUseDelta { id, delta, .. } => {
                 if let Ok(mut status) = sse_status.write() {
                     if let Some(tool) = status.gemini_tools.get_mut(&id) {
                         tool.args.push_str(&delta);

@@ -48,8 +48,11 @@ impl ToolDefinition for TodoCreateTool {
         crate::tools::TOOL_TODO_CREATE
     }
     fn description(&self) -> &str {
-        "Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\n\
+        "Use this tool to create one or more structured tasks for your current session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\n\
         It also helps the user understand the progress of the task and overall progress of their requests.\n\n\
+        ## Capabilities\n\
+        - **Bulk Creation**: You can pass an array of tasks in the `tasks` field to initialize a complete plan in one call.\n\
+        - **Single Creation**: Alternatively, pass `subject` and `description` directly for a single task.\n\n\
         ## When to Use This Tool\n\
         Use this tool proactively in these scenarios:\n\
         - Complex multi-step tasks - When a task requires 3 or more distinct steps or actions\n\
@@ -70,25 +73,37 @@ impl ToolDefinition for TodoCreateTool {
         - **description**: Detailed description of what needs to be done, including context and acceptance criteria\n\
         - **activeForm**: Present continuous form shown in spinner when task is in_progress (e.g., \"Fixing authentication bug\"). This is displayed to the user while you work on the task."
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::System
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::System
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "subject": { "type": "string", "description": "Brief title" },
-                    "description": { "type": "string", "description": "Detailed description" }
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "subject": { "type": "string", "description": "Brief title of the task" },
+                                "description": { "type": "string", "description": "Detailed description of the task" }
+                            },
+                            "required": ["subject", "description"]
+                        },
+                        "description": "An array of tasks to create at once"
+                    },
+                    "subject": { "type": "string", "description": "Brief title (if creating a single task)" },
+                    "description": { "type": "string", "description": "Detailed description (if creating a single task)" }
                 },
-                "required": ["subject", "description"]
+                "description": "Provide 'tasks' array for bulk creation, or 'subject'/'description' for a single item."
             }),
             output_schema: None,
             disabled: false,
@@ -96,18 +111,39 @@ impl ToolDefinition for TodoCreateTool {
     }
     async fn call(&self, params: Value) -> NativeToolResult {
         let mut list = get_db_todo_list(&self.main_store, &self.session_id).await?;
-        let new_id = (list.len() + 1).to_string();
-        let new_item = json!({
-            "id": new_id,
-            "subject": params["subject"].as_str().unwrap_or("Untitled"),
-            "description": params["description"].as_str().unwrap_or(""),
-            "status": "pending",
-            "created_at": chrono::Local::now().to_rfc3339()
-        });
-        list.push(new_item);
+        let mut created_ids = Vec::new();
+
+        // Determine if we are creating bulk or single
+        let tasks_to_create = if let Some(tasks) = params.get("tasks").and_then(|v| v.as_array()) {
+            tasks.clone()
+        } else if params.get("subject").is_some() {
+            vec![params.clone()]
+        } else {
+            return Err(ToolError::InvalidParams(
+                "Either 'tasks' array or 'subject' and 'description' must be provided".to_string(),
+            ));
+        };
+
+        for task in tasks_to_create {
+            let new_id = (list.len() + 1).to_string();
+            let new_item = json!({
+                "id": new_id,
+                "subject": task["subject"].as_str().unwrap_or("Untitled"),
+                "description": task["description"].as_str().unwrap_or(""),
+                "status": "pending",
+                "created_at": chrono::Local::now().to_rfc3339()
+            });
+            list.push(new_item);
+            created_ids.push(new_id);
+        }
+
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         Ok(ToolCallResult::success(
-            Some(format!("Created todo item with ID: {}", new_id)),
+            Some(format!(
+                "Successfully created {} todo item(s). IDs: {}",
+                created_ids.len(),
+                created_ids.join(", ")
+            )),
             None,
         ))
     }
@@ -136,15 +172,15 @@ impl ToolDefinition for TodoListTool {
         - **subject**: Brief description of the task\n\
         - **status**: 'pending', 'in_progress', or 'completed'"
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::System
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::System
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
@@ -202,15 +238,15 @@ impl ToolDefinition for TodoUpdateTool {
         ## Status Workflow\n\
         Status progresses: `pending` → `in_progress` → `completed`. Use `deleted` to permanently remove a task."
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::System
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::System
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
@@ -218,7 +254,7 @@ impl ToolDefinition for TodoUpdateTool {
                 "type": "object",
                 "properties": {
                     "todo_id": { "type": "string" },
-                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "deleted"] }
+                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "deleted", "failed", "data_missing"] }
                 },
                 "required": ["todo_id", "status"]
             }),
@@ -282,15 +318,15 @@ impl ToolDefinition for TodoGetTool {
         - To understand task dependencies\n\
         - After being assigned a task, to get complete requirements"
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::System
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::System
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
@@ -343,6 +379,7 @@ mod tests {
                 None,
                 "System prompt".to_string(),
                 "autonomous".to_string(),
+                None,
                 None,
                 None,
                 None,
@@ -407,7 +444,10 @@ mod tests {
 
         // Verify update in list
         let res = list_tool.call(json!({})).await.unwrap();
-        assert!(res.content.unwrap().contains("[in_progress] Task 1 (ID: 1)"));
+        assert!(res
+            .content
+            .unwrap()
+            .contains("[in_progress] Task 1 (ID: 1)"));
 
         // 4. Test Get
         let get_tool = TodoGetTool {

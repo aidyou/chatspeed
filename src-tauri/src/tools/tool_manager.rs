@@ -204,7 +204,9 @@ impl ToolManager {
             .state::<Arc<crate::libs::tsid::TsidGenerator>>()
             .inner()
             .clone();
-        let path_guard = Arc::new(crate::workflow::react::security::PathGuard::new(vec![]));
+        let path_guard = Arc::new(std::sync::RwLock::new(
+            crate::workflow::react::security::PathGuard::new(vec![]),
+        ));
         self.register_tool(Arc::new(crate::tools::ShellExecute::new(
             path_guard,
             tsid.clone(),

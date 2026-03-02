@@ -34,8 +34,11 @@ pub enum GatewayPayload {
     Message {
         role: String,
         content: String,
+        reasoning: Option<String>,
         step_type: Option<StepType>,
         step_index: i32,
+        is_error: bool,
+        error_type: Option<String>,
         metadata: Option<serde_json::Value>,
     },
     State {
@@ -45,6 +48,9 @@ pub enum GatewayPayload {
         id: String,
         action: String,
         details: String,
+    },
+    SyncTodo {
+        todo_list: serde_json::Value,
     },
     Error {
         message: String,

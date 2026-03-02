@@ -54,8 +54,11 @@ impl ContextManager {
         &mut self,
         role: String,
         content: String,
+        reasoning: Option<String>,
         step_type: Option<StepType>,
         step_index: i32,
+        is_error: bool,
+        error_type: Option<String>,
         metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
         let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
@@ -64,9 +67,12 @@ impl ContextManager {
             session_id: self.session_id.clone(),
             role,
             message: content,
+            reasoning,
             metadata,
             step_type: step_type.map(|t| t.to_string()),
             step_index,
+            is_error,
+            error_type,
             created_at: None,
         };
 
@@ -112,9 +118,12 @@ impl ContextManager {
             session_id: self.session_id.clone(),
             role: "system".to_string(),
             message: format!("## Previous Context Snapshot\n{}", summary),
+            reasoning: None,
             metadata: Some(json!({ "type": "summary" })),
             step_type: None,
             step_index,
+            is_error: false,
+            error_type: None,
             created_at: None,
         };
 

@@ -15,7 +15,10 @@ use crate::{
     ai::{
         chat::openai::OpenAIChat,
         error::AiError,
-        traits::chat::{MCPToolDeclaration, MessageType, ModelDetails, ToolCallDeclaration},
+        traits::chat::{
+            ChatMetadata, InternalChatParam, MCPToolDeclaration, MessageType, ModelDetails,
+            ToolCallDeclaration,
+        },
         traits::{
             chat::FinishReason,
             chat::{AiChatTrait, ChatResponse},
@@ -161,7 +164,7 @@ impl AiChatEnum {
         chat_id: String,
         messages: Vec<Value>,
         tools: Option<Vec<MCPToolDeclaration>>,
-        extra_params: Option<Value>,
+        metadata: Option<ChatMetadata>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError> {
         impl_chat_method!(
@@ -172,7 +175,7 @@ impl AiChatEnum {
             chat_id,
             messages,
             tools,
-            extra_params,
+            metadata,
             callback
         )
     }
@@ -182,7 +185,7 @@ impl AiChatEnum {
     /// # Arguments
     /// - `api_url`: Optional API URL for the chat request.
     /// - `api_key`: Optional API key for authentication.
-    /// - `extra_params`: Optional extra parameters for the chat.
+    /// - `extra_args`: Optional extra parameters for the chat.
     ///
     /// # Returns
     /// A `Result` containing the list of models or an error.
@@ -191,7 +194,7 @@ impl AiChatEnum {
         api_protocol: String,
         api_url: Option<&str>,
         api_key: Option<&str>,
-        metadata: Option<Value>,
+        metadata: Option<ChatMetadata>,
     ) -> Result<Vec<ModelDetails>, AiError> {
         impl_chat_method!(self, list_models, api_protocol, api_url, api_key, metadata).map_err(
             |e| {
@@ -307,12 +310,14 @@ pub async fn list_models_async(
     .await;
 
     let chat_instance = create_chat!(main_store);
+    let finial_metadata = ChatMetadata::try_from(metadata);
+
     chat_instance
         .list_models(
             api_protocol,
             api_url_clone.as_deref(),
             api_key_clone.as_deref(),
-            metadata,
+            finial_metadata,
         )
         .await
         .map_err(AppError::Ai)
@@ -325,7 +330,7 @@ pub async fn start_new_chat_interaction(
     chat_id: String,
     messages: Vec<Value>,
     tools: Option<Vec<MCPToolDeclaration>>,
-    mut metadata: Option<Value>,
+    metadata: Option<ChatMetadata>,
     callback: Option<Box<dyn Fn(Arc<ChatResponse>) + Send + 'static>>,
 ) -> crate::error::Result<()> {
     // Update the shared message history with the complete list of messages for this turn.
@@ -355,30 +360,15 @@ pub async fn start_new_chat_interaction(
     // This information (`chat_param`) is crucial for subsequent operations,
     // especially if the conversation involves tool calls, as it allows the system
     // to reconstruct the context for the next AI turn.
-    let chat_param_value = json!({
-        "protocol": ChatProtocol::OpenAI.to_string(),
-        "provider_id": provider_id,
-        "model": model.clone(),
-        "org_metadata": metadata.clone().unwrap_or_default(),
-        "active_tools_for_turn": if let Some(t) = &tools {
-            serde_json::to_value(t).unwrap_or_default()
-        } else {
-            Value::Null
-        },
-    });
-
-    if let Some(md_val) = metadata.as_mut() {
-        if let Some(md_obj) = md_val.as_object_mut() {
-            md_obj.insert("chat_param".to_string(), chat_param_value);
-        } else {
-            // If metadata was Some but not an object, overwrite it.
-            // This case might be unlikely if metadata is typically an object or None.
-            metadata = Some(json!({ "chat_param": chat_param_value }));
-        }
-    } else {
-        // If metadata was None, create it with chat_param.
-        metadata = Some(json!({ "chat_param": chat_param_value }));
-    }
+    let mut current_metadata = metadata.unwrap_or_default();
+    let chat_param = InternalChatParam {
+        protocol: ChatProtocol::OpenAI.to_string(),
+        provider_id,
+        model: model.clone(),
+        active_tools_for_turn: tools.clone(),
+        org_metadata: Box::new(current_metadata.clone()),
+    };
+    current_metadata.chat_param = Some(chat_param);
 
     let chat_interface = {
         let mut chats_guard = chat_state_arc.chats.lock().await;
@@ -398,7 +388,7 @@ pub async fn start_new_chat_interaction(
                 chat_id.clone(),
                 messages,
                 tools,
-                metadata,
+                Some(current_metadata),
                 internal_cb,
             )
             .await;
@@ -457,21 +447,16 @@ async fn global_message_processor_loop(
 
     while let Some(response_chunk) = dispatcher_input_rx.recv().await {
         let chat_id = response_chunk.chat_id.clone();
-        let window_label_from_metadata = response_chunk
-            .metadata
-            .as_ref()
-            .and_then(|m| {
-                m.get("windowLabel")
-                    .or_else(|| m.get("label"))
-                    .or_else(|| m.get("window_label"))
-                    .and_then(|v| v.as_str())
-            })
-            .map(String::from);
+        let metadata: ChatMetadata = ChatMetadata::from_value(response_chunk.metadata.clone());
 
-        let window_label = window_label_from_metadata.unwrap_or_else(|| {
-            log::warn!("window_label/label not found in ChatResponse metadata for chat_id: {}. Defaulting to 'main'. UI updates may fail.", chat_id);
-            "main".to_string()
-        });
+        let window_label = metadata
+            .window_label
+            .clone()
+            .or_else(|| metadata.label.clone())
+            .unwrap_or_else(|| {
+                log::warn!("window_label/label not found in ChatResponse metadata for chat_id: {}. Defaulting to 'main'. UI updates may fail.", chat_id);
+                "main".to_string()
+            });
 
         match response_chunk.r#type {
             MessageType::ToolCalls => {
@@ -724,59 +709,33 @@ async fn global_message_processor_loop(
                         let cc_chat_state_clone = chat_state_arc.clone();
                         let cc_chat_id_clone = chat_id.clone();
                         let cc_metadata_clone = response_chunk.metadata.clone();
-                        // #[cfg(debug_assertions)]
-                        // {
-                        //     log::debug!(
-                        //         "metadata for next round: {}",
-                        //         serde_json::to_string_pretty(&cc_metadata_clone)
-                        //             .unwrap_or_default()
-                        //     );
-                        // }
 
                         tokio::spawn(async move {
-                            let chat_param =
-                                cc_metadata_clone.as_ref().and_then(|m| m.get("chat_param"));
+                            let metadata: ChatMetadata =
+                                ChatMetadata::from_value(cc_metadata_clone.clone());
 
-                            let provider_id = chat_param
-                                .and_then(|p| p.get("provider_id")?.as_i64())
-                                .unwrap_or_default();
+                            if let Some(chat_param) = metadata.chat_param {
+                                let provider_id = chat_param.provider_id;
+                                let model = chat_param.model;
+                                let org_metadata = *chat_param.org_metadata;
+                                let tools_for_next_turn = chat_param.active_tools_for_turn;
 
-                            // Use `match` to safely get the model, preventing potential panics.
-                            let model = match chat_param.and_then(|p| p.get("model")?.as_str()) {
-                                Some(m) => m.to_string(),
-                                None => {
-                                    log::error!("Could not find model in chat_param for tool call continuation. Metadata: {:?}", cc_metadata_clone);
-                                    return; // Exit the task if model is not found
+                                if let Err(e) = start_new_chat_interaction(
+                                    cc_chat_state_clone.clone(),
+                                    provider_id,
+                                    model,
+                                    cc_chat_id_clone.clone(),
+                                    messages_for_next_ai_turn,
+                                    tools_for_next_turn,
+                                    Some(org_metadata),
+                                    Some(Box::new(internal_cb_for_next_turn)),
+                                )
+                                .await
+                                {
+                                    log::error!("Failed to start subsequent chat interaction after tool call: {}", e);
                                 }
-                            };
-
-                            let org_metadata = chat_param
-                                .and_then(|p| p.get("org_metadata"))
-                                .map(Value::clone);
-
-                            let tools_for_next_turn: Option<Vec<MCPToolDeclaration>> = chat_param
-                                .and_then(|p| p.get("active_tools_for_turn"))
-                                .and_then(|t_val| {
-                                    if t_val.is_array() {
-                                        serde_json::from_value(t_val.clone()).ok()
-                                    } else {
-                                        None
-                                    }
-                                });
-
-                            if let Err(e) = start_new_chat_interaction(
-                                cc_chat_state_clone.clone(),
-                                provider_id,
-                                model,
-                                cc_chat_id_clone.clone(),
-                                messages_for_next_ai_turn, // Pass the prepared messages
-                                tools_for_next_turn,       // Pass the retrieved tools
-                                org_metadata,
-                                Some(Box::new(internal_cb_for_next_turn)),
-                            )
-                            .await
-                            {
-                                log::error!("Failed to start subsequent chat interaction after tool call: {}", e);
+                            } else {
+                                log::error!("Could not find chat_param in metadata for tool call continuation. Metadata: {:?}", cc_metadata_clone);
                             }
                         });
                     }
@@ -973,12 +932,8 @@ async fn global_message_processor_loop(
 
                 if session_ended_naturally {
                     // Extract chat protocol from metadata for cleanup
-                    if let Some(protocol_str) = response_chunk
-                        .metadata
-                        .as_ref()
-                        .and_then(|m| m.get("chat_param")?.get("protocol")?.as_str())
-                    {
-                        if let Ok(protocol) = ChatProtocol::from_str(protocol_str) {
+                    if let Some(chat_param) = metadata.chat_param {
+                        if let Ok(protocol) = ChatProtocol::from_str(&chat_param.protocol) {
                             let mut chats_guard = chat_state_arc.chats.lock().await;
                             if let Some(protocol_chats) = chats_guard.get_mut(&protocol) {
                                 if protocol_chats.remove(&chat_id).is_some() {

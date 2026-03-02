@@ -27,9 +27,12 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             session_id TEXT NOT NULL,
             role TEXT NOT NULL,
             message TEXT NOT NULL,
+            reasoning TEXT,
             metadata TEXT,
             step_type TEXT,                    -- Enum: 'think', 'act', 'observe'
             step_index INTEGER DEFAULT 0,      -- The index of the step in the current session
+            is_error INTEGER DEFAULT 0,        -- 0 for false, 1 for true
+            error_type TEXT,                   -- Enum: 'Security', 'Io', 'InvalidParams', 'Network', 'Auth', 'Other'
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES workflows(id) ON DELETE CASCADE
         )"
@@ -47,5 +50,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "agents_v5_shell_policy",
         "ALTER TABLE agents ADD COLUMN shell_policy TEXT"
+    ),
+    // Add allowed_paths JSON column to agents
+    (
+        "agents_v5_allowed_paths",
+        "ALTER TABLE agents ADD COLUMN allowed_paths TEXT"
     ),
 ];

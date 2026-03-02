@@ -79,6 +79,7 @@ const _transformFromBackend = (backendAgent) => {
     copywritingModel: models.copywriting,
     browsingModel: models.browsing,
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
+    allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
     models: backendAgent.models || '',
     maxContexts: backendAgent.max_contexts || 128000
   };
@@ -119,6 +120,7 @@ const _transformToBackend = (frontendAgent) => {
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
+    allowed_paths: JSON.stringify(frontendAgent.allowedPaths || []),
     plan_model: stringifyModel(frontendAgent.planModel),
     act_model: stringifyModel(frontendAgent.actModel),
     vision_model: stringifyModel(frontendAgent.visionModel),

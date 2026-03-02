@@ -1,5 +1,5 @@
 <template>
-  <div :class="className">
+  <div :class="[className, { 'is-error': isError }]">
     <div class="chat-reference" v-if="reference.length > 0">
       <div
         class="chat-reference-title"
@@ -64,6 +64,10 @@ const props = defineProps({
   toolCalls: {
     type: Array,
     default: () => []
+  },
+  isError: {
+    type: Boolean,
+    default: false
   }
 })
 

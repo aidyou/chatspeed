@@ -172,6 +172,9 @@
       "actModel": "行动模型",
       "add": "添加智能体",
       "addSuccess": "智能体添加成功！",
+      "authorizedPaths": "授权目录",
+      "authorizedPathsAdd": "添加目录",
+      "authorizedPathsTip": "智能体将只能读写这些目录（及其子目录）下的文件。如果不配置，部分文件操作工具可能无法使用。",
       "autoApprove": "自动批准工具",
       "autonomousMode": "自主模式",
       "availableTools": "可用工具",
@@ -206,6 +209,7 @@
       "selectActModel": "选择行动模型",
       "selectAutoApproveTools": "选择自动批准工具",
       "selectAvailableTools": "选择可用工具",
+      "selectDirectory": "选择目录",
       "selectPlanModel": "选择规划模型",
       "selectProvider": "选择提供商",
       "selectVisionModel": "选择视觉模型",
@@ -228,7 +232,8 @@
       "title": "智能体管理",
       "toolsLabel": "工具",
       "updateSuccess": "智能体更新成功！",
-      "visionModel": "视觉模型"
+      "visionModel": "视觉模型",
+      "workingDirectory": "工作目录"
     },
     "general": {
       "advancedSettings": "高级设置",
@@ -797,11 +802,13 @@
     },
     "autoApproveTooltip": "自动批准工具（不包括交互式工具）",
     "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
+    "continue": "继续执行",
     "editWorkflowTitle": "编辑工作流标题",
     "newWorkflow": "新建工作流",
     "startFailed": "启动工作流失败: {error}",
     "todoList": {
-      "title": "待办事项"
+      "title": "待办事项",
+      "next": "下一步"
     },
     "workflowTitle": "工作流标题"
   }

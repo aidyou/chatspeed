@@ -52,6 +52,43 @@ impl PathGuard {
         self.allowed_roots.iter().map(|(r, _)| r.clone()).collect()
     }
 
+    pub fn update_allowed_roots(&mut self, allowed_roots: Vec<PathBuf>) {
+        let canonical_roots: Vec<PathBuf> = allowed_roots
+            .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+
+        let mut roots_with_ignore = Vec::new();
+        for root in canonical_roots {
+            let mut builder = GitignoreBuilder::new(&root);
+
+            for entry in walkdir::WalkDir::new(&root)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| {
+                    let name = e.file_name().to_string_lossy();
+                    name != ".git" && name != "node_modules"
+                })
+                .filter_map(|e| e.ok())
+            {
+                if entry.file_name() == ".gitignore" {
+                    if let Some(err) = builder.add(entry.path()) {
+                        log::warn!(
+                            "Error loading nested gitignore from {:?}: {}",
+                            entry.path(),
+                            err
+                        );
+                    }
+                }
+            }
+
+            let gitignore = builder.build().ok();
+            roots_with_ignore.push((root, gitignore));
+        }
+
+        self.allowed_roots = roots_with_ignore;
+    }
+
     /// Safely normalizes a path by resolving all '..' and '.' components without hitting the disk.
     fn normalize_path(path: &Path) -> PathBuf {
         let mut components = path.components().peekable();

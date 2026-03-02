@@ -3,6 +3,7 @@ pub mod context;
 pub mod error;
 pub mod executor;
 pub mod gateway;
+pub mod llm;
 pub mod observation;
 pub mod orchestrator;
 pub mod security;

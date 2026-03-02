@@ -1,5 +1,13 @@
 use super::stoppable::Stoppable;
-use crate::{ai::error::AiError, ccproxy::ChatProtocol};
+use crate::{
+    ai::{
+        error::AiError,
+        interaction::constants::{
+            TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
+        },
+    },
+    ccproxy::ChatProtocol,
+};
 
 use async_trait::async_trait;
 use log::warn;
@@ -137,40 +145,6 @@ pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
 }
-
-// #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-// #[serde(rename_all = "camelCase")]
-// pub struct ChatCompletionResult {
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     #[allow(unused)]
-//     pub chat_id: Option<String>,
-
-//     /// content
-//     pub content: String,
-
-//     /// reasoning
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     #[allow(unused)]
-//     pub reasoning: Option<String>,
-
-//     /// token usage
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     #[allow(unused)]
-//     pub usage: Option<Usage>,
-
-//     /// reference
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     #[allow(unused)]
-//     pub reference: Option<Vec<SearchResult>>,
-
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     #[allow(unused)]
-//     pub tools: Option<Vec<ToolCallDeclaration>>,
-
-//     /// finish_reason
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     pub finish_reason: Option<FinishReason>,
-// }
 
 // =================================================
 // Tool definition start
@@ -337,9 +311,7 @@ pub struct ModelDetails {
 
     /// Timestamp or date string of model creation/last update (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_updated: Option<String>, // Alternatively use chrono::DateTime<chrono::Utc>
-
-    /// Model family or series (optional, e.g. "GPT-4", "Claude-3")
+    pub last_updated: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
 
@@ -355,6 +327,186 @@ pub struct ModelDetails {
     /// Additional metadata for provider-specific information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+}
+
+/// Internal parameters used to maintain chat continuity, especially for tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalChatParam {
+    pub protocol: String,
+    pub provider_id: i64,
+    pub model: String,
+    pub active_tools_for_turn: Option<Vec<MCPToolDeclaration>>,
+    /// Original metadata passed from the frontend to be preserved across tool call turns.
+    pub org_metadata: Box<ChatMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomHeader {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomParam {
+    pub key: String,
+    pub value: Value,
+}
+
+/// Metadata and parameters for a chat request.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMetadata {
+    // --- Routing & UI ---
+    pub window_label: Option<String>,
+    pub label: Option<String>, // Alternative for window_label
+    #[serde(default)]
+    pub is_internal_tool_result: bool,
+    pub tools_enabled: Option<bool>,
+
+    // --- Model Control ---
+    pub stream: Option<bool>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub max_tokens: Option<u32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub response_format: Option<Value>,
+    pub stop: Option<Vec<String>>,
+    pub candidate_count: Option<u32>,
+    pub user_id: Option<String>,
+    pub tool_choice: Option<Value>,
+    pub reasoning: Option<bool>,
+
+    // --- Custom Extensions ---
+    pub custom_headers: Option<Vec<CustomHeader>>,
+    pub custom_params: Option<Vec<CustomParam>>,
+
+    // --- Proxy Settings ---
+    pub proxy_type: Option<String>,
+    pub proxy_server: Option<String>,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+
+    // --- Internal State ---
+    pub chat_param: Option<InternalChatParam>,
+
+    // --- Extensibility ---
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Map<String, Value>>,
+}
+
+impl ChatMetadata {
+    /// Deserializes ChatMetadata from a JSON value.
+    pub fn from_value(value: Option<Value>) -> Self {
+        match value {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    #[cfg(debug_assertions)]
+                    panic!(
+                        "Failed to deserialize ChatMetadata in debug mode!\nValue: {:?}\nError: {}",
+                        v, e
+                    );
+
+                    #[cfg(not(debug_assertions))]
+                    {
+                        warn!("Failed to deserialize ChatMetadata from JSON value: {}. Error: {}. Returning default metadata.", v, e);
+                        Self::default()
+                    }
+                }
+            },
+            None => Self::default(),
+        }
+    }
+
+    pub fn try_from(val: Option<Value>) -> Option<Self> {
+        val.and_then(|v| serde_json::from_value(v).ok())
+    }
+
+    /// Converts ChatMetadata to a JSON value.
+    pub fn to_value(&self) -> Option<Value> {
+        serde_json::to_value(self).ok()
+    }
+
+    /// Merges current metadata with model configuration.
+    /// Priority: Current instance (user passed) > Model config.
+    pub fn merge_with_model_config(&mut self, model: &crate::db::AiModel) {
+        if self.temperature.is_none() && model.temperature >= 0.0 {
+            self.temperature = Some(model.temperature);
+        }
+        if self.top_p.is_none() && model.top_p > 0.0 {
+            self.top_p = Some(model.top_p);
+        }
+        if self.top_k.is_none() && model.top_k > 0 {
+            self.top_k = Some(model.top_k as u32);
+        }
+        if self.max_tokens.is_none() && model.max_tokens > 0 {
+            self.max_tokens = Some(model.max_tokens as u32);
+        }
+
+        // Merge custom params from model if not present in self
+        if let Some(model_meta) = &model.metadata {
+            if let Some(model_params) = model_meta.get("customParams").and_then(|v| v.as_array()) {
+                let mut current_params = self.custom_params.clone().unwrap_or_default();
+                for p in model_params {
+                    if let (Some(k), Some(v)) =
+                        (p.get("key").and_then(|v| v.as_str()), p.get("value"))
+                    {
+                        if !current_params.iter().any(|cp| cp.key == k) {
+                            current_params.push(CustomParam {
+                                key: k.to_string(),
+                                value: v.clone(),
+                            });
+                        }
+                    }
+                }
+                self.custom_params = Some(current_params);
+            }
+
+            // Merge custom headers from model
+            if let Some(model_headers) = model_meta.get("customHeaders").and_then(|v| v.as_array())
+            {
+                let mut current_headers = self.custom_headers.clone().unwrap_or_default();
+                for h in model_headers {
+                    if let (Some(k), Some(v)) = (
+                        h.get("key").and_then(|v| v.as_str()),
+                        h.get("value").and_then(|v| v.as_str()),
+                    ) {
+                        if !current_headers.iter().any(|ch| ch.key == k) {
+                            current_headers.push(CustomHeader {
+                                key: k.to_string(),
+                                value: v.to_string(),
+                            });
+                        }
+                    }
+                }
+                self.custom_headers = Some(current_headers);
+            }
+        }
+    }
+
+    /// Merges token usage information into metadata for UI feedback.
+    pub fn update_usage(&mut self, total: u64, prompt: u64, completion: u64, tps: f64) {
+        let usage = json!({
+            TOKENS:total,
+            TOKENS_TOTAL: total,
+            TOKENS_PROMPT: prompt,
+            TOKENS_COMPLETION: completion,
+            TOKENS_PER_SECOND: tps,
+        });
+
+        if let Some(extra) = self.extra.as_mut() {
+            extra.insert("tokens".to_string(), usage);
+        } else {
+            let mut extra = serde_json::Map::new();
+            extra.insert("tokens".to_string(), usage);
+            self.extra = Some(extra);
+        }
+    }
 }
 
 #[async_trait]
@@ -401,7 +553,7 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         chat_id: String,
         messages: Vec<Value>,
         tools: Option<Vec<MCPToolDeclaration>>,
-        extra_params: Option<Value>,
+        metadata: Option<ChatMetadata>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError>;
 
@@ -426,6 +578,6 @@ pub trait AiChatTrait: Send + Sync + Stoppable {
         api_protocol: String,
         api_url: Option<&str>,
         api_key: Option<&str>,
-        extra_args: Option<Value>,
+        extra_args: Option<ChatMetadata>,
     ) -> Result<Vec<ModelDetails>, AiError>;
 }

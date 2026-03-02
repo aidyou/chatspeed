@@ -219,7 +219,7 @@ pub fn adapt_stream_chunk_to_log(
                 );
             }
         }
-        UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+        UnifiedStreamChunk::ToolUseDelta { id, delta, .. } => {
             if let Some(tool_calls) = &mut recorder.tool_calls {
                 if let Some(tool) = tool_calls.get_mut(id) {
                     tool.args.push_str(delta);

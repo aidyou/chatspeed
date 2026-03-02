@@ -88,7 +88,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             vec![], // Allowed paths inherited or managed by the caller
             self.app_data_dir.clone(),
             Some(subagent_type.to_string()),
-            signal_rx,
+            Some(signal_rx),
             self.tsid_generator.clone(),
             self.chat_state.tool_manager.clone(),
         ))

@@ -453,7 +453,7 @@ fn enhance_direct_request_body(
     }
 
     // 4. Final step: Merge model-specific custom body params (Highest override for non-standard fields)
-    crate::ai::util::merge_custom_params(&mut body, &proxy_model.custom_params);
+    crate::ai::util::merge_custom_params_value(&mut body, &proxy_model.custom_params);
 
     body
 }

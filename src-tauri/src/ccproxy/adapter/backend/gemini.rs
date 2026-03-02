@@ -658,7 +658,10 @@ impl BackendAdapter for GeminiBackendAdapter {
         let mut request_json = serde_json::to_value(&gemini_request)?;
 
         // Merge custom params from model config
-        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+        crate::ai::util::merge_custom_params_value(
+            &mut request_json,
+            &unified_request.custom_params,
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
@@ -972,6 +975,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     tool_type: "tool_use".to_string(), // or whatever is appropriate
                                     id: tool_id.clone(),
                                     name: tool_name,
+                                    index: message_index,
                                 });
 
                                 // 2. Send all its arguments in a single delta.
@@ -982,6 +986,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
                                     id: tool_id.clone(),
                                     delta: args_json_string,
+                                    index: message_index,
                                 });
 
                                 // 3. Immediately announce the end of this specific tool call.

@@ -12,23 +12,15 @@ use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::observation::ObservationReinforcer;
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
+use dirs;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
 
+use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 use crate::workflow::react::skills::{SkillManifest, SkillScanner};
-
-pub const CORE_SYSTEM_PROMPT: &str = r#"You are an autonomous AI Agent operating in a tool-use environment.
-Your core philosophy is: **Everything is a tool call.**
-
-## OPERATIONAL GUIDELINES:
-1. **Tool-First Thinking**: For every response, you MUST call at least one tool. If you are thinking, use 'think' internally but ensure the final output of the turn includes a tool call.
-2. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track your own progress.
-3. **Structured Snapshot**: You will receive a <state_snapshot> in the context. Always respect the decisions and facts recorded there.
-4. **Communication**: To talk to the user, you MUST use `answer_user` or `ask_user`. To finish, use `finish_task`.
-5. **No Conversational Filler**: Do not provide conversational responses without tools. If you have nothing to do, call `finish_task` with a summary."#;
 
 pub struct WorkflowExecutor {
     pub session_id: String,
@@ -39,15 +31,15 @@ pub struct WorkflowExecutor {
     pub gateway: Arc<dyn Gateway>,
     pub sub_agent_factory: Arc<dyn SubAgentFactory>,
     pub compressor: ContextCompressor,
-    pub path_guard: Arc<PathGuard>,
+    pub path_guard: Arc<RwLock<PathGuard>>,
     pub skill_scanner: SkillScanner,
+    pub llm_processor: LlmProcessor,
     pub available_skills: HashMap<String, SkillManifest>,
     pub agent_config: Agent,
     pub state: WorkflowState,
-    pub max_steps: usize,
     pub current_step: usize,
     pub auto_approve: HashSet<String>,
-    pub signal_rx: tokio::sync::mpsc::Receiver<String>,
+    pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub active_provider_id: i64,
     pub active_model_name: String,
@@ -64,7 +56,7 @@ impl WorkflowExecutor {
         allowed_paths: Vec<PathBuf>,
         app_data_dir: PathBuf,
         subagent_type: Option<String>,
-        signal_rx: tokio::sync::mpsc::Receiver<String>,
+        signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         global_tool_manager: Arc<ToolManager>,
     ) -> Self {
@@ -114,20 +106,61 @@ impl WorkflowExecutor {
         };
 
         let provider_id = active_model["id"].as_i64().unwrap_or(0);
-        let model_name = active_model["model"]
-            .as_str()
-            .unwrap_or("gpt-4o")
-            .to_string();
+        let model_name = active_model["model"].as_str().unwrap_or("").to_string();
+        let reasoning = active_model["reasoning"].as_bool().unwrap_or(false);
 
         let compressor =
             ContextCompressor::new(chat_state.clone(), provider_id, model_name.clone());
-        let path_guard = Arc::new(PathGuard::new(allowed_paths));
-        let skill_scanner = SkillScanner::new(app_data_dir);
+        let skill_scanner = SkillScanner::new(app_data_dir.clone());
+
+        // Auto-add system and application paths to allowed_paths
+        let mut final_allowed_paths = allowed_paths;
+
+        // 1. Add skill search paths
+        for skill_path in skill_scanner.get_search_paths() {
+            final_allowed_paths.push(skill_path);
+        }
+
+        // 2. Add ~/.chatspeed directory
+        if let Some(home) = dirs::home_dir() {
+            final_allowed_paths.push(home.join(".chatspeed"));
+        }
+
+        // 3. Add system temp directory
+        final_allowed_paths.push(std::env::temp_dir());
+
+        // 4. Canonicalize and Deduplicate
+        let mut unique_paths = HashSet::new();
+        let processed_paths: Vec<PathBuf> = final_allowed_paths
+            .into_iter()
+            .filter_map(|p| {
+                let abs_p = if p.is_absolute() {
+                    p
+                } else {
+                    std::env::current_dir().unwrap_or_default().join(p)
+                };
+                // We use canonicalize if it exists, otherwise just normalize
+                abs_p.canonicalize().ok().or(Some(abs_p))
+            })
+            .filter(|p| unique_paths.insert(p.clone()))
+            .collect();
+
+        let path_guard = Arc::new(RwLock::new(PathGuard::new(processed_paths)));
         let tool_manager = Arc::new(ToolManager::new());
 
         let auto_approve: HashSet<String> =
             serde_json::from_str(agent_config.auto_approve.as_deref().unwrap_or("[]"))
                 .unwrap_or_default();
+
+        let llm_processor = LlmProcessor::new(
+            session_id.clone(),
+            agent_config.clone(),
+            HashMap::new(), // available_skills will be populated later
+            path_guard.clone(),
+            provider_id,
+            model_name.clone(),
+            reasoning,
+        );
 
         Self {
             session_id,
@@ -140,10 +173,10 @@ impl WorkflowExecutor {
             compressor,
             path_guard,
             skill_scanner,
+            llm_processor,
             available_skills: HashMap::new(),
             agent_config,
             state: WorkflowState::Pending,
-            max_steps: 15,
             current_step: 0,
             auto_approve,
             signal_rx,
@@ -156,7 +189,12 @@ impl WorkflowExecutor {
     pub async fn init(&mut self) -> Result<(), WorkflowEngineError> {
         self.context.load_history().await?;
         self.available_skills = self.skill_scanner.scan()?;
+        self.llm_processor.available_skills = self.available_skills.clone();
         self.register_foundation_tools().await?;
+
+        // Sync TODO list on initialization
+        let _ = self.sync_todo_list().await;
+
         if let Some(last_msg) = self.context.messages.last() {
             self.current_step = last_msg.step_index as usize;
         }
@@ -277,27 +315,80 @@ impl WorkflowExecutor {
     }
 
     pub async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
-        while self.state != WorkflowState::Completed && self.state != WorkflowState::Error {
+        let mut signal_rx = self
+            .signal_rx
+            .take()
+            .ok_or_else(|| WorkflowEngineError::General("Signal receiver already taken".into()))?;
+
+        while self.state != WorkflowState::Completed
+            && self.state != WorkflowState::Error
+            && self.state != WorkflowState::Cancelled
+        {
+            // --- Check signal channel for "stop" commands ---
+            while let Ok(sig_str) = signal_rx.try_recv() {
+                let sig_json: serde_json::Value =
+                    serde_json::from_str(&sig_str).unwrap_or_default();
+                if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
+                    log::info!(
+                        "WorkflowExecutor {}: Received STOP signal in main loop",
+                        self.session_id
+                    );
+                    self.update_state(WorkflowState::Cancelled).await?;
+                    self.signal_rx = Some(signal_rx);
+                    return Ok(());
+                } else if sig_json["type"] == "user_input" {
+                    // Push user input to messages
+                    let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
+                    self.add_message_and_notify(
+                        "user".to_string(),
+                        user_input,
+                        None,
+                        None,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await?;
+                }
+            }
+
             if self.state == WorkflowState::Paused {
-                let signal_str =
-                    self.signal_rx.recv().await.ok_or_else(|| {
-                        WorkflowEngineError::Gateway("Signal channel closed".into())
-                    })?;
+                let signal_str = signal_rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| WorkflowEngineError::Gateway("Signal channel closed".into()))?;
 
                 let signal_json: serde_json::Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
+                if signal_json["type"] == "stop" {
+                    log::info!(
+                        "WorkflowExecutor {}: Received STOP signal while PAUSED",
+                        self.session_id
+                    );
+                    self.update_state(WorkflowState::Cancelled).await?;
+                    self.signal_rx = Some(signal_rx);
+                    return Ok(());
+                }
+
                 if signal_json["type"] == "approval" {
                     let approved = signal_json["approved"].as_bool().unwrap_or(false);
+                    let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
                     let tool_name = signal_json["tool_name"].as_str().unwrap_or("unknown");
                     let tool_args = signal_json["tool_args"].clone();
 
                     if approved {
                         log::info!(
-                            "WorkflowExecutor {}: User APPROVED tool '{}'",
+                            "WorkflowExecutor {}: User APPROVED tool '{}'{}",
                             self.session_id,
-                            tool_name
+                            tool_name,
+                            if approve_all { " (Approve All)" } else { "" }
                         );
+
+                        if approve_all {
+                            self.auto_approve.insert(tool_name.to_string());
+                        }
+
                         // Execution: Try local then global
                         let result = if let Ok(res) = self
                             .tool_manager
@@ -307,15 +398,45 @@ impl WorkflowExecutor {
                             Ok(res)
                         } else {
                             self.global_tool_manager
-                                .tool_call(tool_name, tool_args)
+                                .tool_call(tool_name, tool_args.clone())
                                 .await
                         };
-                        let observation = ObservationReinforcer::reinforce(tool_name, &result);
+                        let tool_call_obj = serde_json::json!({
+                            "name": tool_name,
+                            "arguments": tool_args
+                        });
+
+                        let reinforced = if tool_name.starts_with("todo_") {
+                            let todos = if let Ok(store) = self.context.main_store.read() {
+                                store
+                                    .get_todo_list_for_workflow(&self.session_id)
+                                    .unwrap_or_default()
+                            } else {
+                                vec![]
+                            };
+                            ObservationReinforcer::reinforce_with_context(
+                                &tool_call_obj,
+                                &result,
+                                Some(serde_json::json!(todos)),
+                            )
+                        } else {
+                            ObservationReinforcer::reinforce(&tool_call_obj, &result)
+                        };
+
                         self.add_message_and_notify(
                             "tool".to_string(),
-                            observation,
-                            Some(StepType::Observe),
+                            reinforced.content,
                             None,
+                            Some(StepType::Observe),
+                            reinforced.is_error,
+                            reinforced.error_type.clone(),
+                            Some(serde_json::json!({
+                                "title": reinforced.title,
+                                "summary": reinforced.summary,
+                                "is_error": reinforced.is_error,
+                                "error_type": reinforced.error_type,
+                                "display_type": reinforced.display_type
+                            })),
                         )
                         .await?;
                     } else {
@@ -328,8 +449,15 @@ impl WorkflowExecutor {
                         self.add_message_and_notify(
                             "tool".to_string(),
                             observation,
-                            Some(StepType::Observe),
                             None,
+                            Some(StepType::Observe),
+                            true,
+                            Some("UserRejected".to_string()),
+                            Some(serde_json::json!({
+                                "summary": "User rejected",
+                                "is_error": true,
+                                "error_type": "UserRejected"
+                            })),
                         )
                         .await?;
                     }
@@ -337,17 +465,19 @@ impl WorkflowExecutor {
                     continue;
                 } else {
                     let user_input = signal_json["content"].as_str().unwrap_or("").to_string();
-                    self.add_message_and_notify("user".to_string(), user_input, None, None)
-                        .await?;
+                    self.add_message_and_notify(
+                        "user".to_string(),
+                        user_input,
+                        None,
+                        None,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await?;
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
-            }
-            if self.current_step >= self.max_steps {
-                self.update_state(WorkflowState::Error).await?;
-                return Err(WorkflowEngineError::General(
-                    "Max steps exceeded".to_string(),
-                ));
             }
             self.current_step += 1;
             self.update_state(WorkflowState::Thinking).await?;
@@ -356,7 +486,15 @@ impl WorkflowExecutor {
                 self.session_id,
                 self.current_step
             );
-            let (response, usage) = self.call_llm_with_retry().await?;
+            let (response, response_reasoning, usage) =
+                self.call_llm_with_retry(&mut signal_rx).await?;
+
+            // --- 3. Check for stop signal after LLM call ---
+            if self.check_stop_signal(&mut signal_rx).await? {
+                self.signal_rx = Some(signal_rx);
+                return Ok(());
+            }
+
             log::debug!(
                 "[Workflow Engine] Session {}: LLM responded ({} chars)",
                 self.session_id,
@@ -365,7 +503,10 @@ impl WorkflowExecutor {
             self.add_message_and_notify(
                 "assistant".to_string(),
                 response.clone(),
+                Some(response_reasoning),
                 Some(StepType::Think),
+                false,
+                None,
                 usage.map(|u| serde_json::json!({ "usage": u })),
             )
             .await?;
@@ -375,24 +516,37 @@ impl WorkflowExecutor {
                 "[Workflow Engine] Session {}: Executing tools",
                 self.session_id
             );
-            let tool_results = self.execute_tools(response).await?;
+            let (tool_results, has_todo_call) =
+                self.execute_tools(response, &mut signal_rx).await?;
 
             if tool_results.is_empty() {
                 log::warn!(
                     "WorkflowExecutor {}: No tool call detected. Forcing retry.",
                     self.session_id
                 );
-                self.add_message_and_notify(
-                    "user".to_string(),
-                    "Error: No tool call detected in your last response. You MUST call a tool to proceed, even if it is just 'answer_user' or 'finish_task'.".to_string(),
-                    Some(StepType::Observe),
-                    None
-                ).await?;
+                // ADD TO CONTEXT BUT DO NOT NOTIFY GATEWAY (UI)
+                self.context
+                    .add_message(
+                        "user".to_string(),
+                        "Error: No tool call detected in your last response. You MUST call a tool to proceed, even if it is just 'answer_user' or 'finish_task'."
+                            .to_string(),
+                        None,
+                        Some(StepType::Observe),
+                        self.current_step as i32,
+                        true,
+                        Some("NoToolCall".to_string()),
+                        Some(serde_json::json!({
+                            "summary": "No tool detected",
+                            "is_error": true,
+                            "error_type": "NoToolCall"
+                        })),
+                    )
+                    .await?;
                 continue;
             }
 
             let mut needs_compression = false;
-            for (tool_call_id, result) in tool_results {
+            for (tool_call_id, reinforced, tool_call) in tool_results {
                 log::debug!(
                     "[Workflow Engine] Session {}: Recording observation for {}",
                     self.session_id,
@@ -401,19 +555,56 @@ impl WorkflowExecutor {
                 let compressed_signal = self
                     .add_message_and_notify(
                         "tool".to_string(),
-                        result,
+                        reinforced.content,
+                        None,
                         Some(StepType::Observe),
-                        Some(serde_json::json!({ "tool_call_id": tool_call_id })),
+                        reinforced.is_error,
+                        reinforced.error_type.clone(),
+                        Some(serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "tool_call": tool_call,
+                            "title": reinforced.title,
+                            "summary": reinforced.summary,
+                            "is_error": reinforced.is_error,
+                            "error_type": reinforced.error_type,
+                            "display_type": reinforced.display_type
+                        })),
                     )
                     .await?;
                 if compressed_signal {
                     needs_compression = true;
                 }
             }
-            while let Ok(interrupt_str) = self.signal_rx.try_recv() {
+
+            // --- SYNC TODO LIST IF ANY TODO TOOL WAS CALLED ---
+            if has_todo_call {
+                let todo_list_opt = if let Ok(store) = self.context.main_store.read() {
+                    store.get_todo_list_for_workflow(&self.session_id).ok()
+                } else {
+                    None
+                };
+
+                if let Some(todos) = todo_list_opt {
+                    self.gateway
+                        .send(
+                            &self.session_id,
+                            GatewayPayload::SyncTodo {
+                                todo_list: serde_json::json!(todos),
+                            },
+                        )
+                        .await?;
+                }
+            }
+
+            while let Ok(interrupt_str) = signal_rx.try_recv() {
                 let sig_json: serde_json::Value = serde_json::from_str(&interrupt_str).unwrap_or(
                     serde_json::json!({ "type": "user_input", "content": interrupt_str }),
                 );
+
+                if sig_json["type"] == "stop" {
+                    log::info!("WorkflowExecutor {}: Ignoring STOP signal at end of loop (will be caught at start)", self.session_id);
+                    continue;
+                }
 
                 let content = if sig_json["type"] == "user_input" {
                     sig_json["content"]
@@ -424,8 +615,16 @@ impl WorkflowExecutor {
                     interrupt_str
                 };
 
-                self.add_message_and_notify("user".to_string(), content, None, None)
-                    .await?;
+                self.add_message_and_notify(
+                    "user".to_string(),
+                    content,
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .await?;
             }
             if needs_compression {
                 let summary = self.compressor.compress(&self.context.messages).await?;
@@ -434,12 +633,15 @@ impl WorkflowExecutor {
                     .await?;
             }
         }
+
+        self.signal_rx = Some(signal_rx);
         Ok(())
     }
 
     async fn call_llm_with_retry(
         &mut self,
-    ) -> Result<(String, Option<serde_json::Value>), WorkflowEngineError> {
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let mut retry_count = 0;
         let max_retries = 10;
         let mut last_error = None;
@@ -455,20 +657,50 @@ impl WorkflowExecutor {
             }
 
             // --- 2. Check signal channel for "stop" commands ---
-            while let Ok(sig_str) = self.signal_rx.try_recv() {
-                if sig_str.to_lowercase().contains("stop") || sig_str.contains("\"stop\"") {
-                    log::info!(
-                        "WorkflowExecutor {}: Received STOP signal during retry loop",
-                        self.session_id
-                    );
-                    self.update_state(WorkflowState::Cancelled).await?;
-                    return Err(WorkflowEngineError::General(
-                        "Stopped by user signal".into(),
-                    ));
-                }
-            }
+            // We use select! to allow immediate interruption of the LLM call
+            let res = {
+                let llm_call = self.call_llm();
+                tokio::pin!(llm_call);
 
-            match self.call_llm().await {
+                tokio::select! {
+                    result = &mut llm_call => result,
+                    signal = signal_rx.recv() => {
+                        if let Some(sig_str) = signal {
+                            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
+                            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
+                                Err(WorkflowEngineError::General("STOP_SIGNAL_RECEIVED".into()))
+                            } else {
+                                // For other signals like user_input, we currently just wait for LLM
+                                llm_call.await
+                            }
+                        } else {
+                            llm_call.await
+                        }
+                    }
+                }
+            };
+
+            // Handle the result outside the select block to avoid multiple borrows of self
+            let res = match res {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    if let WorkflowEngineError::General(ref msg) = e {
+                        if msg == "STOP_SIGNAL_RECEIVED" {
+                            log::info!(
+                                "WorkflowExecutor {}: Received STOP signal during LLM call",
+                                self.session_id
+                            );
+                            self.update_state(WorkflowState::Cancelled).await?;
+                            return Err(WorkflowEngineError::General(
+                                "Stopped by user signal".into(),
+                            ));
+                        }
+                    }
+                    Err(e)
+                }
+            };
+
+            match res {
                 Ok(res) => return Ok(res),
                 Err(e) => {
                     log::warn!(
@@ -504,205 +736,13 @@ impl WorkflowExecutor {
 
     async fn call_llm(
         &mut self,
-    ) -> Result<(String, Option<serde_json::Value>), WorkflowEngineError> {
-        let raw_history = self.context.get_messages_for_llm();
-        let mut history: Vec<serde_json::Value> = Vec::new();
-
-        // --- 1. Context Sanitization & Normalization ---
-        for m in raw_history {
-            let role = m.role.clone();
-            let mut content = m.message.clone();
-            let mut tool_calls = m
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("tool_calls").cloned());
-
-            // Normalize Assistant JSON (if content is raw JSON, parse it)
-            if role == "assistant" && content.trim().starts_with('{') {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(c) = parsed.get("content").and_then(|v| v.as_str()) {
-                        content = c.to_string();
-                    }
-                    if let Some(tc) = parsed.get("tool_calls").cloned() {
-                        tool_calls = Some(tc);
-                    }
-                }
-            }
-
-            // Standardize Tool Result messages
-            let tool_call_id = if role == "tool" {
-                m.metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("tool_call_id").and_then(|v| v.as_str()))
-                    .map(|s| s.to_string())
-            } else {
-                None
-            };
-
-            // Logic: Merge consecutive roles
-            if let Some(last) = history.last_mut() {
-                if last["role"] == role && role != "tool" {
-                    // Append content to last message of same role
-                    let last_content = last["content"].as_str().unwrap_or("");
-                    last["content"] = serde_json::json!(format!("{}\n\n{}", last_content, content));
-                    continue;
-                }
-            }
-
-            // Build structured message
-            let mut msg = serde_json::json!({
-                "role": role,
-                "content": content,
-            });
-
-            if let Some(tc) = tool_calls {
-                msg["tool_calls"] = tc;
-            }
-            if let Some(tid) = tool_call_id {
-                msg["tool_call_id"] = serde_json::json!(tid);
-            }
-
-            history.push(msg);
-        }
-
-        // --- 2. Tool Chain Integrity Check ---
-        // Some providers fail if assistant has tool_calls but no following tool messages.
-        // We scan backwards and fix dangling assistant tool calls.
-        let mut final_history = Vec::new();
-        for i in 0..history.len() {
-            let msg = &history[i];
-            if msg["role"] == "assistant" && msg.get("tool_calls").is_some() {
-                // Peek ahead: is next message a 'tool'?
-                let has_results = history
-                    .get(i + 1)
-                    .map_or(false, |next| next["role"] == "tool");
-                if !has_results {
-                    // Strip tool_calls if no results follow, otherwise providers like ModelScope crash
-                    let mut cleaned_msg = msg.clone();
-                    cleaned_msg
-                        .as_object_mut()
-                        .map(|obj| obj.remove("tool_calls"));
-                    final_history.push(cleaned_msg);
-                    continue;
-                }
-            }
-            final_history.push(msg.clone());
-        }
-        history = final_history;
-
-        // --- 3. System Prompt & Environment Reminders ---
-        let mut full_system_prompt = String::from(CORE_SYSTEM_PROMPT);
-        full_system_prompt.push_str("\n\n## AGENT SPECIFIC INSTRUCTIONS:\n");
-        full_system_prompt.push_str(&self.agent_config.system_prompt);
-        if let Some(sys_msg) = history.iter_mut().find(|m| m["role"] == "system") {
-            let original = sys_msg["content"].as_str().unwrap_or("");
-            sys_msg["content"] =
-                serde_json::json!(format!("{}\n\n{}", full_system_prompt, original));
-        } else {
-            history.insert(
-                0,
-                serde_json::json!({ "role": "system", "content": full_system_prompt }),
-            );
-        }
-
-        let mut reminders = String::new();
-        if !self.available_skills.is_empty() {
-            reminders.push_str(
-                "<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n",
-            );
-            for skill in self.available_skills.values() {
-                reminders.push_str(&format!("- {}: {}\n", skill.name, skill.description));
-            }
-            reminders.push_str("</system-reminder>\n");
-        }
-
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let is_git = std::process::Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-            .unwrap_or(false);
-        let platform = std::env::consts::OS;
-        let shell = if platform == "windows" {
-            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into())
-        } else {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
-        };
-        let os_version = if platform == "windows" {
-            std::process::Command::new("cmd")
-                .args(["/c", "ver"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_else(|_| "Windows".into())
-        } else {
-            std::process::Command::new("uname")
-                .args(["-sr"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_else(|_| platform.to_string())
-        };
-
-        let mut env_info = format!("Environment\nYou have been invoked in the following environment:\n - Primary working directory: {:?}\n  - Is a git repository: {}\n", cwd, is_git);
-        let allowed_roots = self.path_guard.allowed_roots();
-        if allowed_roots.len() > 1 || (allowed_roots.len() == 1 && allowed_roots[0] != cwd) {
-            env_info.push_str(" - Additional working directories:\n");
-            for root in allowed_roots {
-                if root != cwd {
-                    env_info.push_str(&format!("  - {:?}\n", root));
-                }
-            }
-        }
-        env_info.push_str(&format!(
-            " - Platform: {}\n - Shell: {}\n - OS Version: {}\n",
-            platform, shell, os_version
-        ));
-
-        reminders.push_str(&format!("<system-reminder>\n{}\n\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n", env_info, today));
-
-        if let Some(first_user_msg) = history.iter_mut().find(|m| m["role"] == "user") {
-            if let Some(content) = first_user_msg["content"].as_str() {
-                first_user_msg["content"] = serde_json::json!(format!("{}{}", reminders, content));
-            }
-        } else {
-            history.insert(
-                0,
-                serde_json::json!({ "role": "system", "content": reminders }),
-            );
-        }
-
-        // Get tools from BOTH managers for LLM spec
+    ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let mut tools = self.tool_manager.get_tool_calling_spec(None, None).await?;
         let global_tools = self
             .global_tool_manager
             .get_tool_calling_spec(None, None)
             .await?;
         tools.extend(global_tools);
-
-        // // 1. Resolve Metadata (Provider vs Proxy)
-        // let mut metadata = if self.active_provider_id > 0 {
-        //     // Provider Mode: Fetch metadata from DB to pass along custom parameters
-        //     let store = self
-        //         .chat_state
-        //         .main_store
-        //         .read()
-        //         .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-        //     store
-        //         .config
-        //         .get_ai_model_by_id(self.active_provider_id)
-        //         .map(|m| m.metadata.clone().unwrap_or(serde_json::json!({})))
-        //         .unwrap_or(serde_json::json!({}))
-        // } else {
-        //     // Proxy Mode: Metadata is handled internally by ccproxy via group@alias
-        //     serde_json::json!({})
-        // };
-
-        // // Always ensure streaming is enabled for workflow feedback
-        // if let Some(obj) = metadata.as_object_mut() {
-        //     obj.insert("stream".to_string(), serde_json::json!(true));
-        //     // Ensure tools are enabled in the proxy layer
-        //     obj.insert("toolsEnabled".to_string(), serde_json::json!(true));
-        // }
 
         let chat_interface = {
             let mut chats_guard = self.chat_state.chats.lock().await;
@@ -716,107 +756,125 @@ impl WorkflowExecutor {
                 .clone()
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-        chat_interface
-            .chat(
-                self.active_provider_id,
-                &self.active_model_name,
-                self.session_id.clone(),
-                history,
-                Some(tools),
-                None,
-                move |chunk| {
-                    let _ = tx.try_send(chunk);
-                },
+        self.llm_processor
+            .call(
+                &mut self.context,
+                self.current_step,
+                chat_interface,
+                self.gateway.clone(),
+                tools,
             )
             .await
-            .map_err(WorkflowEngineError::Ai)?;
-
-        let mut full_content = String::new();
-        while let Some(chunk) = rx.recv().await {
-            match chunk.r#type {
-                crate::ai::traits::chat::MessageType::Text
-                | crate::ai::traits::chat::MessageType::Reasoning => {
-                    // Send chunk to UI immediately for "Thinking" feedback
-                    self.gateway
-                        .send(
-                            &self.session_id,
-                            GatewayPayload::Chunk {
-                                content: chunk.chunk.clone(),
-                            },
-                        )
-                        .await?;
-
-                    full_content.push_str(&chunk.chunk);
-                }
-                crate::ai::traits::chat::MessageType::ToolCalls => {
-                    // Collect tool calls silently, don't stream them as raw text to user
-                    full_content.push_str(&chunk.chunk);
-                }
-                crate::ai::traits::chat::MessageType::Finished => {
-                    break;
-                }
-                crate::ai::traits::chat::MessageType::Error => {
-                    return Err(WorkflowEngineError::General(chunk.chunk.clone()))
-                }
-                _ => {}
-            }
-        }
-        Ok((full_content, None))
     }
 
     async fn execute_tools(
         &mut self,
         raw_response: String,
-    ) -> Result<Vec<(String, String)>, WorkflowEngineError> {
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<
+        (
+            Vec<(
+                String,
+                crate::workflow::react::observation::ReinforcedResult,
+                serde_json::Value,
+            )>,
+            bool, // has_todo_call
+        ),
+        WorkflowEngineError,
+    > {
+        if self.check_stop_signal(signal_rx).await? {
+            return Ok((Vec::new(), false));
+        }
         let cleaned_response = crate::libs::util::format_json_str(&raw_response);
-        let json_val: serde_json::Value = serde_json::from_str(&cleaned_response).map_err(|e| {
-            WorkflowEngineError::General(format!(
-                "Failed to parse JSON: {}. Original: {}",
-                e, raw_response
-            ))
-        })?;
+        let json_val: serde_json::Value = match serde_json::from_str(&cleaned_response) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!(
+                    "WorkflowExecutor {}: Failed to parse JSON from AI response: {}. Raw: {}",
+                    self.session_id,
+                    e,
+                    raw_response
+                );
+                // Return empty results to trigger the "No tool call detected" logic in run_loop
+                return Ok((Vec::new(), false));
+            }
+        };
         let mut results = vec![];
+        let mut has_todo_call = false;
+
         if let Some(tool_obj) = json_val.get("tool") {
             let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let args = tool_obj
-                .get("arguments")
-                .cloned()
-                .or_else(|| tool_obj.get("input").cloned())
-                .unwrap_or(serde_json::json!({}));
+
+            if name.starts_with("todo_") {
+                has_todo_call = true;
+            }
+
             results.push((
-                "call_single".to_string(),
-                self.dispatch_tool(name, args).await?,
+                crate::ccproxy::get_tool_id(),
+                self.dispatch_tool(tool_obj.clone()).await?,
+                tool_obj.clone(),
             ));
         } else if let Some(tool_calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
             for call in tool_calls {
                 let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let func = call
-                    .get("function")
-                    .cloned()
-                    .unwrap_or_else(|| call.clone());
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args_raw = func
-                    .get("arguments")
-                    .cloned()
-                    .or_else(|| func.get("input").cloned())
-                    .unwrap_or(serde_json::json!({}));
-                let args = if args_raw.is_string() {
-                    serde_json::from_str(args_raw.as_str().unwrap()).unwrap_or_default()
-                } else {
-                    args_raw
-                };
-                results.push((id.to_string(), self.dispatch_tool(name, args).await?));
+
+                results.push((
+                    id.to_string(),
+                    self.dispatch_tool(call.clone()).await?,
+                    call.clone(),
+                ));
             }
         }
-        Ok(results)
+
+        if has_todo_call {
+            let _ = self.sync_todo_list().await;
+        }
+
+        Ok((results, has_todo_call))
+    }
+
+    async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {
+        let todo_list = {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let snapshot = store
+                .get_workflow_snapshot(&self.session_id)
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let todo_list_str = snapshot
+                .workflow
+                .todo_list
+                .unwrap_or_else(|| "[]".to_string());
+            serde_json::from_str::<serde_json::Value>(&todo_list_str)
+                .unwrap_or_else(|_| serde_json::json!([]))
+        };
+
+        self.gateway
+            .send(&self.session_id, GatewayPayload::SyncTodo { todo_list })
+            .await?;
+        Ok(())
     }
 
     async fn dispatch_tool(
         &mut self,
-        name: &str,
-        args: serde_json::Value,
-    ) -> Result<String, WorkflowEngineError> {
+        tool_call: serde_json::Value,
+    ) -> Result<crate::workflow::react::observation::ReinforcedResult, WorkflowEngineError> {
+        // 1. Extract name and args for internal execution logic
+        let func = tool_call.get("function").unwrap_or(&tool_call);
+        let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let args_raw = func
+            .get("arguments")
+            .cloned()
+            .or_else(|| func.get("input").cloned())
+            .unwrap_or(serde_json::json!({}));
+        let args = if let serde_json::Value::String(ref s) = args_raw {
+            serde_json::from_str(s).unwrap_or(args_raw)
+        } else {
+            args_raw
+        };
+
         log::info!(
             "WorkflowExecutor {}: Dispatching '{}'",
             self.session_id,
@@ -839,10 +897,17 @@ impl WorkflowExecutor {
                 match policy_engine.check(command_str) {
                     crate::tools::ShellDecision::Allow => {}
                     crate::tools::ShellDecision::Deny(reason) => {
-                        return Ok(format!(
-                            "Error: Command blocked by security policy. Reason: {}",
-                            reason
-                        ));
+                        return Ok(crate::workflow::react::observation::ReinforcedResult {
+                            content: format!(
+                                "Error: Command blocked by security policy. Reason: {}",
+                                reason
+                            ),
+                            title: format!("Bash({})", command_str),
+                            summary: "Blocked".to_string(),
+                            is_error: true,
+                            error_type: Some("Security".to_string()),
+                            display_type: "text".to_string(),
+                        });
                     }
                     crate::tools::ShellDecision::Review(reason) => {
                         self.gateway
@@ -861,7 +926,14 @@ impl WorkflowExecutor {
                             "WorkflowExecutor {}: Paused for shell command review",
                             self.session_id
                         );
-                        return Ok("WAITING_FOR_USER_APPROVAL".to_string());
+                        return Ok(crate::workflow::react::observation::ReinforcedResult {
+                            content: "WAITING_FOR_USER_APPROVAL".to_string(),
+                            title: format!("Bash({})", command_str),
+                            summary: "Waiting for approval".to_string(),
+                            is_error: false,
+                            error_type: None,
+                            display_type: "text".to_string(),
+                        });
                     }
                 }
             }
@@ -870,7 +942,28 @@ impl WorkflowExecutor {
         // --- 2. Generic Tool Safety (FS, etc.) ---
         if name == TOOL_WRITE_FILE || name == TOOL_EDIT_FILE {
             if !self.auto_approve.contains(name) {
-                let details = args["file_path"].as_str().unwrap_or("").to_string();
+                let file_path = args["file_path"]
+                    .as_str()
+                    .or_else(|| args["path"].as_str())
+                    .unwrap_or("unknown");
+                let mut details = format!("Operation: {}\nFile: {}\n", name, file_path);
+
+                if name == TOOL_EDIT_FILE {
+                    let old = args["old_string"].as_str().unwrap_or("");
+                    let new = args["new_string"].as_str().unwrap_or("");
+                    details.push_str(&format!(
+                        "\n--- OLD STRING ---\n{}\n\n--- NEW STRING ---\n{}",
+                        old, new
+                    ));
+                } else if name == TOOL_WRITE_FILE {
+                    let content = args["content"].as_str().unwrap_or("");
+                    if content.len() > 1000 {
+                        details.push_str(&format!("\nContent: ({} bytes)", content.len()));
+                    } else {
+                        details.push_str(&format!("\nContent:\n{}", content));
+                    }
+                }
+
                 self.gateway
                     .send(
                         &self.session_id,
@@ -882,7 +975,18 @@ impl WorkflowExecutor {
                     )
                     .await?;
                 self.update_state(WorkflowState::Paused).await?;
-                return Ok("WAITING_FOR_USER_APPROVAL".to_string());
+                return Ok(crate::workflow::react::observation::ReinforcedResult {
+                    content: "WAITING_FOR_USER_APPROVAL".to_string(),
+                    title: format!("{}({})", name, file_path),
+                    summary: "Waiting for approval".to_string(),
+                    is_error: false,
+                    error_type: None,
+                    display_type: if name == TOOL_EDIT_FILE {
+                        "diff".to_string()
+                    } else {
+                        "text".to_string()
+                    },
+                });
             }
         }
 
@@ -893,20 +997,45 @@ impl WorkflowExecutor {
             || name == TOOL_EDIT_FILE
         {
             if let Some(path_str) = args["file_path"].as_str().or_else(|| args["path"].as_str()) {
-                self.path_guard.validate(std::path::Path::new(path_str))?;
+                if let Ok(guard) = self.path_guard.read() {
+                    guard.validate(std::path::Path::new(path_str))?;
+                }
             }
         }
 
         // --- 3. Special Core Tools ---
         match name {
-            n if n == TOOL_ANSWER_USER => return Ok("Summary delivered".into()),
+            n if n == TOOL_ANSWER_USER => {
+                return Ok(crate::workflow::react::observation::ReinforcedResult {
+                    content: "Summary delivered".into(),
+                    title: "AnswerUser".to_string(),
+                    summary: "Answered user".to_string(),
+                    is_error: false,
+                    error_type: None,
+                    display_type: "text".to_string(),
+                })
+            }
             n if n == TOOL_ASK_USER => {
                 self.update_state(WorkflowState::Paused).await?;
-                return Ok("Waiting for user".into());
+                return Ok(crate::workflow::react::observation::ReinforcedResult {
+                    content: "Waiting for user".into(),
+                    title: "AskUser".to_string(),
+                    summary: "Asked user".to_string(),
+                    is_error: false,
+                    error_type: None,
+                    display_type: "text".to_string(),
+                });
             }
             n if n == TOOL_FINISH_TASK => {
                 self.update_state(WorkflowState::Completed).await?;
-                return Ok("Finished".into());
+                return Ok(crate::workflow::react::observation::ReinforcedResult {
+                    content: "Finished".into(),
+                    title: "FinishTask".to_string(),
+                    summary: "Task completed".to_string(),
+                    is_error: false,
+                    error_type: None,
+                    display_type: "text".to_string(),
+                });
             }
             _ => {}
         }
@@ -917,18 +1046,26 @@ impl WorkflowExecutor {
             Ok(res)
         } else {
             // Then try the global tool manager (for MCP, WebSearch, etc.)
-            self.global_tool_manager.tool_call(name, args).await
+            self.global_tool_manager.tool_call(name, args.clone()).await
         };
 
         // --- 5. Post-process: Auto-summarize large web_fetch content ---
         if name == TOOL_WEB_FETCH {
             if let Ok(val) = &result {
                 if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
-                    if content.len() > 5000 {
+                    if content.len() > 50000 {
                         log::info!("WorkflowExecutor {}: Content from web_fetch is too long ({} chars). Summarizing...", self.session_id, content.len());
                         match self.summarize_content(content).await {
                             Ok(summary) => {
-                                return Ok(format!("[Auto-Summarized Result] {}\n\n<system-reminder>The original content was over 5000 characters and has been summarized to focus on relevant information.</system-reminder>", summary));
+                                return Ok(crate::workflow::react::observation::ReinforcedResult {
+                                    content: format!("[Auto-Summarized Result] {}\n\n<system-reminder>The original content was over 50000 characters and has been summarized to focus on relevant information.</system-reminder>", summary),
+                                    title: format!("Fetch({})", args["url"].as_str().unwrap_or("")),
+                                    summary: "Content summarized".to_string(),
+                                    is_error: false,
+                                    error_type: None,
+                                    display_type: "text".to_string(),
+
+                                });
                             }
                             Err(e) => {
                                 log::error!(
@@ -944,7 +1081,28 @@ impl WorkflowExecutor {
             }
         }
 
-        Ok(ObservationReinforcer::reinforce(name, &result))
+        if name.starts_with("todo_") {
+            let todos = if let Ok(store) = self.context.main_store.read() {
+                store
+                    .get_todo_list_for_workflow(&self.session_id)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            Ok(
+                crate::workflow::react::observation::ObservationReinforcer::reinforce_with_context(
+                    &tool_call,
+                    &result,
+                    Some(serde_json::json!(todos)),
+                ),
+            )
+        } else {
+            Ok(
+                crate::workflow::react::observation::ObservationReinforcer::reinforce(
+                    &tool_call, &result,
+                ),
+            )
+        }
     }
 
     /// Summarizes or filters large text content with high-fidelity requirements
@@ -1026,22 +1184,74 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    async fn add_message_and_notify(
+    pub(crate) async fn add_message_and_notify(
         &mut self,
         role: String,
         mut content: String,
+        reasoning: Option<String>,
         step_type: Option<StepType>,
+        is_error: bool,
+        error_type: Option<String>,
         mut metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
-        // --- 1. Content Normalization (Handle JSON responses from LLM) ---
-        if role == "assistant" && content.trim().starts_with('{') {
-            if let Ok(json_msg) = serde_json::from_str::<serde_json::Value>(&content) {
-                // Extract actual text content if it exists
+        // --- 1. Content Normalization (Handle mixed Text + JSON responses) ---
+        if role == "assistant" {
+            let trimmed = content.trim();
+
+            // Try to find a JSON block if it doesn't start with {
+            let (text_part, json_val) = if trimmed.starts_with('{') {
+                (
+                    None,
+                    serde_json::from_str::<serde_json::Value>(trimmed).ok(),
+                )
+            } else {
+                // Look for the last { ... } block
+                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                    if start < end {
+                        let text = trimmed[..start].trim().to_string();
+                        let json = trimmed[start..=end].trim();
+                        (
+                            Some(text),
+                            serde_json::from_str::<serde_json::Value>(json).ok(),
+                        )
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            };
+
+            if let Some(json_msg) = json_val {
+                // Case A: Extraction from JSON structure
                 if let Some(text) = json_msg.get("content").and_then(|v| v.as_str()) {
                     content = text.to_string();
+                } else if let Some(text) = text_part {
+                    content = text;
+                } else {
+                    // ReAct fallback for answer_user/finish_task
+                    if let Some(tool_obj) = json_msg.get("tool") {
+                        let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let args = tool_obj
+                            .get("arguments")
+                            .unwrap_or(&serde_json::Value::Null);
+                        if name == "answer_user" {
+                            content = args
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or(content);
+                        } else if name == "finish_task" {
+                            content = args
+                                .get("summary")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or(content);
+                        }
+                    }
                 }
 
-                // Extract tool calls and merge into metadata
+                // Merge tool calls into metadata
                 if let Some(tool_calls) = json_msg.get("tool_calls").and_then(|v| v.as_array()) {
                     let mut meta_obj = metadata.unwrap_or(serde_json::json!({}));
                     meta_obj["tool_calls"] = serde_json::json!(tool_calls);
@@ -1055,8 +1265,11 @@ impl WorkflowExecutor {
             .add_message(
                 role.clone(),
                 content.clone(),
+                reasoning.clone(),
                 step_type.clone(),
                 self.current_step as i32,
+                is_error,
+                error_type.clone(),
                 metadata.clone(),
             )
             .await?;
@@ -1068,13 +1281,72 @@ impl WorkflowExecutor {
                 GatewayPayload::Message {
                     role,
                     content,
+                    reasoning,
                     step_type,
                     step_index: self.current_step as i32,
+                    is_error,
+                    error_type,
                     metadata,
                 },
             )
             .await?;
 
         Ok(needs_compression)
+    }
+
+    /// Checks if a stop signal is pending in the channel
+    async fn check_stop_signal(
+        &mut self,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<bool, WorkflowEngineError> {
+        while let Ok(sig_str) = signal_rx.try_recv() {
+            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
+            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
+                log::info!("WorkflowExecutor {}: Received STOP signal", self.session_id);
+                self.update_state(WorkflowState::Cancelled).await?;
+                return Ok(true);
+            } else if sig_json["type"] == "user_input" {
+                let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
+                self.add_message_and_notify(
+                    "user".to_string(),
+                    user_input,
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .await?;
+            } else if sig_json["type"] == "update_allowed_paths" {
+                if let Some(paths_val) = sig_json.get("paths") {
+                    if let Some(paths_arr) = paths_val.as_array() {
+                        let mut unique_paths = HashSet::new();
+                        let paths: Vec<PathBuf> = paths_arr
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .map(PathBuf::from)
+                            .filter_map(|p| {
+                                let abs_p = if p.is_absolute() {
+                                    p
+                                } else {
+                                    std::env::current_dir().unwrap_or_default().join(p)
+                                };
+                                abs_p.canonicalize().ok().or(Some(abs_p))
+                            })
+                            .filter(|p| unique_paths.insert(p.clone()))
+                            .collect();
+                        log::info!(
+                            "WorkflowExecutor {}: Updating allowed paths to {:?}",
+                            self.session_id,
+                            paths
+                        );
+                        if let Ok(mut guard) = self.path_guard.write() {
+                            guard.update_allowed_roots(paths);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 }

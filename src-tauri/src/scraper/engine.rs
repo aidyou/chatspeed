@@ -130,10 +130,7 @@ pub async fn run(app_handle: AppHandle<Wry>, request: ScrapeRequest) -> Result<S
 }
 
 fn get_time_period(time_period: &str) -> String {
-    if time_period.is_empty() {
-        return String::new();
-    }
-    return time_period[..1].to_string();
+    time_period.chars().next().map(|c| c.to_string()).unwrap_or_default()
 }
 
 fn get_bing_time_period(time_period: &str) -> String {
@@ -157,10 +154,7 @@ fn get_sogou_time_period(time_period: &str) -> String {
 }
 
 fn get_brave_time_period(time_period: &str) -> String {
-    if time_period.is_empty() {
-        return String::new();
-    }
-    return format!("p{}", time_period[..1].to_string());
+    time_period.chars().next().map(|c| format!("p{}", c)).unwrap_or_default()
 }
 
 fn get_duckduckgo_offset(page: u32) -> u32 {

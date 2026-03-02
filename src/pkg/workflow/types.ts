@@ -70,10 +70,14 @@ export interface WorkflowMessage {
   sessionId: string
   role: 'assistant' | 'tool' | 'user' | 'system'
   message: string
+  reasoning?: string
   metadata?: Record<string, unknown>
-  stepType?: 'think' | 'act' | 'observe' | null
+  stepType?: 'think' | 'act' | 'observe'
   stepIndex?: number
-  createdAt?: Date
+  isError?: boolean
+  errorType?: string
+  createdAt?: string
+
 }
 
 // Type alias for a WorkflowMessage without id and createdAt (useful for message creation)

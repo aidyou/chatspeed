@@ -291,11 +291,13 @@ pub enum UnifiedStreamChunk {
         tool_type: String,
         id: String,
         name: String,
+        index: u32,
     },
     /// A delta of the arguments for a tool call.
     ToolUseDelta {
         id: String,
         delta: String, // JSON string delta
+        index: u32,
     },
     /// The end of a tool call.
     ToolUseEnd {
@@ -423,6 +425,7 @@ pub struct SseStatus {
     pub message_id: String,
     pub tool_id: String,
     pub message_index: u32,
+    pub index_to_tool_id: HashMap<u32, String>,
     pub current_content_block: String,
     // For token estimation
     pub estimated_input_tokens: f64,
@@ -454,6 +457,7 @@ impl Default for SseStatus {
             message_id: String::new(),
             tool_id: String::new(),
             message_index: 0,
+            index_to_tool_id: HashMap::new(),
             current_content_block: String::new(),
             estimated_input_tokens: 0.0,
             estimated_output_tokens: 0.0,

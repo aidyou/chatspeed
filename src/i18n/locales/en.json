@@ -172,7 +172,10 @@
       "agentType": "Agent Type",
       "add": "Add Agent",
       "addSuccess": "Agent added successfully!",
-      "autoApprove": "Auto-Approve Tools",
+      "authorizedPaths": "Authorized Directories",
+      "authorizedPathsAdd": "Add Directory",
+      "authorizedPathsTip": "The agent will only be able to read and write files in these directories (and their subdirectories).",
+      "autoApprove": "Auto Approve Tools",
       "autonomousMode": "Autonomous Mode",
       "availableTools": "Available Tools",
       "basicInfo": "Basic Info",
@@ -206,12 +209,28 @@
       "selectPlanModel": "Select Plan Model",
       "selectProvider": "Select Provider",
       "selectVisionModel": "Select Vision Model",
+      "security": "Security Policy",
+      "shellPolicy": "Shell Audit Policy",
+      "shellPolicyPattern": "Match Pattern (Regex/Glob)",
+      "shellPolicyDecision": "Decision",
+      "shellPolicyAdd": "Add Rule",
+      "shellDecisionAllow": "Allow",
+      "shellDecisionReview": "Review",
+      "shellDecisionDeny": "Deny",
+      "shellPolicyClear": "Clear Rules",
+      "shellPolicyClearTitle": "Clear Shell Rules",
+      "shellPolicyClearConfirm": "Are you sure you want to clear all shell audit rules? This action cannot be undone.",
+      "shellPolicyImportDefault": "Import Defaults",
+      "shellPolicyImportDefaultTitle": "Import Default Rules",
+      "shellPolicyImportDefaultConfirm": "Are you sure you want to import the default read-only shell rules? This will add 50+ common read-only command rules.",
       "systemPrompt": "System Prompt",
       "systemPromptRequired": "Please enter system prompt",
       "title": "Agent Management",
       "toolsLabel": "Tools",
       "updateSuccess": "Agent updated successfully!",
-      "visionModel": "Vision Model"
+      "visionModel": "Vision Model",
+      "workingDirectory": "Working Directory",
+      "selectDirectory": "Select Directory"
     },
     "general": {
       "advancedSettings": "Advanced Settings",
@@ -766,10 +785,12 @@
   "workflow": {
     "autoApproveTooltip": "Auto-approve tools (excluding interactive tools)",
     "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
+    "continue": "Continue",
     "editWorkflowTitle": "Edit Workflow Title",
     "newWorkflow": "New Workflow",
     "todoList": {
-      "title": "To-do List"
+      "title": "To-do List",
+      "next": "Next"
     },
     "workflowTitle": "Workflow Title"
   }

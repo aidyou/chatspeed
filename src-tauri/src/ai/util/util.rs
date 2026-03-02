@@ -4,16 +4,23 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::ai::network::ProxyType;
+use crate::ai::traits::chat::ChatMetadata;
 
-/// Process custom headers with dynamic placeholders.
-///
-/// # Arguments
-/// * `metadata`: The metadata containing `customHeaders`.
-/// * `chat_id`: The current chat ID.
-///
-/// # Returns
-/// Returns a map of processed headers.
-pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMap<String, String> {
+/// Process custom headers with dynamic placeholders from type-safe metadata.
+pub fn process_custom_headers(
+    metadata: &Option<ChatMetadata>,
+    chat_id: &str,
+) -> HashMap<String, String> {
+    // Convert ChatMetadata to Value for compatibility with legacy function
+    let metadata_value = metadata.as_ref().and_then(|md| md.to_value());
+    process_custom_headers_value(&metadata_value, chat_id)
+}
+
+/// Legacy wrapper for processing custom headers from raw JSON value.
+pub fn process_custom_headers_value(
+    metadata: &Option<Value>,
+    chat_id: &str,
+) -> HashMap<String, String> {
     let mut processed = HashMap::new();
 
     if let Some(custom_headers) = metadata
@@ -49,7 +56,6 @@ pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMa
 
                 if processed_value.contains("{CONV_ID}") {
                     let conv_id = if chat_id.parse::<u64>().is_ok() {
-                        // If it's a numeric ID, convert to a deterministic UUID
                         Uuid::new_v5(&Uuid::NAMESPACE_DNS, chat_id.as_bytes()).to_string()
                     } else if chat_id.is_empty() {
                         Uuid::new_v4().to_string()
@@ -59,7 +65,7 @@ pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMa
                     processed_value = processed_value.replace("{CONV_ID}", &conv_id);
                 }
 
-                // Add cs- prefix to the key
+                // Headers from backend UI are prefixed with "cs-" to distinguish from standard ones
                 let final_key = if key.to_lowercase().starts_with("cs-") {
                     key.to_string()
                 } else {
@@ -73,14 +79,9 @@ pub fn process_custom_headers(metadata: &Option<Value>, chat_id: &str) -> HashMa
 
     processed
 }
-/// Process custom body parameters from metadata.
-///
-/// # Arguments
-/// * `metadata`: The metadata containing `customParams`.
-///
-/// # Returns
-/// Returns a map of processed parameters.
-pub fn process_custom_params(metadata: &Option<Value>) -> HashMap<String, Value> {
+
+/// Process custom body parameters from raw JSON value.
+pub fn process_custom_params_value(metadata: &Option<Value>) -> HashMap<String, Value> {
     let mut processed = HashMap::new();
 
     if let Some(metadata_val) = metadata {
@@ -131,22 +132,23 @@ pub fn process_custom_params(metadata: &Option<Value>) -> HashMap<String, Value>
     processed
 }
 
-/// Merge custom body parameters from metadata into a JSON object.
-///
-/// # Arguments
-/// * `body`: The target JSON object to merge into.
-/// * `custom_params`: The metadata containing `customParams` (array of KV).
-pub fn merge_custom_params(body: &mut Value, custom_params: &Option<Value>) {
-    let processed_params = process_custom_params(custom_params);
+/// Merge custom body parameters into a JSON object from ChatMetadata.
+pub fn merge_custom_params(body: &mut Value, metadata: &Option<ChatMetadata>) {
+    // Convert ChatMetadata to Value for compatibility with legacy function
+    let metadata_value = metadata.as_ref().and_then(|md| md.to_value());
+    merge_custom_params_value(body, &metadata_value);
+}
+
+/// Merge custom body parameters from metadata value into a JSON object.
+pub fn merge_custom_params_value(body: &mut Value, metadata: &Option<Value>) {
+    let processed_params = process_custom_params_value(metadata);
     if let Some(obj) = body.as_object_mut() {
-        // Check if the current request is a streaming request
         let is_stream = obj.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
         for (k, v) in processed_params {
             let mut final_val = v;
 
-            // Special fix for providers like ModelScope/Qwen:
-            // "parameter.enable_thinking must be set to false for non-streaming calls"
+            // Provider-specific fixes (e.g., Qwen doesn't support reasoning in non-streaming mode)
             if k == "enable_thinking" && !is_stream && final_val.as_bool() == Some(true) {
                 log::debug!(
                     "Forcing enable_thinking to false for non-streaming request to avoid API error"
@@ -159,81 +161,31 @@ pub fn merge_custom_params(body: &mut Value, custom_params: &Option<Value>) {
     }
 }
 
-/// Get the metadata from the extra_params.
-///
-/// # Arguments
-/// * `extra_params`: The extra parameters from the API request.
-///
-/// # Returns
-/// Returns the metadata as a `Value` object. It is used to pass metadata back to the UI.
-// pub fn get_meta_data(extra_params: Option<Value>) -> Option<Value> {
-//     let excluded_keys = [
-//         "presencePenalty",
-//         "frequencyPenalty",
-//         "responseFormat",
-//         "stop",
-//         "n",
-//         "user",
-//         "toolChoice",
-//         "proxyType",
-//         "proxyServer",
-//         "proxyUsername",
-//         "proxyPassword",
-//     ];
-//     let metadata = extra_params
-//         .and_then(|v| v.as_object().cloned())
-//         .unwrap_or_default()
-//         .into_iter()
-//         .filter(|(k, _)| !excluded_keys.contains(&k.as_str()))
-//         .collect::<Map<_, _>>();
-//     let metadata_option = if metadata.is_empty() {
-//         None
-//     } else {
-//         Some(Value::Object(metadata))
-//     };
-//     metadata_option
-// }
+/// Initialize standard request parameters from ChatMetadata.
+pub fn init_request_params(metadata: &Option<ChatMetadata>) -> Value {
+    // Convert ChatMetadata to Value for compatibility with legacy function
+    let metadata_value = metadata.as_ref().and_then(|md| md.to_value());
+    init_request_params_value(metadata_value)
+}
 
-/// Initialize the extra parameters.
-///
-/// # Arguments
-/// * `extra_params`: The extra parameters from the API request.
-///
-/// # Returns
-/// Returns the initialized extra parameters as a `Value` object.
-pub fn init_extra_params(extra_params: Option<Value>) -> Value {
-    // OpenAI API: number, Optional, Defaults to 0.0
-    // Number between -2.0 and 2.0.
-    // Positive values penalize new tokens based on whether they appear in the text so far,
-    // increasing the model's likelihood to talk about new topics.
-    let presence_penalty = extra_params
+/// Initialize the standard request parameters from metadata value.
+pub fn init_request_params_value(metadata: Option<Value>) -> Value {
+    // Extract parameters from raw JSON value
+    let presence_penalty = metadata
         .as_ref()
-        .and_then(|params| params.get("presencePenalty").and_then(|v| v.as_f64()));
-    // OpenAI API: number, Optional, Defaults to 0.0
-    // Number between -2.0 and 2.0.
-    // Positive values penalize new tokens based on their existing frequency in the text so far,
-    // decreasing the model's likelihood to repeat the same line verbatim.
-    let frequency_penalty = extra_params
-        .as_ref()
-        .and_then(|params| params.get("frequencyPenalty").and_then(|v| v.as_f64()));
+        .and_then(|params| params.get("presencePenalty").and_then(|v| v.as_f64()))
+        .unwrap_or(0.0);
 
-    // OpenAI API: object, Optional, Defaults to {"type": "text"}
-    // An object specifying the format that the model must output.
-    // Setting to { "type": "json_object" } enables JSON mode.
-    // Important: when using JSON mode, you must also instruct the model to produce JSON yourself via a system or user message.
-    let response_format = extra_params
+    let frequency_penalty = metadata
+        .as_ref()
+        .and_then(|params| params.get("frequencyPenalty").and_then(|v| v.as_f64()))
+        .unwrap_or(0.0);
+
+    let response_format = metadata
         .as_ref()
         .and_then(|params| params.get("responseFormat").and_then(|v| v.as_str()));
 
-    let tool_choice = extra_params.as_ref().and_then(|params| {
-        params
-            .get("toolChoice")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-
-    // Stop sequences: can be a string or an array of strings
-    let stop_sequences = extra_params.as_ref().and_then(|params| {
+    let stop_sequences = metadata.as_ref().and_then(|params| {
         params.get("stop").and_then(|v| {
             if v.is_string() {
                 v.as_str()
@@ -264,18 +216,25 @@ pub fn init_extra_params(extra_params: Option<Value>) -> Value {
         })
     });
 
-    let n_candidate_count = extra_params
+    let n_candidate_count = metadata
         .as_ref()
         .and_then(|params| params.get("n").and_then(|v| v.as_u64()));
 
-    let user_id = extra_params.as_ref().and_then(|params| {
+    let user_id = metadata.as_ref().and_then(|params| {
         params
             .get("user")
             .and_then(|v| v.as_str())
             .map(String::from)
     });
-    // Prepare response_format object for OpenAI compatibility
-    // This parameter is only added if explicitly provided and valid, to avoid errors on models that don't support it.
+
+    let tool_choice = metadata.as_ref().and_then(|params| {
+        params
+            .get("toolChoice")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+
+    // Prepare response_format object for compatibility
     let response_format_obj = match response_format {
         Some("json_object") => Some(json!({"type": "json_object"})),
         Some("text") => Some(json!({"type": "text"})),
@@ -292,8 +251,8 @@ pub fn init_extra_params(extra_params: Option<Value>) -> Value {
 
     // Keep the Rust underscore style for the final JSON keys
     let mut body = json!({
-        "presence_penalty": presence_penalty.unwrap_or(0.0),
-        "frequency_penalty": frequency_penalty.unwrap_or(0.0),
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
         "stop_sequences": stop_sequences.map_or(Value::Null, |s| json!(s)),
         "candidate_count": n_candidate_count.map_or(Value::Null, |n| json!(n)),
         "user_id": user_id.map_or(Value::Null, |u| json!(u)),
@@ -312,29 +271,6 @@ pub fn init_extra_params(extra_params: Option<Value>) -> Value {
     }
 
     body
-}
-
-/// Update or create metadata options.
-///
-/// This function updates the existing metadata if provided; if not, it creates a new metadata object.
-///
-/// # Arguments
-///
-/// * `metadata_option` - The optional existing metadata
-/// * `key` - The key to update or add
-/// * `value` - The value associated with the key
-///
-/// # Returns
-///
-/// The updated metadata as a `Value` object
-pub fn update_or_create_metadata(metadata_option: Option<Value>, key: &str, value: Value) -> Value {
-    match metadata_option {
-        Some(mut metadata) => {
-            metadata[key] = value;
-            metadata
-        }
-        None => json!({ key: value }),
-    }
 }
 
 /// Gets proxy type from metadata
@@ -376,12 +312,6 @@ pub fn get_proxy_type(metadata: Option<Value>) -> ProxyType {
 }
 
 /// Determines the model family based on the model ID string
-///
-/// # Arguments
-/// * `id` - The model ID string to analyze
-///
-/// # Returns
-/// * `Option<&str>` - Some containing the model family name if matched, None otherwise
 pub fn get_family_from_model_id(lower_model_id: &str) -> Option<String> {
     let family = if lower_model_id.contains("qwen")
         || lower_model_id.contains("qwq")
@@ -396,10 +326,10 @@ pub fn get_family_from_model_id(lower_model_id: &str) -> Option<String> {
         Some("Llama".to_string())
     } else if lower_model_id.starts_with("gpt-4")
         || lower_model_id.starts_with("gpt-3.5")
-        || lower_model_id.contains("davinci") // GPT-3
-        || lower_model_id.contains("curie")// GPT-3
-        || lower_model_id.contains("babbage")// GPT-3
-        || lower_model_id.contains("ada")// GPT-3
+        || lower_model_id.contains("davinci")
+        || lower_model_id.contains("curie")
+        || lower_model_id.contains("babbage")
+        || lower_model_id.contains("ada")
         || lower_model_id.starts_with("text-embedding")
         || lower_model_id.starts_with("whisper")
         || lower_model_id.starts_with("dall-e")
@@ -413,6 +343,14 @@ pub fn get_family_from_model_id(lower_model_id: &str) -> Option<String> {
         Some("Gemma".to_string())
     } else if lower_model_id.contains("phi") {
         Some("Phi".to_string())
+    } else if lower_model_id.contains("kimi") {
+        Some("Kimi".to_string())
+    } else if lower_model_id.contains("glm") {
+        Some("GLM".to_string())
+    } else if lower_model_id.contains("minimax") {
+        Some("MiniMax".to_string())
+    } else if lower_model_id.contains("step") || lower_model_id.contains("stepfun") {
+        Some("StepFun".to_string())
     } else if lower_model_id.contains("/") {
         lower_model_id.split('/').next().map(|s| s.to_string())
     } else {
@@ -422,38 +360,23 @@ pub fn get_family_from_model_id(lower_model_id: &str) -> Option<String> {
     family
 }
 
-// Checks if a model likely supports function calling (tool use).
-/// This is based on common model names and families known to support this feature.
-/// The matching is case-insensitive.
-///
-/// # Arguments
-/// * `model_id` - The model ID string to check.
-///
-/// # Returns
-/// * `bool` - True if the model likely supports function calling, false otherwise.
+/// Checks if a model likely supports function calling (tool use).
 pub fn is_function_call_supported(lower_model_id: &str) -> bool {
-    // OpenAI models (GPT-3.5 Turbo onwards)
-    if lower_model_id.contains("gpt-3.5") // Covers gpt-3.5-turbo and its variants
-        || lower_model_id.contains("gpt-4") // Covers gpt-4, gpt-4-turbo, gpt-4o etc.
-        || lower_model_id.starts_with("o1-") // Specific provider prefixes for OpenAI models
+    if lower_model_id.contains("gpt-")
+        || lower_model_id.starts_with("o1-")
         || lower_model_id.starts_with("o3-")
-    // Specific provider prefixes for OpenAI models
     {
         return true;
     }
 
-    // Anthropic Claude
     if lower_model_id.contains("claude") {
-        // Primarily Claude 3 series. Claude 2.1 had some support.
         return true;
     }
 
-    // Most Gemini models support it.
     if lower_model_id.contains("gemini") {
         return true;
     }
 
-    // Qwen Qw2.5+ and Qwen QwQ
     if lower_model_id.contains("qwq")
         || lower_model_id.contains("qw2.5")
         || lower_model_id.contains("qwen3")
@@ -461,7 +384,6 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    // Qwen series (e.g., Qwen1.5-Chat, Qwen2-Instruct, qwen-turbo, qwen-plus, qwen-max)
     if lower_model_id.contains("qwen")
         && (lower_model_id.contains("chat")
             || lower_model_id.contains("instruct")
@@ -469,12 +391,10 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
             || lower_model_id.contains("plus")
             || lower_model_id.contains("max"))
         && !lower_model_id.contains("audio")
-    // Exclude vision/audio models that might not support standard chat tool calls
     {
         return true;
     }
 
-    // DeepSeek (Coder/Chat series 2.0+, v3)
     if lower_model_id.contains("deepseek")
         && (lower_model_id.contains("chat")
             || lower_model_id.contains("coder")
@@ -483,19 +403,55 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    // Yi large models (e.g., yi-large)
     if lower_model_id.contains("yi-large") {
         return true;
     }
 
-    // Baichuan models
+    // Kimi (Moonshot)
+    if lower_model_id.contains("kimi")
+        && (lower_model_id.contains("k2")
+            || lower_model_id.contains("k1.5")
+            || lower_model_id.contains("k1.6")
+            || lower_model_id.contains("latest"))
+    {
+        return true;
+    }
+
+    // GLM (Zhipu AI)
+    if lower_model_id.contains("glm")
+        && (lower_model_id.contains("4")
+            || lower_model_id.contains("3")
+            || lower_model_id.contains("turbo")
+            || lower_model_id.contains("flash")
+            || lower_model_id.contains("air"))
+    {
+        return true;
+    }
+
+    // MiniMax
+    if lower_model_id.contains("minimax")
+        && (lower_model_id.contains("2.")
+            || lower_model_id.contains("text")
+            || lower_model_id.contains("chat"))
+    {
+        return true;
+    }
+
+    // StepFun
+    if lower_model_id.contains("step")
+        && (lower_model_id.contains("1")
+            || lower_model_id.contains("2")
+            || lower_model_id.contains("chat"))
+    {
+        return true;
+    }
+
     if lower_model_id.contains("baichuan")
         && (lower_model_id.contains("turbo")
             || lower_model_id.contains("chat")
             || lower_model_id.contains("instruct")
-            || lower_model_id.contains("pro") // e.g. baichuan-turbo-pro
+            || lower_model_id.contains("pro")
             || lower_model_id.contains("4"))
-    // For Baichuan4 if it follows similar naming
     {
         return true;
     }
@@ -504,33 +460,21 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
 }
 
 /// Checks if a model is known to explicitly support or output reasoning/thinking steps
-/// (e.g., DeepSeek's `<think>` tags or Claude's strong Chain-of-Thought capabilities).
-/// The matching is case-insensitive.
-///
-/// # Arguments
-/// * `model_id` - The model ID string to check.
-///
-/// # Returns
-/// * `bool` - True if the model is known for reasoning/thinking step output, false otherwise.
 pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
-    // qwq series models, especially qwq3
     if lower_model_id.contains("qwq")
         || (lower_model_id.contains("qwen") && lower_model_id.contains("thinking"))
     {
         return true;
     }
 
-    // OpenAI o1 and o3 series, known for advanced reasoning/agentic capabilities
     if lower_model_id.starts_with("o1-") || lower_model_id.starts_with("o3") {
         return true;
     }
 
-    // DeepSeek R1 series, known for explicit <think> tags / reasoning chains
     if lower_model_id.contains("deepseek") && lower_model_id.contains("r1") {
         return true;
     }
 
-    // Gemini2.5 Flash support Thinking or Non-thinking
     if lower_model_id.contains("gemini-2.5-flash") {
         return true;
     }
@@ -542,12 +486,28 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    if lower_model_id.contains("glm4.5") || lower_model_id.contains("glm4.6") {
+    if lower_model_id.contains("glm4.5")
+        || lower_model_id.contains("glm4.6")
+        || lower_model_id.contains("glm5")
+    {
         return true;
     }
 
-    // General check for models explicitly designated as "thinking" variants,
-    // which includes "Gemini thinking series"， such as gemini-2.0-flash-thinking-exp, etc.
+    // Kimi (Moonshot) - k2 and above support reasoning
+    if lower_model_id.contains("kimi") && lower_model_id.contains("k2") {
+        return true;
+    }
+
+    // MiniMax - 2 and above support reasoning
+    if lower_model_id.contains("minimax") && lower_model_id.contains("2") {
+        return true;
+    }
+
+    // StepFun - Step-2 and above support reasoning
+    if lower_model_id.contains("step") && lower_model_id.contains("2") {
+        return true;
+    }
+
     if lower_model_id.contains("thinking") {
         return true;
     }
@@ -556,30 +516,18 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
 }
 
 /// Checks if a model likely supports image input (multimodal capabilities).
-/// This is based on common model names and families known to support this feature.
-/// The matching is case-insensitive.
-///
-/// # Arguments
-/// * `lower_model_id` - The lowercased model ID string to check.
-///
-/// # Returns
-/// * `bool` - True if the model likely supports image input, false otherwise.
 pub fn is_image_input_supported(lower_model_id: &str) -> bool {
-    // OpenAI
+    // GPT-4 models with vision/multimodal support
     if lower_model_id.contains("gpt-4-vision")
-        || lower_model_id.contains("gpt-4-turbo") // gpt-4-turbo often includes vision
-        || lower_model_id.contains("gpt-4o")
+        || lower_model_id.contains("gpt-4-turbo")
+        || lower_model_id.starts_with("gpt-4o") // gpt-4o, gpt-4o-mini, etc.
+        || lower_model_id.contains("gpt-5")
     {
         return true;
     }
 
-    // Google Gemini
-    if lower_model_id.contains("gemini-pro-vision")
-        || lower_model_id.contains("gemini-1.0-pro-vision")
-        || lower_model_id.contains("gemini-1.5-pro") // Gemini 1.5 Pro is multimodal
-        || lower_model_id.contains("gemini-1.5-flash")
-    // Gemini 1.5 Flash is multimodal
-    {
+    // All Gemini models support image input (multimodal by default)
+    if lower_model_id.starts_with("gemini-") {
         return true;
     }
 

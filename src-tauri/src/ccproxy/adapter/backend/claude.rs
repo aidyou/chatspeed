@@ -526,7 +526,10 @@ impl BackendAdapter for ClaudeBackendAdapter {
         let mut request_json = serde_json::to_value(&claude_request)?;
 
         // Merge custom params from model config
-        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+        crate::ai::util::merge_custom_params_value(
+            &mut request_json,
+            &unified_request.custom_params,
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
@@ -864,15 +867,21 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             }
                                         }
                                         "tool_use" => {
-                                            let tool_id = block.id.clone().unwrap_or(get_tool_id());
+                                            let index = claude_event.index.unwrap_or_default();
+                                            let tool_id = format!("{}_{}", get_tool_id(), index);
+
                                             if let Ok(mut status) = sse_status.write() {
                                                 status.tool_id = tool_id.clone();
+                                                status
+                                                    .index_to_tool_id
+                                                    .insert(index, tool_id.clone());
                                                 update_message_block(&mut status, tool_id.clone());
                                             }
                                             unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
                                                 tool_type: "tool_use".to_string(),
                                                 id: tool_id,
                                                 name: block.name.unwrap_or_default(),
+                                                index,
                                             });
                                         }
                                         // "server_tool_use" => {
@@ -930,9 +939,14 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             }
                                         }
                                         Some("input_json_delta") => {
+                                            let index = claude_event.index.unwrap_or_default();
                                             let tool_id = if let Ok(mut status) = sse_status.write()
                                             {
-                                                let id = status.tool_id.clone();
+                                                let id = status
+                                                    .index_to_tool_id
+                                                    .get(&index)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| status.tool_id.clone());
                                                 if let Some(partial_json) = &delta.partial_json {
                                                     status.estimated_output_tokens +=
                                                         estimate_tokens(partial_json);
@@ -950,6 +964,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                                     UnifiedStreamChunk::ToolUseDelta {
                                                         id: tool_id,
                                                         delta: partial_json,
+                                                        index,
                                                     },
                                                 );
                                             }
@@ -959,13 +974,17 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                 }
                             }
                             "content_block_stop" => {
-                                unified_chunks.push(UnifiedStreamChunk::ContentBlockStop {
-                                    index: claude_event.index.unwrap_or_default(),
-                                });
+                                let index = claude_event.index.unwrap_or_default();
+                                unified_chunks
+                                    .push(UnifiedStreamChunk::ContentBlockStop { index: index });
 
                                 // Check if we need to end a tool use based on current status
                                 if let Ok(mut status) = sse_status.write() {
-                                    if !status.tool_id.is_empty()
+                                    let tool_id = status.index_to_tool_id.remove(&index);
+                                    if let Some(id) = tool_id {
+                                        unified_chunks
+                                            .push(UnifiedStreamChunk::ToolUseEnd { id: id });
+                                    } else if !status.tool_id.is_empty()
                                         && status.current_content_block.contains("tool")
                                     {
                                         unified_chunks.push(UnifiedStreamChunk::ToolUseEnd {

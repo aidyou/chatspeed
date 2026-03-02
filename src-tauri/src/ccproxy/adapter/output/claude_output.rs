@@ -171,7 +171,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
                     .to_string(),
                 )])
             }
-            UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+            UnifiedStreamChunk::ToolUseDelta { id, delta, .. } => {
                 let message_index = if let Ok(status) = sse_status.read() {
                     status
                         .tool_id_to_index

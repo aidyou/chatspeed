@@ -1,7 +1,6 @@
 @font-face {
   font-family: "chatspeed"; /* Project id 4710661 */
-  src: url('./iconfont.woff2') format('woff2');
-  font-display: swap;
+  src: url('@/components/icon/iconfont.woff2') format('woff2');
 }
 
 .chatspeed {
@@ -10,6 +9,10 @@
   font-style: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.cs-ai-step:before {
+  content: "\e65e";
 }
 
 .cs-attachment:before {

@@ -21,7 +21,9 @@ pub fn format_json_str(jstr: &str) -> String {
         .replace('\n', "")
         .replace('\r', "")
         .replace("    ", "")
-        .replace('\t', "");
+        .replace('\t', "")
+        .trim()
+        .to_string();
     if formatted.ends_with('}') && !formatted.starts_with('{') {
         formatted = format!("{{{formatted}");
     } else if formatted.starts_with('{') && !formatted.ends_with('}') {

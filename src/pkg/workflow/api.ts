@@ -26,10 +26,14 @@ export interface WorkflowMessage {
   sessionId: string
   role: string
   message: string
+  reasoning?: string | null
   metadata?: Record<string, unknown> | null
-  stepType?: string | null
-  stepIndex?: number
-  createdAt?: string
+  stepType?: string
+  stepIndex: number
+  isError?: boolean
+  errorType?: string | null
+  createdAt: string
+
 }
 
 export interface WorkflowSnapshot {
@@ -90,8 +94,8 @@ export const getWorkflowSessionKey = (workflowId: string): Promise<string> => {
   return invoke('get_workflow_session_key', { workflowId })
 }
 
-export const updateWorkflowTodoList = (workflowId: string, todoList: string): Promise<void> => {
-  return invoke('update_workflow_todo_list', { workflowId, todoList })
+export const updateWorkflowTodoList = (sessionId: string, todoList: string): Promise<void> => {
+  return invoke('update_workflow_todo_list', { sessionId, todoList })
 }
 
 export const listWorkflows = (): Promise<Workflow[]> => {

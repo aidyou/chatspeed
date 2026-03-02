@@ -36,6 +36,8 @@ pub struct Agent {
     pub models: Option<String>,
     /// Shell command whitelist/blacklist (JSON array of {pattern, decision})
     pub shell_policy: Option<String>,
+    /// JSON array of authorized directory paths
+    pub allowed_paths: Option<String>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -61,6 +63,7 @@ impl Agent {
         vision_model: Option<String>,
         models: Option<String>,
         shell_policy: Option<String>,
+        allowed_paths: Option<String>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
@@ -77,6 +80,7 @@ impl Agent {
             vision_model,
             models,
             shell_policy,
+            allowed_paths,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -103,6 +107,7 @@ impl From<&Row<'_>> for Agent {
             vision_model: row.get("vision_model").ok(),
             models: row.get("models").ok(),
             shell_policy: row.get("shell_policy").ok(),
+            allowed_paths: row.get("allowed_paths").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -134,8 +139,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 agent.id,
                 agent.name,
@@ -150,6 +155,7 @@ impl MainStore {
                 agent.vision_model,
                 agent.models,
                 agent.shell_policy,
+                agent.allowed_paths,
                 agent.max_contexts,
             ],
         )?;
@@ -182,8 +188,8 @@ impl MainStore {
 
         // Update the agent
         tx.execute(
-            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, models = ?11, shell_policy = ?12, max_contexts = ?13, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?14",
+            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, models = ?11, shell_policy = ?12, allowed_paths = ?13, max_contexts = ?14, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?15",
             params![
                 agent.name,
                 agent.description,
@@ -197,6 +203,7 @@ impl MainStore {
                 agent.vision_model,
                 agent.models,
                 agent.shell_policy,
+                agent.allowed_paths,
                 agent.max_contexts,
                 agent.id,
             ],

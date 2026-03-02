@@ -6,6 +6,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
   const messages = ref([]);
+  const todoList = ref([]);
   const messageQueue = ref([]);
   const isRunning = ref(false);
   const error = ref(null);
@@ -13,6 +14,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const currentWorkflow = computed(() => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
+
+  const setTodoList = (todos) => {
+    todoList.value = todos;
+  };
 
   const _handleError = async (err) => {
     if (err instanceof FrontendAppError) {
@@ -29,7 +34,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
     error.value = null;
     try {
       const result = await invokeWrapper('list_workflows');
-      workflows.value = result || [];
+      workflows.value = (result || []).map(w => {
+        if (w.allowedPaths && typeof w.allowedPaths === 'string') {
+          try {
+            w.allowedPaths = JSON.parse(w.allowedPaths);
+          } catch (e) {
+            console.error('Failed to parse allowedPaths for workflow', w.id, e);
+            w.allowedPaths = [];
+          }
+        } else if (!w.allowedPaths) {
+          w.allowedPaths = [];
+        }
+        return w;
+      });
     } catch (err) {
       await _handleError(err);
     }
@@ -42,26 +59,68 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
-      messages.value = snapshot.messages || [];
+      
+      // Parse metadata for all messages in snapshot
+      const parsedMessages = (snapshot.messages || []).map(m => {
+        if (m.metadata && typeof m.metadata === 'string') {
+          try {
+            m.metadata = JSON.parse(m.metadata);
+          } catch (e) {
+            console.error('Failed to parse snapshot message metadata:', e);
+          }
+        }
+        return m;
+      });
+      
+      messages.value = parsedMessages;
 
-      // Initialize todo manager with the workflow's todo list
+      // Initialize todo list from workflow snapshot
       if (snapshot.workflow.todoList) {
         try {
-          const todoList = JSON.parse(snapshot.workflow.todoList);
-          // Import the todo list into the todo manager
+          const todos = JSON.parse(snapshot.workflow.todoList);
+          todoList.value = todos;
+          
+          // Still sync with todo manager for tool consistency
           const { setTodoListForWorkflow } = await import('@/pkg/workflow/tools/todoList');
-          setTodoListForWorkflow(workflowId, todoList);
+          setTodoListForWorkflow(workflowId, todos);
         } catch (e) {
           console.error('Failed to parse todo list from workflow:', e);
+          todoList.value = [];
         }
+      } else {
+        todoList.value = [];
+      }
+
+      // Initialize allowedPaths in the workflow object in the list
+      const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+      console.log('workflowStore: workflowIndex for update:', workflowIndex);
+      if (workflowIndex !== -1) {
+        let paths = [];
+        if (snapshot.workflow.allowedPaths) {
+          try {
+            paths = typeof snapshot.workflow.allowedPaths === 'string' 
+              ? JSON.parse(snapshot.workflow.allowedPaths) 
+              : snapshot.workflow.allowedPaths;
+          } catch (e) {
+            console.error('Failed to parse allowedPaths from snapshot:', e);
+          }
+        }
+        console.log('workflowStore: setting allowedPaths to:', paths);
+        // Force update the object in the list to trigger reactivity
+        workflows.value[workflowIndex] = {
+          ...workflows.value[workflowIndex],
+          ...snapshot.workflow,
+          allowedPaths: Array.isArray(paths) ? paths : []
+        };
       }
     } catch (err) {
       await _handleError(err);
       messages.value = [];
+      todoList.value = [];
     }
   };
 
-  const createWorkflow = async (userQuery, agentId) => {
+  const createWorkflow = async (userQuery, agentId, allowedPaths = []) => {
     error.value = null;
     try {
       const id = `session_${Date.now()}`;
@@ -71,6 +130,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           userQuery,
           agentId,
           status: 'pending',
+          allowedPaths: JSON.stringify(allowedPaths),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -80,7 +140,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
         id: typeof newWorkflow === 'string' ? newWorkflow : id,
         userQuery,
         agentId,
-        status: 'pending'
+        status: 'pending',
+        allowedPaths
       };
       workflows.value.unshift(workflowObj);
       await selectWorkflow(workflowObj.id);
@@ -99,12 +160,24 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const addMessage = (message) => {
-    // Check if message already exists by id (if available) or metadata
-    const exists = messages.value.some(m =>
+    // Ensure metadata is an object
+    if (message.metadata && typeof message.metadata === 'string') {
+      try {
+        message.metadata = JSON.parse(message.metadata);
+      } catch (e) {
+        console.error('Failed to parse message metadata:', e);
+      }
+    }
+
+    const index = messages.value.findIndex(m =>
       (message.id && m.id === message.id) ||
       (m.stepIndex === message.stepIndex && m.role === message.role && m.stepType === message.stepType && m.message === message.message)
     );
-    if (!exists) {
+
+    if (index !== -1) {
+      // Update existing message
+      messages.value[index] = { ...messages.value[index], ...message };
+    } else {
       messages.value.push(message);
     }
   };
@@ -128,6 +201,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
+      }
+    } catch (err) {
+      await _handleError(err);
+    }
+  };
+
+  const updateWorkflowAllowedPaths = async (workflowId, allowedPaths) => {
+    error.value = null;
+    try {
+      await invokeWrapper('update_workflow_allowed_paths', {
+        sessionId: workflowId,
+        allowedPaths: JSON.stringify(allowedPaths)
+      });
+      const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+      if (workflowIndex !== -1) {
+        workflows.value[workflowIndex].allowedPaths = allowedPaths;
       }
     } catch (err) {
       await _handleError(err);
@@ -160,6 +249,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const clearCurrentWorkflow = () => {
     currentWorkflowId.value = null;
     messages.value = [];
+    todoList.value = [];
     isRunning.value = false;
   };
 
@@ -167,10 +257,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     workflows,
     currentWorkflowId,
     messages,
+    todoList,
     messageQueue,
     isRunning,
     error,
     currentWorkflow,
+    setTodoList,
     loadWorkflows,
     selectWorkflow,
     createWorkflow,
@@ -178,6 +270,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     addMessageToQueue,
     setRunning,
     updateWorkflowStatus,
+    updateWorkflowAllowedPaths,
     loadMessages,
     deleteMessage,
     clearCurrentWorkflow,

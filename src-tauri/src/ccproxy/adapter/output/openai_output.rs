@@ -252,12 +252,8 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 tool_type: _,
                 id,
                 name,
+                index,
             } => {
-                let message_index = if let Ok(status) = sse_status.read() {
-                    status.message_index
-                } else {
-                    0
-                };
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
@@ -277,7 +273,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         "index":0,
                         "delta": {
                             "tool_calls": [{
-                                "index": message_index,
+                                "index": index,
                                 "id": id,
                                 "function": {
                                     "name": name,
@@ -289,12 +285,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
-            UnifiedStreamChunk::ToolUseDelta { id: _, delta } => {
-                let message_index = if let Ok(status) = sse_status.read() {
-                    status.message_index
-                } else {
-                    0
-                };
+            UnifiedStreamChunk::ToolUseDelta { id: _, delta, index } => {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {
@@ -314,7 +305,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                         "index":0,
                         "delta": {
                             "tool_calls": [{
-                                "index": message_index,
+                                "index": index,
                                 "function": {
                                     "arguments": delta
                                 }

@@ -1,12 +1,13 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
+use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::security::PathGuard;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
 /// Decision levels for shell auditing
@@ -26,12 +27,12 @@ pub struct ShellPolicyRule {
 
 /// Industrial-grade Shell Policy Engine with graded auditing.
 pub struct ShellPolicyEngine {
-    path_guard: Arc<PathGuard>,
+    path_guard: Arc<RwLock<PathGuard>>,
     custom_rules: Vec<ShellPolicyRule>,
 }
 
 impl ShellPolicyEngine {
-    pub fn new(path_guard: Arc<PathGuard>, custom_rules: Vec<ShellPolicyRule>) -> Self {
+    pub fn new(path_guard: Arc<RwLock<PathGuard>>, custom_rules: Vec<ShellPolicyRule>) -> Self {
         Self {
             path_guard,
             custom_rules,
@@ -255,7 +256,12 @@ impl ShellPolicyEngine {
                 Ok(expanded) => {
                     let expanded_str: &str = expanded.as_ref();
                     if expanded_str.contains('/') || expanded_str.starts_with('.') {
-                        if let Err(e) = self.path_guard.validate(Path::new(expanded_str)) {
+                        let valid = if let Ok(guard) = self.path_guard.read() {
+                            guard.validate(Path::new(expanded_str))
+                        } else {
+                            Err(WorkflowEngineError::Security("Lock failed".into()))
+                        };
+                        if let Err(e) = valid {
                             return ShellDecision::Deny(format!("Boundary Violation: {}", e));
                         }
                     }
@@ -279,7 +285,7 @@ pub struct ShellExecute {
 
 impl ShellExecute {
     pub fn new(
-        path_guard: Arc<PathGuard>,
+        path_guard: Arc<RwLock<PathGuard>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         custom_rules: Vec<ShellPolicyRule>,
     ) -> Self {
@@ -438,13 +444,13 @@ mod tests {
     use crate::workflow::react::security::PathGuard;
     use tempfile::tempdir;
 
-    fn setup_test_context() -> (tempfile::TempDir, std::path::PathBuf, Arc<PathGuard>) {
+    fn setup_test_context() -> (tempfile::TempDir, std::path::PathBuf, Arc<RwLock<PathGuard>>) {
         let root = tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
-        let guard = Arc::new(PathGuard::new(vec![
+        let guard = Arc::new(RwLock::new(PathGuard::new(vec![
             root_path.clone(),
             std::env::current_dir().unwrap(),
-        ]));
+        ])));
         (root, root_path, guard)
     }
 

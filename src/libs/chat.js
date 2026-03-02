@@ -542,7 +542,13 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   //   return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
   // })
 
-  if (toolCalls) {
+  if (toolCalls && toolCalls.length > 0) {
+    const placeholderCount = (content.match(/<!--\[ToolCalls\]-->/g) || []).length
+    if (placeholderCount < toolCalls.length) {
+      for (let i = 0; i < toolCalls.length - placeholderCount; i++) {
+        content += '\n\n<!--[ToolCalls]-->'
+      }
+    }
     content = createToolCallHtml(content, toolCalls)
   }
 

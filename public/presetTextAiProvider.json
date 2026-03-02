@@ -226,18 +226,33 @@
     },
     {
       "protocol": "openai",
-      "name": "Yi(零一万物)",
-      "logo": "https://01.ai/favicon.ico",
-      "desc": "一万物致力于成为一家由技术愿景驱动、拥有卓越中国工程底蕴的创新企业，推动以基座大模型为突破的AI 2.0掀起技术、平台到应用多个层面的革命。",
-      "baseUrl": "https://api.lingyiwanwu.com/v1",
+      "name": "Deepseek",
+      "logo": "https://www.deepseek.com/favicon.ico",
+      "desc": "DeepSeek, unravel the mystery of AGI with curiosity. Answer the essential question with long-termism.",
+      "baseUrl": "https://api.deepseek.com/v1",
       "models": [],
       "maxTokens": 4096,
       "temperature": 0.6,
       "topP": 0.0,
       "topK": 0,
-      "documentationUrl": "https://platform.lingyiwanwu.com/docs",
-      "modelListUrl": "https://platform.lingyiwanwu.com/docs#%E6%A8%A1%E5%9E%8B%E4%B8%8E%E8%AE%A1%E8%B4%B9",
-      "keyApplyUrl": "https://platform.lingyiwanwu.com/apikeys"
+      "documentationUrl": "https://api-docs.deepseek.com/",
+      "modelListUrl": "https://api-docs.deepseek.com/quick_start/pricing",
+      "keyApplyUrl": "https://platform.deepseek.com/api_keys"
+    },
+    {
+      "protocol": "openai",
+      "name": "Stepfun",
+      "logo": "https://static-openapi.stepfun.com/static/platform-docs/images/title-logo.png",
+      "desc": "Stepfun is a leading AI company dedicated to advancing general-purpose foundation models. Founded in April 2023, the company brings together top talent across artificial intelligence and is committed to exploring the path toward universal AI.",
+      "baseUrl": "https://api.stepfun.com/v1",
+      "models": [],
+      "maxTokens": 4096,
+      "temperature": 0.6,
+      "topP": 0.0,
+      "topK": 0,
+      "documentationUrl": "https://platform.stepfun.com/docs/zh/overview/concept",
+      "modelListUrl": "https://platform.stepfun.com/docs/zh/llm/modeloverview",
+      "keyApplyUrl": "https://platform.stepfun.com/"
     },
     {
       "protocol": "openai",
@@ -253,21 +268,6 @@
       "documentationUrl": "https://open.bigmodel.cn/dev/welcome",
       "modelListUrl": "https://open.bigmodel.cn/dev/api#chatglm_turbo",
       "keyApplyUrl": "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"
-    },
-    {
-      "protocol": "openai",
-      "name": "Deepseek",
-      "logo": "https://www.deepseek.com/favicon.ico",
-      "desc": "DeepSeek, unravel the mystery of AGI with curiosity. Answer the essential question with long-termism.",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "models": [],
-      "maxTokens": 4096,
-      "temperature": 0.6,
-      "topP": 0.0,
-      "topK": 0,
-      "documentationUrl": "https://api-docs.deepseek.com/",
-      "modelListUrl": "https://api-docs.deepseek.com/quick_start/pricing",
-      "keyApplyUrl": "https://platform.deepseek.com/api_keys"
     },
     {
       "protocol": "openai",

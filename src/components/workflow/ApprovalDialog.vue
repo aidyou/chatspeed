@@ -19,8 +19,9 @@
     </div>
     <template #footer>
       <div class="dialog-footer">
-        <el-button @click="onReject" :loading="loading">{{ $t('common.reject') }}</el-button>
-        <el-button type="primary" @click="onApprove" :loading="loading">{{ $t('common.approve') }}</el-button>
+        <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
+        <el-button type="primary" @click="onApprove" :loading="loading" round>{{ $t('common.approve') }}</el-button>
+        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{ $t('workflow.approveAll') }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -37,7 +38,7 @@ const props = defineProps({
   loading: Boolean
 })
 
-const emit = defineEmits(['update:modelValue', 'approve', 'reject'])
+const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject'])
 
 const { t } = useI18n()
 
@@ -50,6 +51,10 @@ const title = computed(() => t('workflow.approval.title'))
 
 const onApprove = () => {
   emit('approve')
+}
+
+const onApproveAll = () => {
+  emit('approveAll')
 }
 
 const onReject = () => {

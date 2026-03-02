@@ -145,35 +145,56 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane v-if="agentForm.availableTools.includes('bash')" :label="$t('settings.agent.security')"
-          name="security">
-          <div class="shell-policy-header">
-            <h3>{{ $t('settings.agent.shellPolicy') }}</h3>
-            <div class="shell-policy-actions">
-              <el-button type="primary" size="small" @click="addShellPolicyRule">
-                {{ $t('settings.agent.shellPolicyAdd') }}
-              </el-button>
-              <el-button type="info" size="small" @click="importDefaultShellPolicies" plain>
-                {{ $t('settings.agent.shellPolicyImportDefault') }}
-              </el-button>
-              <el-button v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0" type="danger" size="small"
-                @click="clearShellPolicyRules" plain>
-                {{ $t('settings.agent.shellPolicyClear') }}
-              </el-button>
+        <el-tab-pane :label="$t('settings.agent.security')" name="security">
+          <div class="security-group">
+            <div class="shell-policy-header">
+              <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
+              <div class="shell-policy-actions">
+                <el-button type="primary" size="small" @click="addAuthorizedPath">
+                  {{ $t('settings.agent.authorizedPathsAdd') }}
+                </el-button>
+              </div>
+            </div>
+            <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
+            <div class="shell-policy-list">
+              <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
+                <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
+                <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
+                  <cs name="trash" size="12px" />
+                </el-button>
+              </div>
             </div>
           </div>
-          <div class="shell-policy-list" ref="shellPolicyListRef">
-            <div v-for="(rule, index) in agentForm.shellPolicy" :key="index" class="shell-policy-item">
-              <el-input v-model="rule.pattern" size="small" :placeholder="$t('settings.agent.shellPolicyPattern')"
-                style="flex: 1" />
-              <el-select v-model="rule.decision" size="small" style="width: 130px">
-                <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
-                <el-option :label="$t('settings.agent.shellDecisionReview')" value="review" />
-                <el-option :label="$t('settings.agent.shellDecisionDeny')" value="deny" />
-              </el-select>
-              <el-button type="danger" size="small" circle @click="removeShellPolicyRule(index)">
-                <cs name="trash" size="12px" />
-              </el-button>
+
+          <div v-if="agentForm.availableTools.includes('bash')" class="security-group" style="margin-top: 24px;">
+            <div class="shell-policy-header">
+              <h3>{{ $t('settings.agent.shellPolicy') }}</h3>
+              <div class="shell-policy-actions">
+                <el-button type="primary" size="small" @click="addShellPolicyRule">
+                  {{ $t('settings.agent.shellPolicyAdd') }}
+                </el-button>
+                <el-button type="info" size="small" @click="importDefaultShellPolicies" plain>
+                  {{ $t('settings.agent.shellPolicyImportDefault') }}
+                </el-button>
+                <el-button v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0" type="danger" size="small"
+                  @click="clearShellPolicyRules" plain>
+                  {{ $t('settings.agent.shellPolicyClear') }}
+                </el-button>
+              </div>
+            </div>
+            <div class="shell-policy-list" ref="shellPolicyListRef">
+              <div v-for="(rule, index) in agentForm.shellPolicy" :key="index" class="shell-policy-item">
+                <el-input v-model="rule.pattern" size="small" :placeholder="$t('settings.agent.shellPolicyPattern')"
+                  style="flex: 1" />
+                <el-select v-model="rule.decision" size="small" style="width: 130px">
+                  <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
+                  <el-option :label="$t('settings.agent.shellDecisionReview')" value="review" />
+                  <el-option :label="$t('settings.agent.shellDecisionDeny')" value="deny" />
+                </el-select>
+                <el-button type="danger" size="small" circle @click="removeShellPolicyRule(index)">
+                  <cs name="trash" size="12px" />
+                </el-button>
+              </div>
             </div>
           </div>
         </el-tab-pane>
@@ -193,6 +214,7 @@ import { computed, ref, onMounted, reactive, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { Sortable } from 'sortablejs-vue3'
+import { open } from '@tauri-apps/plugin-dialog'
 
 import { showMessage } from '@/libs/util'
 import { useModelStore } from '@/stores/model'
@@ -232,6 +254,7 @@ const defaultFormData = {
   availableTools: [],
   autoApprove: [],
   shellPolicy: [],
+  allowedPaths: [],
   planModel: { id: '', model: '' },
   actModel: { id: '', model: '' },
   visionModel: { id: '', model: '' },
@@ -431,6 +454,28 @@ const addShellPolicyRule = () => {
   })
 }
 
+const addAuthorizedPath = async () => {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: t('settings.agent.selectDirectory')
+    })
+    if (selected) {
+      if (!agentForm.value.allowedPaths) agentForm.value.allowedPaths = []
+      if (!agentForm.value.allowedPaths.includes(selected)) {
+        agentForm.value.allowedPaths.push(selected)
+      }
+    }
+  } catch (error) {
+    console.error('Failed to open directory dialog:', error)
+  }
+}
+
+const removeAuthorizedPath = index => {
+  agentForm.value.allowedPaths.splice(index, 1)
+}
+
 const removeShellPolicyRule = index => {
   agentForm.value.shellPolicy.splice(index, 1)
 }
@@ -565,6 +610,26 @@ const editAgent = async id => {
         agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
       }
 
+      // Unpack 'allowedPaths' JSON field if it exists
+      const rawPaths = agentData.allowed_paths || agentData.allowedPaths;
+      if (rawPaths) {
+        try {
+          if (typeof rawPaths === 'string' && rawPaths.trim()) {
+            const pathsObj = JSON.parse(rawPaths)
+            if (Array.isArray(pathsObj)) {
+              agentForm.value.allowedPaths = pathsObj
+            }
+          } else if (Array.isArray(rawPaths)) {
+            agentForm.value.allowedPaths = rawPaths
+          }
+        } catch (e) {
+          console.error('Failed to parse allowedPaths JSON:', e)
+          agentForm.value.allowedPaths = []
+        }
+      } else {
+        agentForm.value.allowedPaths = []
+      }
+
       modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
   } else {
@@ -574,6 +639,7 @@ const editAgent = async id => {
     agentForm.value.availableTools = availableTools.value.map(tool => tool.id)
     agentForm.value.autoApprove = availableTools.value.filter(tool => READ_ONLY_TOOLS.includes(tool.id)).map(tool => tool.id)
     agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+    agentForm.value.allowedPaths = []
   }
 
   agentDialogVisible.value = true
@@ -615,6 +681,25 @@ const copyAgent = async id => {
       agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
     }
 
+    // Unpack 'allowedPaths' JSON field if it exists
+    if (agentData.allowedPaths) {
+      try {
+        if (typeof agentData.allowedPaths === 'string' && agentData.allowedPaths.trim()) {
+          const pathsObj = JSON.parse(agentData.allowedPaths)
+          if (Array.isArray(pathsObj)) {
+            agentForm.value.allowedPaths = pathsObj
+          }
+        } else if (Array.isArray(agentData.allowedPaths)) {
+          agentForm.value.allowedPaths = agentData.allowedPaths
+        }
+      } catch (e) {
+        console.error('Failed to parse allowedPaths JSON during copy:', e)
+        agentForm.value.allowedPaths = []
+      }
+    } else {
+      agentForm.value.allowedPaths = []
+    }
+
     modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     agentDialogVisible.value = true
   } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
@@ -626,26 +711,18 @@ const updateAgent = () => {
       const finalForm = JSON.parse(JSON.stringify(agentForm.value))
 
       // 1. Filter out empty shell policy rules
-      let filteredPolicy = []
       if (finalForm.shellPolicy && Array.isArray(finalForm.shellPolicy)) {
-        filteredPolicy = finalForm.shellPolicy.filter(rule =>
+        finalForm.shellPolicy = finalForm.shellPolicy.filter(rule =>
           rule.pattern && rule.pattern.trim() !== ''
         )
       }
 
-      // 2. Stringify shellPolicy for Rust/SQLite backend compatibility
-      finalForm.shellPolicy = JSON.stringify(filteredPolicy)
-
-      // 3. Prepare and stringify models
+      // 2. Prepare models
       modelRoles.forEach(role => {
         if (modelModes[role.key] === 'proxy') {
           finalForm[role.key + 'Model'].id = 0
           finalForm[role.key + 'Model'].model = `${proxyGroups[role.key]}@${proxyAliases[role.key]}`
         }
-      })
-      finalForm.models = JSON.stringify({
-        plan: finalForm.planModel, act: finalForm.actModel, vision: finalForm.visionModel,
-        coding: finalForm.codingModel, copywriting: finalForm.copywritingModel, browsing: finalForm.browsingModel
       })
 
       try {
@@ -750,6 +827,14 @@ onMounted(() => {
       gap: var(--cs-space-sm);
       align-items: center;
     }
+  }
+
+  .security-tip {
+    font-size: 12px;
+    color: var(--cs-text-color-secondary);
+    margin-bottom: 12px;
+    margin-top: -8px;
+    line-height: 1.4;
   }
 
   .shell-policy-list {

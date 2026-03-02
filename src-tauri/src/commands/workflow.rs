@@ -78,6 +78,12 @@ pub async fn create_workflow(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     workflow: Workflow,
 ) -> Result<String, String> {
+    log::info!(
+        "Creating workflow: id={}, agent_id={}, allowed_paths={:?}",
+        workflow.id,
+        workflow.agent_id,
+        workflow.allowed_paths
+    );
     let store = state.read().map_err(|e| e.to_string())?;
     let created = store
         .create_workflow(
@@ -165,7 +171,10 @@ pub async fn workflow_start(
     agent_id: String,
     initial_prompt: Option<String>,
 ) -> Result<String, String> {
-    log::debug!("[Workflow Command] workflow_start: session_id={}", session_id);
+    log::debug!(
+        "[Workflow Command] workflow_start: session_id={}",
+        session_id
+    );
 
     let main_store = main_store.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
@@ -199,7 +208,7 @@ pub async fn workflow_start(
         vec![std::env::current_dir().unwrap_or_default()],
         app_data_dir,
         None,
-        signal_rx,
+        Some(signal_rx),
         tsid_generator,
         global_tool_manager,
     );
@@ -208,8 +217,7 @@ pub async fn workflow_start(
 
     if let Some(prompt) = initial_prompt {
         executor
-            .context
-            .add_message("user".into(), prompt, None, 0, None)
+            .add_message_and_notify("user".into(), prompt, None, None, false, None, None)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -263,14 +271,14 @@ pub async fn workflow_stop(
     session_id: String,
 ) -> Result<(), String> {
     log::info!("Stopping workflow session: {}", session_id);
-    
+
     // 1. Inject an asynchronous signal. This is non-blocking and doesn't require executor lock.
-    let _ = gateway.inject_input(&session_id, "stop".to_string()).await;
+    let _ = gateway.inject_input(&session_id, "{\"type\": \"stop\"}".to_string()).await;
 
     // 2. Mark as cancelled in BACKGROUND_TASKS if it's still there (best effort)
     // We don't wait for the lock here to avoid hanging the UI.
     // The executor's run_loop will see the signal and stop itself.
-    
+
     Ok(())
 }
 
@@ -316,6 +324,32 @@ pub async fn update_workflow_todo_list(
     let store = state.read().map_err(|e| e.to_string())?;
     store
         .update_workflow_todo_list(&session_id, &todo_list)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+use crate::workflow::react::skills::{SkillManifest, SkillScanner};
+
+#[tauri::command]
+pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, String> {
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let scanner = SkillScanner::new(app_data_dir);
+    let skills_map = scanner.scan().map_err(|e| e.to_string())?;
+    let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
+    // Sort by name for consistent UI
+    skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(skills)
+}
+
+#[tauri::command]
+pub async fn update_workflow_allowed_paths(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    allowed_paths: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_allowed_paths(&session_id, &allowed_paths)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

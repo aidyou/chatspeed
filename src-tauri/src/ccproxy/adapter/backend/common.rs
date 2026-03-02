@@ -308,6 +308,7 @@ fn parse_and_emit_tool_call(
             tool_type: "function".to_string(),
             id: tool_id.clone(),
             name: parsed_tool.name.clone(),
+            index: status.message_index,
         });
 
         // Send tool call parameters
@@ -315,6 +316,7 @@ fn parse_and_emit_tool_call(
         unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
             id: tool_id,
             delta: args_json.clone(),
+            index: status.message_index,
         });
 
         log::info!("tool parse success, name: {}", parsed_tool.name.clone());
