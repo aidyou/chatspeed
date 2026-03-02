@@ -126,6 +126,54 @@ impl LlmProcessor {
             }
         }
 
+        // --- Post-processing: Extract <think> blocks from content ---
+        if full_content.contains("<think>") || full_content.contains("</think>") {
+            let mut extracted_reasoning = String::new();
+            let mut cleaned_content = String::new();
+            let mut current_pos = 0;
+            
+            while let Some(start_idx) = full_content[current_pos..].find("<think>") {
+                let absolute_start = current_pos + start_idx;
+                cleaned_content.push_str(&full_content[current_pos..absolute_start]);
+                
+                let remainder = &full_content[absolute_start + 7..];
+                if let Some(end_idx) = remainder.find("</think>") {
+                    let absolute_end = absolute_start + 7 + end_idx;
+                    let reasoning = &full_content[absolute_start + 7..absolute_end];
+                    if !extracted_reasoning.is_empty() {
+                        extracted_reasoning.push_str("\n\n");
+                    }
+                    extracted_reasoning.push_str(reasoning.trim());
+                    current_pos = absolute_end + 8;
+                } else {
+                    // Unclosed <think> tag, take the rest as reasoning
+                    if !extracted_reasoning.is_empty() {
+                        extracted_reasoning.push_str("\n\n");
+                    }
+                    extracted_reasoning.push_str(remainder.trim());
+                    current_pos = full_content.len();
+                    break;
+                }
+            }
+            
+            if current_pos < full_content.len() {
+                cleaned_content.push_str(&full_content[current_pos..]);
+            } else if current_pos == 0 {
+                // No <think> tag found at all, but we knew it had <think> or </think>
+                cleaned_content.push_str(&full_content);
+            }
+            
+            if !extracted_reasoning.is_empty() {
+                if !full_reasoning.is_empty() {
+                    full_reasoning.push_str("\n\n");
+                }
+                full_reasoning.push_str(&extracted_reasoning);
+            }
+            
+            // Final cleanup of the content (remove any dangling </think>)
+            full_content = cleaned_content.replace("</think>", "").trim().to_string();
+        }
+
         Ok((full_content, full_reasoning, None))
     }
 
@@ -141,14 +189,34 @@ impl LlmProcessor {
                 .as_ref()
                 .and_then(|meta| meta.get("tool_calls").cloned());
 
-            // Normalize Assistant JSON
-            if role == "assistant" && content.trim().starts_with('{') {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(c) = parsed.get("content").and_then(|v| v.as_str()) {
-                        content = c.to_string();
-                    }
-                    if let Some(tc) = parsed.get("tool_calls").cloned() {
-                        tool_calls = Some(tc);
+            // Normalize Assistant JSON (even if it has prefix text)
+            if role == "assistant" {
+                let cleaned = crate::libs::util::format_json_str(&content);
+                if (cleaned.starts_with('{') || cleaned.starts_with('[')) && cleaned.contains(':') {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                        // If it's a tool call message
+                        if parsed.get("tool_calls").is_some() || parsed.get("tool").is_some() {
+                            if let Some(c) = parsed.get("content").and_then(|v| v.as_str()) {
+                                content = c.to_string();
+                            } else {
+                                // If the original content had text BEFORE the JSON, keep it
+                                let json_start = content.find('{').or_else(|| content.find('['));
+                                if let Some(idx) = json_start {
+                                    let prefix = content[..idx].trim();
+                                    if !prefix.is_empty() {
+                                        content = prefix.to_string();
+                                    } else {
+                                        content = String::new();
+                                    }
+                                }
+                            }
+
+                            if let Some(tc) = parsed.get("tool_calls").cloned() {
+                                tool_calls = Some(tc);
+                            } else if let Some(t) = parsed.get("tool").cloned() {
+                                tool_calls = Some(serde_json::json!([t]));
+                            }
+                        }
                     }
                 }
             }

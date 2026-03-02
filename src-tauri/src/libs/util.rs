@@ -13,23 +13,47 @@ use url::form_urlencoded::{byte_serialize, parse};
 /// # Returns
 /// The formatted JSON string
 pub fn format_json_str(jstr: &str) -> String {
-    let mut formatted = jstr
-        .trim()
+    let mut jstr = jstr.trim();
+
+    // 1. Try to extract content between the first { and the last } or [ and ]
+    let start_brace = jstr.find('{');
+    let start_bracket = jstr.find('[');
+    let end_brace = jstr.rfind('}');
+    let end_bracket = jstr.rfind(']');
+
+    let start = match (start_brace, start_bracket) {
+        (Some(s1), Some(s2)) => Some(s1.min(s2)),
+        (Some(s), None) | (None, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
+    let end = match (end_brace, end_bracket) {
+        (Some(e1), Some(e2)) => Some(e1.max(e2)),
+        (Some(e), None) | (None, Some(e)) => Some(e),
+        (None, None) => None,
+    };
+
+    if let (Some(s), Some(e)) = (start, end) {
+        if s <= e {
+            jstr = &jstr[s..=e];
+        }
+    }
+
+    // Still perform some basic cleaning for malformed AI output,
+    // but try to be less destructive to valid multi-line content if possible.
+    // However, for tool calling, AI usually produces compact JSON or JSON with newlines for formatting.
+    // If the JSON is already valid, serde_json handles it fine.
+    // The previous aggressive replace('\n', "") was likely to fix raw newlines in strings.
+    
+    let formatted = jstr
         .trim_start_matches("```json")
         .trim_start_matches(|c: char| c == '`' || c.is_whitespace())
         .trim_end_matches(|c: char| c == '`' || c.is_whitespace())
-        .replace('\n', "")
-        .replace('\r', "")
-        .replace("    ", "")
-        .replace('\t', "")
         .trim()
         .to_string();
-    if formatted.ends_with('}') && !formatted.starts_with('{') {
-        formatted = format!("{{{formatted}");
-    } else if formatted.starts_with('{') && !formatted.ends_with('}') {
-        formatted = format!("{formatted}}}");
-    }
 
+    // If it starts with { and ends with }, but serde_json fails, we might still need to clean it.
+    // Let's keep a balance.
     formatted
 }
 
