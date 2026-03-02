@@ -817,6 +817,12 @@ impl WorkflowExecutor {
         } else if let Some(tool_calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
             for call in tool_calls {
                 let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let func = call.get("function").unwrap_or(call);
+                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
+
+                if name.starts_with("todo_") {
+                    has_todo_call = true;
+                }
 
                 results.push((
                     id.to_string(),
@@ -828,13 +834,21 @@ impl WorkflowExecutor {
             // Handle direct array of tool calls
             for call in calls {
                 let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let func = call.get("function").unwrap_or(call);
+                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
+
+                if name.starts_with("todo_") {
+                    has_todo_call = true;
+                }
+
                 results.push((
                     id.to_string(),
                     self.dispatch_tool(call.clone()).await?,
                     call.clone(),
                 ));
             }
-        } else if json_val.get("name").is_some() || (json_val.get("function").is_some() && json_val.get("function").and_then(|f| f.get("name")).is_some()) {
+        }
+ else if json_val.get("name").is_some() || (json_val.get("function").is_some() && json_val.get("function").and_then(|f| f.get("name")).is_some()) {
             // Handle single tool call object without wrapper
             let id = json_val.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
             let name = json_val.get("name").and_then(|v| v.as_str())

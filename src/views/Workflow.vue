@@ -137,7 +137,8 @@
           </div>
         </div>
 
-        <div class="todo-list-wrapper" v-if="todoList.length > 0">
+        <!-- Floating Todo List -->
+        <div class="todo-floating-panel" v-if="todoList.length > 0">
           <TodoList :items="todoList" />
         </div>
 
@@ -577,9 +578,9 @@ const enhancedMessages = computed(() => {
     // 2. Visibility logic for Assistant messages
     if (m.role === 'assistant') {
       // Show if there is any text content (message, parsed content, or reasoning)
-      const hasTextContent = (m.message && m.message.trim()) || 
-                            (m.parsed && m.parsed.content && m.parsed.content.trim()) || 
-                            (m.reasoning && m.reasoning.trim())
+      const hasTextContent = (m.message && m.message.trim()) ||
+        (m.parsed && m.parsed.content && m.parsed.content.trim()) ||
+        (m.reasoning && m.reasoning.trim())
 
       if (hasTextContent) return true
 
@@ -1362,6 +1363,7 @@ const onGlobalKeyDown = event => {
       flex: 1;
       overflow: hidden;
       height: 100%;
+      position: relative; // For floating panels
 
       .messages {
         flex: 1;
@@ -1656,9 +1658,34 @@ const onGlobalKeyDown = event => {
         }
       }
 
-      .todo-list-wrapper {
-        flex-shrink: 0;
-        padding: 0 var(--cs-space) var(--cs-space-sm);
+      .todo-floating-panel {
+        position: absolute;
+        top: 10px;
+        left: 20px;
+        right: 20px;
+        z-index: 100;
+        pointer-events: none; // Allow clicks to pass through to messages below
+        display: flex;
+        justify-content: center;
+
+        // Make the list itself interactive
+        :deep(.todo-list) {
+          pointer-events: auto;
+          background-color: var(--cs-bg-color);
+          border: 1px solid var(--cs-border-color);
+          border-radius: var(--cs-border-radius-lg);
+          box-shadow: var(--el-box-shadow-light);
+          padding: 8px 12px;
+          max-width: 600px;
+          width: 100%;
+          opacity: 0.95;
+          backdrop-filter: blur(4px);
+          transition: opacity 0.3s ease;
+
+          &:hover {
+            opacity: 1;
+          }
+        }
       }
 
       footer.input-container {
