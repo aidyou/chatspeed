@@ -551,7 +551,7 @@ const enhancedMessages = computed(() => {
       .map(m => m.metadata.tool_call_id)
   )
 
-  return msgs.map(message => {
+  return msgs.filter(m => !(m.role === 'user' && m.stepType === 'observe')).map(message => {
     // Pre-calculate parsed content to avoid multiple calls in filter and template
     const parsed = getParsedMessage(message)
     const toolDisplay = getToolDisplayInfo(message)
@@ -1729,7 +1729,7 @@ const onGlobalKeyDown = event => {
         }
       }
 
-      .todo-list-wrapper{
+      .todo-list-wrapper {
         padding: 0 var(--cs-space);
       }
 
