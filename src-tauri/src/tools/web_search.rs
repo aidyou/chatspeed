@@ -218,7 +218,14 @@ impl ToolDefinition for WebSearch {
     /// Returns a brief description of the function.
     fn description(&self) -> &str {
         "Search the web for up-to-date information, current events, or data beyond your knowledge cutoff. \
-        Returns a list of search results including titles, snippets, and source URLs."
+        Returns a list of search results including titles, snippets, and source URLs.\n\n\
+        **Best Practices:**\n\
+        - Use specific, targeted queries. Avoid vague or overly broad searches.\n\
+        - For Chinese topics, prefer searching in Chinese for better results.\n\
+        - ALWAYS analyze search results before deciding on next action.\n\
+        - After reviewing results, use web_fetch on the 1-3 most relevant URLs.\n\
+        - If results are insufficient, try completely different keywords before searching again.\n\
+        - Do NOT call web_search repeatedly with similar queries."
     }
 
     /// Returns the function calling spec.

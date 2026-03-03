@@ -127,7 +127,6 @@
             </div>
           </div>
 
-          <!-- Active Chatting State -->
           <div v-if="isChatting && chatState.content" class="message assistant chatting">
             <div class="content-container">
               <div class="ai-content">
@@ -137,8 +136,8 @@
           </div>
         </div>
 
-        <!-- Floating Todo List -->
-        <div class="todo-floating-panel" v-if="todoList.length > 0">
+        <!-- Todo List Wrapper -->
+        <div class="todo-list-wrapper" v-if="todoList.length > 0">
           <TodoList :items="todoList" />
         </div>
 
@@ -433,7 +432,7 @@ const toggleMessageExpand = (id) => {
 }
 const isMessageExpanded = (id) => expandedMessages.value.has(id)
 
-// Mirroring the backend's title generation logic in JS
+// Mirroring the backend's title generation logic in JS, specifically handling Todo tools
 const formatToolTitle = (name, args) => {
   if (!name) return 'Tool'
   const displayNames = {
@@ -446,18 +445,32 @@ const formatToolTitle = (name, args) => {
     'web_search': 'Search',
     'web_fetch': 'Fetch',
     'bash': 'Bash',
-    'todo_create': 'TodoCreate',
-    'todo_update': 'TodoUpdate',
-    'todo_list': 'TodoList',
-    'todo_get': 'TodoGet'
+    'answer_user': 'Answer',
+    'finish_task': 'Finish'
   }
-
-  const toolName = displayNames[name] || name.replace('todo_', 'Todo')
 
   let parsedArgs = args
   if (typeof args === 'string' && args.trim().startsWith('{')) {
     try { parsedArgs = JSON.parse(args) } catch (e) { /* keep as string */ }
   }
+
+  // Special handling for Todo tools logic
+  if (name === 'todo_create') {
+    if (parsedArgs?.tasks && Array.isArray(parsedArgs.tasks)) {
+      return `TodoCreate(tasks: ${parsedArgs.tasks.length})`
+    }
+    return `TodoCreate`
+  }
+  if (name === 'todo_update') {
+    if (parsedArgs?.status) {
+      return `TodoUpdate(status: "${parsedArgs.status}")`
+    }
+    return `TodoUpdate`
+  }
+  if (name === 'todo_list') return 'TodoList'
+  if (name === 'todo_get') return `TodoGet(id: ${parsedArgs?.todo_id || '?'})`
+
+  const toolName = displayNames[name] || name
 
   if (!parsedArgs || typeof parsedArgs !== 'object') {
     return toolName + (parsedArgs ? `(${parsedArgs})` : '')
@@ -695,6 +708,34 @@ const getParsedMessage = (message) => {
 
       // 3. Handle OpenAI style tool_calls array
       parsedToolCalls = parsed.tool_calls || parsed.toolCall || []
+
+      // 4. Specifically extract 'finish_task' and 'answer_user' content into the main message
+      if (parsedToolCalls.length > 0) {
+        const remainingCalls = []
+        for (const call of parsedToolCalls) {
+          const fnName = call?.function?.name || call?.name
+          if (fnName === 'finish_task' || fnName === 'answer_user') {
+            try {
+              const args = typeof call.function.arguments === 'string'
+                ? JSON.parse(call.function.arguments)
+                : call.function.arguments
+
+              if (fnName === 'finish_task' && args?.summary) {
+                // Ensure double newline before appending if content already exists
+                parsedContent = parsedContent ? parsedContent + '\n\n' + args.summary : args.summary
+              } else if (fnName === 'answer_user' && args?.text) {
+                parsedContent = parsedContent ? parsedContent + '\n\n' + args.text : args.text
+              }
+            } catch (e) {
+              console.error('Failed to parse args for final output injection', e)
+              remainingCalls.push(call)
+            }
+          } else {
+            remainingCalls.push(call)
+          }
+        }
+        parsedToolCalls = remainingCalls
+      }
 
       // If assistant Think step, we still might want to hide these if they are "unexecuted"
       if (message.role === 'assistant' && message.stepType === 'Think') {
@@ -1660,7 +1701,7 @@ const onGlobalKeyDown = event => {
 
       .todo-floating-panel {
         position: absolute;
-        top: 10px;
+        bottom: 100%; // Sit on top of the footer
         left: 20px;
         right: 20px;
         z-index: 100;
@@ -1686,6 +1727,10 @@ const onGlobalKeyDown = event => {
             opacity: 1;
           }
         }
+      }
+
+      .todo-list-wrapper{
+        padding: 0 var(--cs-space);
       }
 
       footer.input-container {

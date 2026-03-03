@@ -14,11 +14,19 @@ pub const CORE_SYSTEM_PROMPT: &str = r#"You are an autonomous AI Agent operating
 Your core philosophy is: **Everything is a tool call.**
 
 ## OPERATIONAL GUIDELINES:
-1. **Tool-First Thinking**: For every response, you MUST call at least one tool. If you are thinking, use 'think' internally but ensure the final output of the turn includes a tool call.
-2. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track your own progress.
-3. **Structured Snapshot**: You will receive a <state_snapshot> in the context. Always respect the decisions and facts recorded there.
-4. **Communication**: To talk to the user, you MUST use `answer_user` or `ask_user`. To finish, use `finish_task`.
-5. **No Conversational Filler**: Do not provide conversational responses without tools. If you have nothing to do, call `finish_task` with a summary."#;
+1. **Tool-First Thinking**: For every response, you MUST call at least one tool. Think internally, but the final output of every turn MUST include a tool call.
+2. **ReAct Cycle**: Follow the cycle strictly: Thought → Action (tool call) → Observation → Thought → ... → finish_task.
+3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress.
+4. **Structured Snapshot**: You will receive a `<state_snapshot>` in the context. Always respect the decisions and facts recorded there.
+5. **Communication**: To talk to the user, use `answer_user` or `ask_user`. To finish, use `finish_task`.
+6. **No Conversational Filler**: Do not provide conversational responses without tools. If you have nothing to do, call `finish_task` with a summary.
+
+## CONVERGENCE & EFFICIENCY RULES:
+- **Fail Fast**: If a sub-task fails twice (tool error, empty result, timeout), mark it as `data_missing` and proceed. Do NOT retry indefinitely.
+- **No Repetition**: Never call the same tool with identical arguments more than twice. Always change keywords, parameters, or approach before retrying.
+- **Web Research Discipline**: For each research step: search → analyze results → fetch 1–3 best URLs → extract key data → move on. NEVER fetch more than 3 URLs per sub-task.
+- **Convergence Awareness**: When data is unavailable, note the gap and continue. In the final report, explicitly state what data was missing and why.
+- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, call `finish_task` immediately with the comprehensive result."#;
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -59,16 +67,39 @@ impl LlmProcessor {
         chat_interface: AiChatEnum,
         gateway: Arc<dyn Gateway>,
         tools: Vec<MCPToolDeclaration>,
+        max_steps: usize,
     ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
-        // 1. Context Normalization
+        // 1. Extract the latest state_snapshot from compression history (if any).
+        let state_snapshot = raw_history.iter().rev().find_map(|m| {
+            if m.role == "system"
+                && m.metadata
+                    .as_ref()
+                    .map_or(false, |meta| meta["type"] == "summary")
+            {
+                Some(m.message.clone())
+            } else {
+                None
+            }
+        });
+
+        // 2. Extract the next pending todo item for progress display.
+        let next_pending_task = {
+            // Look for the most recent todo_list / todo_update result content in history
+            // We parse the session todo from stored messages via the reinforced snapshots.
+            // Fallback: none.
+            None::<String>
+        };
+
+        // 3. Context Normalization
         let history = self.normalize_history(raw_history);
 
-        // 2. Build System Prompt & Environment Reminders
-        let final_history = self.inject_prompts(history, current_step);
+        // 4. Build System Prompt & Environment Reminders
+        let final_history =
+            self.inject_prompts(history, current_step, max_steps, state_snapshot, next_pending_task);
 
-        // 3. Perform the LLM Call
+        // 5. Perform the LLM Call
         let (tx, mut rx) = mpsc::channel(100);
         chat_interface
             .chat(
@@ -131,11 +162,11 @@ impl LlmProcessor {
             let mut extracted_reasoning = String::new();
             let mut cleaned_content = String::new();
             let mut current_pos = 0;
-            
+
             while let Some(start_idx) = full_content[current_pos..].find("<think>") {
                 let absolute_start = current_pos + start_idx;
                 cleaned_content.push_str(&full_content[current_pos..absolute_start]);
-                
+
                 let remainder = &full_content[absolute_start + 7..];
                 if let Some(end_idx) = remainder.find("</think>") {
                     let absolute_end = absolute_start + 7 + end_idx;
@@ -155,21 +186,21 @@ impl LlmProcessor {
                     break;
                 }
             }
-            
+
             if current_pos < full_content.len() {
                 cleaned_content.push_str(&full_content[current_pos..]);
             } else if current_pos == 0 {
                 // No <think> tag found at all, but we knew it had <think> or </think>
                 cleaned_content.push_str(&full_content);
             }
-            
+
             if !extracted_reasoning.is_empty() {
                 if !full_reasoning.is_empty() {
                     full_reasoning.push_str("\n\n");
                 }
                 full_reasoning.push_str(&extracted_reasoning);
             }
-            
+
             // Final cleanup of the content (remove any dangling </think>)
             full_content = cleaned_content.replace("</think>", "").trim().to_string();
         }
@@ -320,10 +351,24 @@ impl LlmProcessor {
         &self,
         mut history: Vec<serde_json::Value>,
         _current_step: usize,
+        _max_steps: usize,
+        state_snapshot: Option<String>,
+        _next_pending_task: Option<String>,
     ) -> Vec<serde_json::Value> {
         let mut full_system_prompt = String::from(CORE_SYSTEM_PROMPT);
         full_system_prompt.push_str("\n\n## AGENT SPECIFIC INSTRUCTIONS:\n");
         full_system_prompt.push_str(&self.agent_config.system_prompt);
+
+        // Inject last state_snapshot into the system prompt so the LLM always
+        // has full continuity even after context compression.
+        if let Some(snapshot) = state_snapshot {
+            // Only inject if the snapshot isn't already duplicated at the start of history
+            // (load_history already prepends it, but inject_prompts gets the normalized view)
+            if !full_system_prompt.contains("<state_snapshot>") {
+                full_system_prompt.push_str("\n\n## PREVIOUS CONTEXT SNAPSHOT:\n");
+                full_system_prompt.push_str(&snapshot);
+            }
+        }
 
         if let Some(sys_msg) = history.iter_mut().find(|m| m["role"] == "system") {
             let original = sys_msg["content"].as_str().unwrap_or("");
@@ -336,7 +381,7 @@ impl LlmProcessor {
             );
         }
 
-        let reminders = self.build_reminders();
+        let reminders = self.build_reminders(_current_step, _max_steps);
 
         if let Some(first_user_msg) = history.iter_mut().find(|m| m["role"] == "user") {
             if let Some(content) = first_user_msg["content"].as_str() {
@@ -352,7 +397,7 @@ impl LlmProcessor {
         history
     }
 
-    fn build_reminders(&self) -> String {
+    fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
         let mut reminders = String::new();
         if !self.available_skills.is_empty() {
             reminders.push_str("<system-reminder>\nThe following skills are available for use with the Skill tool:\n\n");
@@ -408,7 +453,20 @@ impl LlmProcessor {
             platform, shell, os_version
         ));
 
-        format!("<system-reminder>\n{}\n\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n", env_info, today)
+        // Step progress block
+        let progress_info = if max_steps > 0 {
+            let remaining = max_steps.saturating_sub(current_step);
+            format!(
+                "\n - Step: {current_step} / {max_steps} (remaining: {remaining})"
+            )
+        } else {
+            String::new()
+        };
+
+        format!(
+            "<system-reminder>\n{}{}\n\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n",
+            env_info, progress_info, today
+        )
     }
 }
 
@@ -447,7 +505,20 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             "<system-reminder>Operation timed out. Consider breaking the task into smaller steps or using a less resource-intensive approach.</system-reminder>".to_string()
         }
         "NetworkError" => {
-            "<system-reminder>Network error occurred. Check your connection and retry. If the issue persists, the remote service may be unavailable.</system-reminder>".to_string()
+            match tool_name {
+                "web_search" | "web_fetch" => {
+                    "<system-reminder>Network error on web operation. Recovery steps:\n\
+                    1. Retry ONCE with the same URL/query. \n\
+                    2. If retry fails: try an alternative search query or a different data source URL.\n\
+                    3. If no alternatives exist: mark this task as 'data_missing' and proceed to the next task.\n\
+                    Do NOT retry more than once with identical parameters.</system-reminder>"
+                        .to_string()
+                }
+                _ => {
+                    "<system-reminder>Network error occurred. Check your connection and retry. If the issue persists, the remote service may be unavailable.</system-reminder>"
+                        .to_string()
+                }
+            }
         }
         "AuthError" => {
             "<system-reminder>Authentication failed. Check API keys or credentials configuration in settings.</system-reminder>".to_string()

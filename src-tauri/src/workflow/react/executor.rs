@@ -13,10 +13,70 @@ use crate::workflow::react::observation::ObservationReinforcer;
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
 use dirs;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
+
+/// Default maximum ReAct steps before the agent is forced to conclude.
+const DEFAULT_MAX_STEPS: usize = 60;
+
+/// Window size for the repetition detector (number of recent tool calls to inspect).
+const LOOP_DETECT_WINDOW: usize = 8;
+
+/// Minimum repeat count within the window that triggers a loop warning.
+const LOOP_REPEAT_THRESHOLD: usize = 3;
+
+/// Detects when the agent repeats the same tool call with identical arguments.
+struct LoopDetector {
+    /// Sliding window of (tool_name, args_hash) pairs.
+    recent_calls: VecDeque<(String, u64)>,
+}
+
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            recent_calls: VecDeque::with_capacity(LOOP_DETECT_WINDOW),
+        }
+    }
+
+    /// Records a tool call and returns a warning message if a loop is detected.
+    fn record_and_check(&mut self, tool_name: &str, args: &serde_json::Value) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        args.to_string().hash(&mut hasher);
+        let args_hash = hasher.finish();
+
+        let key = (tool_name.to_string(), args_hash);
+        let repeat_count = self
+            .recent_calls
+            .iter()
+            .filter(|c| c.0 == key.0 && c.1 == key.1)
+            .count();
+
+        self.recent_calls.push_back(key);
+        if self.recent_calls.len() > LOOP_DETECT_WINDOW {
+            self.recent_calls.pop_front();
+        }
+
+        if repeat_count >= LOOP_REPEAT_THRESHOLD {
+            Some(format!(
+                "<system-reminder>LOOP DETECTED: You have called '{}' with identical arguments {} times \
+                in the last {} steps. This is unproductive repetition. You MUST change your approach NOW:\n\
+                1. If searching the web: try completely different keywords or a different data source.\n\
+                2. If fetching a URL: the content may be unavailable — mark the task as 'data_missing' and continue.\n\
+                3. If all alternatives are exhausted: accept the limitation and move to the next task.\n\
+                Do NOT call '{}' with the same parameters again.</system-reminder>",
+                tool_name,
+                repeat_count + 1,
+                LOOP_DETECT_WINDOW,
+                tool_name
+            ))
+        } else {
+            None
+        }
+    }
+}
 
 use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::orchestrator::SubAgentFactory;
@@ -38,11 +98,15 @@ pub struct WorkflowExecutor {
     pub agent_config: Agent,
     pub state: WorkflowState,
     pub current_step: usize,
+    /// Hard upper bound on ReAct iterations to prevent infinite loops.
+    pub max_steps: usize,
     pub auto_approve: HashSet<String>,
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub active_provider_id: i64,
     pub active_model_name: String,
+    /// Detects repetitive tool calls within a sliding window.
+    loop_detector: LoopDetector,
 }
 
 impl WorkflowExecutor {
@@ -162,6 +226,13 @@ impl WorkflowExecutor {
             reasoning,
         );
 
+        // Derive max_steps from agent config: use max_contexts as a hint (divide by 2000
+        // tokens/step heuristic), clamped between 20 and 200, defaulting to DEFAULT_MAX_STEPS.
+        let max_steps = agent_config
+            .max_contexts
+            .map(|ctx| ((ctx as usize) / 2000).clamp(20, 200))
+            .unwrap_or(DEFAULT_MAX_STEPS);
+
         Self {
             session_id,
             context,
@@ -178,11 +249,13 @@ impl WorkflowExecutor {
             agent_config,
             state: WorkflowState::Pending,
             current_step: 0,
+            max_steps,
             auto_approve,
             signal_rx,
             tsid_generator,
             active_provider_id: provider_id,
             active_model_name: model_name,
+            loop_detector: LoopDetector::new(),
         }
     }
 
@@ -480,6 +553,56 @@ impl WorkflowExecutor {
                 }
             }
             self.current_step += 1;
+
+            // --- Max-step budget guard ---
+            if self.current_step > self.max_steps {
+                log::warn!(
+                    "WorkflowExecutor {}: Reached max steps ({}). Forcing conclusion.",
+                    self.session_id,
+                    self.max_steps
+                );
+                self.context
+                    .add_message(
+                        "user".to_string(),
+                        format!(
+                            "<system-reminder>STEP BUDGET EXHAUSTED: You have used {} out of {} \
+                            allowed steps. You MUST conclude the task immediately. Do NOT perform \
+                            any more research. Call 'finish_task' with a summary of what you have \
+                            found so far, clearly noting any incomplete sections.</system-reminder>",
+                            self.current_step, self.max_steps
+                        ),
+                        None,
+                        Some(StepType::Observe),
+                        self.current_step as i32,
+                        true,
+                        Some("StepBudgetExhausted".to_string()),
+                        None,
+                    )
+                    .await?;
+            } else if self.current_step == (self.max_steps * 4 / 5) {
+                // 80% warning — give the LLM a chance to wrap up gracefully
+                self.context
+                    .add_message(
+                        "user".to_string(),
+                        format!(
+                            "<system-reminder>STEP BUDGET WARNING: You are at step {} of {}. \
+                            Only {} steps remain. Start wrapping up: complete your most critical \
+                            pending tasks and prepare a final answer. Avoid starting new research \
+                            threads.</system-reminder>",
+                            self.current_step,
+                            self.max_steps,
+                            self.max_steps - self.current_step
+                        ),
+                        None,
+                        Some(StepType::Observe),
+                        self.current_step as i32,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await?;
+            }
+
             self.update_state(WorkflowState::Thinking).await?;
             log::debug!(
                 "[Workflow Engine] Session {}: Step {} - Calling LLM",
@@ -763,6 +886,7 @@ impl WorkflowExecutor {
                 chat_interface,
                 self.gateway.clone(),
                 tools,
+                self.max_steps,
             )
             .await
     }
@@ -854,7 +978,7 @@ impl WorkflowExecutor {
             let name = json_val.get("name").and_then(|v| v.as_str())
                 .or_else(|| json_val.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()))
                 .unwrap_or("");
-                
+
             if name.starts_with("todo_") {
                 has_todo_call = true;
             }
@@ -914,6 +1038,30 @@ impl WorkflowExecutor {
         } else {
             args_raw
         };
+
+        // --- Loop detection: track this call and warn if repetitive ---
+        let loop_warning = self.loop_detector.record_and_check(name, &args);
+        if let Some(ref warning) = loop_warning {
+            log::warn!(
+                "WorkflowExecutor {}: Loop detected for tool '{}'",
+                self.session_id,
+                name
+            );
+            // Inject as a user-side reminder so it shows up in LLM context
+            let _ = self
+                .context
+                .add_message(
+                    "user".to_string(),
+                    warning.clone(),
+                    None,
+                    Some(StepType::Observe),
+                    self.current_step as i32,
+                    true,
+                    Some("LoopDetected".to_string()),
+                    None,
+                )
+                .await;
+        }
 
         log::info!(
             "WorkflowExecutor {}: Dispatching '{}'",
@@ -1093,7 +1241,7 @@ impl WorkflowExecutor {
         if name == TOOL_WEB_FETCH {
             if let Ok(val) = &result {
                 if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
-                    if content.len() > 50000 {
+                    if content.len() > 15000 {
                         log::info!("WorkflowExecutor {}: Content from web_fetch is too long ({} chars). Summarizing...", self.session_id, content.len());
                         match self.summarize_content(content).await {
                             Ok(summary) => {

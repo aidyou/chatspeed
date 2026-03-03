@@ -49,6 +49,11 @@ impl ToolDefinition for WebFetch {
 
 **Limitations:**
 -  Avoid using this tool on multimedia files (typically URLs ending in .pdf, .ppt, .docx, .xlsx, .mp3, .mp4, etc.) as they cannot be processed - focus on HTML pages and text-based content instead
+
+**Error Handling:**
+-  If a page returns empty content or fails, do NOT retry the same URL.
+-  Instead, try an alternative source URL from your search results.
+-  If no alternatives exist, mark the data as unavailable and proceed to the next task.
 "
     }
 

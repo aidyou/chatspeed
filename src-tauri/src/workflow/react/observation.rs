@@ -86,23 +86,49 @@ impl ObservationReinforcer {
                     if let Some(todos) = extra_context.and_then(|v| v.as_array().cloned()) {
                         let mut list_str = String::from("Task updated.\n");
                         let next_pending = todos.iter().find(|t| {
-                            t["status"].as_str() == Some("pending")
-                                || t["status"].as_str() == Some("todo")
+                            let s = t["status"].as_str().unwrap_or("");
+                            s == "pending" || s == "todo" || s == "in_progress"
                         });
 
                         if let Some(next) = next_pending {
                             let subject = next["subject"].as_str().unwrap_or("Untitled");
                             list_str.push_str(&format!("Next pending task: {}\n", subject));
                         } else {
-                            let all_done = todos.iter().all(|t| {
-                                t["status"].as_str() == Some("completed")
-                                    || t["status"].as_str() == Some("done")
+                            // Treat completed, done, data_missing, and failed as terminal states
+                            let all_terminal = todos.iter().all(|t| {
+                                matches!(
+                                    t["status"].as_str(),
+                                    Some("completed" | "done" | "data_missing" | "failed")
+                                )
                             });
-                            if all_done && !todos.is_empty() {
-                                list_str.push_str("All tasks are COMPLETED. You can now proceed to provide the final answer to the user.\n");
+                            if all_terminal && !todos.is_empty() {
+                                list_str.push_str("All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.\n");
                             }
                         }
                         raw_res = list_str;
+                    }
+                }
+
+                // --- Structured formatting for web_search results ---
+                if tool_name == TOOL_WEB_SEARCH {
+                    if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&raw_res) {
+                        if !arr.is_empty() {
+                            let mut formatted = String::from("Search Results:\n");
+                            for (i, item) in arr.iter().enumerate() {
+                                let title = item["title"].as_str().unwrap_or("No title");
+                                let snippet = item["snippet"].as_str().unwrap_or("");
+                                let url = item["url"].as_str().unwrap_or("");
+                                formatted.push_str(&format!(
+                                    "{}. **{}**\n   {}\n   URL: {}\n\n",
+                                    i + 1,
+                                    title,
+                                    snippet,
+                                    url
+                                ));
+                            }
+                            formatted.push_str("<system-reminder>Analyze these results carefully. Select the 1-3 most relevant and authoritative URLs, then use web_fetch to extract detailed data. Do NOT search again with similar keywords.</system-reminder>");
+                            raw_res = formatted;
+                        }
                     }
                 }
 
@@ -115,21 +141,26 @@ impl ObservationReinforcer {
                 };
 
                 if raw_res == "[]" || raw_res == "{}" || raw_res.is_empty() {
+                    let empty_hint = match tool_name {
+                        "web_search" => "No search results found. Try different keywords, use a more specific query, or search in Chinese if the topic is China-related.",
+                        "web_fetch" => "Web page returned no content. The URL may be inaccessible, blocked, or require authentication. Try a different source.",
+                        _ => "If you expected data, try adjusting your search terms or checking if the target exists.",
+                    };
                     ReinforcedResult {
-                        content: format!("Tool '{}' executed successfully but returned no data. <system-reminder>If you expected data, try adjusting your search terms or checking if the target exists.</system-reminder>", tool_name),
+                        content: format!("Tool '{}' executed successfully but returned no data. <system-reminder>{}</system-reminder>", tool_name, empty_hint),
                         title,
                         summary: "No data returned".to_string(),
                         is_error: false,
                         error_type: None,
                         display_type: display_type.to_string(),
                     }
-                } else if raw_res.len() > 50000 {
-                    let truncated = match raw_res.char_indices().nth(50000) {
+                } else if raw_res.len() > 20000 {
+                    let truncated = match raw_res.char_indices().nth(20000) {
                         Some((idx, _)) => &raw_res[..idx],
                         None => &raw_res,
                     };
                     ReinforcedResult {
-                        content: format!("[Result too long, truncated] {}\n<system-reminder>The output was truncated. Use more specific search patterns or read smaller chunks if needed.</system-reminder>", truncated),
+                        content: format!("[Result truncated to 20000 chars] {}\n<system-reminder>The output was truncated. Use more specific search patterns or read smaller chunks if needed.</system-reminder>", truncated),
                         title,
                         summary: format!("{} (Truncated)", summary),
                         is_error: false,
@@ -150,7 +181,6 @@ impl ObservationReinforcer {
             Err(err) => {
                 let err_msg = err.to_string();
                 let title = Self::generate_title(tool_name, &args);
-                let content = format!("Error: {}", err_msg);
                 let error_type = match err {
                     ToolError::Security(_) => "Security",
                     ToolError::IoError(_) => "Io",
@@ -159,6 +189,8 @@ impl ObservationReinforcer {
                     ToolError::AuthError(_) => "Auth",
                     _ => "Other",
                 };
+                let recovery = Self::generate_recovery_hint(tool_name, error_type);
+                let content = format!("Error: {}\n{}", err_msg, recovery);
 
                 ReinforcedResult {
                     content,
@@ -299,7 +331,7 @@ impl ObservationReinforcer {
                     for item in items {
                         let subject = item["subject"].as_str().unwrap_or("Unknown");
                         let status = item["status"].as_str().unwrap_or("todo");
-                        let box_char = if status == "done" { "[x]" } else { "[ ]" };
+                        let box_char = if status == "done" { "✓" } else { "☐" };
                         if !summary.is_empty() {
                             summary.push('\n');
                         }
@@ -315,6 +347,31 @@ impl ObservationReinforcer {
                 }
             }
             _ => "Executed successfully".to_string(),
+        }
+    }
+
+    /// Generates actionable recovery hints based on the tool and error type.
+    fn generate_recovery_hint(tool_name: &str, error_type: &str) -> String {
+        match (tool_name, error_type) {
+            ("web_search", "Network") => {
+                "<system-reminder>Search failed due to network error. Try once more with the same query. If it fails again, try a completely different search engine keyword or mark the sub-task as data_missing.</system-reminder>".to_string()
+            }
+            ("web_fetch", "Network") | ("web_fetch", _) => {
+                "<system-reminder>Failed to fetch this URL. Do NOT retry the same URL. Instead: (1) try an alternative URL from your search results, or (2) if no alternatives exist, mark the data as unavailable and move to the next task.</system-reminder>".to_string()
+            }
+            ("web_search", _) => {
+                "<system-reminder>Search failed. Try rephrasing your query with different keywords. If the topic is China-related, try searching in Chinese.</system-reminder>".to_string()
+            }
+            (_, "Security") => {
+                "<system-reminder>Path is outside your authorized workspace. Use list_dir to find valid paths or ask the user to grant access.</system-reminder>".to_string()
+            }
+            (_, "InvalidParams") => {
+                "<system-reminder>Check the tool's input schema. Ensure all required fields are provided with correct types.</system-reminder>".to_string()
+            }
+            (_, "Io") => {
+                "<system-reminder>File I/O error. Verify the path exists using list_dir before retrying.</system-reminder>".to_string()
+            }
+            _ => String::new(),
         }
     }
 }

@@ -236,7 +236,12 @@ impl ToolDefinition for TodoUpdateTool {
         **Update task details:**\n\
         - When requirements change or become clearer\n\n\
         ## Status Workflow\n\
-        Status progresses: `pending` → `in_progress` → `completed`. Use `deleted` to permanently remove a task."
+        Status progresses: `pending` → `in_progress` → `completed`.\n\
+        Use `data_missing` when the required data could not be obtained but the task can be skipped.\n\
+        Use `failed` when the task encountered an unrecoverable error.\n\
+        Use `deleted` to permanently remove a task.\n\n\
+        **Important**: When a task's data cannot be obtained after reasonable attempts, \
+        mark it as `data_missing` rather than retrying indefinitely."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::System

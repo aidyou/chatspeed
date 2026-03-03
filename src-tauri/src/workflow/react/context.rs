@@ -33,7 +33,7 @@ impl ContextManager {
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
         let store = self.main_store.read().map_err(|e| WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string())))?;
         let snapshot = store.get_workflow_snapshot(&self.session_id)?;
-        
+
         // Find the index of the last summary message
         let last_summary_idx = snapshot.messages.iter().rposition(|m| {
             m.role == "system" && m.metadata.as_ref().map_or(false, |meta| meta["type"] == "summary")
@@ -45,7 +45,7 @@ impl ContextManager {
         } else {
             self.messages = snapshot.messages;
         }
-        
+
         Ok(())
     }
 
@@ -82,7 +82,7 @@ impl ContextManager {
         };
 
         self.messages.push(persisted_msg);
-        
+
         // Check if compression is needed (80% threshold)
         // Use actual usage if available in metadata, else estimate
         let mut total_tokens = 0.0;
@@ -97,16 +97,18 @@ impl ContextManager {
             }
             total_tokens += crate::ccproxy::utils::token_estimator::estimate_tokens(&m.message);
         }
-        
+
         Ok(total_tokens > (self.max_tokens as f64 * 0.8))
     }
 
     /// Adds a summary message to mark a compression point
     pub async fn add_summary(&mut self, summary: String, step_index: i32) -> Result<(), WorkflowEngineError> {
-        // Find the split point: keep the last 30% of messages for continuity (Gemini style)
+        // Keep the most recent N messages for continuity after compression.
+        // Fixed count is more predictable than a percentage for long conversations.
+        const KEEP_RECENT_MESSAGES: usize = 10;
         let total_msgs = self.messages.len();
-        let keep_count = (total_msgs as f64 * 0.3).ceil() as usize;
-        let split_idx = total_msgs.saturating_sub(keep_count.max(5)); // Keep at least 5 messages
+        let keep_count = KEEP_RECENT_MESSAGES.min(total_msgs).max(5); // Always keep at least 5
+        let split_idx = total_msgs.saturating_sub(keep_count);
 
         // We only keep messages AFTER split_idx
         self.messages = self.messages[split_idx..].to_vec();
@@ -134,7 +136,7 @@ impl ContextManager {
         };
 
         self.messages.insert(0, persisted_summary);
-        
+
         Ok(())
     }
 
