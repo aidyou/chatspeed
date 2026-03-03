@@ -136,10 +136,8 @@
           </div>
         </div>
 
-        <!-- Todo List Wrapper -->
-        <div class="todo-list-wrapper" v-if="todoList.length > 0">
-          <TodoList :items="todoList" />
-        </div>
+        <!-- Status Panel (Floating) -->
+        <StatusPanel />
 
         <!-- footer -->
         <el-footer class="input-container">
@@ -263,11 +261,10 @@ import { useWindowStore } from '@/stores/window'
 import Titlebar from '@/components/window/Titlebar.vue'
 import Markdown from '@/components/chat/Markdown.vue'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
-import TodoList from '@/components/workflow/TodoList.vue'
+import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 
 // Import types
-import { getTodoListForWorkflow } from '@/pkg/workflow/tools/todoList'
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser'
 
 const { t } = useI18n()
@@ -1727,10 +1724,6 @@ const onGlobalKeyDown = event => {
             opacity: 1;
           }
         }
-      }
-
-      .todo-list-wrapper {
-        padding: 0 var(--cs-space);
       }
 
       footer.input-container {

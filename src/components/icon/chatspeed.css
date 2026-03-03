@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-list:before {
+  content: "\e661";
+}
+
 .cs-ai-step:before {
   content: "\e65e";
 }

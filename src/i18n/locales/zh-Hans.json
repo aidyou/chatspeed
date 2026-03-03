@@ -132,6 +132,7 @@
     "close": "关闭",
     "loading": "加载中……",
     "mindmap": "思维导图",
+    "more": "更多",
     "newVersionReady": "新版本已准备好，点击重启以更新",
     "noData": "无数据",
     "openUrlError": "打开链接失败",
@@ -806,6 +807,13 @@
     "editWorkflowTitle": "编辑工作流标题",
     "newWorkflow": "新建工作流",
     "startFailed": "启动工作流失败: {error}",
+    "statusPanel": {
+      "title": "状态面板",
+      "progress": "任务进度",
+      "todos": "待办事项",
+      "recentOps": "最近操作",
+      "empty": "暂无任务"
+    },
     "todoList": {
       "title": "待办事项",
       "next": "下一步"
