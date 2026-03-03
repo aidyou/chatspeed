@@ -87,6 +87,7 @@ impl ToolDefinition for WebFetch {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 

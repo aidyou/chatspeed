@@ -1188,6 +1188,7 @@ mod tests {
                 input_schema: json!({}),
                 output_schema: None,
                 disabled: false,
+                scope: Some(self.scope()),
             }
         }
         async fn call(&self, _params: Value) -> NativeToolResult {
@@ -1257,6 +1258,7 @@ mod tests {
             input_schema: json!({}),
             output_schema: None,
             disabled: false,
+            scope: Some(ToolScope::Chat),
         };
 
         // We can't easily mock McpClient without extra traits, but we can manually

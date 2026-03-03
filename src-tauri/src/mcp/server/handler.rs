@@ -115,7 +115,10 @@ impl McpProxyHandler {
 
         for tool_spec in all_tools {
             // Built-in tools
-            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT) {
+            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
+                && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)
+                    || tool_spec.scope == Some(crate::tools::ToolScope::Both))
+            {
                 let tool_name = tool_spec.name.clone();
                 new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));
                 continue;
@@ -201,7 +204,10 @@ impl ServerHandler for McpProxyHandler {
 
         for tool_spec in all_tools {
             // Built-in tools
-            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT) {
+            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
+                && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)
+                    || tool_spec.scope == Some(crate::tools::ToolScope::Both))
+            {
                 let tool_name = tool_spec.name.clone();
                 display_tools.push(tool_spec.into());
                 new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));

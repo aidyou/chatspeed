@@ -107,6 +107,7 @@ impl ToolDefinition for TodoCreateTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -187,6 +188,7 @@ impl ToolDefinition for TodoListTool {
             input_schema: json!({ "type": "object", "properties": {} }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, _params: Value) -> NativeToolResult {
@@ -265,6 +267,7 @@ impl ToolDefinition for TodoUpdateTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -342,6 +345,7 @@ impl ToolDefinition for TodoGetTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 

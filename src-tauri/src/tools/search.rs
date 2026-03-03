@@ -23,15 +23,15 @@ impl ToolDefinition for Glob {
         - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead\n\
         - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::FileSystem
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::FileSystem
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
@@ -45,6 +45,7 @@ impl ToolDefinition for Glob {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -94,15 +95,15 @@ impl ToolDefinition for Grep {
         - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)\n\
         - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`"
     }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::FileSystem
-        }
-    
-        fn scope(&self) -> crate::tools::ToolScope {
-            crate::tools::ToolScope::Workflow
-        }
-    
-        fn tool_calling_spec(&self) -> MCPToolDeclaration {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::FileSystem
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
@@ -118,6 +119,7 @@ impl ToolDefinition for Grep {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {

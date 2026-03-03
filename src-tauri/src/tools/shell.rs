@@ -341,6 +341,7 @@ impl ToolDefinition for ShellExecute {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 
@@ -444,7 +445,11 @@ mod tests {
     use crate::workflow::react::security::PathGuard;
     use tempfile::tempdir;
 
-    fn setup_test_context() -> (tempfile::TempDir, std::path::PathBuf, Arc<RwLock<PathGuard>>) {
+    fn setup_test_context() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Arc<RwLock<PathGuard>>,
+    ) {
         let root = tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
         let guard = Arc::new(RwLock::new(PathGuard::new(vec![

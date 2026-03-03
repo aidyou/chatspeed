@@ -7,6 +7,7 @@ use crate::{
         },
     },
     ccproxy::ChatProtocol,
+    tools::ToolScope,
 };
 
 use async_trait::async_trait;
@@ -173,6 +174,8 @@ pub struct MCPToolDeclaration {
     pub output_schema: Option<Value>,
     #[serde(default, skip_serializing)]
     pub disabled: bool,
+    #[serde(default, skip_serializing)]
+    pub scope: Option<ToolScope>,
 }
 
 impl MCPToolDeclaration {

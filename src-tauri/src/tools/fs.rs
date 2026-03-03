@@ -50,6 +50,7 @@ impl ToolDefinition for ReadFile {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -136,6 +137,7 @@ impl ToolDefinition for WriteFile {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -201,6 +203,7 @@ impl ToolDefinition for EditFile {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
@@ -282,6 +285,7 @@ impl ToolDefinition for ListDir {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {

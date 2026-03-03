@@ -55,6 +55,7 @@ Activation will inject the skill's specific instructions into your context."#
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 

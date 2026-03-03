@@ -33,6 +33,7 @@ impl ToolDefinition for AnswerUser {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, _params: Value) -> NativeToolResult {
@@ -79,6 +80,7 @@ impl ToolDefinition for AskUser {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, _params: Value) -> NativeToolResult {
@@ -119,6 +121,7 @@ impl ToolDefinition for FinishTask {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
     async fn call(&self, _params: Value) -> NativeToolResult {

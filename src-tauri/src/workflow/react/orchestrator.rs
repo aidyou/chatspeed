@@ -165,6 +165,7 @@ impl ToolDefinition for TaskTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 
@@ -334,6 +335,7 @@ impl ToolDefinition for TaskOutputTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 
@@ -424,6 +426,7 @@ impl ToolDefinition for TaskStopTool {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 

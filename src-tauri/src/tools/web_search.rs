@@ -268,6 +268,7 @@ impl ToolDefinition for WebSearch {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 
