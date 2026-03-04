@@ -254,7 +254,6 @@ const getToolInfo = (name, args) => {
     'todo_update': { icon: 'check', shortName: 'Todo✓' },
     'todo_list': { icon: 'list', shortName: 'Todos' },
     'todo_get': { icon: 'list', shortName: 'Todo' },
-    'answer_user': { icon: 'check', shortName: 'Answer' },
     'finish_task': { icon: 'check-circle', shortName: 'Finish' }
   }
 

@@ -14,7 +14,6 @@ pub const TOOL_TODO_LIST: &str = "todo_list";
 pub const TOOL_TODO_UPDATE: &str = "todo_update";
 pub const TOOL_TODO_GET: &str = "todo_get";
 pub const TOOL_SKILL: &str = "skill";
-pub const TOOL_ANSWER_USER: &str = "answer_user";
 pub const TOOL_ASK_USER: &str = "ask_user";
 pub const TOOL_FINISH_TASK: &str = "finish_task";
 pub const TOOL_WEB_SEARCH: &str = "web_search";

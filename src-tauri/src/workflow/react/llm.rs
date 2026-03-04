@@ -10,23 +10,22 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-pub const CORE_SYSTEM_PROMPT: &str = r#"You are an autonomous AI Agent operating in a tool-use environment.
-Your core philosophy is: **Everything is a tool call.**
+pub const CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI Agent. Your core philosophy is: **Everything is a tool call.**
 
 ## OPERATIONAL GUIDELINES:
-1. **Tool-First Thinking**: For every response, you MUST call at least one tool. Think internally, but the final output of every turn MUST include a tool call.
-2. **ReAct Cycle**: Follow the cycle strictly: Thought → Action (tool call) → Observation → Thought → ... → finish_task.
-3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress.
+1. **Tool-First Thinking**: For every response, you MUST conclude with at least one tool call. You can provide plain text updates or thoughts before the tool call for a better streaming experience, but a tool call is MANDATORY to close the turn.
+2. **ReAct Cycle**: Follow the cycle strictly: Thought (plain text) → Action (tool call) → Observation → Thought → ... → finish_task.
+3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress and do not give up until all avenues are exhausted.
 4. **Structured Snapshot**: You will receive a `<state_snapshot>` in the context. Always respect the decisions and facts recorded there.
-5. **Communication**: To talk to the user, use `answer_user` or `ask_user`. To finish, use `finish_task`.
-6. **No Conversational Filler**: Do not provide conversational responses without tools. If you have nothing to do, call `finish_task` with a summary.
+5. **Communication**: To ask the user a question, use `ask_user`. To provide answers or status updates, speak directly in plain text and then conclude with the next logical tool call.
+6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments).
 
 ## CONVERGENCE & EFFICIENCY RULES:
 - **Fail Fast**: If a sub-task fails twice (tool error, empty result, timeout), mark it as `data_missing` and proceed. Do NOT retry indefinitely.
 - **No Repetition**: Never call the same tool with identical arguments more than twice. Always change keywords, parameters, or approach before retrying.
 - **Web Research Discipline**: For each research step: search → analyze results → fetch 1–3 best URLs → extract key data → move on. NEVER fetch more than 3 URLs per sub-task.
 - **Convergence Awareness**: When data is unavailable, note the gap and continue. In the final report, explicitly state what data was missing and why.
-- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, call `finish_task` immediately with the comprehensive result."#;
+- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, provide a comprehensive final report in plain text and call `finish_task` immediately."#;
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -96,8 +95,13 @@ impl LlmProcessor {
         let history = self.normalize_history(raw_history);
 
         // 4. Build System Prompt & Environment Reminders
-        let final_history =
-            self.inject_prompts(history, current_step, max_steps, state_snapshot, next_pending_task);
+        let final_history = self.inject_prompts(
+            history,
+            current_step,
+            max_steps,
+            state_snapshot,
+            next_pending_task,
+        );
 
         // 5. Perform the LLM Call
         let (tx, mut rx) = mpsc::channel(100);
@@ -456,9 +460,7 @@ impl LlmProcessor {
         // Step progress block
         let progress_info = if max_steps > 0 {
             let remaining = max_steps.saturating_sub(current_step);
-            format!(
-                "\n - Step: {current_step} / {max_steps} (remaining: {remaining})"
-            )
+            format!("\n - Step: {current_step} / {max_steps} (remaining: {remaining})")
         } else {
             String::new()
         };

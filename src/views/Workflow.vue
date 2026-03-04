@@ -442,7 +442,6 @@ const formatToolTitle = (name, args) => {
     'web_search': 'Search',
     'web_fetch': 'Fetch',
     'bash': 'Bash',
-    'answer_user': 'Answer',
     'finish_task': 'Finish'
   }
 
@@ -693,14 +692,7 @@ const getParsedMessage = (message) => {
 
       // 2. Handle ReAct style tool calls {"tool": {"name": "...", "arguments": {...}}}
       if (parsed.tool) {
-        const name = parsed.tool.name
-        const args = parsed.tool.arguments || {}
-
-        if (name === 'answer_user') {
-          parsedContent = args.text || ''
-        } else if (name === 'finish_task') {
-          parsedContent = args.summary || ''
-        }
+        // No special action needed for tool.name now as content should be in parsed.content
       }
 
       // 3. Handle OpenAI style tool_calls array
@@ -712,21 +704,8 @@ const getParsedMessage = (message) => {
         for (const call of parsedToolCalls) {
           const fnName = call?.function?.name || call?.name
           if (fnName === 'finish_task' || fnName === 'answer_user') {
-            try {
-              const args = typeof call.function.arguments === 'string'
-                ? JSON.parse(call.function.arguments)
-                : call.function.arguments
-
-              if (fnName === 'finish_task' && args?.summary) {
-                // Ensure double newline before appending if content already exists
-                parsedContent = parsedContent ? parsedContent + '\n\n' + args.summary : args.summary
-              } else if (fnName === 'answer_user' && args?.text) {
-                parsedContent = parsedContent ? parsedContent + '\n\n' + args.text : args.text
-              }
-            } catch (e) {
-              console.error('Failed to parse args for final output injection', e)
-              remainingCalls.push(call)
-            }
+            // These tools are now either removed or parameterless. 
+            // The content is already in parsed.content from step 1.
           } else {
             remainingCalls.push(call)
           }

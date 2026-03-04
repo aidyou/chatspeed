@@ -2,8 +2,8 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::db::{Agent, MainStore};
 use crate::tools::{
-    ToolManager, TOOL_ANSWER_USER, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK,
-    TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
+    ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
+    TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -335,9 +335,6 @@ impl WorkflowExecutor {
         }
 
         // 3. Interaction Tools
-        if is_allowed(TOOL_ANSWER_USER) {
-            tm.register_tool(Arc::new(AnswerUser)).await?;
-        }
         if is_allowed(TOOL_ASK_USER) {
             tm.register_tool(Arc::new(AskUser)).await?;
         }
@@ -971,12 +968,27 @@ impl WorkflowExecutor {
                     call.clone(),
                 ));
             }
-        }
- else if json_val.get("name").is_some() || (json_val.get("function").is_some() && json_val.get("function").and_then(|f| f.get("name")).is_some()) {
+        } else if json_val.get("name").is_some()
+            || (json_val.get("function").is_some()
+                && json_val
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .is_some())
+        {
             // Handle single tool call object without wrapper
-            let id = json_val.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let name = json_val.get("name").and_then(|v| v.as_str())
-                .or_else(|| json_val.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()))
+            let id = json_val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let name = json_val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    json_val
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|v| v.as_str())
+                })
                 .unwrap_or("");
 
             if name.starts_with("todo_") {
@@ -1193,16 +1205,6 @@ impl WorkflowExecutor {
 
         // --- 3. Special Core Tools ---
         match name {
-            n if n == TOOL_ANSWER_USER => {
-                return Ok(crate::workflow::react::observation::ReinforcedResult {
-                    content: "Summary delivered".into(),
-                    title: "AnswerUser".to_string(),
-                    summary: "Answered user".to_string(),
-                    is_error: false,
-                    error_type: None,
-                    display_type: "text".to_string(),
-                })
-            }
             n if n == TOOL_ASK_USER => {
                 self.update_state(WorkflowState::Paused).await?;
                 return Ok(crate::workflow::react::observation::ReinforcedResult {
@@ -1416,27 +1418,6 @@ impl WorkflowExecutor {
                     content = text.to_string();
                 } else if let Some(text) = text_part {
                     content = text;
-                } else {
-                    // ReAct fallback for answer_user/finish_task
-                    if let Some(tool_obj) = json_msg.get("tool") {
-                        let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let args = tool_obj
-                            .get("arguments")
-                            .unwrap_or(&serde_json::Value::Null);
-                        if name == "answer_user" {
-                            content = args
-                                .get("text")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or(content);
-                        } else if name == "finish_task" {
-                            content = args
-                                .get("summary")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or(content);
-                        }
-                    }
                 }
 
                 // Merge tool calls into metadata

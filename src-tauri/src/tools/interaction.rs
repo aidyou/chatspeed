@@ -3,47 +3,6 @@ use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinitio
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub struct AnswerUser;
-
-#[async_trait]
-impl ToolDefinition for AnswerUser {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_ANSWER_USER
-    }
-    fn description(&self) -> &str {
-        "Delivers a partial or final answer to the user. Use this whenever you want to provide information, \
-        give a summary, or simply talk to the user. This tool ensures your response is properly formatted and delivered."
-    }
-    fn category(&self) -> ToolCategory {
-        ToolCategory::Interaction
-    }
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "text": { "type": "string", "description": "The message content to deliver to the user. Supports Markdown." }
-                },
-                "required": ["text"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-    async fn call(&self, _params: Value) -> NativeToolResult {
-        Ok(ToolCallResult::success(
-            Some("Message delivered".into()),
-            None,
-        ))
-    }
-}
-
 pub struct AskUser;
 
 #[async_trait]
@@ -100,7 +59,7 @@ impl ToolDefinition for FinishTask {
     }
     fn description(&self) -> &str {
         "Signals that the current task has been fully addressed and is now complete. \
-        Provide a comprehensive summary of the work performed and any final conclusions."
+        This tool takes no arguments. Ensure you have provided a comprehensive summary of your work and conclusions in your plain text response BEFORE calling this tool."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::Interaction
@@ -114,10 +73,7 @@ impl ToolDefinition for FinishTask {
             description: self.description().to_string(),
             input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "summary": { "type": "string", "description": "A comprehensive summary of the work performed." }
-                },
-                "required": ["summary"]
+                "properties": {}
             }),
             output_schema: None,
             disabled: false,
@@ -133,27 +89,6 @@ impl ToolDefinition for FinishTask {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[tokio::test]
-    async fn test_answer_user() {
-        let tool = AnswerUser;
-        let params = json!({
-            "text": "Hello, this is a test message."
-        });
-
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Message delivered");
-    }
-
-    #[tokio::test]
-    async fn test_answer_user_empty_params() {
-        let tool = AnswerUser;
-        // The tool doesn't validate params, but should still work
-        let params = json!({});
-
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Message delivered");
-    }
 
     #[tokio::test]
     async fn test_ask_user() {
@@ -179,53 +114,16 @@ mod tests {
     #[tokio::test]
     async fn test_finish_task() {
         let tool = FinishTask;
-        let params = json!({
-            "summary": "Completed all work successfully."
-        });
-
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Task finished");
-    }
-
-    #[tokio::test]
-    async fn test_finish_task_empty_summary() {
-        let tool = FinishTask;
         let params = json!({});
 
         let result = tool.call(params).await.unwrap();
         assert_eq!(result.content.unwrap(), "Task finished");
     }
 
-    // Test edge cases for input types
-    #[tokio::test]
-    async fn test_answer_user_with_non_string_text() {
-        let tool = AnswerUser;
-        let params = json!({
-            "text": 12345  // Non-string value
-        });
-
-        // Should still work since tool doesn't validate type
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Message delivered");
-    }
-
-    #[tokio::test]
-    async fn test_ask_user_with_complex_question() {
-        let tool = AskUser;
-        let long_question = "A".repeat(1000);
-        let params = json!({
-            "question": long_question
-        });
-
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Waiting for user response");
-    }
-
     // Test that all tools return ToolCallResult with expected structure
     #[tokio::test]
     async fn test_tool_result_structure() {
         let tools: Vec<Box<dyn ToolDefinition>> = vec![
-            Box::new(AnswerUser),
             Box::new(AskUser),
             Box::new(FinishTask),
         ];

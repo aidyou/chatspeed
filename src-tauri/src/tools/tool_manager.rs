@@ -257,8 +257,6 @@ impl ToolManager {
             .await?;
 
         // Interaction tools
-        self.register_tool(Arc::new(crate::tools::AnswerUser))
-            .await?;
         self.register_tool(Arc::new(crate::tools::AskUser)).await?;
         self.register_tool(Arc::new(crate::tools::FinishTask))
             .await?;
