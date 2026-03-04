@@ -17,9 +17,10 @@ pub struct UnifiedChatMessage {
     pub name: Option<String>, // Name of the tool, if applicable
 
     // Added for custom reasoning content
-    // index is specific to streaming tool calls, but can be part of a unified tool call struct if needed for parsing
-    // However, OpenAI's request/non-stream response tool_calls don't have an index.
-    // So, `UnifiedToolCall` will handle the `index` for streaming.
+    // TODO: Investigate which models (e.g. Claude 3.7, DeepSeek R1) require or support returning 
+    // reasoning_content in message history to maintain CoT continuity, and which models will 
+    // error out if this extra field is present. Consider a fallback mechanism to prepend 
+    // reasoning to 'content' for unsupported models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 

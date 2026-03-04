@@ -629,11 +629,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
                         content_blocks.push(UnifiedContentBlock::Text { text })
                     }
                     ClaudeNativeContentBlock::ToolUse {
-                        id,
+                        id: _, // Ignore upstream ID
                         name,
                         input,
                         cache_control: _,
-                    } => content_blocks.push(UnifiedContentBlock::ToolUse { id, name, input }),
+                    } => content_blocks.push(UnifiedContentBlock::ToolUse { id: crate::ccproxy::get_tool_id(), name, input }),
                     ClaudeNativeContentBlock::ToolResult {
                         tool_use_id,
                         content,

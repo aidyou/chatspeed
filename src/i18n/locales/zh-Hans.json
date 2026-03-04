@@ -818,6 +818,17 @@
       "title": "待办事项",
       "next": "下一步"
     },
+    "todo": {
+      "create": "创建待办",
+      "createBatch": "批量创建待办",
+      "update": "更新待办",
+      "list": "查看待办列表",
+      "view": "查看待办",
+      "statusCompleted": "已完成",
+      "statusInProgress": "进行中",
+      "statusPending": "待处理"
+    },
+    "finishTask": "完成任务",
     "workflowTitle": "工作流标题"
   }
 }

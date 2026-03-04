@@ -75,20 +75,21 @@
               </div>
               <div v-else class="ai-content">
                 <!-- CLI Style Tool Call (Results) -->
-                <div v-if="message.role === 'tool'" class="cli-tool-call expandable"
-                  :class="{ error: message.toolDisplay.isError }" @click="toggleMessageExpand(message.id)">
-                  <div class="tool-line title-wrap">
-                    <span class="status-dot" :class="{ 'error': message.toolDisplay.isError }">●</span>
-                    <span class="tool-title">{{ message.toolDisplay.title }}</span>
+                <div v-if="message.role === 'tool'" class="cli-tool-call"
+                  :class="[message.toolDisplay.toolType || 'tool-system', message.toolDisplay.isError ? 'status-error' : 'status-success']">
+                  <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.id)">
+                    <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
+                    <span class="tool-name">{{ message.toolDisplay.action }}</span>
+                    <span class="tool-target">{{ message.toolDisplay.target }}</span>
                   </div>
-                  <div class="tool-line summary">
+                  <div class="tool-line summary expandable" @click="toggleMessageExpand(message.id)">
                     <span class="corner-icon">⎿</span>
                     <span class="summary-text">{{ message.toolDisplay.summary }}</span>
-                    <span class="expand-hint" v-if="!isMessageExpanded(message.id)">(click to expand)</span>
+                    <span class="expand-hint" v-if="!isMessageExpanded(message)">(click to expand)</span>
                   </div>
-                  <div v-if="isMessageExpanded(message.id)" class="tool-detail">
-                    <markdown v-if="message.toolDisplay.displayType === 'diff'" :content="message.message" />
-                    <pre v-else class="raw-content">{{ message.message }}</pre>
+                  <div v-if="isMessageExpanded(message)" class="tool-detail">
+                    <markdown v-if="message.toolDisplay.displayType === 'diff'" :content="removeSystemReminder(message.message)" />
+                    <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
                   </div>
                 </div>
 
@@ -103,11 +104,12 @@
                   <!-- Tool Call Indicators SECOND (Only pending ones) -->
 
                   <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
-                    <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending">
+                    <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending"
+                      :class="[call.toolType || 'tool-system', 'status-running']">
                       <div class="tool-line title-wrap">
-                        <span class="tool-title">
-                          <cs name="loading" class="status-icon rotating" /> {{ call.title }}
-                        </span>
+                        <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
+                        <span class="tool-name">{{ call.action }}</span>
+                        <span class="tool-target">{{ call.target }}</span>
                       </div>
                     </div>
                   </div>
@@ -427,92 +429,192 @@ const toggleMessageExpand = (id) => {
     expandedMessages.value.add(id)
   }
 }
-const isMessageExpanded = (id) => expandedMessages.value.has(id)
+const isMessageExpanded = (message) => {
+  if (message.toolDisplay?.displayType === 'diff') return true
+  return expandedMessages.value.has(message.id)
+}
 
-// Mirroring the backend's title generation logic in JS, specifically handling Todo tools
+// Helper functions for truncating text (UTF-8 safe)
+const truncateUrl = (url, maxLen = 40) => {
+  if (!url || url.length <= maxLen) return url
+  const keep = Math.floor((maxLen - 3) / 2)
+  return url.slice(0, keep) + '...' + url.slice(-keep)
+}
+
+// UTF-8 safe truncation using Array.from to properly handle multibyte characters
+const truncateText = (text, maxLen = 25) => {
+  if (!text) return ''
+  const chars = Array.from(text)
+  if (chars.length <= maxLen) return text
+  return chars.slice(0, maxLen - 3).join('') + '...'
+}
+
+const truncatePath = (path, maxLen = 30) => {
+  if (!path || path.length <= maxLen) return path
+  // For paths, try to keep the filename and truncate the middle
+  const parts = path.split('/')
+  const fileName = parts.pop()
+  if (fileName && fileName.length > maxLen - 10) {
+    return '.../' + truncateText(fileName, maxLen - 4)
+  }
+  const dir = parts.join('/')
+  const available = maxLen - fileName.length - 4 // 4 for ".../"
+  if (available > 5) {
+    return truncateText(dir, available) + '/.../' + fileName
+  }
+  return '.../' + fileName
+}
+
+// Format tool title with icon, tool type class, and display text
+// Returns action (verb) and target separately for proper display in template
 const formatToolTitle = (name, args) => {
-  if (!name) return 'Tool'
-  const displayNames = {
-    'read_file': 'Read',
-    'write_file': 'Write',
-    'edit_file': 'Edit',
-    'list_dir': 'List',
-    'grep': 'Grep',
-    'grep_search': 'Grep',
-    'web_search': 'Search',
-    'web_fetch': 'Fetch',
-    'bash': 'Bash',
-    'finish_task': 'Finish'
+  const toolFormatters = {
+    'read_file': (args) => {
+      const path = args.file_path || args.path || ''
+      const limit = args.limit
+      const offset = args.offset
+      let suffix = ''
+      if (limit !== undefined && offset !== undefined) {
+        suffix = ` L${limit}-${offset}`
+      } else if (limit !== undefined) {
+        suffix = ` L${limit}`
+      } else if (offset !== undefined) {
+        suffix = ` @${offset}`
+      }
+      return { icon: 'file', toolType: 'tool-file', action: 'Read', target: `${path}${suffix}` }
+    },
+
+    'write_file': (args) => {
+      const path = args.file_path || args.path || ''
+      return { icon: 'file', toolType: 'tool-file', action: 'Write', target: path }
+    },
+
+    'edit_file': (args) => {
+      const path = args.file_path || args.path || ''
+      return { icon: 'edit', toolType: 'tool-file', action: 'Edit', target: path }
+    },
+
+    'list_dir': (args) => {
+      const path = args.path || args.dir || '.'
+      return { icon: 'folder', toolType: 'tool-file', action: 'List', target: path }
+    },
+
+    'glob': (args) => {
+      const pattern = args.pattern || args.glob || ''
+      return { icon: 'search', toolType: 'tool-file', action: 'Glob', target: truncateText(pattern, 30) }
+    },
+
+    'grep': (args) => {
+      const pattern = args.pattern || args.query || ''
+      const path = args.path || ''
+      const target = path ? `"${truncateText(pattern, 15)}" in ${truncatePath(path, 15)}` : `"${truncateText(pattern, 25)}"`
+      return { icon: 'search', toolType: 'tool-file', action: 'Grep', target }
+    },
+
+    'web_fetch': (args) => {
+      const url = args.url || ''
+      return { icon: 'link', toolType: 'tool-network', action: 'Fetch', target: truncateUrl(url, 40) }
+    },
+
+    'web_search': (args) => {
+      const query = args.query || ''
+      const target = `"${truncateText(query, 30)}"`
+      const numResults = args.num_results
+      if (numResults !== undefined) {
+        return { icon: 'search', toolType: 'tool-network', action: 'Search', target: `${target} Number:${numResults}` }
+      }
+      return { icon: 'search', toolType: 'tool-network', action: 'Search', target }
+    },
+
+    'bash': (args) => {
+      const cmd = args.command || ''
+      return { icon: 'terminal', toolType: 'tool-system', action: 'Bash', target: truncateText(cmd, 30) }
+    },
+
+    'todo_create': (args) => {
+      // Handle single todo creation
+      const subject = args.subject || args.title || ''
+      if (subject) {
+        return { icon: 'add', toolType: 'tool-todo', action: t('workflow.todo.create'), target: truncateText(subject, 25) }
+      }
+      // Handle batch creation
+      const tasks = args.tasks
+      if (tasks && Array.isArray(tasks)) {
+        const taskList = tasks.map(t => `[ ] ${truncateText(t.subject || t.title || '', 20)}`).join('\\n')
+        return { icon: 'add', toolType: 'tool-todo', action: t('workflow.todo.createBatch'), target: `${tasks.length}项` }
+      }
+      return { icon: 'add', toolType: 'tool-todo', action: t('workflow.todo.create'), target: '' }
+    },
+
+    'todo_update': (args) => {
+      const subject = args.subject || args.title || ''
+      const status = args.status || ''
+      let statusText = ''
+      if (status === 'completed') statusText = t('workflow.todo.statusCompleted')
+      else if (status === 'in_progress') statusText = t('workflow.todo.statusInProgress')
+      else if (status === 'pending') statusText = t('workflow.todo.statusPending')
+      else statusText = status
+
+      if (subject && statusText) {
+        return { icon: 'check', toolType: 'tool-todo', action: t('workflow.todo.update'), target: `${truncateText(subject, 20)} → ${statusText}` }
+      }
+      return { icon: 'check', toolType: 'tool-todo', action: t('workflow.todo.update'), target: '' }
+    },
+
+    'todo_list': () => ({ icon: 'list', toolType: 'tool-todo', action: t('workflow.todo.list'), target: '' }),
+
+    'todo_get': () => ({ icon: 'list', toolType: 'tool-todo', action: t('workflow.todo.view'), target: '' }),
+
+    'finish_task': () => ({ icon: 'check-circle', toolType: 'tool-todo', action: t('workflow.finishTask'), target: '' })
   }
 
-  let parsedArgs = args
-  if (typeof args === 'string' && args.trim().startsWith('{')) {
-    try { parsedArgs = JSON.parse(args) } catch (e) { /* keep as string */ }
+  const formatter = toolFormatters[name]
+  if (formatter) {
+    return formatter(args || {})
   }
 
-  // Special handling for Todo tools logic
-  if (name === 'todo_create') {
-    if (parsedArgs?.tasks && Array.isArray(parsedArgs.tasks)) {
-      return `TodoCreate(tasks: ${parsedArgs.tasks.length})`
-    }
-    return `TodoCreate`
-  }
-  if (name === 'todo_update') {
-    if (parsedArgs?.status) {
-      return `TodoUpdate(status: "${parsedArgs.status}")`
-    }
-    return `TodoUpdate`
-  }
-  if (name === 'todo_list') return 'TodoList'
-  if (name === 'todo_get') return `TodoGet(id: ${parsedArgs?.todo_id || '?'})`
-
-  const toolName = displayNames[name] || name
-
-  if (!parsedArgs || typeof parsedArgs !== 'object') {
-    return toolName + (parsedArgs ? `(${parsedArgs})` : '')
-  }
-
-  const parts = Object.entries(parsedArgs).map(([k, v]) => {
-    let val = v
-    if (typeof v === 'string') {
-      val = v.length > 40 ? `"${v.substring(0, 37)}..."` : `"${v}"`
-    } else {
-      val = JSON.stringify(v)
-    }
-    return `${k}: ${val}`
-  })
-
-  return parts.length > 0 ? `${toolName}(${parts.join(', ')})` : toolName
+  // Default handling - just show the tool name
+  const defaultName = name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return { icon: 'tool', toolType: 'tool-system', action: defaultName, target: '' }
 }
 
 // Standardize tool display info from metadata
 const getToolDisplayInfo = (message) => {
   const meta = message.metadata || {}
-
-  // Prioritize top-level error flag from message object
   const isError = message.isError || message.is_error || meta.is_error || false
 
-  // If backend provided pre-formatted title/summary, use them (Tool Results)
-  if (meta.title && meta.summary) {
-    return {
-      title: meta.title,
-      summary: meta.summary,
-      isError: isError,
-      displayType: meta.display_type || 'text'
-    }
-  }
-
-  // Fallback or for Pending calls (reconstruct from tool_call metadata)
+  // Reconstruct from tool_call metadata if available, or fallback to top-level fields
   const toolCall = meta.tool_call || {}
   const func = toolCall.function || toolCall
   const name = func.name || ''
-  const args = func.arguments || func.input || {}
+  const rawArgs = func.arguments || func.input || {}
+
+  // CRITICAL: OpenAI tool calls provide arguments as a JSON string. We must parse it for formatToolTitle.
+  let args = rawArgs
+  if (typeof rawArgs === 'string') {
+    try {
+      args = JSON.parse(rawArgs)
+    } catch (e) {
+      args = {}
+    }
+  }
+
+  const { icon, toolType, action, target } = formatToolTitle(name, args)
+
+  // Filter out internal system reminders from ALL user-facing strings
+  const cleanTitle = removeSystemReminder(meta.title || (target ? `${action} ${target}` : action))
+  const cleanSummary = removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...'))
+  const cleanTarget = removeSystemReminder(target)
 
   return {
-    title: formatToolTitle(name, args),
-    summary: 'Executing...',
+    title: cleanTitle,
+    summary: cleanSummary,
     isError: isError,
-    displayType: 'text'
+    displayType: meta.display_type || 'text',
+    icon,
+    toolType,
+    action,
+    target: cleanTarget
   }
 }
 
@@ -548,8 +650,6 @@ const enhancedMessages = computed(() => {
   )
 
   return msgs.filter(m => !(m.role === 'user' && m.stepType === 'observe')).map(message => {
-    // Pre-calculate parsed content to avoid multiple calls in filter and template
-    const parsed = getParsedMessage(message)
     const toolDisplay = getToolDisplayInfo(message)
 
     // Pre-calculate pending tool calls
@@ -557,16 +657,34 @@ const enhancedMessages = computed(() => {
     const toolCalls = message.metadata?.tool_calls || []
     if (toolCalls.length > 0) {
       pendingToolCalls = toolCalls
+        .map(call => {
+          const name = call.function?.name || call.name || ''
+          const rawArgs = call.function?.arguments || call.arguments || {}
+
+          // CRITICAL: Parse JSON string arguments if necessary
+          let args = rawArgs
+          if (typeof rawArgs === 'string') {
+            try {
+              args = JSON.parse(rawArgs)
+            } catch (e) {
+              args = {}
+            }
+          }
+
+          const { icon, toolType, action, target } = formatToolTitle(name, args)
+          return {
+            id: call.id,
+            icon,
+            toolType,
+            action,
+            target
+          }
+        })
         .filter(call => !completedIds.has(call.id))
-        .map(call => ({
-          id: call.id,
-          title: formatToolTitle(call.function?.name || call.name, call.function?.arguments || call.arguments)
-        }))
     }
 
     return {
       ...message,
-      parsed,
       toolDisplay,
       pendingToolCalls
     }
@@ -580,27 +698,22 @@ const enhancedMessages = computed(() => {
       // Hide internal orchestration tools
       if (name === 'answer_user' || name === 'finish_task') return false
 
-      // Keep everything else (including todo_* results, which provide feedback)
+      // Keep everything else
       return true
     }
 
     // 2. Visibility logic for Assistant messages
     if (m.role === 'assistant') {
-      // Show if there is any text content (message, parsed content, or reasoning)
+      const parsed = getParsedMessage(m)
       const hasTextContent = (m.message && m.message.trim()) ||
-        (m.parsed && m.parsed.content && m.parsed.content.trim()) ||
+        (parsed.content && parsed.content.trim()) ||
         (m.reasoning && m.reasoning.trim())
 
       if (hasTextContent) return true
-
-      // Show if there are pending tool calls (even if no text)
       if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true
-
-      // Hide empty assistant turns (often used just for thinking/routing)
       return false
     }
 
-    // 3. User messages always shown
     return true
   })
 
@@ -653,84 +766,51 @@ watch(
   { deep: true }
 )
 
-// Helper to parse message content (handles raw JSON from ReAct Think steps)
+// Helper to remove <system-reminder>...</system-reminder> tags from content
+const removeSystemReminder = (content) => {
+  if (!content) return ''
+  // Handle multiline content and multiple tags
+  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim()
+}
+
+// Helper to parse message content
 const getParsedMessage = (message) => {
   let content = message.message || ''
+  content = removeSystemReminder(content)
   let toolCalls = []
-  let isError = false
-
-  if (message.role === 'tool') {
-    if (content.toLowerCase().startsWith('error:') || content.toLowerCase().includes('failed')) {
-      isError = true
-    }
-    // For tool messages, we show the call info if available in metadata
-    if (message.metadata?.tool_call) {
-      toolCalls = [message.metadata.tool_call]
-    } else if (message.metadata?.toolCalls) {
-      toolCalls = message.metadata.toolCalls
-    }
-  } else if (message.role === 'assistant') {
-    // For assistant messages, we only show tool calls if it's NOT a Think step
-    // or if the user wants to see them anyway (but following the request to hide unexecuted ones)
-    if (message.stepType !== 'Think') {
-      toolCalls = message.metadata?.toolCalls || message.metadata?.tool_calls || []
-    }
-  }
+  const isError = message.isError || message.is_error || false
 
   try {
-    // Check if it's a JSON response
     const trimmed = content.trim()
     if (trimmed.startsWith('{')) {
       const parsed = JSON.parse(trimmed)
-      let parsedContent = ''
-      let parsedToolCalls = []
+      let parsedContent = parsed.content || ''
+      let parsedToolCalls = parsed.tool_calls || parsed.toolCall || (parsed.tool ? [parsed.tool] : [])
 
-      // 1. Handle standard content field (OpenAI style)
-      if (parsed.content) {
-        parsedContent = parsed.content
-      }
+      // Filter out internal tools
+      parsedToolCalls = parsedToolCalls.filter(call => {
+        const name = call?.function?.name || call?.name
+        return name !== 'finish_task' && name !== 'answer_user'
+      })
 
-      // 2. Handle ReAct style tool calls {"tool": {"name": "...", "arguments": {...}}}
-      if (parsed.tool) {
-        // No special action needed for tool.name now as content should be in parsed.content
-      }
-
-      // 3. Handle OpenAI style tool_calls array
-      parsedToolCalls = parsed.tool_calls || parsed.toolCall || []
-
-      // 4. Specifically extract 'finish_task' and 'answer_user' content into the main message
-      if (parsedToolCalls.length > 0) {
-        const remainingCalls = []
-        for (const call of parsedToolCalls) {
-          const fnName = call?.function?.name || call?.name
-          if (fnName === 'finish_task' || fnName === 'answer_user') {
-            // These tools are now either removed or parameterless. 
-            // The content is already in parsed.content from step 1.
-          } else {
-            remainingCalls.push(call)
-          }
-        }
-        parsedToolCalls = remainingCalls
-      }
-
-      // If assistant Think step, we still might want to hide these if they are "unexecuted"
+      // If assistant Think step, hide tool calls
       if (message.role === 'assistant' && message.stepType === 'Think') {
         parsedToolCalls = []
       }
 
       return {
         content: parsedContent,
-        toolCalls: toolCalls.length > 0 ? toolCalls : parsedToolCalls,
+        toolCalls: parsedToolCalls,
         isError
       }
     }
   } catch (e) {
-    // Not JSON, fall back to raw message
+    // Not JSON
   }
 
   return {
     content,
-    toolCalls,
+    toolCalls: [],
     isError
   }
 }
@@ -1502,9 +1582,55 @@ const onGlobalKeyDown = event => {
                 line-height: 1.5;
                 margin-bottom: 8px;
                 display: block; // Force block container
+                border-left: 3px solid transparent;
+                padding-left: 8px;
+                transition: all 0.2s ease;
 
-                &.expandable {
+                // Status-based border colors (override tool type colors)
+                &.status-success {
+                  border-left-color: var(--el-color-success);
+                }
+
+                &.status-error {
+                  border-left-color: var(--el-color-danger);
+                }
+
+                &.status-running {
+                  border-left-color: var(--el-color-primary);
+                  animation: pulse-border 1.5s infinite;
+                }
+
+                .expandable {
                   cursor: pointer;
+                }
+
+                @keyframes pulse-border {
+
+                  0%,
+                  100% {
+                    opacity: 1;
+                  }
+
+                  50% {
+                    opacity: 0.5;
+                  }
+                }
+
+                // Tool type icon colors
+                &.tool-file .tool-type-icon {
+                  color: var(--el-color-primary);
+                }
+
+                &.tool-network .tool-type-icon {
+                  color: var(--el-color-success);
+                }
+
+                &.tool-system .tool-type-icon {
+                  color: var(--el-color-warning);
+                }
+
+                &.tool-todo .tool-type-icon {
+                  color: #8b5cf6;
                 }
 
                 .tool-line {
@@ -1513,33 +1639,31 @@ const onGlobalKeyDown = event => {
                   align-items: center;
                   white-space: nowrap;
                   width: 100%;
-                  gap: 8px;
+                  gap: var(--cs-space-xs);
 
                   &.title-wrap {
                     user-select: none;
-                    margin-bottom: 2px;
+                    margin-bottom: var(--cs-space-xxs);
 
-                    .status-dot {
-                      color: var(--el-color-success);
-                      width: 16px;
-                      display: flex;
-                      align-items: center;
-                      justify-content: center;
+                    .tool-type-icon {
                       flex-shrink: 0;
-
-                      &.error {
-                        color: var(--el-color-danger);
-                      }
+                      width: 14px;
+                      height: 14px;
                     }
 
-                    .tool-title {
-                      color: var(--cs-text-color-primary);
-                      font-size: var(--cs-font-size);
+                    .tool-name {
                       font-weight: 600;
-                      white-space: nowrap;
+                      color: var(--cs-text-color-primary);
+                      flex-shrink: 0;
+                    }
+
+                    .tool-target {
+                      flex: 1;
+                      color: var(--cs-text-color-secondary);
+                      font-size: var(--cs-font-size-sm);
                       overflow: hidden;
                       text-overflow: ellipsis;
-                      flex: 1; // Take remaining space
+                      white-space: nowrap;
                     }
                   }
 
@@ -1555,6 +1679,7 @@ const onGlobalKeyDown = event => {
                       text-align: center;
                       flex-shrink: 0;
                       margin-top: -2px;
+                      margin-left: var(--cs-space);
                     }
 
                     .summary-text {
@@ -1578,18 +1703,16 @@ const onGlobalKeyDown = event => {
                   }
                 }
 
-                &.error {
-
-                  .status-dot,
-                  .summary-text {
-                    color: var(--el-color-danger);
-                  }
+                // Summary text color for error state
+                &.status-error .summary-text {
+                  color: var(--el-color-danger);
                 }
 
                 &.pending {
+                  opacity: 0.8;
 
-                  .status-dot,
-                  .tool-title {
+                  .tool-name,
+                  .tool-target {
                     color: var(--cs-text-color-placeholder);
                   }
                 }

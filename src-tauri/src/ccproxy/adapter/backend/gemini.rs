@@ -1,4 +1,5 @@
 use crate::ccproxy::get_tool_id;
+use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::types::{
     TOOL_PARSE_ERROR_REMINDER, TOOL_RESULT_SUFFIX_REMINDER, TOOL_TAG_END, TOOL_TAG_START,
 };
@@ -807,8 +808,8 @@ impl BackendAdapter for GeminiBackendAdapter {
         }
 
         Ok(UnifiedResponse {
-            id: uuid::Uuid::new_v4().to_string(), // Generate a new ID as Gemini doesn't provide one
-            model: "gemini".to_string(),          // Model name might need to be passed through
+            id: get_msg_id(),            // Generate a new ID as Gemini doesn't provide one
+            model: "gemini".to_string(), // Model name might need to be passed through
             content: content_blocks,
             stop_reason,
             usage,

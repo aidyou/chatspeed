@@ -67,7 +67,7 @@ impl LlmProcessor {
         gateway: Arc<dyn Gateway>,
         tools: Vec<MCPToolDeclaration>,
         max_steps: usize,
-    ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
+    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
         // 1. Extract the latest state_snapshot from compression history (if any).
@@ -123,7 +123,8 @@ impl LlmProcessor {
             .await
             .map_err(WorkflowEngineError::Ai)?;
 
-        let mut full_content = String::new();
+        let mut plain_text = String::new();
+        let mut tool_calls_json = String::new();
         let mut full_reasoning = String::new();
 
         while let Some(chunk) = rx.recv().await {
@@ -137,7 +138,7 @@ impl LlmProcessor {
                             },
                         )
                         .await?;
-                    full_content.push_str(&chunk.chunk);
+                    plain_text.push_str(&chunk.chunk);
                 }
                 MessageType::Reasoning => {
                     gateway
@@ -151,7 +152,8 @@ impl LlmProcessor {
                     full_reasoning.push_str(&chunk.chunk);
                 }
                 MessageType::ToolCalls => {
-                    full_content.push_str(&chunk.chunk);
+                    // This is the full structured JSON from OpenAIChat
+                    tool_calls_json = chunk.chunk.clone();
                 }
                 MessageType::Finished => break,
                 MessageType::Error => {
@@ -161,20 +163,20 @@ impl LlmProcessor {
             }
         }
 
-        // --- Post-processing: Extract <think> blocks from content ---
-        if full_content.contains("<think>") || full_content.contains("</think>") {
+        // --- Post-processing: Extract <think> blocks from plain_text (if model doesn't support reasoning field) ---
+        if plain_text.contains("<think>") || plain_text.contains("</think>") {
             let mut extracted_reasoning = String::new();
             let mut cleaned_content = String::new();
             let mut current_pos = 0;
 
-            while let Some(start_idx) = full_content[current_pos..].find("<think>") {
+            while let Some(start_idx) = plain_text[current_pos..].find("<think>") {
                 let absolute_start = current_pos + start_idx;
-                cleaned_content.push_str(&full_content[current_pos..absolute_start]);
+                cleaned_content.push_str(&plain_text[current_pos..absolute_start]);
 
-                let remainder = &full_content[absolute_start + 7..];
+                let remainder = &plain_text[absolute_start + 7..];
                 if let Some(end_idx) = remainder.find("</think>") {
                     let absolute_end = absolute_start + 7 + end_idx;
-                    let reasoning = &full_content[absolute_start + 7..absolute_end];
+                    let reasoning = &plain_text[absolute_start + 7..absolute_end];
                     if !extracted_reasoning.is_empty() {
                         extracted_reasoning.push_str("\n\n");
                     }
@@ -186,16 +188,15 @@ impl LlmProcessor {
                         extracted_reasoning.push_str("\n\n");
                     }
                     extracted_reasoning.push_str(remainder.trim());
-                    current_pos = full_content.len();
+                    current_pos = plain_text.len();
                     break;
                 }
             }
 
-            if current_pos < full_content.len() {
-                cleaned_content.push_str(&full_content[current_pos..]);
+            if current_pos < plain_text.len() {
+                cleaned_content.push_str(&plain_text[current_pos..]);
             } else if current_pos == 0 {
-                // No <think> tag found at all, but we knew it had <think> or </think>
-                cleaned_content.push_str(&full_content);
+                cleaned_content.push_str(&plain_text);
             }
 
             if !extracted_reasoning.is_empty() {
@@ -206,10 +207,10 @@ impl LlmProcessor {
             }
 
             // Final cleanup of the content (remove any dangling </think>)
-            full_content = cleaned_content.replace("</think>", "").trim().to_string();
+            plain_text = cleaned_content.replace("</think>", "").trim().to_string();
         }
 
-        Ok((full_content, full_reasoning, None))
+        Ok((plain_text, tool_calls_json, full_reasoning, None))
     }
 
     /// Normalizes history to handle irregular message sequences.
@@ -374,6 +375,11 @@ impl LlmProcessor {
             }
         }
 
+        // Add environment reminders to the system prompt instead of user message
+        let reminders = self.build_reminders(_current_step, _max_steps);
+        full_system_prompt.push_str("\n\n## CURRENT ENVIRONMENT:\n");
+        full_system_prompt.push_str(&reminders);
+
         if let Some(sys_msg) = history.iter_mut().find(|m| m["role"] == "system") {
             let original = sys_msg["content"].as_str().unwrap_or("");
             sys_msg["content"] =
@@ -382,19 +388,6 @@ impl LlmProcessor {
             history.insert(
                 0,
                 serde_json::json!({ "role": "system", "content": full_system_prompt }),
-            );
-        }
-
-        let reminders = self.build_reminders(_current_step, _max_steps);
-
-        if let Some(first_user_msg) = history.iter_mut().find(|m| m["role"] == "user") {
-            if let Some(content) = first_user_msg["content"].as_str() {
-                first_user_msg["content"] = serde_json::json!(format!("{}{}", reminders, content));
-            }
-        } else {
-            history.insert(
-                0,
-                serde_json::json!({ "role": "system", "content": reminders }),
             );
         }
 

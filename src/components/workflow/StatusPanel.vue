@@ -2,7 +2,7 @@
   <Teleport to="body">
     <!-- Large panel -->
     <div
-      v-if="isVisible"
+      v-if="isVisible && hasData"
       ref="panelRef"
       class="status-panel"
       :class="{ collapsed: isCollapsed, dragging: isDragging }"
@@ -63,7 +63,7 @@
           </div>
           <ul class="todo-list">
             <li
-              v-for="item in todoList.slice(0, 5)"
+              v-for="item in displayedTodoList"
               :key="item.id"
               :class="['todo-item', item.status]"
             >
@@ -78,8 +78,8 @@
               </span>
             </li>
           </ul>
-          <div v-if="todoList.length > 5" class="more-indicator">
-            +{{ todoList.length - 5 }} {{ t('common.more') }}
+          <div v-if="todoList.length > 10" class="more-indicator clickable" @click="isTodoExpanded = !isTodoExpanded">
+            {{ isTodoExpanded ? t('common.collapse') : `+${todoList.length - 10} ${t('common.more')}` }}
           </div>
         </div>
 
@@ -93,11 +93,12 @@
             <li
               v-for="(op, index) in recentOperations"
               :key="index"
-              :class="['op-item', op.status]"
+              :class="['op-item', op.status, op.toolType]"
             >
-              <span class="op-index">{{ index + 1 }}</span>
-              <cs :name="op.icon" size="12px" class="op-icon" />
-              <span class="op-name" :title="op.fullText">{{ op.name }}</span>
+              <div class="op-main">
+                <cs :name="op.icon" size="14px" class="op-icon" />
+                <span class="op-name" :title="op.fullText">{{ op.name }}</span>
+              </div>
               <cs
                 v-if="op.status === 'running'"
                 name="loading"
@@ -130,7 +131,7 @@
 
     <!-- Trigger button (small circle) -->
     <div
-      v-else
+      v-else-if="hasData"
       ref="triggerRef"
       class="status-panel-trigger"
       :style="triggerStyle"
@@ -159,6 +160,7 @@ const workflowStore = useWorkflowStore()
 const isVisible = ref(true)
 const isCollapsed = ref(false)
 const isDragging = ref(false)
+const isTodoExpanded = ref(false)
 
 // Position: use left/top for unified storage
 const position = ref({ x: 0, y: 0 })
@@ -176,6 +178,10 @@ const triggerRef = ref(null)
 
 // Get data from store
 const todoList = computed(() => workflowStore.todoList)
+const displayedTodoList = computed(() => {
+  if (isTodoExpanded.value) return todoList.value
+  return todoList.value.slice(0, 10)
+})
 const messages = computed(() => workflowStore.messages)
 const isRunning = computed(() => workflowStore.isRunning)
 
@@ -208,6 +214,12 @@ const progressStatusClass = computed(() => {
   return 'start'
 })
 
+// Helper to remove <system-reminder>...</system-reminder> tags
+const removeSystemReminder = (content) => {
+  if (!content) return ''
+  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim()
+}
+
 // Calculate recent operations
 const recentOperations = computed(() => {
   const toolMessages = messages.value
@@ -218,7 +230,11 @@ const recentOperations = computed(() => {
   return toolMessages.map(m => {
     const meta = m.metadata || {}
     const toolCall = meta.tool_call || {}
-    const name = toolCall.name || (toolCall.function && toolCall.function.name) || 'Tool'
+    
+    // Robustly extract name and arguments (handling both ReAct and OpenAI styles)
+    const func = toolCall.function || toolCall
+    const name = func.name || toolCall.name || 'Tool'
+    const rawArgs = func.arguments || func.input || toolCall.arguments || {}
 
     let status = 'success'
     if (m.isError || meta.is_error) {
@@ -227,49 +243,159 @@ const recentOperations = computed(() => {
       status = 'running'
     }
 
-    const { icon, shortName } = getToolInfo(name, toolCall.arguments || toolCall.input || {})
+    const { icon, toolType, shortName } = getToolInfo(name, rawArgs)
 
     return {
       name: shortName,
-      fullText: name,
+      fullText: removeSystemReminder(meta.summary || name),
       icon,
+      toolType,
       status,
       raw: m
     }
   })
 })
 
-const getToolInfo = (name, args) => {
-  const toolMap = {
-    'read_file': { icon: 'file', shortName: 'Read' },
-    'write_file': { icon: 'file', shortName: 'Write' },
-    'edit_file': { icon: 'edit', shortName: 'Edit' },
-    'list_dir': { icon: 'folder', shortName: 'List' },
-    'grep': { icon: 'search', shortName: 'Grep' },
-    'grep_search': { icon: 'search', shortName: 'Grep' },
-    'web_search': { icon: 'search', shortName: 'Search' },
-    'web_fetch': { icon: 'search', shortName: 'Fetch' },
-    'bash': { icon: 'tool', shortName: 'Bash' },
-    'todo_create': { icon: 'add', shortName: 'Todo+' },
-    'todo_update': { icon: 'check', shortName: 'Todo✓' },
-    'todo_list': { icon: 'list', shortName: 'Todos' },
-    'todo_get': { icon: 'list', shortName: 'Todo' },
-    'finish_task': { icon: 'check-circle', shortName: 'Finish' }
+// Hide panel when there's no data to show
+const hasData = computed(() => {
+  return todoList.value.length > 0 || recentOperations.value.length > 0
+})
+
+// Helper functions for text truncation (UTF-8 safe)
+const truncateUrl = (url, maxLen = 30) => {
+  if (!url || url.length <= maxLen) return url
+  const keep = Math.floor((maxLen - 3) / 2)
+  return url.slice(0, keep) + '...' + url.slice(-keep)
+}
+
+// UTF-8 safe truncation using Array.from
+const truncateText = (text, maxLen = 20) => {
+  if (!text) return ''
+  const chars = Array.from(text)
+  if (chars.length <= maxLen) return text
+  return chars.slice(0, maxLen - 3).join('') + '...'
+}
+
+const truncatePath = (path, maxLen = 25) => {
+  if (!path || path.length <= maxLen) return path
+  const parts = path.split('/')
+  const fileName = parts.pop()
+  if (fileName && fileName.length > maxLen - 8) {
+    return '.../' + truncateText(fileName, maxLen - 4)
   }
+  return '.../' + fileName
+}
 
-  const info = toolMap[name] || { icon: 'tool', shortName: name }
-
-  if (args && typeof args === 'object') {
-    if (args.file_path || args.path) {
-      const path = args.file_path || args.path
-      const fileName = path.split('/').pop()
-      if (fileName && fileName.length < 15) {
-        return { ...info, shortName: `${info.shortName} ${fileName}` }
-      }
+const getToolInfo = (name, rawArgs) => {
+  // Parse JSON if it's a string (OpenAI protocol uses JSON strings for arguments)
+  let args = rawArgs
+  if (typeof rawArgs === 'string') {
+    try {
+      args = JSON.parse(rawArgs)
+    } catch (e) {
+      args = {}
     }
   }
 
-  return info
+  const formatters = {
+    'read_file': () => {
+      const path = truncatePath(args.file_path || args.path || '')
+      const limit = args.limit
+      const offset = args.offset
+      let suffix = ''
+      if (limit && offset !== undefined) suffix = ` L${limit}-${offset}`
+      else if (limit) suffix = ` L${limit}`
+      else if (offset !== undefined) suffix = ` @${offset}`
+      return { icon: 'file', toolType: 'tool-file', shortName: `Read ${path}${suffix}` }
+    },
+
+    'write_file': () => ({
+      icon: 'file',
+      toolType: 'tool-file',
+      shortName: `Write ${truncatePath(args.file_path || args.path || '')}`
+    }),
+
+    'edit_file': () => ({
+      icon: 'edit',
+      toolType: 'tool-file',
+      shortName: `Edit ${truncatePath(args.file_path || args.path || '')}`
+    }),
+
+    'list_dir': () => ({
+      icon: 'folder',
+      toolType: 'tool-file',
+      shortName: `List ${truncatePath(args.path || args.dir || '.', 20)}`
+    }),
+
+    'glob': () => ({
+      icon: 'search',
+      toolType: 'tool-file',
+      shortName: `Glob ${truncateText(args.pattern || args.glob || '', 20)}`
+    }),
+
+    'grep': () => ({
+      icon: 'search',
+      toolType: 'tool-file',
+      shortName: `Grep "${truncateText(args.pattern || args.query || '', 15)}"`
+    }),
+
+    'web_fetch': () => ({
+      icon: 'link',
+      toolType: 'tool-network',
+      shortName: `Fetch ${truncateUrl(args.url, 30)}`
+    }),
+
+    'web_search': () => {
+      const query = args.query || ''
+      const display = `"${truncateText(query, 20)}"`
+      const numResults = args.num_results
+      if (numResults !== undefined) {
+        return { icon: 'search', toolType: 'tool-network', shortName: `Search ${display} Number:${numResults}` }
+      }
+      return { icon: 'search', toolType: 'tool-network', shortName: `Search ${display}` }
+    },
+
+    'bash': () => ({
+      icon: 'terminal',
+      toolType: 'tool-system',
+      shortName: `Bash: ${truncateText(args.command || '', 25)}`
+    }),
+
+    'todo_create': () => {
+      const subject = args.subject || args.title || ''
+      const tasks = args.tasks
+      if (tasks && Array.isArray(tasks)) {
+        return { icon: 'add', toolType: 'tool-todo', shortName: `${t('workflow.todo.createBatch')} (${tasks.length})` }
+      }
+      return { icon: 'add', toolType: 'tool-todo', shortName: `${t('workflow.todo.create')}: ${truncateText(subject, 20)}` }
+    },
+
+    'todo_update': () => {
+      const subject = args.subject || args.title || ''
+      const status = args.status || ''
+      let statusText = ''
+      if (status === 'completed') statusText = t('workflow.todo.statusCompleted')
+      else if (status === 'in_progress') statusText = t('workflow.todo.statusInProgress')
+      else if (status === 'pending') statusText = t('workflow.todo.statusPending')
+      else statusText = status
+
+      if (subject && statusText) {
+        return { icon: 'check', toolType: 'tool-todo', shortName: `${t('workflow.todo.update')}: ${truncateText(subject, 15)} → ${statusText}` }
+      }
+      return { icon: 'check', toolType: 'tool-todo', shortName: t('workflow.todo.update') }
+    },
+
+    'todo_list': () => ({ icon: 'list', toolType: 'tool-todo', shortName: t('workflow.todo.list') }),
+
+    'todo_get': () => ({ icon: 'list', toolType: 'tool-todo', shortName: t('workflow.todo.view') }),
+
+    'finish_task': () => ({ icon: 'check-circle', toolType: 'tool-todo', shortName: t('workflow.finishTask') })
+  }
+
+  const formatter = formatters[name]
+  if (formatter) return formatter()
+
+  return { icon: 'tool', toolType: 'tool-system', shortName: name }
 }
 
 const getStatusIcon = (status) => {
@@ -800,6 +926,16 @@ watch(() => todoList.value, (newList) => {
   color: var(--cs-text-color-placeholder);
   padding-top: 4px;
   font-style: italic;
+
+  &.clickable {
+    cursor: pointer;
+    transition: color 0.2s ease;
+
+    &:hover {
+      color: var(--el-color-primary);
+      text-decoration: underline;
+    }
+  }
 }
 
 .operations-list {
@@ -810,25 +946,52 @@ watch(() => todoList.value, (newList) => {
   .op-item {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
     font-size: var(--cs-font-size-xs);
     color: var(--cs-text-color-regular);
     background: var(--cs-bg-color-light);
     border-radius: var(--cs-border-radius-sm);
     margin-bottom: 4px;
+    border-left: 2px solid transparent;
+    transition: all 0.2s ease;
 
     &:last-child {
       margin-bottom: 0;
     }
 
-    .op-index {
-      color: var(--cs-text-color-placeholder);
-      min-width: 14px;
-      font-weight: 600;
+    // Tool type color coding
+    &.tool-file {
+      border-left-color: var(--el-color-primary);
+      .op-icon { color: var(--el-color-primary); }
+    }
+
+    &.tool-network {
+      border-left-color: var(--el-color-success);
+      .op-icon { color: var(--el-color-success); }
+    }
+
+    &.tool-system {
+      border-left-color: var(--el-color-warning);
+      .op-icon { color: var(--el-color-warning); }
+    }
+
+    &.tool-todo {
+      border-left-color: #8b5cf6;
+      .op-icon { color: #8b5cf6; }
+    }
+
+    .op-main {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0; // Allow flex child to shrink
     }
 
     .op-icon {
+      flex-shrink: 0;
       color: var(--cs-text-color-secondary);
     }
 
@@ -863,6 +1026,7 @@ watch(() => todoList.value, (newList) => {
 
     &.error {
       background: var(--el-color-danger-light-9);
+      border-left-color: var(--el-color-danger) !important;
     }
   }
 }

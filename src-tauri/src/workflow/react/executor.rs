@@ -100,6 +100,7 @@ pub struct WorkflowExecutor {
     pub current_step: usize,
     /// Hard upper bound on ReAct iterations to prevent infinite loops.
     pub max_steps: usize,
+    pub consecutive_no_tool_calls: u32,
     pub auto_approve: HashSet<String>,
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
@@ -247,9 +248,10 @@ impl WorkflowExecutor {
             llm_processor,
             available_skills: HashMap::new(),
             agent_config,
-            state: WorkflowState::Pending,
+            state: WorkflowState::Idle,
             current_step: 0,
             max_steps,
+            consecutive_no_tool_calls: 0,
             auto_approve,
             signal_rx,
             tsid_generator,
@@ -606,7 +608,7 @@ impl WorkflowExecutor {
                 self.session_id,
                 self.current_step
             );
-            let (response, response_reasoning, usage) =
+            let (text_part, json_part, response_reasoning, usage) =
                 self.call_llm_with_retry(&mut signal_rx).await?;
 
             // --- 3. Check for stop signal after LLM call ---
@@ -616,13 +618,22 @@ impl WorkflowExecutor {
             }
 
             log::debug!(
-                "[Workflow Engine] Session {}: LLM responded ({} chars)",
+                "[Workflow Engine] Session {}: LLM responded (text: {} chars, json: {} chars)",
                 self.session_id,
-                response.len()
+                text_part.len(),
+                json_part.len()
             );
+
+            // Construct full message for history (Text + JSON if present)
+            let full_response = if json_part.is_empty() {
+                text_part.clone()
+            } else {
+                format!("{}\n\n{}", text_part, json_part)
+            };
+
             self.add_message_and_notify(
                 "assistant".to_string(),
-                response.clone(),
+                full_response,
                 Some(response_reasoning),
                 Some(StepType::Think),
                 false,
@@ -636,34 +647,63 @@ impl WorkflowExecutor {
                 "[Workflow Engine] Session {}: Executing tools",
                 self.session_id
             );
-            let (tool_results, has_todo_call) =
-                self.execute_tools(response, &mut signal_rx).await?;
+            let (tool_results, has_todo_call) = self
+                .execute_tools(text_part, json_part, &mut signal_rx)
+                .await?;
 
             if tool_results.is_empty() {
+                self.consecutive_no_tool_calls += 1;
                 log::warn!(
-                    "WorkflowExecutor {}: No tool call detected. Forcing retry.",
-                    self.session_id
+                    "WorkflowExecutor {}: No tool call detected (consecutive: {}). Forcing retry.",
+                    self.session_id,
+                    self.consecutive_no_tool_calls
                 );
-                // ADD TO CONTEXT BUT DO NOT NOTIFY GATEWAY (UI)
-                self.context
-                    .add_message(
-                        "user".to_string(),
-                        "Error: No tool call detected in your last response. You MUST call a tool to proceed, even if it is just 'answer_user' or 'finish_task'."
-                            .to_string(),
-                        None,
-                        Some(StepType::Observe),
-                        self.current_step as i32,
-                        true,
-                        Some("NoToolCall".to_string()),
-                        Some(serde_json::json!({
-                            "summary": "No tool detected",
-                            "is_error": true,
-                            "error_type": "NoToolCall"
-                        })),
+
+                let error_msg = if self.consecutive_no_tool_calls >= 3 {
+                    let remaining = self.max_steps.saturating_sub(self.current_step);
+                    format!(
+                        "<system-reminder>CRITICAL ERROR: You have failed to call a tool for {} consecutive turns. \
+                        This is wasting your limited step budget ({}/{} steps used, {} remaining). \
+                        To maintain execution state and avoid eventual task failure, your next response MUST conclude with a valid tool call. \
+                        If you are truly finished, provide a summary and call 'finish_task'.</system-reminder>",
+                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining
                     )
-                    .await?;
+                } else {
+                    "<system-reminder>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</system-reminder>".to_string()
+                };
+
+                // Avoid appending multiple identical reminders if AI is stuck
+                let should_add = if let Some(last_msg) = self.context.get_messages().last() {
+                    !(last_msg.role == "user" && last_msg.message.contains("No tool call detected"))
+                } else {
+                    true
+                };
+
+                if should_add {
+                    self.context
+                        .add_message(
+                            "user".to_string(),
+                            error_msg,
+                            None,
+                            Some(StepType::Observe),
+                            self.current_step as i32,
+                            true,
+                            Some("NoToolCall".to_string()),
+                            Some(serde_json::json!({
+                                "summary": "No tool detected",
+                                "is_error": true,
+                                "error_type": "NoToolCall"
+                            })),
+                        )
+                        .await?;
+                }
+                
+                // If AI is extremely stubborn, back off and wait or slightly reduce step count to allow recovery
                 continue;
             }
+
+            // Reset counter on any successful tool call
+            self.consecutive_no_tool_calls = 0;
 
             let mut needs_compression = false;
             for (tool_call_id, reinforced, tool_call) in tool_results {
@@ -672,9 +712,19 @@ impl WorkflowExecutor {
                     self.session_id,
                     tool_call_id
                 );
+
+                // Use 'user' role for system-level summary errors to force compliance
+                let role = if reinforced.is_error
+                    && reinforced.error_type.as_deref() == Some("NoSummary")
+                {
+                    "user".to_string()
+                } else {
+                    "tool".to_string()
+                };
+
                 let compressed_signal = self
                     .add_message_and_notify(
-                        "tool".to_string(),
+                        role,
                         reinforced.content,
                         None,
                         Some(StepType::Observe),
@@ -761,7 +811,7 @@ impl WorkflowExecutor {
     async fn call_llm_with_retry(
         &mut self,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
-    ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
+    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let mut retry_count = 0;
         let max_retries = 10;
         let mut last_error = None;
@@ -821,7 +871,7 @@ impl WorkflowExecutor {
             };
 
             match res {
-                Ok(res) => return Ok(res),
+                Ok((text, json, reasoning, usage)) => return Ok((text, json, reasoning, usage)),
                 Err(e) => {
                     log::warn!(
                         "WorkflowExecutor {}: LLM call failed (attempt {}): {}",
@@ -856,7 +906,7 @@ impl WorkflowExecutor {
 
     async fn call_llm(
         &mut self,
-    ) -> Result<(String, String, Option<serde_json::Value>), WorkflowEngineError> {
+    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let mut tools = self.tool_manager.get_tool_calling_spec(None, None).await?;
         let global_tools = self
             .global_tool_manager
@@ -890,7 +940,8 @@ impl WorkflowExecutor {
 
     async fn execute_tools(
         &mut self,
-        raw_response: String,
+        text_part: String,
+        json_part: String,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
@@ -906,50 +957,82 @@ impl WorkflowExecutor {
         if self.check_stop_signal(signal_rx).await? {
             return Ok((Vec::new(), false));
         }
-        let cleaned_response = crate::libs::util::format_json_str(&raw_response);
-        let json_val: serde_json::Value = match serde_json::from_str(&cleaned_response) {
+
+        // If json_part is empty, there are no tool calls.
+        if json_part.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+
+        let cleaned_json = crate::libs::util::format_json_str(&json_part);
+        let json_val: serde_json::Value = match serde_json::from_str(&cleaned_json) {
             Ok(v) => v,
             Err(e) => {
                 log::warn!(
-                    "WorkflowExecutor {}: Failed to parse JSON from AI response: {}. Raw: {}",
+                    "WorkflowExecutor {}: Failed to parse JSON from AI response: {}. JSON: {}",
                     self.session_id,
                     e,
-                    raw_response
+                    json_part
                 );
-                // Return empty results to trigger the "No tool call detected" logic in run_loop
                 return Ok((Vec::new(), false));
             }
         };
         let mut results = vec![];
         let mut has_todo_call = false;
 
+        let check_finish_guard = |name: &str,
+                                  raw_text: &str|
+         -> Option<
+            crate::workflow::react::observation::ReinforcedResult,
+        > {
+            if name == TOOL_FINISH_TASK && raw_text.trim().is_empty() {
+                log::warn!("WorkflowExecutor: finish_task called without summary.");
+                return Some(crate::workflow::react::observation::ReinforcedResult {
+                    content: "<system-reminder>Error: You called 'finish_task' but your plain text response was empty. You MUST provide a comprehensive summary or report in plain text BEFORE the tool call block to inform the user of your results.</system-reminder>".into(),
+                    title: "FinishTask Error".to_string(),
+                    summary: "Missing summary".to_string(),
+                    is_error: true,
+                    error_type: Some("NoSummary".into()),
+                    display_type: "text".to_string(),
+                });
+            }
+            None
+        };
+
         if let Some(tool_obj) = json_val.get("tool") {
             let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-            if name.starts_with("todo_") {
-                has_todo_call = true;
-            }
+            if let Some(error_obs) = check_finish_guard(name, &text_part) {
+                results.push((crate::ccproxy::get_tool_id(), error_obs, tool_obj.clone()));
+            } else {
+                if name.starts_with("todo_") {
+                    has_todo_call = true;
+                }
 
-            results.push((
-                crate::ccproxy::get_tool_id(),
-                self.dispatch_tool(tool_obj.clone()).await?,
-                tool_obj.clone(),
-            ));
+                results.push((
+                    crate::ccproxy::get_tool_id(),
+                    self.dispatch_tool(tool_obj.clone()).await?,
+                    tool_obj.clone(),
+                ));
+            }
         } else if let Some(tool_calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
             for call in tool_calls {
                 let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
                 let func = call.get("function").unwrap_or(call);
                 let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-                if name.starts_with("todo_") {
-                    has_todo_call = true;
-                }
+                if let Some(error_obs) = check_finish_guard(name, &text_part) {
+                    results.push((id.to_string(), error_obs, call.clone()));
+                } else {
+                    if name.starts_with("todo_") {
+                        has_todo_call = true;
+                    }
 
-                results.push((
-                    id.to_string(),
-                    self.dispatch_tool(call.clone()).await?,
-                    call.clone(),
-                ));
+                    results.push((
+                        id.to_string(),
+                        self.dispatch_tool(call.clone()).await?,
+                        call.clone(),
+                    ));
+                }
             }
         } else if let Some(calls) = json_val.as_array() {
             // Handle direct array of tool calls
@@ -958,15 +1041,19 @@ impl WorkflowExecutor {
                 let func = call.get("function").unwrap_or(call);
                 let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-                if name.starts_with("todo_") {
-                    has_todo_call = true;
-                }
+                if let Some(error_obs) = check_finish_guard(name, &text_part) {
+                    results.push((id.to_string(), error_obs, call.clone()));
+                } else {
+                    if name.starts_with("todo_") {
+                        has_todo_call = true;
+                    }
 
-                results.push((
-                    id.to_string(),
-                    self.dispatch_tool(call.clone()).await?,
-                    call.clone(),
-                ));
+                    results.push((
+                        id.to_string(),
+                        self.dispatch_tool(call.clone()).await?,
+                        call.clone(),
+                    ));
+                }
             }
         } else if json_val.get("name").is_some()
             || (json_val.get("function").is_some()
@@ -991,15 +1078,19 @@ impl WorkflowExecutor {
                 })
                 .unwrap_or("");
 
-            if name.starts_with("todo_") {
-                has_todo_call = true;
-            }
+            if let Some(error_obs) = check_finish_guard(name, &text_part) {
+                results.push((id.to_string(), error_obs, json_val.clone()));
+            } else {
+                if name.starts_with("todo_") {
+                    has_todo_call = true;
+                }
 
-            results.push((
-                id.to_string(),
-                self.dispatch_tool(json_val.clone()).await?,
-                json_val.clone(),
-            ));
+                results.push((
+                    id.to_string(),
+                    self.dispatch_tool(json_val.clone()).await?,
+                    json_val.clone(),
+                ));
+            }
         }
 
         if has_todo_call {

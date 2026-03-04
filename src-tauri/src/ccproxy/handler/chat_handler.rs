@@ -293,6 +293,7 @@ pub async fn handle_chat_completion(
         _ => tool_compat_mode,                   // Fallback to route parameter
     };
 
+    /* 
     if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
@@ -324,6 +325,7 @@ pub async fn handle_chat_completion(
         .await?;
         return Ok(result.into_response());
     }
+    */
 
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),

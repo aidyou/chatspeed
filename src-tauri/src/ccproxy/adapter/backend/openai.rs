@@ -748,7 +748,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 for tc in tool_calls {
                     if let Some(function) = &tc.function {
                         content_blocks.push(UnifiedContentBlock::ToolUse {
-                            id: tc.id.clone().unwrap_or_default(),
+                            id: get_tool_id(), // IGNORE upstream ID, use our own unique ID
                             name: function.name.clone().unwrap_or_default(),
                             input: serde_json::from_str(
                                 &function
@@ -1134,7 +1134,7 @@ impl OpenAIBackendAdapter {
     ) {
         if let Some(name) = tc.function.as_ref().and_then(|f| f.name.as_ref()) {
             if !name.is_empty() {
-                let tool_id = tc.id.clone().unwrap_or_else(|| get_tool_id());
+                let tool_id = get_tool_id(); // ALWAYS use our own ID for streaming too
 
                 // Update tool_id in status
                 let mut message_index = 0;

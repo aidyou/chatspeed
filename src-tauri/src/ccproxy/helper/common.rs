@@ -768,11 +768,11 @@ impl ModelResolver {
 
     /// Unified parameter merging logic for JSON bodies (Direct Forward mode).
     /// Precedence: Client Body > Proxy Configuration (Valid Non-Defaults)
-    pub fn merge_parameters_json(body: &mut serde_json::Value, proxy_model: &ProxyModel) {
-        if let Some(body_map) = body.as_object_mut() {
-            apply_sampling_params!(body_map, proxy_model, json);
-        }
-    }
+    // pub fn merge_parameters_json(body: &mut serde_json::Value, proxy_model: &ProxyModel) {
+    //     if let Some(body_map) = body.as_object_mut() {
+    //         apply_sampling_params!(body_map, proxy_model, json);
+    //     }
+    // }
 
     /// Unified parameter merging logic for UnifiedRequest (Protocol Conversion mode).
     /// Precedence: Client Request > Proxy Configuration (Valid Non-Defaults)

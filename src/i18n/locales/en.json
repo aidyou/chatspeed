@@ -139,6 +139,7 @@
     "restart": "Restart",
     "save": "Save",
     "search": "Search",
+    "to": "to",
     "unpin": "Unpin",
     "updateButtonText": "Update",
     "uploadFailed": "File upload failed"
@@ -792,6 +793,23 @@
       "title": "To-do List",
       "next": "Next"
     },
-    "workflowTitle": "Workflow Title"
+    "workflowTitle": "Workflow Title",
+    "todo": {
+      "create": "Create todo",
+      "createBatch": "Create batch todos",
+      "update": "Update todo",
+      "list": "List todos",
+      "view": "View todo",
+      "statusCompleted": "completed",
+      "statusInProgress": "in progress",
+      "statusPending": "pending"
+    },
+    "finishTask": "Finish task",
+    "statusPanel": {
+      "title": "Status",
+      "progress": "Progress",
+      "todos": "Tasks",
+      "recentOps": "Recent Operations"
+    }
   }
 }
