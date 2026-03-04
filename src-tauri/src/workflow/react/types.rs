@@ -26,8 +26,12 @@ pub enum StepType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayPayload {
-    /// Incremental chunk of text (for streaming thoughts or content)
+    /// Incremental chunk of text (for streaming content)
     Chunk {
+        content: String,
+    },
+    /// Incremental chunk of reasoning text
+    ReasoningChunk {
         content: String,
     },
     /// Full message update

@@ -203,31 +203,27 @@ impl WebviewScraper {
         }
 
         let result = async {
-            // Use shorter timeout for page load to fail fast on problematic pages
-            let page_load_timeout = std::cmp::min(page_timeout, Duration::from_secs(15));
-            let page_load_result = tokio::time::timeout(page_load_timeout, rx_page_load).await;
-            if page_load_result.is_err() {
-                // Mark as completed to prevent further processing
-                is_completed.store(true, Ordering::SeqCst);
+            // Use race between load and DOMContentLoaded events
+            // We only need one of them to be ready to proceed with script injection
+            let fast_ready_timeout = std::cmp::min(page_timeout, Duration::from_secs(12));
+            
+            let combined_ready = async {
+                tokio::select! {
+                    _ = rx_page_load => { log::debug!("Page load event received"); },
+                    _ = rx_dom_content_loaded => { log::debug!("DOMContentLoaded event received"); },
+                }
+            };
+            
+            if tokio::time::timeout(fast_ready_timeout, combined_ready).await.is_err() {
                 log::warn!(
-                    "Page load timed out for URL: {} after {:?}",
+                    "Timed out waiting for page ready events for URL: {} after {:?}",
                     url,
-                    page_load_timeout
+                    fast_ready_timeout
                 );
+                // On heavy pages, we might still want to try injection even if events timed out, 
+                // but for now, let's keep the error behavior for consistency.
+                is_completed.store(true, Ordering::SeqCst);
                 return Err(anyhow!("Page load timed out for URL: {}", url));
-            }
-
-            let dom_content_result =
-                tokio::time::timeout(page_timeout, rx_dom_content_loaded).await;
-            if dom_content_result.is_err() {
-                // Mark as completed to prevent further processing
-                is_completed.store(true, Ordering::SeqCst);
-                log::warn!(
-                    "DOMContentLoaded timed out for URL: {} after {:?}",
-                    url,
-                    page_timeout
-                );
-                return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
             }
 
             if url.contains("bing.com") {
@@ -313,7 +309,7 @@ impl WebviewScraper {
         let utility_js = include_str!("../../assets/scrape/utility.min.js");
         let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
         let readability_js = include_str!("../../assets/scrape/readability.min.js");
-        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.min.js");
+        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.js");
 
         let config_json_str =
             serde_json::to_string(&config).context("Failed to serialize scraper config to JSON")?;

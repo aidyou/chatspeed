@@ -164,6 +164,8 @@ onMounted(async () => {
       modelStore.updateModelStore()
     } else if (eventType === 'skill') {
       skillStore.updateSkillStore()
+    } else if (eventType === 'agent') {
+      agentStore.fetchAgents()
     } else if (eventType === 'setting_changed') {
       settingStore.updateSettingStore(event.payload.setting)
     } else if (eventType === 'proxy_group_changed' || eventType === 'proxy_group_updated') {

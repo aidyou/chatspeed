@@ -808,11 +808,12 @@
     "newWorkflow": "新建工作流",
     "startFailed": "启动工作流失败: {error}",
     "statusPanel": {
-      "title": "状态面板",
+      "contextUsage": "上下文使用率",
+      "empty": "暂无任务",
       "progress": "任务进度",
-      "todos": "待办事项",
       "recentOps": "最近操作",
-      "empty": "暂无任务"
+      "todos": "待办事项",
+      "title": "状态面板"
     },
     "todoList": {
       "title": "待办事项",

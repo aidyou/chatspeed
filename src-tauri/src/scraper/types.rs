@@ -43,6 +43,7 @@ pub enum ScrapeRequest {
 pub enum StrapeContentFormat {
     Markdown,
     Text,
+    Links,
 }
 
 impl From<StrapeContentFormat> for String {
@@ -50,6 +51,7 @@ impl From<StrapeContentFormat> for String {
         match format {
             StrapeContentFormat::Markdown => "markdown".to_string(),
             StrapeContentFormat::Text => "text".to_string(),
+            StrapeContentFormat::Links => "links".to_string(),
         }
     }
 }
@@ -58,6 +60,7 @@ impl From<String> for StrapeContentFormat {
     fn from(format: String) -> Self {
         match format.as_str() {
             "text" => StrapeContentFormat::Text,
+            "links" => StrapeContentFormat::Links,
             _ => StrapeContentFormat::Markdown,
         }
     }
@@ -68,6 +71,7 @@ impl Display for StrapeContentFormat {
         match self {
             StrapeContentFormat::Markdown => write!(f, "markdown"),
             StrapeContentFormat::Text => write!(f, "text"),
+            StrapeContentFormat::Links => write!(f, "links"),
         }
     }
 }

@@ -39,7 +39,7 @@ function sendScrapeResult(data) {
   sendEvent(ev, data)
 }
 
-;(() => {
+; (() => {
   const urls = [
     'https://www.bing.com/ck/',
     'https://www.so.com/link',
@@ -264,10 +264,84 @@ function sendScrapeResult(data) {
   }
 
   /**
+   * Extracts all useful links from the page.
+   * Useful for index pages or finding navigation paths.
+   */
+  function scrapeLinks() {
+    const links = []
+    const seen = new Set()
+    
+    // Select links while avoiding noise containers (header, footer, nav)
+    // We target links that are NOT children of these semantic noise tags
+    const allLinks = document.querySelectorAll('a')
+    
+    allLinks.forEach(a => {
+      // Check if the link is inside a noise container
+      if (a.closest('header, footer, nav, [role="navigation"], .footer, #footer, .header, #header, .nav, #nav')) {
+        return
+      }
+
+      const href = a.href
+      const text = (a.innerText || a.title || '').trim().replace(/\s+/g, ' ')
+
+      // Filter out useless links:
+      // 1. Empty or invalid href
+      // 2. Hash-only or javascript links
+      // 3. Very short text (unless it has a title)
+      // 4. Duplicate hrefs (to keep list clean)
+      if (!href ||
+        href === '' ||
+        href.startsWith('javascript:') ||
+        href.startsWith('mailto:') ||
+        href.startsWith('tel:') ||
+        href.startsWith('ftp:') ||
+        seen.has(href)) {
+        return
+      }
+
+      // Basic text validation
+      if (text.length < 2) return
+
+      seen.add(href)
+      links.push({ text, href })
+    })
+
+    // Format as a simple markdown list
+    let markdown = `# Links from ${document.title || 'Page'}\n\n`
+    if (links.length === 0) {
+      markdown += 'No useful links found on this page.'
+    } else {
+      links.forEach(link => {
+        markdown += `- [${link.text}](${link.href})\n`
+      })
+    }
+
+    return {
+      title: document.title || 'Page Links',
+      content: markdown,
+      url: window.location.href
+    }
+  }
+
+  /**
    * Performs generic content extraction, first trying Readability.js,
    * then falling back to custom extractor if needed.
    */
   async function scrapeGeneric(generic_content_rule = {}) {
+    // Check for explicit links format
+    if (generic_content_rule.format === 'links') {
+      try {
+        const result = scrapeLinks()
+        if (!hasSentResult) {
+          sendScrapeResult({ success: JSON.stringify(result) })
+        }
+        return
+      } catch (error) {
+        logger.error('Links scraping failed:', error)
+        // Fallback to normal generic scraping if links extraction fails
+      }
+    }
+
     const maxTry = 3
     let lastError = 'Unknown error'
     let useReadabilityFirst = true
@@ -498,23 +572,36 @@ function sendScrapeResult(data) {
     logger.debug('generic_content_rule:', JSON.stringify(generic_content_rule))
 
     try {
-      // Wait for TurndownService to be available
-      await new Promise((resolve, reject) => {
-        const interval = setInterval(() => {
-          if (typeof TurndownService !== 'undefined' && isFinalHttp()) {
+      // Wait for TurndownService to be available (only if NOT links)
+      if (generic_content_rule?.format !== 'links') {
+        await new Promise((resolve, reject) => {
+          const interval = setInterval(() => {
+            if (typeof TurndownService !== 'undefined' && isFinalHttp()) {
+              clearInterval(interval)
+              logger.debug('TurndownService is ready, url:', window.location.href)
+              resolve()
+            }
+          }, 100)
+
+          setTimeout(() => {
             clearInterval(interval)
-            logger.debug('TurndownService is ready, url:', window.location.href)
-            resolve()
-          }
-        }, 100)
+            reject(new Error('Timeout waiting for TurndownService'))
+          }, 3000)
+        })
+      } else {
+        // For links, just ensure we are on the final URL
+        await new Promise((resolve) => {
+          const interval = setInterval(() => {
+            if (isFinalHttp()) {
+              clearInterval(interval)
+              resolve()
+            }
+          }, 50)
+          setTimeout(() => { clearInterval(interval); resolve(); }, 1500)
+        })
+      }
 
-        setTimeout(() => {
-          clearInterval(interval)
-          reject(new Error('Timeout waiting for TurndownService'))
-        }, 3000) // 5 second timeout
-      })
-
-      // Now that TurndownService is ready, proceed
+      // Now proceed
       if (config) {
         await scrapeWithSchema(config)
       } else {
@@ -529,29 +616,29 @@ function sendScrapeResult(data) {
       }
     }
   }
-  ;(async () => {
-    try {
-      const event = await waitForTauriAPI()
-      if (!event) {
-        logger.warn('Tauri API unavailable, unable to send event')
-        return
-      }
+    ; (async () => {
+      try {
+        const event = await waitForTauriAPI()
+        if (!event) {
+          logger.warn('Tauri API unavailable, unable to send event')
+          return
+        }
 
-      const maxTry = 3
-      let tryCount = 0
-      while (!isFinalHttp() && tryCount < maxTry) {
-        tryCount++
-        await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** tryCount))
-      }
+        const maxTry = 3
+        let tryCount = 0
+        while (!isFinalHttp() && tryCount < maxTry) {
+          tryCount++
+          await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** tryCount))
+        }
 
-      if (isFinalHttp()) {
-        logger.info('emit page loaded, url:', window.location.href)
-        event.emit(`page_loaded_${windowLabel}`)
-      } else {
-        logger.warn('Failed to get a valid URL after multiple retries.')
+        if (isFinalHttp()) {
+          logger.info('emit page loaded, url:', window.location.href)
+          event.emit(`page_loaded_${windowLabel}`)
+        } else {
+          logger.warn('Failed to get a valid URL after multiple retries.')
+        }
+      } catch (error) {
+        logger.error('Error during page loaded event handling:', error)
       }
-    } catch (error) {
-      logger.error('Error during page loaded event handling:', error)
-    }
-  })()
+    })()
 })()

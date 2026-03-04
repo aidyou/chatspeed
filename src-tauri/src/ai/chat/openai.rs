@@ -625,6 +625,12 @@ impl AiChatTrait for OpenAIChat {
             "stream": stream_enabled,
         });
 
+        if stream_enabled {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("stream_options".to_string(), json!({ "include_usage": true }));
+            }
+        }
+
         // Add custom body parameters from model metadata
         merge_custom_params_value(&mut payload, &model_detail.metadata);
         // Add custom body parameters from user metadata (ChatMetadata)

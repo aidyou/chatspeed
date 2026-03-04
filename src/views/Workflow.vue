@@ -57,7 +57,7 @@
       <!-- main container -->
       <el-container class="main-container">
         <div class="messages" ref="messagesRef">
-          <div v-for="(message, index) in enhancedMessages" :key="message.id" class="message"
+          <div v-for="(message, index) in enhancedMessages" :key="message.displayId" class="message"
             :class="[message.role, message.stepType?.toLowerCase()]">
             <div class="avatar" v-if="message.role === 'user'">
               <cs name="talk" class="user-icon" />
@@ -77,12 +77,12 @@
                 <!-- CLI Style Tool Call (Results) -->
                 <div v-if="message.role === 'tool'" class="cli-tool-call"
                   :class="[message.toolDisplay.toolType || 'tool-system', message.toolDisplay.isError ? 'status-error' : 'status-success']">
-                  <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.id)">
+                  <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.displayId)">
                     <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
                     <span class="tool-name">{{ message.toolDisplay.action }}</span>
                     <span class="tool-target">{{ message.toolDisplay.target }}</span>
                   </div>
-                  <div class="tool-line summary expandable" @click="toggleMessageExpand(message.id)">
+                  <div class="tool-line summary expandable" @click="toggleMessageExpand(message.displayId)">
                     <span class="corner-icon">⎿</span>
                     <span class="summary-text">{{ message.toolDisplay.summary }}</span>
                     <span class="expand-hint" v-if="!isMessageExpanded(message)">(click to expand)</span>
@@ -129,10 +129,13 @@
             </div>
           </div>
 
-          <div v-if="isChatting && chatState.content" class="message assistant chatting">
+          <div v-if="isChatting && (chatState.content || chatState.reasoning)" class="message assistant chatting">
             <div class="content-container">
               <div class="ai-content">
-                <markdown :content="chatState.content" />
+                <div class="thought-content" v-if="chatState.reasoning">
+                  {{ chatState.reasoning }}
+                </div>
+                <markdown v-if="chatState.content" :content="chatState.content" />
               </div>
             </div>
           </div>
@@ -292,6 +295,7 @@ const chattingParser = new MarkdownStreamParser()
 const isChatting = computed(() => workflowStore.isRunning)
 const chatState = ref({
   content: '',
+  reasoning: '',
   blocks: []
 })
 
@@ -431,7 +435,7 @@ const toggleMessageExpand = (id) => {
 }
 const isMessageExpanded = (message) => {
   if (message.toolDisplay?.displayType === 'diff') return true
-  return expandedMessages.value.has(message.id)
+  return expandedMessages.value.has(message.displayId)
 }
 
 // Helper functions for truncating text (UTF-8 safe)
@@ -649,8 +653,10 @@ const enhancedMessages = computed(() => {
       .map(m => m.metadata.tool_call_id)
   )
 
-  return msgs.filter(m => !(m.role === 'user' && m.stepType === 'observe')).map(message => {
+  return msgs.filter(m => !(m.role === 'user' && m.stepType === 'observe')).map((message, idx) => {
     const toolDisplay = getToolDisplayInfo(message)
+    // Use a robust unique ID for UI state (expansion, etc.)
+    const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
 
     // Pre-calculate pending tool calls
     let pendingToolCalls = []
@@ -685,6 +691,7 @@ const enhancedMessages = computed(() => {
 
     return {
       ...message,
+      displayId,
       toolDisplay,
       pendingToolCalls
     }
@@ -890,16 +897,24 @@ const setupWorkflowEvents = async sessionId => {
       workflowStore.updateWorkflowStatus(sessionId, payload.state)
 
       // If we move out of Thinking/Executing, reset the parser
+      // Use a small timeout to allow final rendering of streaming buffers
       if (payload.state !== 'thinking' && payload.state !== 'executing') {
-        chattingParser.reset()
-        chatState.value.content = ''
-        chatState.value.blocks = []
+        setTimeout(() => {
+          chattingParser.reset()
+          chatState.value.content = ''
+          chatState.value.reasoning = ''
+          chatState.value.blocks = []
+        }, 500)
       }
     } else if (payload.type === 'chunk') {
       // Direct text chunk from LLM or StreamParser
       chatState.value.content += payload.content
       chatState.value.blocks = chattingParser.process(payload.content)
 
+      nextTick(() => scrollToBottom())
+    } else if (payload.type === 'reasoning_chunk') {
+      // Thinking chunk
+      chatState.value.reasoning += payload.content
       nextTick(() => scrollToBottom())
     } else if (payload.type === 'message') {
       // ReAct engine sends incremental messages or chunks
@@ -1753,6 +1768,31 @@ const onGlobalKeyDown = event => {
                 border-radius: var(--cs-border-radius-sm);
                 border-left: 3px solid var(--cs-border-color-light);
                 white-space: pre-wrap;
+              }
+
+              // Custom <cs:thought> tag styling
+              ::v-deep(cs-thought), ::v-deep(cs\:thought) {
+                display: block;
+                font-style: italic;
+                color: var(--cs-text-color-secondary);
+                background-color: var(--cs-bg-color-light);
+                padding: 8px 12px;
+                border-left: 3px solid var(--cs-border-color-light);
+                margin: 10px 0;
+                font-size: 0.9em;
+                border-radius: var(--cs-border-radius-sm);
+                line-height: 1.5;
+                white-space: pre-wrap;
+
+                &::before {
+                  content: "Thought";
+                  display: block;
+                  font-weight: bold;
+                  font-size: 0.8em;
+                  text-transform: uppercase;
+                  margin-bottom: 4px;
+                  opacity: 0.6;
+                }
               }
 
               .msg-ops-container {

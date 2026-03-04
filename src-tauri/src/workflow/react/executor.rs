@@ -248,7 +248,7 @@ impl WorkflowExecutor {
             llm_processor,
             available_skills: HashMap::new(),
             agent_config,
-            state: WorkflowState::Idle,
+            state: WorkflowState::Pending,
             current_step: 0,
             max_steps,
             consecutive_no_tool_calls: 0,
@@ -673,7 +673,8 @@ impl WorkflowExecutor {
                 };
 
                 // Avoid appending multiple identical reminders if AI is stuck
-                let should_add = if let Some(last_msg) = self.context.get_messages().last() {
+                let should_add = if let Some(last_msg) = self.context.get_messages_for_llm().last()
+                {
                     !(last_msg.role == "user" && last_msg.message.contains("No tool call detected"))
                 } else {
                     true
@@ -697,7 +698,7 @@ impl WorkflowExecutor {
                         )
                         .await?;
                 }
-                
+
                 // If AI is extremely stubborn, back off and wait or slightly reduce step count to allow recovery
                 continue;
             }
@@ -706,12 +707,21 @@ impl WorkflowExecutor {
             self.consecutive_no_tool_calls = 0;
 
             let mut needs_compression = false;
+            let mut final_completion_detected = false;
+
             for (tool_call_id, reinforced, tool_call) in tool_results {
                 log::debug!(
                     "[Workflow Engine] Session {}: Recording observation for {}",
                     self.session_id,
                     tool_call_id
                 );
+
+                // Track if finish_task was among the results
+                let func = tool_call.get("function").unwrap_or(&tool_call);
+                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if name == TOOL_FINISH_TASK {
+                    final_completion_detected = true;
+                }
 
                 // Use 'user' role for system-level summary errors to force compliance
                 let role = if reinforced.is_error
@@ -801,6 +811,12 @@ impl WorkflowExecutor {
                 self.context
                     .add_summary(summary, self.current_step as i32)
                     .await?;
+            }
+
+            // Post-iteration state check: if finish_task was called, conclude now.
+            if final_completion_detected {
+                log::info!("WorkflowExecutor {}: Concluding session due to finish_task.", self.session_id);
+                self.update_state(WorkflowState::Completed).await?;
             }
         }
 
@@ -1308,7 +1324,9 @@ impl WorkflowExecutor {
                 });
             }
             n if n == TOOL_FINISH_TASK => {
-                self.update_state(WorkflowState::Completed).await?;
+                // Don't update state to Completed here immediately.
+                // We'll do it at the end of the run_loop iteration to ensure
+                // the assistant message and this tool result are fully saved and notified.
                 return Ok(crate::workflow::react::observation::ReinforcedResult {
                     content: "Finished".into(),
                     title: "FinishTask".to_string(),

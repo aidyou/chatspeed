@@ -18,7 +18,8 @@ pub const CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI Agen
 3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress and do not give up until all avenues are exhausted.
 4. **Structured Snapshot**: You will receive a `<state_snapshot>` in the context. Always respect the decisions and facts recorded there.
 5. **Communication**: To ask the user a question, use `ask_user`. To provide answers or status updates, speak directly in plain text and then conclude with the next logical tool call.
-6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments).
+6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments). **CRITICAL**: If your final report is long, output the full report in one turn first, and only call `finish_task` in the NEXT turn to ensure no content is truncated.
+7. **Deep Thinking**: For complex problems, logic derivation, or when a previous tool call failed, you are encouraged to use `<cs:thought>\n[Your internal reasoning, mental simulation, or analysis of the current situation]\n</cs:thought>` at the beginning of your response. Use this space to "think out loud" and decide on the best NEXT action without repeating conversational filler in the main response. The `<cs:thought>` block is a scratchpad and does not replace the formal progress tracking via `todo_*` tools.
 
 ## CONVERGENCE & EFFICIENCY RULES:
 - **Fail Fast**: If a sub-task fails twice (tool error, empty result, timeout), mark it as `data_missing` and proceed. Do NOT retry indefinitely.
@@ -126,6 +127,7 @@ impl LlmProcessor {
         let mut plain_text = String::new();
         let mut tool_calls_json = String::new();
         let mut full_reasoning = String::new();
+        let mut final_metadata = None;
 
         while let Some(chunk) = rx.recv().await {
             match chunk.r#type {
@@ -144,7 +146,7 @@ impl LlmProcessor {
                     gateway
                         .send(
                             &self.session_id,
-                            crate::workflow::react::types::GatewayPayload::Chunk {
+                            crate::workflow::react::types::GatewayPayload::ReasoningChunk {
                                 content: chunk.chunk.clone(),
                             },
                         )
@@ -155,7 +157,10 @@ impl LlmProcessor {
                     // This is the full structured JSON from OpenAIChat
                     tool_calls_json = chunk.chunk.clone();
                 }
-                MessageType::Finished => break,
+                MessageType::Finished => {
+                    final_metadata = chunk.metadata.clone();
+                    break;
+                }
                 MessageType::Error => {
                     return Err(WorkflowEngineError::General(chunk.chunk.clone()))
                 }
@@ -163,7 +168,9 @@ impl LlmProcessor {
             }
         }
 
-        // --- Post-processing: Extract <think> blocks from plain_text (if model doesn't support reasoning field) ---
+        // --- Post-processing: Extract model-native <think> blocks if present ---
+        // We keep <cs:thought> in the plain_text so it stays in the conversation history
+        // and can be styled by the frontend without triggering API field conflicts.
         if plain_text.contains("<think>") || plain_text.contains("</think>") {
             let mut extracted_reasoning = String::new();
             let mut cleaned_content = String::new();
@@ -183,7 +190,6 @@ impl LlmProcessor {
                     extracted_reasoning.push_str(reasoning.trim());
                     current_pos = absolute_end + 8;
                 } else {
-                    // Unclosed <think> tag, take the rest as reasoning
                     if !extracted_reasoning.is_empty() {
                         extracted_reasoning.push_str("\n\n");
                     }
@@ -206,11 +212,10 @@ impl LlmProcessor {
                 full_reasoning.push_str(&extracted_reasoning);
             }
 
-            // Final cleanup of the content (remove any dangling </think>)
             plain_text = cleaned_content.replace("</think>", "").trim().to_string();
         }
 
-        Ok((plain_text, tool_calls_json, full_reasoning, None))
+        Ok((plain_text, tool_calls_json, full_reasoning, final_metadata))
     }
 
     /// Normalizes history to handle irregular message sequences.
@@ -220,42 +225,10 @@ impl LlmProcessor {
         for m in raw_history {
             let role = m.role.clone();
             let mut content = m.message.clone();
-            let mut tool_calls = m
+            let tool_calls = m
                 .metadata
                 .as_ref()
                 .and_then(|meta| meta.get("tool_calls").cloned());
-
-            // Normalize Assistant JSON (even if it has prefix text)
-            if role == "assistant" {
-                let cleaned = crate::libs::util::format_json_str(&content);
-                if (cleaned.starts_with('{') || cleaned.starts_with('[')) && cleaned.contains(':') {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cleaned) {
-                        // If it's a tool call message
-                        if parsed.get("tool_calls").is_some() || parsed.get("tool").is_some() {
-                            if let Some(c) = parsed.get("content").and_then(|v| v.as_str()) {
-                                content = c.to_string();
-                            } else {
-                                // If the original content had text BEFORE the JSON, keep it
-                                let json_start = content.find('{').or_else(|| content.find('['));
-                                if let Some(idx) = json_start {
-                                    let prefix = content[..idx].trim();
-                                    if !prefix.is_empty() {
-                                        content = prefix.to_string();
-                                    } else {
-                                        content = String::new();
-                                    }
-                                }
-                            }
-
-                            if let Some(tc) = parsed.get("tool_calls").cloned() {
-                                tool_calls = Some(tc);
-                            } else if let Some(t) = parsed.get("tool").cloned() {
-                                tool_calls = Some(serde_json::json!([t]));
-                            }
-                        }
-                    }
-                }
-            }
 
             // Standardize Tool Result messages
             let tool_call_id = if role == "tool" {
@@ -293,9 +266,9 @@ impl LlmProcessor {
                 content = format!("{}\n\n{}", content, reminder);
             }
 
-            // Logic: Merge consecutive roles
+            // Logic: Merge consecutive roles (except tool results and system prompts)
             if let Some(last) = history.last_mut() {
-                if last["role"] == role && role != "tool" {
+                if last["role"] == role && role != "tool" && role != "system" {
                     let last_content = last["content"].as_str().unwrap_or("");
                     if !content.is_empty() {
                         last["content"] =
@@ -328,27 +301,7 @@ impl LlmProcessor {
             history.push(msg);
         }
 
-        // --- Post-normalization: Fix dangling assistant tool calls ---
-        let mut fixed_history = Vec::new();
-        for i in 0..history.len() {
-            let msg = &history[i];
-            if msg["role"] == "assistant" && msg.get("tool_calls").is_some() {
-                let has_results = history
-                    .get(i + 1)
-                    .map_or(false, |next| next["role"] == "tool");
-                if !has_results {
-                    let mut cleaned_msg = msg.clone();
-                    if let Some(obj) = cleaned_msg.as_object_mut() {
-                        obj.remove("tool_calls");
-                    }
-                    fixed_history.push(cleaned_msg);
-                    continue;
-                }
-            }
-            fixed_history.push(msg.clone());
-        }
-
-        fixed_history
+        history
     }
 
     /// Injects system prompt, environmental info, and reminders into history.

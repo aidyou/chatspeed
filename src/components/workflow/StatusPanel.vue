@@ -37,6 +37,27 @@
 
       <!-- Expanded content -->
       <div v-if="!isCollapsed" class="panel-body">
+        <!-- Context Usage section -->
+        <div class="section progress-section">
+          <div class="section-header">
+            <cs name="skill-piechart" size="14px" />
+            <span>{{ t('workflow.statusPanel.contextUsage') || 'Context Usage' }}</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar">
+              <div
+                class="progress-fill"
+                :style="{ width: `${contextUsagePercent}%` }"
+                :class="contextUsageStatusClass"
+              />
+            </div>
+            <span class="progress-text">{{ contextUsagePercent }}%</span>
+          </div>
+          <div class="usage-details" v-if="totalTokens > 0">
+            {{ formatNumber(totalTokens) }} / {{ formatNumber(maxContexts) }} tokens
+          </div>
+        </div>
+
         <!-- Progress section -->
         <div v-if="todoList.length > 0" class="section progress-section">
           <div class="section-header">
@@ -152,9 +173,11 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
+import { useAgentStore } from '@/stores/agent'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
+const agentStore = useAgentStore()
 
 // Panel state
 const isVisible = ref(true)
@@ -213,6 +236,45 @@ const progressStatusClass = computed(() => {
   if (progressPercent.value >= 30) return 'medium'
   return 'start'
 })
+
+// Calculate Context Usage
+const maxContexts = computed(() => {
+  const agentId = workflowStore.currentWorkflow?.agentId
+  if (!agentId) return 128000
+  const agent = agentStore.agents.find(a => a.id === agentId)
+  return agent?.maxContexts || 128000
+})
+
+const totalTokens = computed(() => {
+  // Find the most recent message with usage information
+  // In ReAct workflows, the latest input_tokens represents the current total context size
+  const lastAssistantMsg = [...messages.value]
+    .reverse()
+    .find(m => m.role === 'assistant' && m.metadata?.usage)
+  
+  if (!lastAssistantMsg) return 0
+  
+  const usage = lastAssistantMsg.metadata.usage
+  return (usage.input_tokens || 0) + (usage.output_tokens || 0)
+})
+
+const contextUsagePercent = computed(() => {
+  if (maxContexts.value <= 0) return 0
+  const percent = Math.round((totalTokens.value / maxContexts.value) * 100)
+  return Math.min(percent, 100)
+})
+
+const contextUsageStatusClass = computed(() => {
+  if (contextUsagePercent.value >= 90) return 'complete'
+  if (contextUsagePercent.value >= 70) return 'medium'
+  if (contextUsagePercent.value >= 40) return 'good'
+  return 'start'
+})
+
+const formatNumber = (num) => {
+  if (!num) return '0'
+  return new Intl.NumberFormat().format(num)
+}
 
 // Helper to remove <system-reminder>...</system-reminder> tags
 const removeSystemReminder = (content) => {
@@ -853,6 +915,14 @@ watch(() => todoList.value, (newList) => {
       min-width: 36px;
       text-align: right;
     }
+  }
+
+  .usage-details {
+    font-size: 10px;
+    color: var(--cs-text-color-placeholder);
+    margin-top: 4px;
+    text-align: right;
+    font-family: var(--cs-font-family-mono, monospace);
   }
 }
 

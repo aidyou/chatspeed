@@ -41,9 +41,11 @@ impl ToolDefinition for WebFetch {
 
     /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Extracts the full content from a single web page URL. Use this tool to understand the content of a specific link.
+        "Extracts the full content or links from a single web page URL. Use this tool to understand the content of a specific link or discover more links on a portal/list page.
 
 **Usage Guidelines:**
+-  **For News/List/Portal pages**: Use `format: \"links\"` or set `keep_link: true` to discover the content you need.
+-  **For specific articles/content**: Use `format: \"markdown\"` (default) to get the main text.
 -  Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
 -  When using information from this tool, cite the source URL in your answer.
 
@@ -71,12 +73,12 @@ impl ToolDefinition for WebFetch {
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["markdown", "text"],
-                        "description": "Format for the extracted content. Use 'markdown' to preserve structure, or 'text' for plain text. Defaults to 'markdown'."
+                        "enum": ["markdown", "text", "links"],
+                        "description": "Format for the extracted content. Use 'markdown' for articles, 'text' for plain text, or 'links' for news/list/portal pages to discover more URLs. Defaults to 'markdown'."
                     },
                     "keep_link": {
                         "type": "boolean",
-                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. Enable this when navigation through links on the page is required. Defaults to false."
+                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. MUST be set to true for news/list/portal pages if using 'markdown' format. Defaults to false."
                     },
                     "keep_image": {
                         "type": "boolean",
@@ -124,12 +126,21 @@ impl ToolDefinition for WebFetch {
         }
 
         // Get optional selector
-        let content_format = params["format"]
+        let content_format_str = params["format"]
             .as_str()
-            .unwrap_or("markdown")
+            .unwrap_or("markdown");
+            
+        let content_format: crate::scraper::types::StrapeContentFormat = content_format_str
             .to_string()
             .into();
-        let keep_link = params["keep_link"].as_bool().unwrap_or(false);
+            
+        let mut keep_link = params["keep_link"].as_bool().unwrap_or(false);
+        
+        // Force keep_link to true if format is 'links' or if we're on a portal/list page
+        if content_format_str == "links" {
+            keep_link = true;
+        }
+        
         let keep_image = params["keep_image"].as_bool().unwrap_or(false);
         let request = ScrapeRequest::Content(ContentOptions {
             url: url.to_string(),

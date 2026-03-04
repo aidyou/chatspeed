@@ -729,6 +729,8 @@ const updateAgent = () => {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })
         showMessage(t(editId.value ? 'settings.agent.updateSuccess' : 'settings.agent.addSuccess'), 'success')
         agentDialogVisible.value = false
+        // Refresh the agents list from the store to update the UI
+        await agentStore.fetchAgents()
       } catch (error) { showMessage(t('settings.agent.saveFailed'), 'error') }
     }
   })

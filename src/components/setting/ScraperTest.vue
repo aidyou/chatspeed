@@ -34,6 +34,7 @@
             <el-select v-model="format">
               <el-option label="markdown" value="markdown"></el-option>
               <el-option label="text" value="text"></el-option>
+              <el-option label="links" value="links"></el-option>
             </el-select>
           </div>
         </div>
@@ -118,12 +119,7 @@
       <div class="item" v-if="error">
         <div class="label">Scraper Error</div>
         <div class="value">
-          <el-input
-            type="textarea"
-            :rows="5"
-            v-model="error"
-            readonly
-            resize="vertical"
+          <el-input type="textarea" :rows="5" v-model="error" readonly resize="vertical"
             class="error-textarea"></el-input>
         </div>
       </div>

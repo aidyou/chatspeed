@@ -1,6 +1,9 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+
+import { sendSyncState } from '@/libs/sync';
 
 /**
  * @typedef {Object} Agent
@@ -27,6 +30,8 @@ import { ref } from 'vue';
  * @property {string} description - The description of the tool.
  * @property {string} category - The category of the tool (e.g., "Web", "FS", "System").
  */
+
+const label = getCurrentWebviewWindow().label;
 
 /**
  * Transforms agent data from the backend (snake_case, JSON strings)
@@ -97,18 +102,15 @@ const _transformToBackend = (frontendAgent) => {
     return '';
   };
 
-  // If models field isn't already a consolidated string, create it
-  let modelsJson = frontendAgent.models;
-  if (!modelsJson) {
-    modelsJson = JSON.stringify({
-      plan: frontendAgent.planModel,
-      act: frontendAgent.actModel,
-      vision: frontendAgent.visionModel,
-      coding: frontendAgent.codingModel,
-      copywriting: frontendAgent.copywritingModel,
-      browsing: frontendAgent.browsingModel
-    });
-  }
+  // Rebuild models field from individual model settings to ensure updates persist
+  const modelsJson = JSON.stringify({
+    plan: frontendAgent.planModel,
+    act: frontendAgent.actModel,
+    vision: frontendAgent.visionModel,
+    coding: frontendAgent.codingModel,
+    copywriting: frontendAgent.copywritingModel,
+    browsing: frontendAgent.browsingModel
+  });
 
   return {
     id: frontendAgent.id,
@@ -196,6 +198,7 @@ export const useAgentStore = defineStore('agent', () => {
       const command = agent.id ? 'update_agent' : 'add_agent';
       // Corrected payload key to match Rust command 'agent' parameter
       await invokeWrapper(command, { agent });
+      sendSyncState('agent', label);
       await fetchAgents();
     } catch (err) {
       _handleError(err, 'Failed to save agent');
@@ -213,6 +216,7 @@ export const useAgentStore = defineStore('agent', () => {
       if (index !== -1) {
         agents.value.splice(index, 1);
       }
+      sendSyncState('agent', label);
     } catch (err) {
       _handleError(err, `Failed to delete agent ${id}`);
     } finally {
@@ -239,6 +243,7 @@ export const useAgentStore = defineStore('agent', () => {
       const agentIds = orderedAgents.map(a => a.id);
       await invokeWrapper('update_agent_order', { agentIds });
       agents.value = [...orderedAgents];
+      sendSyncState('agent', label);
     } catch (err) {
       _handleError(err, 'Failed to update agent order');
     } finally {
@@ -256,6 +261,7 @@ export const useAgentStore = defineStore('agent', () => {
     loading,
     error,
     fetchAgents,
+    updateAgentStore: fetchAgents,
     fetchAvailableTools,
     getAgent,
     saveAgent,
