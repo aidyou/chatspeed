@@ -1,4 +1,4 @@
-# Planning Mode Implementation Design
+# Planning Mode Implementation Design (Final)
 
 ## 1. Objective
 Introduce a "Planning Mode" to ChatSpeed. In this mode, the AI first conducts research and exploration to create a detailed implementation plan. The actual execution (making changes) only begins after the user reviews and approves the plan.
@@ -18,27 +18,31 @@ To keep the logic clean and maintainable, we will split the ReAct engine into tw
 - **Input**: Original user prompt + Approved Plan + Initial Todo List.
 - **Goal**: Execute the steps defined in the plan accurately.
 
-## 3. Workflow
+## 3. Workflow & Prompting
 1. **Selection**: User toggles "Planning Mode" in the UI before starting a workflow.
-2. **Phase 1: Exploration (PlanningExecutor)**:
-   - AI uses a specialized "Planning Prompt" (adapted from Claude Code).
-   - AI performs research to understand the boundaries and requirements.
-   - AI calls a final tool `submit_plan` (or similar) to present the findings.
-3. **Phase 2: Approval**:
-   - The workflow enters a `Paused` state.
-   - UI displays the Markdown plan and the generated Todo List.
-   - User can "Approve" (start Execution) or "Provide Feedback" (re-plan).
-4. **Phase 3: Execution (ExecutionExecutor)**:
+2. **System Prompt**: Both modes use the same standard `CORE_SYSTEM_PROMPT` + `Agent.system_prompt`.
+3. **User Message Construction**: In Planning Mode, the initial user message is constructed as a combined string: 
+   `{PLANNING_MODE_PROMPT}\n\n{user_question}`.
+4. **Phase 1: Exploration (PlanningExecutor)**:
+   - AI performs research and calls `submit_plan` to present findings.
+5. **Phase 2: Approval & Recovery**:
+   - The session enters `AwaitingApproval` state (stored in DB).
+   - Both phases share the same `session_id`.
+   - If the app is restarted, the session remains in `AwaitingApproval` to ensure recovery.
+6. **Phase 3: Execution Transition (Context Pruning)**:
    - Upon approval, the `ExecutionExecutor` is instantiated.
-   - It follows the plan until `finish_task` is called.
+   - **Context Pruning**: The detailed research messages (thoughts/tool calls) from the planning phase are **pruned**.
+   - The execution context starts fresh with:
+     - The `CORE_SYSTEM_PROMPT`.
+     - The original user query.
+     - The **Final Approved Plan** (as high-priority context).
+     - The current `todo_list`.
 
-## 4. Generalized Planning Prompt
-The prompt will be adapted from the Claude Code version to handle both technical and general tasks:
-- **Phase 1: Initial Understanding**: Explore context and ask clarifying questions.
-- **Phase 2: Design**: Create a step-by-step approach.
-- **Phase 3: Review**: Ensure alignment with user intent.
-- **Phase 4: Final Plan**: Write a concise, executable plan.
-- **Phase 5: Request Approval**: Use the approval mechanism to pause and wait for the user.
+## 4. Tool Management & Safety Rules
+### A. Built-in Mandatory Tools
+The following tools are always allowed: `ask_user`, `finish_task`, and `todo_*`.
+### B. Recursion Protection
+Sub-agents **MUST NOT** have access to the `task` tool to prevent infinite recursion.
 
 ## 5. UI Requirements (`Workflow.vue`)
 - New toggle switch for Mode selection.
