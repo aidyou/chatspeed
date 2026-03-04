@@ -247,15 +247,23 @@ const maxContexts = computed(() => {
 
 const totalTokens = computed(() => {
   // Find the most recent message with usage information
-  // In ReAct workflows, the latest input_tokens represents the current total context size
   const lastAssistantMsg = [...messages.value]
     .reverse()
-    .find(m => m.role === 'assistant' && m.metadata?.usage)
+    .find(m => m.role === 'assistant' && (m.metadata?.usage || m.metadata?.tokens))
   
   if (!lastAssistantMsg) return 0
   
-  const usage = lastAssistantMsg.metadata.usage
-  return (usage.input_tokens || 0) + (usage.output_tokens || 0)
+  const meta = lastAssistantMsg.metadata
+  // 1. Try ChatMetadata style (nested tokens object)
+  if (meta.tokens) {
+    return meta.tokens.total || (meta.tokens.prompt + meta.tokens.completion) || 0
+  }
+  
+  // 2. Fallback to flattened style or legacy 'usage' wrapper
+  const usage = meta.usage || meta
+  const input = usage.input_tokens || usage.prompt_tokens || 0
+  const output = usage.output_tokens || usage.completion_tokens || 0
+  return input + output
 })
 
 const contextUsagePercent = computed(() => {
@@ -282,6 +290,32 @@ const removeSystemReminder = (content) => {
   return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim()
 }
 
+const getToolInfo = (name, metadata = {}) => {
+  const iconMap = {
+    'read_file': { icon: 'file', toolType: 'tool-file' },
+    'write_file': { icon: 'file', toolType: 'tool-file' },
+    'edit_file': { icon: 'edit', toolType: 'tool-file' },
+    'list_dir': { icon: 'folder', toolType: 'tool-file' },
+    'glob': { icon: 'search', toolType: 'tool-file' },
+    'grep': { icon: 'search', toolType: 'tool-file' },
+    'web_fetch': { icon: 'link', toolType: 'tool-network' },
+    'web_search': { icon: 'search', toolType: 'tool-network' },
+    'bash': { icon: 'terminal', toolType: 'tool-system' },
+    'todo_create': { icon: 'add', toolType: 'tool-todo' },
+    'todo_update': { icon: 'check', toolType: 'tool-todo' },
+    'todo_list': { icon: 'list', toolType: 'tool-todo' },
+    'todo_get': { icon: 'list', toolType: 'tool-todo' },
+    'finish_task': { icon: 'check-circle', toolType: 'tool-todo' }
+  }
+
+  const info = iconMap[name] || { icon: 'tool', toolType: 'tool-system' }
+  
+  return {
+    ...info,
+    shortName: metadata.title || name.replace(/_/g, ' ')
+  }
+}
+
 // Calculate recent operations
 const recentOperations = computed(() => {
   const toolMessages = messages.value
@@ -293,10 +327,9 @@ const recentOperations = computed(() => {
     const meta = m.metadata || {}
     const toolCall = meta.tool_call || {}
     
-    // Robustly extract name and arguments (handling both ReAct and OpenAI styles)
+    // Robustly extract name (handling both ReAct and OpenAI styles)
     const func = toolCall.function || toolCall
     const name = func.name || toolCall.name || 'Tool'
-    const rawArgs = func.arguments || func.input || toolCall.arguments || {}
 
     let status = 'success'
     if (m.isError || meta.is_error) {
@@ -305,7 +338,7 @@ const recentOperations = computed(() => {
       status = 'running'
     }
 
-    const { icon, toolType, shortName } = getToolInfo(name, rawArgs)
+    const { icon, toolType, shortName } = getToolInfo(name, meta)
 
     return {
       name: shortName,
@@ -322,143 +355,6 @@ const recentOperations = computed(() => {
 const hasData = computed(() => {
   return todoList.value.length > 0 || recentOperations.value.length > 0
 })
-
-// Helper functions for text truncation (UTF-8 safe)
-const truncateUrl = (url, maxLen = 30) => {
-  if (!url || url.length <= maxLen) return url
-  const keep = Math.floor((maxLen - 3) / 2)
-  return url.slice(0, keep) + '...' + url.slice(-keep)
-}
-
-// UTF-8 safe truncation using Array.from
-const truncateText = (text, maxLen = 20) => {
-  if (!text) return ''
-  const chars = Array.from(text)
-  if (chars.length <= maxLen) return text
-  return chars.slice(0, maxLen - 3).join('') + '...'
-}
-
-const truncatePath = (path, maxLen = 25) => {
-  if (!path || path.length <= maxLen) return path
-  const parts = path.split('/')
-  const fileName = parts.pop()
-  if (fileName && fileName.length > maxLen - 8) {
-    return '.../' + truncateText(fileName, maxLen - 4)
-  }
-  return '.../' + fileName
-}
-
-const getToolInfo = (name, rawArgs) => {
-  // Parse JSON if it's a string (OpenAI protocol uses JSON strings for arguments)
-  let args = rawArgs
-  if (typeof rawArgs === 'string') {
-    try {
-      args = JSON.parse(rawArgs)
-    } catch (e) {
-      args = {}
-    }
-  }
-
-  const formatters = {
-    'read_file': () => {
-      const path = truncatePath(args.file_path || args.path || '')
-      const limit = args.limit
-      const offset = args.offset
-      let suffix = ''
-      if (limit && offset !== undefined) suffix = ` L${limit}-${offset}`
-      else if (limit) suffix = ` L${limit}`
-      else if (offset !== undefined) suffix = ` @${offset}`
-      return { icon: 'file', toolType: 'tool-file', shortName: `Read ${path}${suffix}` }
-    },
-
-    'write_file': () => ({
-      icon: 'file',
-      toolType: 'tool-file',
-      shortName: `Write ${truncatePath(args.file_path || args.path || '')}`
-    }),
-
-    'edit_file': () => ({
-      icon: 'edit',
-      toolType: 'tool-file',
-      shortName: `Edit ${truncatePath(args.file_path || args.path || '')}`
-    }),
-
-    'list_dir': () => ({
-      icon: 'folder',
-      toolType: 'tool-file',
-      shortName: `List ${truncatePath(args.path || args.dir || '.', 20)}`
-    }),
-
-    'glob': () => ({
-      icon: 'search',
-      toolType: 'tool-file',
-      shortName: `Glob ${truncateText(args.pattern || args.glob || '', 20)}`
-    }),
-
-    'grep': () => ({
-      icon: 'search',
-      toolType: 'tool-file',
-      shortName: `Grep "${truncateText(args.pattern || args.query || '', 15)}"`
-    }),
-
-    'web_fetch': () => ({
-      icon: 'link',
-      toolType: 'tool-network',
-      shortName: `Fetch ${truncateUrl(args.url, 30)}`
-    }),
-
-    'web_search': () => {
-      const query = args.query || ''
-      const display = `"${truncateText(query, 20)}"`
-      const numResults = args.num_results
-      if (numResults !== undefined) {
-        return { icon: 'search', toolType: 'tool-network', shortName: `Search ${display} Number:${numResults}` }
-      }
-      return { icon: 'search', toolType: 'tool-network', shortName: `Search ${display}` }
-    },
-
-    'bash': () => ({
-      icon: 'terminal',
-      toolType: 'tool-system',
-      shortName: `Bash: ${truncateText(args.command || '', 25)}`
-    }),
-
-    'todo_create': () => {
-      const subject = args.subject || args.title || ''
-      const tasks = args.tasks
-      if (tasks && Array.isArray(tasks)) {
-        return { icon: 'add', toolType: 'tool-todo', shortName: `${t('workflow.todo.createBatch')} (${tasks.length})` }
-      }
-      return { icon: 'add', toolType: 'tool-todo', shortName: `${t('workflow.todo.create')}: ${truncateText(subject, 20)}` }
-    },
-
-    'todo_update': () => {
-      const subject = args.subject || args.title || ''
-      const status = args.status || ''
-      let statusText = ''
-      if (status === 'completed') statusText = t('workflow.todo.statusCompleted')
-      else if (status === 'in_progress') statusText = t('workflow.todo.statusInProgress')
-      else if (status === 'pending') statusText = t('workflow.todo.statusPending')
-      else statusText = status
-
-      if (subject && statusText) {
-        return { icon: 'check', toolType: 'tool-todo', shortName: `${t('workflow.todo.update')}: ${truncateText(subject, 15)} → ${statusText}` }
-      }
-      return { icon: 'check', toolType: 'tool-todo', shortName: t('workflow.todo.update') }
-    },
-
-    'todo_list': () => ({ icon: 'list', toolType: 'tool-todo', shortName: t('workflow.todo.list') }),
-
-    'todo_get': () => ({ icon: 'list', toolType: 'tool-todo', shortName: t('workflow.todo.view') }),
-
-    'finish_task': () => ({ icon: 'check-circle', toolType: 'tool-todo', shortName: t('workflow.finishTask') })
-  }
-
-  const formatter = formatters[name]
-  if (formatter) return formatter()
-
-  return { icon: 'tool', toolType: 'tool-system', shortName: name }
-}
 
 const getStatusIcon = (status) => {
   switch (status) {

@@ -18,7 +18,7 @@ pub const CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI Agen
 3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress and do not give up until all avenues are exhausted.
 4. **Structured Snapshot**: You will receive a `<state_snapshot>` in the context. Always respect the decisions and facts recorded there.
 5. **Communication**: To ask the user a question, use `ask_user`. To provide answers or status updates, speak directly in plain text and then conclude with the next logical tool call.
-6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments). **CRITICAL**: If your final report is long, output the full report in one turn first, and only call `finish_task` in the NEXT turn to ensure no content is truncated.
+6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments). **CRITICAL**: The `finish_task` tool call is the ONLY way to end the workflow. Once you have provided your final findings, call it immediately in the same turn.
 7. **Deep Thinking**: For complex problems, logic derivation, or when a previous tool call failed, you are encouraged to use `<cs:thought>\n[Your internal reasoning, mental simulation, or analysis of the current situation]\n</cs:thought>` at the beginning of your response. Use this space to "think out loud" and decide on the best NEXT action without repeating conversational filler in the main response. The `<cs:thought>` block is a scratchpad and does not replace the formal progress tracking via `todo_*` tools.
 
 ## CONVERGENCE & EFFICIENCY RULES:
@@ -26,7 +26,7 @@ pub const CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI Agen
 - **No Repetition**: Never call the same tool with identical arguments more than twice. Always change keywords, parameters, or approach before retrying.
 - **Web Research Discipline**: For each research step: search → analyze results → fetch 1–3 best URLs → extract key data → move on. NEVER fetch more than 3 URLs per sub-task.
 - **Convergence Awareness**: When data is unavailable, note the gap and continue. In the final report, explicitly state what data was missing and why.
-- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, provide a comprehensive final report in plain text and call `finish_task` immediately."#;
+- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, provide a comprehensive final report in plain text and call `finish_task` IMMEDIATELY, unless the user has requested further actions or asked follow-up questions. Do not look for more work on your own."#;
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -105,7 +105,99 @@ impl LlmProcessor {
         );
 
         // 5. Perform the LLM Call
-        let (tx, mut rx) = mpsc::channel(100);
+        let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
+
+        let session_id_for_rx = self.session_id.clone();
+        let gateway_for_rx = gateway.clone();
+
+        // Drain the channel in a separate task to avoid blocking the chat loop.
+        // This ensures chunks are forwarded to the gateway in real-time.
+        let rx_processor = tokio::spawn(async move {
+            let mut plain_text = String::new();
+            let mut tool_calls_json = String::new();
+            let mut full_reasoning = String::new();
+            let mut final_metadata = None;
+
+            while let Some(chunk) = rx.recv().await {
+                match chunk.r#type {
+                    MessageType::Text => {
+                        gateway_for_rx
+                            .send(
+                                &session_id_for_rx,
+                                crate::workflow::react::types::GatewayPayload::Chunk {
+                                    content: chunk.chunk.clone(),
+                                },
+                            )
+                            .await?;
+                        plain_text.push_str(&chunk.chunk);
+                    }
+                    MessageType::Reasoning => {
+                        gateway_for_rx
+                            .send(
+                                &session_id_for_rx,
+                                crate::workflow::react::types::GatewayPayload::ReasoningChunk {
+                                    content: chunk.chunk.clone(),
+                                },
+                            )
+                            .await?;
+                        full_reasoning.push_str(&chunk.chunk);
+                    }
+                    MessageType::ToolCalls => {
+                        // Standardize tool call IDs using our own unique generator
+                        let mut tool_calls_val: serde_json::Value =
+                            serde_json::from_str(&chunk.chunk).unwrap_or(serde_json::json!([]));
+
+                        // Case 1: OpenAI style array [ {id, function: {name, arguments}}, ... ]
+                        if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
+                            for tool_call in tool_calls_array {
+                                if let Some(tool_call_obj) = tool_call.as_object_mut() {
+                                    tool_call_obj.insert(
+                                        "id".to_string(),
+                                        serde_json::json!(crate::ccproxy::get_tool_id()),
+                                    );
+                                }
+                            }
+                        }
+                        // Case 2: ReAct style object { "tool": { "name", "arguments", ... } }
+                        else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
+                            if let Some(tool_obj) = tool_wrapper.as_object_mut() {
+                                tool_obj.insert(
+                                    "id".to_string(),
+                                    serde_json::json!(crate::ccproxy::get_tool_id()),
+                                );
+                            }
+                        }
+                        // Case 3: Single tool object { "name", "arguments", ... }
+                        else if tool_calls_val.is_object() && tool_calls_val.get("name").is_some() {
+                            if let Some(tool_obj) = tool_calls_val.as_object_mut() {
+                                tool_obj.insert(
+                                    "id".to_string(),
+                                    serde_json::json!(crate::ccproxy::get_tool_id()),
+                                );
+                            }
+                        }
+
+                        tool_calls_json =
+                            serde_json::to_string(&tool_calls_val).unwrap_or(chunk.chunk.clone());
+                    }
+                    MessageType::Finished => {
+                        final_metadata = chunk.metadata.clone();
+                    }
+                    MessageType::Error => {
+                        return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>((
+                plain_text,
+                tool_calls_json,
+                full_reasoning,
+                final_metadata,
+            ))
+        });
+
+        let tx_for_chat = tx.clone();
         chat_interface
             .chat(
                 self.active_provider_id,
@@ -118,55 +210,17 @@ impl LlmProcessor {
                     ..Default::default()
                 }),
                 move |chunk| {
-                    let _ = tx.try_send(chunk);
+                    let _ = tx_for_chat.try_send(chunk);
                 },
             )
             .await
             .map_err(WorkflowEngineError::Ai)?;
 
-        let mut plain_text = String::new();
-        let mut tool_calls_json = String::new();
-        let mut full_reasoning = String::new();
-        let mut final_metadata = None;
-
-        while let Some(chunk) = rx.recv().await {
-            match chunk.r#type {
-                MessageType::Text => {
-                    gateway
-                        .send(
-                            &self.session_id,
-                            crate::workflow::react::types::GatewayPayload::Chunk {
-                                content: chunk.chunk.clone(),
-                            },
-                        )
-                        .await?;
-                    plain_text.push_str(&chunk.chunk);
-                }
-                MessageType::Reasoning => {
-                    gateway
-                        .send(
-                            &self.session_id,
-                            crate::workflow::react::types::GatewayPayload::ReasoningChunk {
-                                content: chunk.chunk.clone(),
-                            },
-                        )
-                        .await?;
-                    full_reasoning.push_str(&chunk.chunk);
-                }
-                MessageType::ToolCalls => {
-                    // This is the full structured JSON from OpenAIChat
-                    tool_calls_json = chunk.chunk.clone();
-                }
-                MessageType::Finished => {
-                    final_metadata = chunk.metadata.clone();
-                    break;
-                }
-                MessageType::Error => {
-                    return Err(WorkflowEngineError::General(chunk.chunk.clone()))
-                }
-                _ => {}
-            }
-        }
+        // Close the local channel sender to ensure the receiver task finishes
+        drop(tx);
+        let (mut plain_text, tool_calls_json, mut full_reasoning, final_metadata) = rx_processor
+            .await
+            .map_err(|e| WorkflowEngineError::General(format!("RX task failed: {}", e)))??;
 
         // --- Post-processing: Extract model-native <think> blocks if present ---
         // We keep <cs:thought> in the plain_text so it stays in the conversation history

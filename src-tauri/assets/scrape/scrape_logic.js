@@ -50,10 +50,13 @@ function sendScrapeResult(data) {
     return urls.some(url => window.location.href.startsWith(url))
   }
 
-  const isFinalHttp = () =>
-    !!window.location.href &&
-    (window.location.href.startsWith('http://') || window.location.href.startsWith('https://')) &&
-    !isRedirectUrl()
+  const isFinalHttp = () => {
+    const href = window.location.href
+    const isHttp = !!href && (href.startsWith('http://') || href.startsWith('https://'))
+    const isIndex = href.includes('index.html')
+    // If we are on an actual website and not redirecting or still on internal index
+    return isHttp && !isIndex && !isRedirectUrl()
+  }
 
   // Helper function to wait for the Tauri API to be available
   function waitForTauriAPI() {
@@ -270,11 +273,11 @@ function sendScrapeResult(data) {
   function scrapeLinks() {
     const links = []
     const seen = new Set()
-    
+
     // Select links while avoiding noise containers (header, footer, nav)
     // We target links that are NOT children of these semantic noise tags
     const allLinks = document.querySelectorAll('a')
-    
+
     allLinks.forEach(a => {
       // Check if the link is inside a noise container
       if (a.closest('header, footer, nav, [role="navigation"], .footer, #footer, .header, #header, .nav, #nav')) {
@@ -620,25 +623,35 @@ function sendScrapeResult(data) {
       try {
         const event = await waitForTauriAPI()
         if (!event) {
-          logger.warn('Tauri API unavailable, unable to send event')
+          console.warn('Scraper: Tauri API unavailable, script might be blocked by CSP')
           return
         }
 
-        const maxTry = 3
+        const maxTry = 10
         let tryCount = 0
-        while (!isFinalHttp() && tryCount < maxTry) {
-          tryCount++
-          await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** tryCount))
+
+        const checkAndEmit = () => {
+          const href = window.location.href
+          // Emit if URL is a real website OR if DOM is already interactive/complete
+          if (isFinalHttp() || (document.readyState !== 'loading' && href.length > 15 && !href.includes('index.html'))) {
+            logger.info('Scraper: emit page loaded, url:', href, 'readyState:', document.readyState)
+            event.emit(`page_loaded_${windowLabel}`)
+            return true
+          }
+          return false
         }
 
-        if (isFinalHttp()) {
-          logger.info('emit page loaded, url:', window.location.href)
-          event.emit(`page_loaded_${windowLabel}`)
-        } else {
-          logger.warn('Failed to get a valid URL after multiple retries.')
-        }
+        if (checkAndEmit()) return
+
+        const interval = setInterval(() => {
+          tryCount++
+          if (checkAndEmit() || tryCount >= maxTry) {
+            clearInterval(interval)
+          }
+        }, 500)
+
       } catch (error) {
-        logger.error('Error during page loaded event handling:', error)
+        console.error('Scraper: Error during page loaded event handling:', error)
       }
     })()
 })()

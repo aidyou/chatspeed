@@ -1,7 +1,7 @@
 use crate::tools::{
-    ToolError, TOOL_BASH, TOOL_EDIT_FILE, TOOL_GLOB, TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE,
-    TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH,
-    TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    ToolError, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_GLOB, TOOL_GREP, TOOL_LIST_DIR,
+    TOOL_READ_FILE, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE,
+    TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use rust_i18n::t;
 use serde_json::Value;
@@ -58,20 +58,21 @@ impl ObservationReinforcer {
 
         match result {
             Ok(val) => {
-                let mut raw_res = if let Some(content) = val.get("content").and_then(|v| v.as_str())
-                {
-                    content.to_string()
-                } else if let Some(structured) = val.get("structured_content") {
-                    if structured.is_null() {
-                        "".to_string()
+                let raw_res_for_summary =
+                    if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                        content.to_string()
+                    } else if let Some(structured) = val.get("structured_content") {
+                        serde_json::to_string(structured).unwrap_or_default()
                     } else {
-                        serde_json::to_string_pretty(structured).unwrap_or_default()
-                    }
-                } else {
-                    serde_json::to_string(val).unwrap_or_default()
-                };
+                        serde_json::to_string(val).unwrap_or_default()
+                    };
 
-                // --- Custom Logic for TODO tools ---
+                let title = Self::generate_title(tool_name, &args);
+                let summary = Self::generate_summary(tool_name, &raw_res_for_summary, &args);
+
+                let mut raw_res = raw_res_for_summary;
+
+                // --- Custom Logic for TODO tools (Formatting for AI) ---
                 if tool_name == TOOL_TODO_CREATE {
                     if let Some(todos) = extra_context.and_then(|v| v.as_array().cloned()) {
                         let mut list_str = String::from("Task created. Current todo list:\n");
@@ -92,7 +93,10 @@ impl ObservationReinforcer {
 
                         if let Some(next) = next_pending {
                             let subject = next["subject"].as_str().unwrap_or("Untitled");
-                            list_str.push_str(&format!("Next pending task: {}\n", subject));
+                            list_str.push_str(&format!(
+                                "<system-reminder>Next pending task: {}\n</system-reminder>",
+                                subject
+                            ));
                         } else {
                             // Treat completed, done, data_missing, and failed as terminal states
                             let all_terminal = todos.iter().all(|t| {
@@ -102,14 +106,14 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.\n");
+                                list_str.push_str("<system-reminder>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.</system-reminder>\n");
                             }
                         }
                         raw_res = list_str;
                     }
                 }
 
-                // --- Structured formatting for web_search results ---
+                // --- Structured formatting for web_search results (Formatting for AI) ---
                 if tool_name == TOOL_WEB_SEARCH {
                     if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&raw_res) {
                         if !arr.is_empty() {
@@ -132,8 +136,6 @@ impl ObservationReinforcer {
                     }
                 }
 
-                let title = Self::generate_title(tool_name, &args);
-                let summary = Self::generate_summary(tool_name, &raw_res);
                 let display_type = if tool_name == TOOL_EDIT_FILE {
                     "diff"
                 } else {
@@ -205,52 +207,151 @@ impl ObservationReinforcer {
     }
 
     fn generate_title(tool_name: &str, args: &Value) -> String {
-        let name = match tool_name {
-            TOOL_READ_FILE => "Read",
-            TOOL_WRITE_FILE => "Write",
-            TOOL_EDIT_FILE => "Edit",
-            TOOL_LIST_DIR => "List",
-            TOOL_GREP => "Grep",
-            TOOL_GLOB => "Glob",
-            TOOL_WEB_SEARCH => "Search",
-            TOOL_WEB_FETCH => "Fetch",
-            TOOL_BASH => "Bash",
-            TOOL_TODO_CREATE => "TodoCreate",
-            TOOL_TODO_UPDATE => "TodoUpdate",
-            TOOL_TODO_LIST => "TodoList",
-            TOOL_TODO_GET => "TodoGet",
-            _ => tool_name,
+        let truncate = |s: &str, len: usize| -> String {
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() <= len {
+                s.to_string()
+            } else {
+                let truncated: String = chars.iter().take(len - 3).collect();
+                format!("{}...", truncated)
+            }
         };
 
-        let mut parts = Vec::new();
-        if let Some(obj) = args.as_object() {
-            for (k, v) in obj {
-                // Skip internal or too technical keys if necessary, or show all
-                let val_str = match v {
-                    Value::String(s) => match s.char_indices().nth(40) {
-                        Some(_) => {
-                            let truncated = match s.char_indices().nth(37) {
-                                Some((idx, _)) => &s[..idx],
-                                None => s,
-                            };
-                            format!("\"{}...\"", truncated)
-                        }
-                        None => format!("\"{}\"", s),
-                    },
-                    _ => v.to_string(),
-                };
-                parts.push(format!("{}: {}", k, val_str));
+        let get_domain = |url: &str| -> String {
+            if let Some(host) = url.split("://").nth(1).and_then(|s| s.split('/').next()) {
+                host.to_string()
+            } else {
+                url.to_string()
             }
-        }
+        };
 
-        if parts.is_empty() {
-            name.to_string()
-        } else {
-            format!("{}({})", name, parts.join(", "))
+        match tool_name {
+            TOOL_READ_FILE => {
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("");
+                let limit = args["limit"].as_i64();
+                let offset = args["offset"].as_i64();
+                let mut suffix = String::new();
+                if let (Some(l), Some(o)) = (limit, offset) {
+                    suffix = format!(" L{}-{}", l, o);
+                } else if let Some(l) = limit {
+                    suffix = format!(" L{}", l);
+                } else if let Some(o) = offset {
+                    suffix = format!(" @{}", o);
+                }
+                format!("Read {}{}", path, suffix)
+            }
+            TOOL_WRITE_FILE => {
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("");
+                format!("Write {}", path)
+            }
+            TOOL_EDIT_FILE => {
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("");
+                format!("Edit {}", path)
+            }
+            TOOL_LIST_DIR => {
+                let path = args["path"]
+                    .as_str()
+                    .or(args["dir"].as_str())
+                    .unwrap_or(".");
+                format!("List {}", path)
+            }
+            TOOL_GLOB => {
+                let pattern = args["pattern"]
+                    .as_str()
+                    .or(args["glob"].as_str())
+                    .unwrap_or("");
+                format!("Glob {}", truncate(pattern, 30))
+            }
+            TOOL_GREP => {
+                let pattern = args["pattern"]
+                    .as_str()
+                    .or(args["query"].as_str())
+                    .unwrap_or("");
+                let path = args["path"].as_str().unwrap_or("");
+                if !path.is_empty() {
+                    format!(
+                        "Grep \"{}\" in {}",
+                        truncate(pattern, 15),
+                        truncate(path, 15)
+                    )
+                } else {
+                    format!("Grep \"{}\"", truncate(pattern, 25))
+                }
+            }
+            TOOL_WEB_FETCH => {
+                let url = args["url"].as_str().unwrap_or("");
+                format!("Fetch {}", get_domain(url))
+            }
+            TOOL_WEB_SEARCH => {
+                let query = args["query"].as_str().unwrap_or("");
+                let num_results = args["num_results"].as_i64();
+                if let Some(n) = num_results {
+                    format!("Search \"{}\" Number:{}", truncate(query, 30), n)
+                } else {
+                    format!("Search \"{}\"", truncate(query, 30))
+                }
+            }
+            TOOL_BASH => {
+                let cmd = args["command"].as_str().unwrap_or("");
+                format!("Bash {}", truncate(cmd, 30))
+            }
+            TOOL_TODO_CREATE => {
+                if let Some(tasks) = args["tasks"].as_array() {
+                    return format!(
+                        "{} ({} items)",
+                        t!("workflow.todo.createBatch"),
+                        tasks.len()
+                    );
+                }
+                let subject = args["subject"]
+                    .as_str()
+                    .or(args["title"].as_str())
+                    .unwrap_or("Untitled");
+                format!("{}: {}", t!("workflow.todo.create"), truncate(subject, 25))
+            }
+            TOOL_TODO_UPDATE => {
+                let subject = args["subject"]
+                    .as_str()
+                    .or(args["title"].as_str())
+                    .unwrap_or("Untitled");
+                let status_raw = args["status"].as_str().unwrap_or("updated");
+                let status = match status_raw {
+                    "completed" | "done" => t!("workflow.todo.statusCompleted"),
+                    "in_progress" => t!("workflow.todo.statusInProgress"),
+                    "pending" => t!("workflow.todo.statusPending"),
+                    _ => status_raw.into(),
+                };
+                format!("Update {} to {}", truncate(subject, 20), status)
+            }
+            TOOL_TODO_LIST => t!("workflow.todo.list").to_string(),
+            TOOL_TODO_GET => t!("workflow.todo.view").to_string(),
+            TOOL_FINISH_TASK => t!("workflow.finishTask").to_string(),
+            _ => {
+                let name = tool_name.replace('_', " ");
+                name.split_whitespace()
+                    .map(|w| {
+                        let mut c = w.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
         }
     }
 
-    fn generate_summary(tool_name: &str, content: &str) -> String {
+    fn generate_summary(tool_name: &str, content: &str, args: &Value) -> String {
         match tool_name {
             TOOL_READ_FILE => {
                 let lines = content.lines().count();
@@ -275,7 +376,14 @@ impl ObservationReinforcer {
                 }
             }
             TOOL_WEB_FETCH => {
-                format!("Fetched {} chars", content.len())
+                let url = args["url"].as_str().unwrap_or("");
+                let domain =
+                    if let Some(host) = url.split("://").nth(1).and_then(|s| s.split('/').next()) {
+                        host
+                    } else {
+                        url
+                    };
+                format!("Fetched {} chars from {}", content.len(), domain)
             }
             TOOL_EDIT_FILE => "Applied changes".to_string(),
             TOOL_WRITE_FILE => "File written".to_string(),
@@ -300,25 +408,7 @@ impl ObservationReinforcer {
                     t!("workflow.summary.todo_create", subject = "").to_string()
                 }
             }
-            TOOL_TODO_UPDATE => {
-                if let Ok(val) = serde_json::from_str::<Value>(content) {
-                    let subject = val["subject"].as_str().unwrap_or("");
-                    let status_raw = val["status"].as_str().unwrap_or("todo");
-                    let status = if status_raw == "done" {
-                        t!("workflow.summary.todo_status_done")
-                    } else {
-                        t!("workflow.summary.todo_status_todo")
-                    };
-                    t!(
-                        "workflow.summary.todo_update",
-                        subject = subject,
-                        status = status
-                    )
-                    .to_string()
-                } else {
-                    "Todo updated".to_string()
-                }
-            }
+            TOOL_TODO_UPDATE => "Todo updated".to_string(),
             TOOL_TODO_LIST | TOOL_TODO_GET => {
                 if let Ok(val) = serde_json::from_str::<Value>(content) {
                     let items = if val.is_array() {
@@ -331,7 +421,11 @@ impl ObservationReinforcer {
                     for item in items {
                         let subject = item["subject"].as_str().unwrap_or("Unknown");
                         let status = item["status"].as_str().unwrap_or("todo");
-                        let box_char = if status == "done" { "✓" } else { "☐" };
+                        let box_char = if status == "done" || status == "completed" {
+                            "✓"
+                        } else {
+                            "☐"
+                        };
                         if !summary.is_empty() {
                             summary.push('\n');
                         }

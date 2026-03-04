@@ -73,7 +73,7 @@
                 </div>
                 <pre class="simple-text">{{ message.message }}</pre>
               </div>
-              <div v-else class="ai-content">
+              <div v-else class="ai-content chat">
                 <!-- CLI Style Tool Call (Results) -->
                 <div v-if="message.role === 'tool'" class="cli-tool-call"
                   :class="[message.toolDisplay.toolType || 'tool-system', message.toolDisplay.isError ? 'status-error' : 'status-success']">
@@ -88,7 +88,8 @@
                     <span class="expand-hint" v-if="!isMessageExpanded(message)">(click to expand)</span>
                   </div>
                   <div v-if="isMessageExpanded(message)" class="tool-detail">
-                    <markdown v-if="message.toolDisplay.displayType === 'diff'" :content="removeSystemReminder(message.message)" />
+                    <markdown v-if="message.toolDisplay.displayType === 'diff'"
+                      :content="removeSystemReminder(message.message)" />
                     <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
                   </div>
                 </div>
@@ -96,8 +97,28 @@
                 <!-- Regular Assistant Content -->
                 <div v-else>
                   <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
-                  <div class="thought-content" v-if="message.reasoning || message.stepType === 'Think'">
-                    {{ message.reasoning || message.message }}
+                  <div v-if="message.reasoning || message.stepType === 'Think'" class="reasoning-container">
+                    <div class="reasoning-header" @click="toggleReasoningExpand(message.displayId)">
+                      <cs name="reasoning" size="14px" class="reasoning-icon"
+                        :class="{ rotating: isRunning && !getParsedMessage(message).content && (message.metadata?.tool_calls?.length || 0) === 0 && !isReasoningExpanded(message.displayId) && message === lastAssistantMessage }" />
+                      <span class="reasoning-text" :class="{ expanded: isReasoningExpanded(message.displayId) }">
+                        <template v-if="isReasoningExpanded(message.displayId)">
+                          {{ t('workflow.thinkingExpanded') || 'Thinking Process' }}
+                        </template>
+                        <template v-else-if="isRunning && !getParsedMessage(message).content && (message.metadata?.tool_calls?.length || 0) === 0 && message === lastAssistantMessage">
+                          {{ getReasoningPreview(message.reasoning || message.message) }}
+                        </template>
+                        <template v-else>
+                          {{ t('workflow.thoughtCompleted') || 'Thought Complete' }}
+                        </template>
+                      </span>
+                      <span class="reasoning-toggle">
+                        {{ isReasoningExpanded(message.displayId) ? '▲' : '▼' }}
+                      </span>
+                    </div>
+                    <div v-if="isReasoningExpanded(message.displayId)" class="reasoning-content">
+                      {{ message.reasoning || message.message }}
+                    </div>
                   </div>
                   <markdown v-if="getParsedMessage(message).content" :content="getParsedMessage(message).content" />
 
@@ -131,9 +152,14 @@
 
           <div v-if="isChatting && (chatState.content || chatState.reasoning)" class="message assistant chatting">
             <div class="content-container">
-              <div class="ai-content">
-                <div class="thought-content" v-if="chatState.reasoning">
-                  {{ chatState.reasoning }}
+              <div class="ai-content chat">
+                <div v-if="chatState.reasoning" class="reasoning-container">
+                  <div class="reasoning-header">
+                    <cs name="reasoning" size="14px" class="reasoning-icon" :class="{ rotating: !chatState.content }" />
+                    <span class="reasoning-text">
+                      {{ chatState.content ? (t('workflow.thoughtCompleted') || 'Thought Complete') : getReasoningPreview(chatState.reasoning) }}
+                    </span>
+                  </div>
                 </div>
                 <markdown v-if="chatState.content" :content="chatState.content" />
               </div>
@@ -438,6 +464,39 @@ const isMessageExpanded = (message) => {
   return expandedMessages.value.has(message.displayId)
 }
 
+// Reasoning expansion state
+const expandedReasonings = ref(new Set())
+const toggleReasoningExpand = (id) => {
+  if (expandedReasonings.value.has(id)) {
+    expandedReasonings.value.delete(id)
+  } else {
+    expandedReasonings.value.add(id)
+  }
+}
+const isReasoningExpanded = (id) => expandedReasonings.value.has(id)
+
+// Get last sentence from text (split by punctuation)
+const getLastSentence = (text) => {
+  if (!text) return ''
+  const sentences = text.split(/(?<=[。！？.!?])\s*/).filter(s => s.trim())
+  return sentences[sentences.length - 1] || text.slice(-50)
+}
+
+// Get preview text for reasoning (last sentence with max length)
+const getReasoningPreview = (text, maxLen = 50) => {
+  if (!text) return t('workflow.thinking') || 'Thinking...'
+  const last = getLastSentence(text)
+  if (last.length <= maxLen) return last
+  return last.slice(0, maxLen) + '...'
+}
+
+// Compute last assistant message for streaming state detection
+const lastAssistantMessage = computed(() => {
+  return enhancedMessages.value
+    .filter(m => m.role === 'assistant')
+    .pop()
+})
+
 // Helper functions for truncating text (UTF-8 safe)
 const truncateUrl = (url, maxLen = 40) => {
   if (!url || url.length <= maxLen) return url
@@ -472,6 +531,17 @@ const truncatePath = (path, maxLen = 30) => {
 // Format tool title with icon, tool type class, and display text
 // Returns action (verb) and target separately for proper display in template
 const formatToolTitle = (name, args) => {
+  // Helper to extract domain from URL
+  const getDomain = (url) => {
+    if (!url) return ''
+    try {
+      const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`)
+      return urlObj.hostname
+    } catch (e) {
+      return url
+    }
+  }
+
   const toolFormatters = {
     'read_file': (args) => {
       const path = args.file_path || args.path || ''
@@ -517,7 +587,7 @@ const formatToolTitle = (name, args) => {
 
     'web_fetch': (args) => {
       const url = args.url || ''
-      return { icon: 'link', toolType: 'tool-network', action: 'Fetch', target: truncateUrl(url, 40) }
+      return { icon: 'link', toolType: 'tool-network', action: 'Fetch', target: getDomain(url) }
     },
 
     'web_search': (args) => {
@@ -560,7 +630,7 @@ const formatToolTitle = (name, args) => {
       else statusText = status
 
       if (subject && statusText) {
-        return { icon: 'check', toolType: 'tool-todo', action: t('workflow.todo.update'), target: `${truncateText(subject, 20)} → ${statusText}` }
+        return { icon: 'check', toolType: 'tool-todo', action: `Update ${truncateText(subject, 20)} to ${statusText}`, target: '' }
       }
       return { icon: 'check', toolType: 'tool-todo', action: t('workflow.todo.update'), target: '' }
     },
@@ -606,19 +676,28 @@ const getToolDisplayInfo = (message) => {
   const { icon, toolType, action, target } = formatToolTitle(name, args)
 
   // Filter out internal system reminders from ALL user-facing strings
-  const cleanTitle = removeSystemReminder(meta.title || (target ? `${action} ${target}` : action))
-  const cleanSummary = removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...'))
+  let cleanSummary = removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...'))
   const cleanTarget = removeSystemReminder(target)
 
+  // UI Preference: Use backend-generated descriptive titles as the main 'action' if available
+  let displayAction = action
+  let displayTarget = cleanTarget
+
+  if (meta.title && meta.title.includes(' ')) {
+    // If backend provided a descriptive title (like "Update xxx to done"), use it as the action
+    displayAction = meta.title
+    displayTarget = '' // Target is already in the title
+  }
+
   return {
-    title: cleanTitle,
+    title: removeSystemReminder(meta.title || (target ? `${action} ${target}` : action)),
     summary: cleanSummary,
     isError: isError,
     displayType: meta.display_type || 'text',
     icon,
     toolType,
-    action,
-    target: cleanTarget
+    action: displayAction,
+    target: displayTarget
   }
 }
 
@@ -725,6 +804,7 @@ const enhancedMessages = computed(() => {
   })
 
 })
+
 // Get todo list from the store
 const todoList = computed(() => workflowStore.todoList)
 
@@ -822,13 +902,14 @@ const getParsedMessage = (message) => {
   }
 }
 
-const scrollToBottom = () => {
+const scrollToBottom = (force = false) => {
   if (messagesRef.value) {
     const el = messagesRef.value
-    // Check if user is near bottom (with 100px threshold)
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+    // Increase threshold to 300px to handle tall tool call blocks
+    // If 'force' is true, we scroll regardless of current position
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 300
 
-    if (isAtBottom) {
+    if (force || isAtBottom) {
       nextTick(() => {
         el.scrollTop = el.scrollHeight
       })
@@ -867,6 +948,9 @@ onMounted(async () => {
 
   windowStore.initWorkflowWindowAlwaysOnTop()
   window.addEventListener('keydown', onGlobalKeyDown)
+  
+  // Initial scroll
+  nextTick(() => scrollToBottom(true))
 })
 
 onBeforeUnmount(() => {
@@ -911,11 +995,11 @@ const setupWorkflowEvents = async sessionId => {
       chatState.value.content += payload.content
       chatState.value.blocks = chattingParser.process(payload.content)
 
-      nextTick(() => scrollToBottom())
+      scrollToBottom()
     } else if (payload.type === 'reasoning_chunk') {
       // Thinking chunk
       chatState.value.reasoning += payload.content
-      nextTick(() => scrollToBottom())
+      scrollToBottom()
     } else if (payload.type === 'message') {
       // ReAct engine sends incremental messages or chunks
       workflowStore.addMessage({
@@ -934,6 +1018,9 @@ const setupWorkflowEvents = async sessionId => {
       chattingParser.reset()
       chatState.value.content = ''
       chatState.value.blocks = []
+      
+      // Force scroll for new full messages
+      scrollToBottom(true)
     } else if (payload.type === 'confirm') {
       approvalRequestId.value = payload.id
       approvalAction.value = payload.action
@@ -1112,17 +1199,16 @@ const onSendMessage = async () => {
     // Start brand new workflow
     await startNewWorkflow(message)
   } else {
-    // 1. Add to UI and DB
-    await workflowStore.addMessage({
-      sessionId: currentWorkflowId.value,
-      role: 'user',
-      message: message
-    })
-
-    nextTick(() => scrollToBottom())
-
     // 2. Decide: Signal or Re-start?
     if (isRunning.value) {
+      // 1. Add to UI and DB manually for immediate feedback in running loop
+      await workflowStore.addMessage({
+        sessionId: currentWorkflowId.value,
+        role: 'user',
+        message: message
+      })
+      nextTick(() => scrollToBottom())
+
       // Just send signal to the running loop
       try {
         const signal = JSON.stringify({
@@ -1139,7 +1225,7 @@ const onSendMessage = async () => {
       }
     } else {
       // Engine is stopped (Completed or Error).
-      // Re-trigger workflow_start to "wake up" the Agent.
+      // DO NOT add message manually here, workflow_start will handle it and broadcast via events.
       try {
         await invokeWrapper('workflow_start', {
           sessionId: currentWorkflowId.value,
@@ -1581,10 +1667,9 @@ const onGlobalKeyDown = event => {
             }
 
             .ai-content {
-              background-color: transparent;
-              padding: 0;
-              font-size: var(--cs-font-size-md);
-              line-height: 2;
+              .content {
+                background: none;
+              }
 
               // CLI Style Tool Calls
               .cli-tool-calls-container {
@@ -1756,7 +1841,75 @@ const onGlobalKeyDown = event => {
                 }
               }
 
-              // Thoughts
+              // Thoughts - collapsible reasoning container
+              .reasoning-container {
+                margin-bottom: 12px;
+
+                .reasoning-header {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  cursor: pointer;
+                  padding: 4px 0;
+
+                  .reasoning-icon {
+                    color: var(--cs-text-color-secondary);
+                    font-size: 14px;
+
+                    &.rotating {
+                      animation: cs-rotate 2s linear infinite;
+                    }
+                  }
+
+                  .reasoning-text {
+                    color: var(--cs-text-color-secondary);
+                    font-style: italic;
+                    font-size: 13px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  }
+
+                  .reasoning-toggle {
+                    color: var(--cs-text-color-placeholder);
+                    font-size: 12px;
+
+                    &:hover {
+                      color: var(--cs-color-primary);
+                    }
+                  }
+                }
+
+                .reasoning-content {
+                  margin-top: 8px;
+                  padding: 8px 12px;
+                  background-color: var(--cs-bg-color);
+                  border-radius: var(--cs-border-radius-sm);
+                  border-left: 3px solid var(--cs-border-color-light);
+                  color: var(--cs-text-color-secondary);
+                  font-style: italic;
+                  font-size: 13px;
+                  line-height: 1.6;
+                  white-space: pre-wrap;
+                  animation: slideDown 0.2s ease;
+                }
+
+                @keyframes slideDown {
+                  from {
+                    opacity: 0;
+                    max-height: 0;
+                    margin-top: 0;
+                  }
+
+                  to {
+                    opacity: 1;
+                    max-height: 500px;
+                    margin-top: 8px;
+                  }
+                }
+              }
+
+              // Legacy thought-content (keep for compatibility)
               .thought-content {
                 margin-bottom: 12px;
                 color: var(--cs-text-color-secondary);
@@ -1771,7 +1924,8 @@ const onGlobalKeyDown = event => {
               }
 
               // Custom <cs:thought> tag styling
-              ::v-deep(cs-thought), ::v-deep(cs\:thought) {
+              ::v-deep(cs-thought),
+              ::v-deep(cs\:thought) {
                 display: block;
                 font-style: italic;
                 color: var(--cs-text-color-secondary);

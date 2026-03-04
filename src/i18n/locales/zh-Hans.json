@@ -795,6 +795,9 @@
     }
   },
   "workflow": {
+    "thinkingExpanded": "思考过程",
+    "thoughtCompleted": "已思考",
+    "thinking": "思考中...",
     "approval": {
       "action": "待执行操作",
       "details": "操作详情",

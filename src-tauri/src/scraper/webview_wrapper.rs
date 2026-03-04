@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent, Wry,
@@ -204,30 +204,46 @@ impl WebviewScraper {
 
         let result = async {
             // Use race between load and DOMContentLoaded events
-            // We only need one of them to be ready to proceed with script injection
+            // Plus a fallback probe that checks if the URL has already reached its destination
             let fast_ready_timeout = std::cmp::min(page_timeout, Duration::from_secs(12));
-            
+
             let combined_ready = async {
                 tokio::select! {
-                    _ = rx_page_load => { log::debug!("Page load event received"); },
-                    _ = rx_dom_content_loaded => { log::debug!("DOMContentLoaded event received"); },
+                    _ = rx_page_load => { log::debug!("Page load event received via JS"); },
+                    _ = rx_dom_content_loaded => { log::debug!("DOMContentLoaded event received via JS"); },
+                    _ = async {
+                        // Fallback probe: poll URL status every 500ms
+                        let start = Instant::now();
+                        loop {
+                            if let Ok(current_url) = webview.url() {
+                                let current_url_str = current_url.as_str();
+                                // If we've reached the target URL (ignoring fragments/queries for basic match)
+                                if current_url_str.contains(url) || (url.contains("://") && current_url_str.len() > 10 && !current_url_str.contains("index.html")) {
+                                    // Give it at least 2 seconds to settle if it's a fallback
+                                    if start.elapsed() >= Duration::from_secs(3) {
+                                        log::debug!("Fallback probe: URL reached and settled. Proceeding.");
+                                        break;
+                                    }
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            if start.elapsed() >= fast_ready_timeout { break; }
+                        }
+                    } => { log::debug!("Fallback probe reached timeout or success"); }
                 }
             };
-            
+
             if tokio::time::timeout(fast_ready_timeout, combined_ready).await.is_err() {
                 log::warn!(
-                    "Timed out waiting for page ready events for URL: {} after {:?}",
+                    "Timed out waiting for page ready events for URL: {} after {:?}. Proceeding anyway as fallback.",
                     url,
                     fast_ready_timeout
                 );
-                // On heavy pages, we might still want to try injection even if events timed out, 
-                // but for now, let's keep the error behavior for consistency.
-                is_completed.store(true, Ordering::SeqCst);
-                return Err(anyhow!("Page load timed out for URL: {}", url));
+                // We no longer return Err here. Instead, we fall through to injection.
             }
 
             if url.contains("bing.com") {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
 
             // Add retry mechanism for script injection

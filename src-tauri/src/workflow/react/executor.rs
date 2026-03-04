@@ -638,7 +638,7 @@ impl WorkflowExecutor {
                 Some(StepType::Think),
                 false,
                 None,
-                usage.map(|u| serde_json::json!({ "usage": u })),
+                usage, // Use the metadata directly
             )
             .await?;
 
@@ -754,69 +754,19 @@ impl WorkflowExecutor {
                 if compressed_signal {
                     needs_compression = true;
                 }
-            }
 
-            // --- SYNC TODO LIST IF ANY TODO TOOL WAS CALLED ---
-            if has_todo_call {
-                let todo_list_opt = if let Ok(store) = self.context.main_store.read() {
-                    store.get_todo_list_for_workflow(&self.session_id).ok()
-                } else {
-                    None
-                };
-
-                if let Some(todos) = todo_list_opt {
-                    self.gateway
-                        .send(
-                            &self.session_id,
-                            GatewayPayload::SyncTodo {
-                                todo_list: serde_json::json!(todos),
-                            },
-                        )
-                        .await?;
+                // If finish_task detected, don't process further tool results in this batch
+                if final_completion_detected {
+                    break;
                 }
             }
 
-            while let Ok(interrupt_str) = signal_rx.try_recv() {
-                let sig_json: serde_json::Value = serde_json::from_str(&interrupt_str).unwrap_or(
-                    serde_json::json!({ "type": "user_input", "content": interrupt_str }),
-                );
-
-                if sig_json["type"] == "stop" {
-                    log::info!("WorkflowExecutor {}: Ignoring STOP signal at end of loop (will be caught at start)", self.session_id);
-                    continue;
-                }
-
-                let content = if sig_json["type"] == "user_input" {
-                    sig_json["content"]
-                        .as_str()
-                        .unwrap_or(&interrupt_str)
-                        .to_string()
-                } else {
-                    interrupt_str
-                };
-
-                self.add_message_and_notify(
-                    "user".to_string(),
-                    content,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )
-                .await?;
-            }
-            if needs_compression {
-                let summary = self.compressor.compress(&self.context.messages).await?;
-                self.context
-                    .add_summary(summary, self.current_step as i32)
-                    .await?;
-            }
-
-            // Post-iteration state check: if finish_task was called, conclude now.
+            // --- IMMEDIATE EXIT IF FINISHED ---
             if final_completion_detected {
                 log::info!("WorkflowExecutor {}: Concluding session due to finish_task.", self.session_id);
                 self.update_state(WorkflowState::Completed).await?;
+                // Break the main run_loop immediately
+                break;
             }
         }
 
@@ -1016,35 +966,44 @@ impl WorkflowExecutor {
 
         if let Some(tool_obj) = json_val.get("tool") {
             let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let tool_id = tool_obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(crate::ccproxy::get_tool_id);
 
             if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                results.push((crate::ccproxy::get_tool_id(), error_obs, tool_obj.clone()));
+                results.push((tool_id, error_obs, tool_obj.clone()));
             } else {
                 if name.starts_with("todo_") {
                     has_todo_call = true;
                 }
 
                 results.push((
-                    crate::ccproxy::get_tool_id(),
+                    tool_id,
                     self.dispatch_tool(tool_obj.clone()).await?,
                     tool_obj.clone(),
                 ));
             }
         } else if let Some(tool_calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
             for call in tool_calls {
-                let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let id = call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(crate::ccproxy::get_tool_id);
                 let func = call.get("function").unwrap_or(call);
                 let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
                 if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                    results.push((id.to_string(), error_obs, call.clone()));
+                    results.push((id, error_obs, call.clone()));
                 } else {
                     if name.starts_with("todo_") {
                         has_todo_call = true;
                     }
 
                     results.push((
-                        id.to_string(),
+                        id,
                         self.dispatch_tool(call.clone()).await?,
                         call.clone(),
                     ));
@@ -1053,19 +1012,23 @@ impl WorkflowExecutor {
         } else if let Some(calls) = json_val.as_array() {
             // Handle direct array of tool calls
             for call in calls {
-                let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let id = call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(crate::ccproxy::get_tool_id);
                 let func = call.get("function").unwrap_or(call);
                 let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
                 if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                    results.push((id.to_string(), error_obs, call.clone()));
+                    results.push((id, error_obs, call.clone()));
                 } else {
                     if name.starts_with("todo_") {
                         has_todo_call = true;
                     }
 
                     results.push((
-                        id.to_string(),
+                        id,
                         self.dispatch_tool(call.clone()).await?,
                         call.clone(),
                     ));
@@ -1082,7 +1045,8 @@ impl WorkflowExecutor {
             let id = json_val
                 .get("id")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
+                .map(|s| s.to_string())
+                .unwrap_or_else(crate::ccproxy::get_tool_id);
             let name = json_val
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1095,14 +1059,14 @@ impl WorkflowExecutor {
                 .unwrap_or("");
 
             if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                results.push((id.to_string(), error_obs, json_val.clone()));
+                results.push((id, error_obs, json_val.clone()));
             } else {
                 if name.starts_with("todo_") {
                     has_todo_call = true;
                 }
 
                 results.push((
-                    id.to_string(),
+                    id,
                     self.dispatch_tool(json_val.clone()).await?,
                     json_val.clone(),
                 ));
@@ -1529,10 +1493,20 @@ impl WorkflowExecutor {
                     content = text;
                 }
 
-                // Merge tool calls into metadata
+                // Merge tool calls into metadata (Support multiple formats)
+                let mut tool_calls_to_track = Vec::new();
                 if let Some(tool_calls) = json_msg.get("tool_calls").and_then(|v| v.as_array()) {
+                    tool_calls_to_track.extend(tool_calls.clone());
+                } else if let Some(tool) = json_msg.get("tool") {
+                    tool_calls_to_track.push(tool.clone());
+                } else if json_msg.get("name").is_some() {
+                    // Single tool object format
+                    tool_calls_to_track.push(json_msg.clone());
+                }
+
+                if !tool_calls_to_track.is_empty() {
                     let mut meta_obj = metadata.unwrap_or(serde_json::json!({}));
-                    meta_obj["tool_calls"] = serde_json::json!(tool_calls);
+                    meta_obj["tool_calls"] = serde_json::json!(tool_calls_to_track);
                     metadata = Some(meta_obj);
                 }
             }
