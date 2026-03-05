@@ -45,6 +45,7 @@ The following tools are always allowed: `ask_user`, `finish_task`, and `todo_*`.
 Sub-agents **MUST NOT** have access to the `task` tool to prevent infinite recursion.
 
 ## 5. UI Requirements (`Workflow.vue`)
-- New toggle switch for Mode selection.
-- Disabled toggle once a session starts.
-- Specialized "Plan Review" component for the approval stage.
+- **Mode Selection**: New toggle switch for Mode selection (Autonomous vs. Planning).
+- **Final Audit Switch**: A new toggle to enable/disable the "Self-Reflection Audit" before the task concludes. This allows users to skip the audit for trivial tasks.
+- **Dynamic Controls**: Both switches are editable before the workflow starts and disabled once a session is active.
+- **Plan Review UI**: Specialized "Plan Review" component for the approval stage.
