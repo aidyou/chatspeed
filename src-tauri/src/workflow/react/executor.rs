@@ -1,5 +1,6 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
+use crate::ai::traits::chat::MessageType;
 use crate::db::{Agent, MainStore};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
@@ -1783,15 +1784,11 @@ impl WorkflowExecutor {
         );
 
         let messages = self.context.get_messages_for_llm();
-        let mut history = vec![serde_json::json!({
-            "role": "system",
-            "content": SELF_REFLECTION_AUDIT_PROMPT
-        })];
 
         // 1. Consolidate Mission Context
         let user_queries: Vec<String> = messages
             .iter()
-            .filter(|m| m.role == "user")
+            .filter(|m| m.role == "user" && m.step_type.as_deref().unwrap_or_default() != "observe")
             .map(|m| m.message.clone())
             .collect();
 
@@ -1812,36 +1809,69 @@ impl WorkflowExecutor {
             String::new()
         };
 
-        history.push(serde_json::json!({
-            "role": "system",
-            "content": format!(
-                "AUDIT CONTEXT:\n\n\
-                <USER_MISSIONS>\n{}\n</USER_MISSIONS>\n\n\
-                <INITIAL_PLAN>\n{}\n</INITIAL_PLAN>\n\n\
-                <CURRENT_TODO_STATUS>\n{}\n</CURRENT_TODO_STATUS>",
-                user_queries.join("\n---\n"),
-                plan_text,
-                todo_json
-            )
-        }));
+        // 2. Extract Audit Rejection History to ensure consistency
+        let mut audit_history = String::new();
+        for (i, m) in messages.iter().enumerate() {
+            if m.error_type.as_deref() == Some("AuditRejected") {
+                // Find the assistant response that for audit
+                if let Some(next_m) = messages.get(i - 1) {
+                    if next_m.role == "assistant" {
+                        audit_history.push_str(&format!(
+                            "<AGENT_MESSAGE>\n{}\n</AGENT_MESSAGE>\n\n",
+                            next_m.message
+                        ));
+                    }
+                }
+                audit_history.push_str(&format!(
+                    "<REJECTION_FEEDBACK>\n{}\n</REJECTION_FEEDBACK>\n\n",
+                    m.message
+                ));
+            }
+        }
+
+        let mut history = vec![
+            (serde_json::json!({
+                "role": "system",
+                "content": format!(
+                    "{}\n\n\
+                    AUDIT CONTEXT:\n\n\
+                    <USER_MISSIONS>\n{}\n</USER_MISSIONS>\n\n\
+                    <INITIAL_PLAN>\n{}\n</INITIAL_PLAN>\n\n\
+                    <CURRENT_TODO_STATUS>\n{}\n</CURRENT_TODO_STATUS>\n\n\
+                    <PREVIOUS_AUDIT_FEEDBACK>\n{}\n</PREVIOUS_AUDIT_FEEDBACK>",
+                    SELF_REFLECTION_AUDIT_PROMPT,
+                    user_queries.join("\n---\n"),
+                    plan_text,
+                    todo_json,
+                    if audit_history.is_empty() { "None".to_string() } else { audit_history }
+                )
+            })),
+        ];
 
         // 2. Add the Target Conclusion (The Assistant message calling finish_task)
         if let Some(target_msg) = messages.iter().rev().find(|m| {
-            m.role == "assistant" && (m.message.contains(TOOL_FINISH_TASK) || m.metadata.as_ref().map_or(false, |meta| {
-                meta.get("tool_calls").and_then(|tc| tc.as_array()).map_or(false, |arr| {
-                    arr.iter().any(|call| call["name"] == TOOL_FINISH_TASK || call["function"]["name"] == TOOL_FINISH_TASK)
-                })
-            }))
+            m.role == "assistant"
+                && (m.message.contains(TOOL_FINISH_TASK)
+                    || m.metadata.as_ref().map_or(false, |meta| {
+                        meta.get("tool_calls")
+                            .and_then(|tc| tc.as_array())
+                            .map_or(false, |arr| {
+                                arr.iter().any(|call| {
+                                    call["name"] == TOOL_FINISH_TASK
+                                        || call["function"]["name"] == TOOL_FINISH_TASK
+                                })
+                            })
+                    }))
         }) {
             history.push(serde_json::json!({
-                "role": "assistant",
+                "role": "user",
                 "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", target_msg.message)
             }));
         } else {
             // Fallback: If we can't find it exactly, use the very last assistant message
             if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
                 history.push(serde_json::json!({
-                    "role": "assistant",
+                    "role": "user",
                     "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", last_msg.message)
                 }));
             }
@@ -1857,32 +1887,42 @@ impl WorkflowExecutor {
                 .clone()
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        chat_interface
-            .chat(
-                self.active_provider_id,
-                &self.active_model_name,
-                self.session_id.clone() + "_auditor",
-                history,
-                None,
-                None,
-                move |chunk| {
-                    let _ = tx.try_send(chunk);
-                },
-            )
-            .await
-            .map_err(WorkflowEngineError::Ai)?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+        // Spawn the LLM call in a separate task so we can process the stream concurrently
+        let session_id_audit = self.session_id.clone() + "_auditor";
+        let provider_id = self.active_provider_id;
+        let model_name = self.active_model_name.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = chat_interface
+                .chat(
+                    provider_id,
+                    &model_name,
+                    session_id_audit,
+                    history,
+                    None,
+                    None,
+                    move |chunk| {
+                        let _ = tx.try_send(chunk);
+                    },
+                )
+                .await
+            {
+                log::error!("WorkflowExecutor audit background task failed: {}", e);
+            }
+        });
 
         let mut result = String::new();
         while let Some(chunk) = rx.recv().await {
             match chunk.r#type {
-                crate::ai::traits::chat::MessageType::Text => {
+                MessageType::Text => {
                     result.push_str(&chunk.chunk);
                 }
-                crate::ai::traits::chat::MessageType::Finished => {
+                MessageType::Finished => {
                     break;
                 }
-                crate::ai::traits::chat::MessageType::Error => {
+                MessageType::Error => {
                     log::error!("WorkflowExecutor audit LLM error: {}", chunk.chunk);
                     return Ok(None); // Fail open
                 }
@@ -1891,16 +1931,36 @@ impl WorkflowExecutor {
         }
 
         let result = result.trim();
-        let result_upper = result.to_uppercase();
 
-        if result_upper == "APPROVED"
-            || (result_upper.contains("APPROVED") && !result_upper.contains("REJECTED"))
-        {
+        let audit_json: serde_json::Value =
+            match serde_json::from_str(crate::libs::util::format_json_str(result).as_str()) {
+                Ok(v) => v,
+                Err(_) => {
+                    // Fallback for non-JSON responses
+                    let result_upper = result.to_uppercase();
+                    if result_upper.contains("APPROVED") && !result_upper.contains("REJECTED") {
+                        serde_json::json!({ "approved": true })
+                    } else {
+                        let feedback = if result_upper.contains("REJECTED:") {
+                            let idx = result_upper.find("REJECTED:").unwrap();
+                            result[idx + 9..].trim().to_string()
+                        } else {
+                            result.to_string()
+                        };
+                        serde_json::json!({ "approved": false, "reason": feedback })
+                    }
+                }
+            };
+
+        #[cfg(debug_assertions)]
+        dbg!(&audit_json);
+
+        if audit_json["approved"].as_bool().unwrap_or(false) {
             Ok(None)
         } else {
-            let feedback = result.trim_start_matches("REJECTED:").trim();
-            if feedback.is_empty() || feedback == "REJECTED" {
-                Ok(Some("The conclusion was rejected, but no specific feedback was provided. Please ensure all user requests are fully addressed in your report.".to_string()))
+            let feedback = audit_json["reason"].as_str().unwrap_or("").trim();
+            if feedback.is_empty() || feedback.to_uppercase() == "REJECTED" {
+                Ok(Some("The conclusion was rejected by audit. Please review the global goals and ensure all requirements are addressed in your final report.".to_string()))
             } else {
                 Ok(Some(feedback.to_string()))
             }

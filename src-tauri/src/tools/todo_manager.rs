@@ -47,6 +47,7 @@ impl ToolDefinition for TodoCreateTool {
     fn name(&self) -> &str {
         crate::tools::TOOL_TODO_CREATE
     }
+
     fn description(&self) -> &str {
         "Use this tool to create one or more structured tasks for your current session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\n\
         It also helps the user understand the progress of the task and overall progress of their requests.\n\n\
@@ -73,6 +74,7 @@ impl ToolDefinition for TodoCreateTool {
         - **description**: Detailed description of what needs to be done, including context and acceptance criteria\n\
         - **activeForm**: Present continuous form shown in spinner when task is in_progress (e.g., \"Fixing authentication bug\"). This is displayed to the user while you work on the task."
     }
+
     fn category(&self) -> ToolCategory {
         ToolCategory::System
     }
@@ -110,6 +112,7 @@ impl ToolDefinition for TodoCreateTool {
             scope: Some(self.scope()),
         }
     }
+
     async fn call(&self, params: Value) -> NativeToolResult {
         let mut list = get_db_todo_list(&self.main_store, &self.session_id).await?;
         let mut created_ids = Vec::new();
