@@ -404,6 +404,8 @@ workflow:
     todo_status_done: "已完成"
     todo_status_in_progress: "进行中"
     todo_status_pending: "等待中"
+    todo_status_failed: "执行失败"
+    todo_status_data_missing: "数据缺失"
   error:
     cancelled: "操作已被用户取消"
     config: "配置错误"

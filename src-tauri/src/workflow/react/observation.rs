@@ -348,7 +348,9 @@ impl ObservationReinforcer {
                 let status = match status_raw {
                     "completed" | "done" => t!("workflow.summary.todo_status_done"),
                     "in_progress" => t!("workflow.summary.todo_status_in_progress"),
-                    "pending" => t!("workflow.summary.todo_status_todo"),
+                    "pending" => t!("workflow.summary.todo_status_pending"),
+                    "failed" => t!("workflow.summary.todo_status_failed"),
+                    "data_missing" => t!("workflow.summary.todo_status_data_missing"),
                     _ => status_raw.into(),
                 };
                 t!(
