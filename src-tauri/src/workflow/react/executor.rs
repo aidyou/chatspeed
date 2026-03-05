@@ -1050,8 +1050,10 @@ impl WorkflowExecutor {
         let mut has_todo_call = false;
         let mut results = vec![];
 
-        use futures::stream::{FuturesUnordered, StreamExt};
-        let mut tool_futures = FuturesUnordered::new();
+        use futures::stream::{FuturesOrdered, StreamExt};
+
+        let mut tool_futures = FuturesOrdered::new();
+
 
         for call in tool_calls {
             let id = call
@@ -1096,7 +1098,7 @@ impl WorkflowExecutor {
             let gtm = self.global_tool_manager.clone();
             let semaphore = self.context.semaphore.clone();
 
-            tool_futures.push(async move {
+            tool_futures.push_back(async move {
                 let _permit = semaphore.acquire().await.ok();
                 let call_name = name.clone();
                 let call_args = args.clone();
@@ -1695,7 +1697,13 @@ impl WorkflowExecutor {
                                 } else {
                                     std::env::current_dir().unwrap_or_default().join(p)
                                 };
-                                abs_p.canonicalize().ok().or(Some(abs_p))
+                                // Validate that the path exists and is a directory
+                                if abs_p.exists() && abs_p.is_dir() {
+                                    abs_p.canonicalize().ok().or(Some(abs_p))
+                                } else {
+                                    log::warn!("WorkflowExecutor {}: Invalid path ignored: {:?}", self.session_id, abs_p);
+                                    None
+                                }
                             })
                             .filter(|p| unique_paths.insert(p.clone()))
                             .collect();
