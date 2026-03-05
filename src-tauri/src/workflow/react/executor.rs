@@ -3,7 +3,7 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::db::{Agent, MainStore};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_READ_FILE, TOOL_TODO_CREATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -44,12 +44,12 @@ impl LoopDetector {
     /// Records a tool call and returns a warning message if a loop is detected.
     fn record_and_check(&mut self, tool_name: &str, args: &serde_json::Value) -> Option<String> {
         use std::hash::{Hash, Hasher};
-        
+
         // Canonicalize JSON to ensure consistent hashing regardless of key order
         // serde_json::to_string on a Value uses BTreeMap internally which is sorted by default,
         // but being explicit or using a sorted approach is safer if preserve_order is enabled.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        
+
         // For Objects, we ensure keys are hashed in a stable order
         fn hash_stable<H: Hasher>(v: &serde_json::Value, state: &mut H) {
             match v {
@@ -959,8 +959,12 @@ impl WorkflowExecutor {
                     retry_count += 1;
                     if retry_count < max_retries {
                         let wait_duration = Duration::from_secs(2u64.pow(retry_count as u32));
-                        log::info!("WorkflowExecutor {}: Waiting {:?} before retry...", self.session_id, wait_duration);
-                        
+                        log::info!(
+                            "WorkflowExecutor {}: Waiting {:?} before retry...",
+                            self.session_id,
+                            wait_duration
+                        );
+
                         tokio::select! {
                             _ = sleep(wait_duration) => {}
                             msg = signal_rx.recv() => {
@@ -1074,7 +1078,6 @@ impl WorkflowExecutor {
         use futures::stream::{FuturesOrdered, StreamExt};
 
         let mut tool_futures = FuturesOrdered::new();
-
 
         for call in tool_calls {
             let id = call
@@ -1193,14 +1196,15 @@ impl WorkflowExecutor {
 
                     // If there are failures, we allow exiting (consistent with 'Fail Fast' principle)
                     if !has_failures {
-                        let active_tasks: Vec<String> = todos.iter()
+                        let active_tasks: Vec<String> = todos
+                            .iter()
                             .filter(|t| {
                                 let s = t["status"].as_str().unwrap_or("");
                                 s == "pending" || s == "in_progress"
                             })
                             .map(|t| t["subject"].as_str().unwrap_or("Untitled").to_string())
                             .collect();
-                        
+
                         if !active_tasks.is_empty() {
                             return Ok(Some(ReinforcedResult {
                                 content: format!("<system-reminder>Block: You still have active tasks: {}. You MUST either complete them, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling finish_task.</system-reminder>", active_tasks.join(", ")),
@@ -1722,7 +1726,11 @@ impl WorkflowExecutor {
                                 if abs_p.exists() && abs_p.is_dir() {
                                     abs_p.canonicalize().ok().or(Some(abs_p))
                                 } else {
-                                    log::warn!("WorkflowExecutor {}: Invalid path ignored: {:?}", self.session_id, abs_p);
+                                    log::warn!(
+                                        "WorkflowExecutor {}: Invalid path ignored: {:?}",
+                                        self.session_id,
+                                        abs_p
+                                    );
                                     None
                                 }
                             })
@@ -1780,44 +1788,63 @@ impl WorkflowExecutor {
             "content": SELF_REFLECTION_AUDIT_PROMPT
         })];
 
-        // 1. Gather ALL User Questions from history
+        // 1. Consolidate Mission Context
         let user_queries: Vec<String> = messages
             .iter()
             .filter(|m| m.role == "user")
             .map(|m| m.message.clone())
             .collect();
 
+        let plan_text = messages
+            .iter()
+            .find(|m| {
+                m.step_type.as_deref() == Some("Plan") || m.message.contains(TOOL_TODO_CREATE)
+            })
+            .map(|m| m.message.as_str())
+            .unwrap_or("No initial plan provided.");
+
+        let todo_json = if let Ok(store) = self.context.main_store.read() {
+            store
+                .get_todo_list_for_workflow(&self.session_id)
+                .map(|t| serde_json::to_string_pretty(&t).unwrap_or_default())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         history.push(serde_json::json!({
-            "role": "user",
-            "content": format!("MISSION HISTORY: Sequential user requests in this session:\n\n{}", user_queries.join("\n---\n"))
+            "role": "system",
+            "content": format!(
+                "AUDIT CONTEXT:\n\n\
+                <USER_MISSIONS>\n{}\n</USER_MISSIONS>\n\n\
+                <INITIAL_PLAN>\n{}\n</INITIAL_PLAN>\n\n\
+                <CURRENT_TODO_STATUS>\n{}\n</CURRENT_TODO_STATUS>",
+                user_queries.join("\n---\n"),
+                plan_text,
+                todo_json
+            )
         }));
 
-        // 2. Extract and Inject Original Plan (if any plan-like message exists)
-        if let Some(plan_msg) = messages.iter().find(|m| {
-            m.step_type.as_deref() == Some("Plan") || m.message.contains("todo_create")
+        // 2. Add the Target Conclusion (The Assistant message calling finish_task)
+        if let Some(target_msg) = messages.iter().rev().find(|m| {
+            m.role == "assistant" && (m.message.contains(TOOL_FINISH_TASK) || m.metadata.as_ref().map_or(false, |meta| {
+                meta.get("tool_calls").and_then(|tc| tc.as_array()).map_or(false, |arr| {
+                    arr.iter().any(|call| call["name"] == TOOL_FINISH_TASK || call["function"]["name"] == TOOL_FINISH_TASK)
+                })
+            }))
         }) {
             history.push(serde_json::json!({
-                "role": "user",
-                "content": format!("INITIAL PLAN:\n{}", plan_msg.message)
+                "role": "assistant",
+                "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", target_msg.message)
             }));
-        }
-
-        // 3. Inject Current Todo List State
-        if let Ok(store) = self.context.main_store.read() {
-            if let Ok(todos) = store.get_todo_list_for_workflow(&self.session_id) {
+        } else {
+            // Fallback: If we can't find it exactly, use the very last assistant message
+            if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
                 history.push(serde_json::json!({
-                    "role": "user",
-                    "content": format!("CURRENT TODO STATUS:\n{}", serde_json::to_string_pretty(&todos).unwrap_or_default())
+                    "role": "assistant",
+                    "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", last_msg.message)
                 }));
             }
-        }
-
-        // 3. Add the Latest Assistant Response (The one being audited)
-        if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
-            history.push(serde_json::json!({
-                "role": "assistant",
-                "content": last_msg.message.clone()
-            }));
         }
 
         let chat_interface = {
@@ -1857,18 +1884,26 @@ impl WorkflowExecutor {
                 }
                 crate::ai::traits::chat::MessageType::Error => {
                     log::error!("WorkflowExecutor audit LLM error: {}", chunk.chunk);
-                    return Ok(None); // Fail open if audit engine breaks
+                    return Ok(None); // Fail open
                 }
                 _ => {}
             }
         }
 
         let result = result.trim();
-        if result == "APPROVED" || result.contains("APPROVED") {
+        let result_upper = result.to_uppercase();
+
+        if result_upper == "APPROVED"
+            || (result_upper.contains("APPROVED") && !result_upper.contains("REJECTED"))
+        {
             Ok(None)
         } else {
             let feedback = result.trim_start_matches("REJECTED:").trim();
-            Ok(Some(feedback.to_string()))
+            if feedback.is_empty() || feedback == "REJECTED" {
+                Ok(Some("The conclusion was rejected, but no specific feedback was provided. Please ensure all user requests are fully addressed in your report.".to_string()))
+            } else {
+                Ok(Some(feedback.to_string()))
+            }
         }
     }
 }

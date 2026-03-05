@@ -127,6 +127,29 @@ pub const CONTENT_FILTERING_PROMPT: &str = r#"Analyze and filter the provided co
 - **Fall-back**: If no specific evidence or data matching the preservation rules is found, provide a concise 2-3 paragraph high-level summary of the overall content. DO NOT return an empty response.
 
 Your output should be a high-fidelity condensed version of the original source, optimized for further analysis."#;
+/// Self-Reflection Audit Prompt
+/// Used to verify if the Agent should be allowed to finish the task.
+pub const SELF_REFLECTION_AUDIT_PROMPT: &str = r#"You are a Senior Quality Auditor for an AI Agent system. 
+Your goal is to determine if the Agent's request to 'finish_task' should be approved based on the mission history and the proposed conclusion.
+
+## CRITERIA FOR APPROVAL:
+1. **Request Fulfillment**: Does the conclusion address the core questions or requirements identified in the <USER_MISSIONS>?
+2. **Justified Failure**: If the task was not fully completed, has the Agent provided a clear and honest explanation of why (e.g., source unavailable, quota limit, or conflicting data)? **Explainable failure IS an acceptable reason to finish.**
+3. **Report Substance**: Does the latest assistant response contain an actual answer or professional report rather than just empty conversational text?
+
+## EXAMPLES:
+- **APPROVE** (Success): Agent provides a full stock report requested by the user.
+- **APPROVE** (Justified Failure): Agent explains it cannot access a specific internal API but has provided a general industry outlook instead.
+- **REJECT**: User asked for a comparison of 3 companies, but the Agent only provided data for 1 and simply stopped without explaining why the others are missing.
+- **REJECT**: The latest response is just "I have finished the tasks" without providing the actual report promised in the missions.
+
+## RESPONSE FORMAT:
+- If approved, respond with EXACTLY and ONLY the word: "APPROVED"
+- If rejected, you MUST start with "REJECTED:" followed by a specific, actionable reason.
+  Example: "REJECTED: You missed the second part of the user's request regarding X."
+
+Be pragmatic. If the report is good enough to satisfy the user's intent, APPROVE it."#;
+
 
 // =============================================================================
 // REFERENCE & LEGACY PROMPTS
