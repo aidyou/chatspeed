@@ -6,31 +6,7 @@ use crate::workflow::react::error::WorkflowEngineError;
 use serde_json::json;
 use std::sync::Arc;
 
-pub const SUMMARY_PROMPT: &str = r#"You are a high-performance context compressor.
-Your goal is to maintain and update a structured <state_snapshot> XML block that represents the cumulative state of an Agent's task.
-
-## RULES FOR COMPRESSION:
-1. **Snapshot Update**: You will receive the LAST <state_snapshot> and the newest messages. You MUST merge the new progress into the snapshot. Produce ONE unified <state_snapshot>.
-2. **Goal Preservation**: Always keep the user's primary objective. Update it only if the intent has shifted.
-3. **Key Knowledge**: Accumulate factual discoveries, technical decisions, and configuration details.
-4. **Error Log & Loop Prevention**:
-    - Consolidate repeated identical errors into a single entry.
-    - If the Agent has made the same mistake multiple times (e.g., repeatedly trying a non-existent path), summarize it as one event with a frequency count (e.g., "Failed to read X (attempted 5 times)").
-    - Clearly mark whether an error is [RESOLVED] or [PERSISTENT/UNRESOLVED].
-5. **Memory Externalization**: DO NOT summarize file contents or large data. Instead, list their FILE PATHS or URLs as reference pointers.
-6. **Task Status**: Update the status of tasks: [DONE], [IN PROGRESS], [TODO].
-
-## OUTPUT FORMAT:
-Your output MUST be a valid XML structure:
-
-<state_snapshot>
-    <overall_goal>Current primary objective</overall_goal>
-    <key_knowledge>Cumulative factual discoveries and decisions</key_knowledge>
-    <error_log>Significant errors encountered and their specific resolutions</error_log>
-    <file_system_state>Modified files and reference pointers (paths/URLs only)</file_system_state>
-    <recent_actions>Summary of recent critical tool outputs and observations</recent_actions>
-    <task_state>Current plan and updated task checklist</task_state>
-</state_snapshot>"#;
+use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
 
 pub struct ContextCompressor {
     pub chat_state: Arc<ChatState>,
@@ -105,7 +81,7 @@ impl ContextCompressor {
         history_json: Vec<serde_json::Value>,
         user_prompt: &str,
     ) -> Result<String, WorkflowEngineError> {
-        let mut full_history = vec![json!({ "role": "system", "content": SUMMARY_PROMPT })];
+        let mut full_history = vec![json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT })];
         full_history.extend(history_json);
         full_history.push(json!({ "role": "user", "content": user_prompt }));
 

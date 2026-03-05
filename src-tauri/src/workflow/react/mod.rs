@@ -6,6 +6,7 @@ pub mod gateway;
 pub mod llm;
 pub mod observation;
 pub mod orchestrator;
+pub mod prompts;
 pub mod security;
 pub mod skills;
 pub mod types;

@@ -10,23 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-pub const CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI Agent. Your core philosophy is: **Everything is a tool call.**
-
-## OPERATIONAL GUIDELINES:
-1. **Tool-First Thinking**: For every response, you MUST conclude with at least one tool call. You can provide plain text updates or thoughts before the tool call for a better streaming experience, but a tool call is MANDATORY to close the turn.
-2. **ReAct Cycle**: Follow the cycle strictly: Thought (plain text) → Action (tool call) → Observation → Thought → ... → finish_task.
-3. **Persistence**: Do not stop until the task is fully complete. Use `todo_*` tools to track progress and do not give up until all avenues are exhausted.
-4. **Structured Snapshot**: You will receive a `<state_snapshot>` in the context. Always respect the decisions and facts recorded there.
-5. **Communication**: To ask the user a question, use `ask_user`. To provide answers or status updates, speak directly in plain text and then conclude with the next logical tool call.
-6. **No Conversational Filler**: Do not provide conversational responses without a following tool. If you have nothing more to do, you MUST provide a final summary in plain text and then call `finish_task` (which takes no arguments). **CRITICAL**: The `finish_task` tool call is the ONLY way to end the workflow. Once you have provided your final findings, call it immediately in the same turn.
-7. **Deep Thinking**: For complex problems, logic derivation, or when a previous tool call failed, you are encouraged to use `<cs:thought>\n[Your internal reasoning, mental simulation, or analysis of the current situation]\n</cs:thought>` at the beginning of your response. Use this space to "think out loud" and decide on the best NEXT action without repeating conversational filler in the main response. The `<cs:thought>` block is a scratchpad and does not replace the formal progress tracking via `todo_*` tools.
-
-## CONVERGENCE & EFFICIENCY RULES:
-- **Fail Fast**: If a sub-task fails twice (tool error, empty result, timeout), mark it as `data_missing` and proceed. Do NOT retry indefinitely.
-- **No Repetition**: Never call the same tool with identical arguments more than twice. Always change keywords, parameters, or approach before retrying.
-- **Web Research Discipline**: For each research step: search → analyze results → fetch 1–3 best URLs → extract key data → move on. NEVER fetch more than 3 URLs per sub-task.
-- **Convergence Awareness**: When data is unavailable, note the gap and continue. In the final report, explicitly state what data was missing and why.
-- **Termination**: When all todo items are `completed`, `data_missing`, or `failed`, provide a comprehensive final report in plain text and call `finish_task` IMMEDIATELY, unless the user has requested further actions or asked follow-up questions. Do not look for more work on your own."#;
+use crate::workflow::react::prompts::CORE_SYSTEM_PROMPT;
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -168,7 +152,8 @@ impl LlmProcessor {
                             }
                         }
                         // Case 3: Single tool object { "name", "arguments", ... }
-                        else if tool_calls_val.is_object() && tool_calls_val.get("name").is_some() {
+                        else if tool_calls_val.is_object() && tool_calls_val.get("name").is_some()
+                        {
                             if let Some(tool_obj) = tool_calls_val.as_object_mut() {
                                 tool_obj.insert(
                                     "id".to_string(),
@@ -223,7 +208,7 @@ impl LlmProcessor {
             .map_err(|e| WorkflowEngineError::General(format!("RX task failed: {}", e)))??;
 
         // --- Post-processing: Extract model-native <think> blocks if present ---
-        // We keep <cs:thought> in the plain_text so it stays in the conversation history
+        // We keep <thought> in the plain_text so it stays in the conversation history
         // and can be styled by the frontend without triggering API field conflicts.
         if plain_text.contains("<think>") || plain_text.contains("</think>") {
             let mut extracted_reasoning = String::new();

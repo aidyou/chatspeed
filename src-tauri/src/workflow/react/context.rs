@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use crate::db::MainStore;
 use crate::db::WorkflowMessage;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::types::StepType;
 use serde_json::json;
+use std::sync::Arc;
 
 pub struct ContextManager {
     pub session_id: String,
@@ -11,6 +11,7 @@ pub struct ContextManager {
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub max_tokens: usize,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    pub semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl ContextManager {
@@ -26,21 +27,31 @@ impl ContextManager {
             main_store,
             max_tokens,
             tsid_generator,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(3)),
         }
     }
 
     /// Loads history from database, starting from the last summary if exists.
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
-        let store = self.main_store.read().map_err(|e| WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string())))?;
+        let store = self.main_store.read().map_err(|e| {
+            WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+        })?;
         let snapshot = store.get_workflow_snapshot(&self.session_id)?;
 
         // Find the index of the last summary message
         let last_summary_idx = snapshot.messages.iter().rposition(|m| {
-            m.role == "system" && m.metadata.as_ref().map_or(false, |meta| meta["type"] == "summary")
+            m.role == "system"
+                && m.metadata
+                    .as_ref()
+                    .map_or(false, |meta| meta["type"] == "summary")
         });
 
         if let Some(idx) = last_summary_idx {
-            log::info!("ContextManager {}: Resuming from last summary at index {}", self.session_id, idx);
+            log::info!(
+                "ContextManager {}: Resuming from last summary at index {}",
+                self.session_id,
+                idx
+            );
             self.messages = snapshot.messages[idx..].to_vec();
         } else {
             self.messages = snapshot.messages;
@@ -61,11 +72,14 @@ impl ContextManager {
         error_type: Option<String>,
         metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
-        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
+        let msg_id = self
+            .tsid_generator
+            .generate_u64()
+            .map_err(|e| WorkflowEngineError::General(e))?;
         let msg = WorkflowMessage {
             id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
-            role,
+            role: role.clone(),
             message: content,
             reasoning,
             metadata,
@@ -76,8 +90,15 @@ impl ContextManager {
             created_at: None,
         };
 
+        #[cfg(debug_assertions)]
+        if role == "assistant" {
+            dbg!(&msg);
+        }
+
         let persisted_msg = {
-            let store = self.main_store.read().map_err(|e| WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string())))?;
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
             store.add_workflow_message(&msg)?
         };
 
@@ -102,7 +123,11 @@ impl ContextManager {
     }
 
     /// Adds a summary message to mark a compression point
-    pub async fn add_summary(&mut self, summary: String, step_index: i32) -> Result<(), WorkflowEngineError> {
+    pub async fn add_summary(
+        &mut self,
+        summary: String,
+        step_index: i32,
+    ) -> Result<(), WorkflowEngineError> {
         // Keep the most recent N messages for continuity after compression.
         // Fixed count is more predictable than a percentage for long conversations.
         const KEEP_RECENT_MESSAGES: usize = 10;
@@ -114,7 +139,10 @@ impl ContextManager {
         self.messages = self.messages[split_idx..].to_vec();
 
         // Prepend the new summary
-        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
+        let msg_id = self
+            .tsid_generator
+            .generate_u64()
+            .map_err(|e| WorkflowEngineError::General(e))?;
         let summary_msg = WorkflowMessage {
             id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
@@ -131,7 +159,9 @@ impl ContextManager {
 
         // Persist summary
         let persisted_summary = {
-            let store = self.main_store.read().map_err(|e| WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string())))?;
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
             store.add_workflow_message(&summary_msg)?
         };
 

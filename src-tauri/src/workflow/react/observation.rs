@@ -67,7 +67,7 @@ impl ObservationReinforcer {
                         serde_json::to_string(val).unwrap_or_default()
                     };
 
-                let title = Self::generate_title(tool_name, &args);
+                let title = Self::generate_title(tool_name, &args, extra_context.as_ref());
                 let summary = Self::generate_summary(tool_name, &raw_res_for_summary, &args);
 
                 let mut raw_res = raw_res_for_summary;
@@ -182,7 +182,7 @@ impl ObservationReinforcer {
             }
             Err(err) => {
                 let err_msg = err.to_string();
-                let title = Self::generate_title(tool_name, &args);
+                let title = Self::generate_title(tool_name, &args, extra_context.as_ref());
                 let error_type = match err {
                     ToolError::Security(_) => "Security",
                     ToolError::IoError(_) => "Io",
@@ -206,7 +206,7 @@ impl ObservationReinforcer {
         }
     }
 
-    fn generate_title(tool_name: &str, args: &Value) -> String {
+    fn generate_title(tool_name: &str, args: &Value, extra_context: Option<&Value>) -> String {
         let truncate = |s: &str, len: usize| -> String {
             let chars: Vec<char> = s.chars().collect();
             if chars.len() <= len {
@@ -308,33 +308,59 @@ impl ObservationReinforcer {
                 if let Some(tasks) = args["tasks"].as_array() {
                     return format!(
                         "{} ({} items)",
-                        t!("workflow.todo.createBatch"),
+                        t!("workflow.summary.todo_create"),
                         tasks.len()
                     );
                 }
-                let subject = args["subject"]
-                    .as_str()
-                    .or(args["title"].as_str())
-                    .unwrap_or("Untitled");
-                format!("{}: {}", t!("workflow.todo.create"), truncate(subject, 25))
+                t!("workflow.summary.todo_create").to_string()
             }
             TOOL_TODO_UPDATE => {
-                let subject = args["subject"]
+                let id_val = args["todo_id"]
+                    .as_str()
+                    .or(args["task_id"].as_str())
+                    .or(args["id"].as_str());
+
+                let mut subject = args["subject"]
                     .as_str()
                     .or(args["title"].as_str())
-                    .unwrap_or("Untitled");
+                    .map(|s| s.to_string());
+
+                // Lookup title from current todo list if not provided in arguments
+                if subject.is_none() {
+                    if let (Some(id), Some(todos)) =
+                        (id_val, extra_context.and_then(|v| v.as_array()))
+                    {
+                        subject = todos
+                            .iter()
+                            .find(|t| {
+                                t["id"].as_str() == Some(id)
+                                    || t["task_id"].as_str() == Some(id)
+                                    || t["todo_id"].as_str() == Some(id)
+                            })
+                            .and_then(|t| t["subject"].as_str().or(t["title"].as_str()))
+                            .map(|s| s.to_string());
+                    }
+                }
+
+                let display_subject =
+                    subject.unwrap_or_else(|| id_val.unwrap_or("Task").to_string());
                 let status_raw = args["status"].as_str().unwrap_or("updated");
                 let status = match status_raw {
-                    "completed" | "done" => t!("workflow.todo.statusCompleted"),
-                    "in_progress" => t!("workflow.todo.statusInProgress"),
-                    "pending" => t!("workflow.todo.statusPending"),
+                    "completed" | "done" => t!("workflow.summary.todo_status_done"),
+                    "in_progress" => t!("workflow.summary.todo_status_in_progress"),
+                    "pending" => t!("workflow.summary.todo_status_todo"),
                     _ => status_raw.into(),
                 };
-                format!("Update {} to {}", truncate(subject, 20), status)
+                t!(
+                    "workflow.summary.todo_update",
+                    subject = truncate(&display_subject, 20),
+                    status = status
+                )
+                .to_string()
             }
-            TOOL_TODO_LIST => t!("workflow.todo.list").to_string(),
-            TOOL_TODO_GET => t!("workflow.todo.view").to_string(),
-            TOOL_FINISH_TASK => t!("workflow.finishTask").to_string(),
+            TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
+            TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
+            TOOL_FINISH_TASK => t!("workflow.task_finished").to_string(),
             _ => {
                 let name = tool_name.replace('_', " ");
                 name.split_whitespace()
@@ -351,7 +377,7 @@ impl ObservationReinforcer {
         }
     }
 
-    fn generate_summary(tool_name: &str, content: &str, args: &Value) -> String {
+    fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
         match tool_name {
             TOOL_READ_FILE => {
                 let lines = content.lines().count();
@@ -376,14 +402,8 @@ impl ObservationReinforcer {
                 }
             }
             TOOL_WEB_FETCH => {
-                let url = args["url"].as_str().unwrap_or("");
-                let domain =
-                    if let Some(host) = url.split("://").nth(1).and_then(|s| s.split('/').next()) {
-                        host
-                    } else {
-                        url
-                    };
-                format!("Fetched {} chars from {}", content.len(), domain)
+                // Return success immediately, handled by reinforcement usually
+                "Fetched content".to_string()
             }
             TOOL_EDIT_FILE => "Applied changes".to_string(),
             TOOL_WRITE_FILE => "File written".to_string(),
@@ -391,53 +411,10 @@ impl ObservationReinforcer {
                 let last_line = content.lines().last().unwrap_or("Done");
                 match last_line.char_indices().nth(30) {
                     Some(_) => {
-                        let truncated = match last_line.char_indices().nth(27) {
-                            Some((idx, _)) => &last_line[..idx],
-                            None => last_line,
-                        };
+                        let truncated: String = last_line.chars().take(27).collect();
                         format!("{}...", truncated)
                     }
                     None => last_line.to_string(),
-                }
-            }
-            TOOL_TODO_CREATE => {
-                if let Ok(val) = serde_json::from_str::<Value>(content) {
-                    let subject = val["subject"].as_str().unwrap_or("");
-                    t!("workflow.summary.todo_create", subject = subject).to_string()
-                } else {
-                    t!("workflow.summary.todo_create", subject = "").to_string()
-                }
-            }
-            TOOL_TODO_UPDATE => "Todo updated".to_string(),
-            TOOL_TODO_LIST | TOOL_TODO_GET => {
-                if let Ok(val) = serde_json::from_str::<Value>(content) {
-                    let items = if val.is_array() {
-                        val.as_array().unwrap().clone()
-                    } else {
-                        vec![val]
-                    };
-
-                    let mut summary = String::new();
-                    for item in items {
-                        let subject = item["subject"].as_str().unwrap_or("Unknown");
-                        let status = item["status"].as_str().unwrap_or("todo");
-                        let box_char = if status == "done" || status == "completed" {
-                            "✓"
-                        } else {
-                            "☐"
-                        };
-                        if !summary.is_empty() {
-                            summary.push('\n');
-                        }
-                        summary.push_str(&format!("{} {}", box_char, subject));
-                    }
-                    if summary.is_empty() {
-                        t!("workflow.summary.todo_list").to_string()
-                    } else {
-                        summary
-                    }
-                } else {
-                    t!("workflow.summary.todo_list").to_string()
                 }
             }
             _ => "Executed successfully".to_string(),

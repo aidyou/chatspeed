@@ -249,7 +249,7 @@ const totalTokens = computed(() => {
   // Find the most recent message with usage information
   const lastAssistantMsg = [...messages.value]
     .reverse()
-    .find(m => m.role === 'assistant' && (m.metadata?.usage || m.metadata?.tokens))
+    .find(m => m.role === 'assistant' && (m.metadata?.usage || m.metadata?.tokens || m.metadata?.input_tokens || m.metadata?.prompt_tokens))
   
   if (!lastAssistantMsg) return 0
   
@@ -259,11 +259,17 @@ const totalTokens = computed(() => {
     return meta.tokens.total || (meta.tokens.prompt + meta.tokens.completion) || 0
   }
   
-  // 2. Fallback to flattened style or legacy 'usage' wrapper
-  const usage = meta.usage || meta
-  const input = usage.input_tokens || usage.prompt_tokens || 0
-  const output = usage.output_tokens || usage.completion_tokens || 0
-  return input + output
+  // 2. Try usage object style
+  if (meta.usage) {
+    const u = meta.usage
+    return u.total_tokens || ((u.input_tokens || u.prompt_tokens || 0) + (u.output_tokens || u.completion_tokens || 0)) || 0
+  }
+  
+  // 3. Fallback to flattened style
+  const input = meta.input_tokens || meta.prompt_tokens || 0
+  const output = meta.output_tokens || meta.completion_tokens || 0
+  const total = meta.total_tokens || (input + output)
+  return total || 0
 })
 
 const contextUsagePercent = computed(() => {

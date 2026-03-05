@@ -3,13 +3,14 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::db::{Agent, MainStore};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
+    TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
-use crate::workflow::react::observation::ObservationReinforcer;
+use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
+use crate::workflow::react::prompts::CONTENT_FILTERING_PROMPT;
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
 use dirs;
@@ -716,10 +717,10 @@ impl WorkflowExecutor {
                     tool_call_id
                 );
 
-                // Track if finish_task was among the results
+                // Track if finish_task was among the results AND was successful
                 let func = tool_call.get("function").unwrap_or(&tool_call);
                 let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                if name == TOOL_FINISH_TASK {
+                if name == TOOL_FINISH_TASK && !reinforced.is_error {
                     final_completion_detected = true;
                 }
 
@@ -761,9 +762,60 @@ impl WorkflowExecutor {
                 }
             }
 
+            // --- SYNC TODO LIST IF ANY TODO TOOL WAS CALLED ---
+            if has_todo_call {
+                let _ = self.sync_todo_list().await;
+            }
+
+            // --- CHECK FOR USER INTERRUPT OR INPUT ---
+            while let Ok(interrupt_str) = signal_rx.try_recv() {
+                let sig_json: serde_json::Value = serde_json::from_str(&interrupt_str).unwrap_or(
+                    serde_json::json!({ "type": "user_input", "content": interrupt_str }),
+                );
+
+                if sig_json["type"] == "stop" {
+                    log::info!(
+                        "WorkflowExecutor {}: STOP signal will be caught at next iteration start",
+                        self.session_id
+                    );
+                    continue;
+                }
+
+                let content = if sig_json["type"] == "user_input" {
+                    sig_json["content"]
+                        .as_str()
+                        .unwrap_or(&interrupt_str)
+                        .to_string()
+                } else {
+                    interrupt_str
+                };
+
+                self.add_message_and_notify(
+                    "user".to_string(),
+                    content,
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                )
+                .await?;
+            }
+
+            // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
+            if needs_compression {
+                let summary = self.compressor.compress(&self.context.messages).await?;
+                self.context
+                    .add_summary(summary, self.current_step as i32)
+                    .await?;
+            }
+
             // --- IMMEDIATE EXIT IF FINISHED ---
             if final_completion_detected {
-                log::info!("WorkflowExecutor {}: Concluding session due to finish_task.", self.session_id);
+                log::info!(
+                    "WorkflowExecutor {}: Concluding session due to finish_task.",
+                    self.session_id
+                );
                 self.update_state(WorkflowState::Completed).await?;
                 // Break the main run_loop immediately
                 break;
@@ -911,11 +963,7 @@ impl WorkflowExecutor {
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
-            Vec<(
-                String,
-                crate::workflow::react::observation::ReinforcedResult,
-                serde_json::Value,
-            )>,
+            Vec<(String, ReinforcedResult, serde_json::Value)>,
             bool, // has_todo_call
         ),
         WorkflowEngineError,
@@ -942,98 +990,13 @@ impl WorkflowExecutor {
                 return Ok((Vec::new(), false));
             }
         };
-        let mut results = vec![];
-        let mut has_todo_call = false;
-
-        let check_finish_guard = |name: &str,
-                                  raw_text: &str|
-         -> Option<
-            crate::workflow::react::observation::ReinforcedResult,
-        > {
-            if name == TOOL_FINISH_TASK && raw_text.trim().is_empty() {
-                log::warn!("WorkflowExecutor: finish_task called without summary.");
-                return Some(crate::workflow::react::observation::ReinforcedResult {
-                    content: "<system-reminder>Error: You called 'finish_task' but your plain text response was empty. You MUST provide a comprehensive summary or report in plain text BEFORE the tool call block to inform the user of your results.</system-reminder>".into(),
-                    title: "FinishTask Error".to_string(),
-                    summary: "Missing summary".to_string(),
-                    is_error: true,
-                    error_type: Some("NoSummary".into()),
-                    display_type: "text".to_string(),
-                });
-            }
-            None
-        };
-
+        let mut tool_calls = vec![];
         if let Some(tool_obj) = json_val.get("tool") {
-            let name = tool_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let tool_id = tool_obj
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(crate::ccproxy::get_tool_id);
-
-            if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                results.push((tool_id, error_obs, tool_obj.clone()));
-            } else {
-                if name.starts_with("todo_") {
-                    has_todo_call = true;
-                }
-
-                results.push((
-                    tool_id,
-                    self.dispatch_tool(tool_obj.clone()).await?,
-                    tool_obj.clone(),
-                ));
-            }
-        } else if let Some(tool_calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
-            for call in tool_calls {
-                let id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(crate::ccproxy::get_tool_id);
-                let func = call.get("function").unwrap_or(call);
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-
-                if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                    results.push((id, error_obs, call.clone()));
-                } else {
-                    if name.starts_with("todo_") {
-                        has_todo_call = true;
-                    }
-
-                    results.push((
-                        id,
-                        self.dispatch_tool(call.clone()).await?,
-                        call.clone(),
-                    ));
-                }
-            }
+            tool_calls.push(tool_obj.clone());
+        } else if let Some(calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
+            tool_calls.extend(calls.iter().cloned());
         } else if let Some(calls) = json_val.as_array() {
-            // Handle direct array of tool calls
-            for call in calls {
-                let id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(crate::ccproxy::get_tool_id);
-                let func = call.get("function").unwrap_or(call);
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-
-                if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                    results.push((id, error_obs, call.clone()));
-                } else {
-                    if name.starts_with("todo_") {
-                        has_todo_call = true;
-                    }
-
-                    results.push((
-                        id,
-                        self.dispatch_tool(call.clone()).await?,
-                        call.clone(),
-                    ));
-                }
-            }
+            tool_calls.extend(calls.iter().cloned());
         } else if json_val.get("name").is_some()
             || (json_val.get("function").is_some()
                 && json_val
@@ -1041,36 +1004,83 @@ impl WorkflowExecutor {
                     .and_then(|f| f.get("name"))
                     .is_some())
         {
-            // Handle single tool call object without wrapper
-            let id = json_val
+            tool_calls.push(json_val.clone());
+        }
+
+        if tool_calls.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+
+        let mut has_todo_call = false;
+        let mut results = vec![];
+
+        use futures::stream::{FuturesUnordered, StreamExt};
+        let mut tool_futures = FuturesUnordered::new();
+
+        for call in tool_calls {
+            let id = call
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(crate::ccproxy::get_tool_id);
-            let name = json_val
+
+            let func = call.get("function").unwrap_or(&call);
+            let name = func
                 .get("name")
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    json_val
-                        .get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|v| v.as_str())
-                })
-                .unwrap_or("");
-
-            if let Some(error_obs) = check_finish_guard(name, &text_part) {
-                results.push((id, error_obs, json_val.clone()));
+                .unwrap_or("")
+                .to_string();
+            let args_raw = func
+                .get("arguments")
+                .cloned()
+                .or_else(|| func.get("input").cloned())
+                .unwrap_or(serde_json::json!({}));
+            let args = if let serde_json::Value::String(ref s) = args_raw {
+                serde_json::from_str(s).unwrap_or(args_raw)
             } else {
-                if name.starts_with("todo_") {
-                    has_todo_call = true;
-                }
+                args_raw
+            };
 
-                results.push((
-                    id,
-                    self.dispatch_tool(json_val.clone()).await?,
-                    json_val.clone(),
-                ));
+            if name.starts_with("todo_") {
+                has_todo_call = true;
             }
+
+            // --- 1. Sequential Pre-check (Loop detection, Security, etc.) ---
+            match self.pre_dispatch_check(&name, &args, &text_part).await {
+                Ok(Some(early_result)) => {
+                    results.push((id, early_result, call));
+                    continue;
+                }
+                Err(e) => return Err(e),
+                _ => {}
+            }
+
+            // --- 2. Queue for Parallel Execution (Limit to 3 concurrent calls) ---
+            let tm = self.tool_manager.clone();
+            let gtm = self.global_tool_manager.clone();
+            let semaphore = self.context.semaphore.clone();
+
+            tool_futures.push(async move {
+                let _permit = semaphore.acquire().await.ok();
+                let call_name = name.clone();
+                let call_args = args.clone();
+
+                let res = if let Ok(res) = tm.tool_call(&call_name, call_args.clone()).await {
+                    Ok(res)
+                } else {
+                    gtm.tool_call(&call_name, call_args).await
+                };
+
+                (id, name, args, call, res)
+            });
+        }
+
+        // --- 3. Sequential Post-processing (Summarization, Todo Sync) ---
+        while let Some((id, name, args, call, res)) = tool_futures.next().await {
+            let reinforced = self
+                .post_process_tool_result(&name, &args, &call, res)
+                .await?;
+            results.push((id, reinforced, call));
         }
 
         if has_todo_call {
@@ -1080,50 +1090,28 @@ impl WorkflowExecutor {
         Ok((results, has_todo_call))
     }
 
-    async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {
-        let todo_list = {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            let snapshot = store
-                .get_workflow_snapshot(&self.session_id)
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            let todo_list_str = snapshot
-                .workflow
-                .todo_list
-                .unwrap_or_else(|| "[]".to_string());
-            serde_json::from_str::<serde_json::Value>(&todo_list_str)
-                .unwrap_or_else(|_| serde_json::json!([]))
-        };
-
-        self.gateway
-            .send(&self.session_id, GatewayPayload::SyncTodo { todo_list })
-            .await?;
-        Ok(())
-    }
-
-    async fn dispatch_tool(
+    /// Performs safety and logic checks BEFORE a tool is executed.
+    /// Returns Some(ReinforcedResult) if the check fails or requires an early return (e.g. Paused for confirmation).
+    async fn pre_dispatch_check(
         &mut self,
-        tool_call: serde_json::Value,
-    ) -> Result<crate::workflow::react::observation::ReinforcedResult, WorkflowEngineError> {
-        // 1. Extract name and args for internal execution logic
-        let func = tool_call.get("function").unwrap_or(&tool_call);
-        let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let args_raw = func
-            .get("arguments")
-            .cloned()
-            .or_else(|| func.get("input").cloned())
-            .unwrap_or(serde_json::json!({}));
-        let args = if let serde_json::Value::String(ref s) = args_raw {
-            serde_json::from_str(s).unwrap_or(args_raw)
-        } else {
-            args_raw
-        };
+        name: &str,
+        args: &serde_json::Value,
+        text_part: &str,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        // 1. Finish Task Guard
+        if name == TOOL_FINISH_TASK && text_part.trim().is_empty() {
+            return Ok(Some(ReinforcedResult {
+                content: "<system-reminder>Error: You called 'finish_task' but your plain text response was empty. You MUST provide a summary before concluding.</system-reminder>".into(),
+                title: "FinishTask Error".to_string(),
+                summary: "Missing summary".to_string(),
+                is_error: true,
+                error_type: Some("NoSummary".into()),
+                display_type: "text".to_string(),
+            }));
+        }
 
-        // --- Loop detection: track this call and warn if repetitive ---
-        let loop_warning = self.loop_detector.record_and_check(name, &args);
+        // 2. Loop Detection
+        let loop_warning = self.loop_detector.record_and_check(name, args);
         if let Some(ref warning) = loop_warning {
             log::warn!(
                 "WorkflowExecutor {}: Loop detected for tool '{}'",
@@ -1146,13 +1134,7 @@ impl WorkflowExecutor {
                 .await;
         }
 
-        log::info!(
-            "WorkflowExecutor {}: Dispatching '{}'",
-            self.session_id,
-            name
-        );
-
-        // --- 1. Graded Shell Auditing ---
+        // 3. Security: Shell Auditing
         if name == TOOL_BASH {
             let command_str = args["command"].as_str().unwrap_or("");
             if !self.auto_approve.contains(name) {
@@ -1168,7 +1150,7 @@ impl WorkflowExecutor {
                 match policy_engine.check(command_str) {
                     crate::tools::ShellDecision::Allow => {}
                     crate::tools::ShellDecision::Deny(reason) => {
-                        return Ok(crate::workflow::react::observation::ReinforcedResult {
+                        return Ok(Some(ReinforcedResult {
                             content: format!(
                                 "Error: Command blocked by security policy. Reason: {}",
                                 reason
@@ -1178,7 +1160,7 @@ impl WorkflowExecutor {
                             is_error: true,
                             error_type: Some("Security".to_string()),
                             display_type: "text".to_string(),
-                        });
+                        }));
                     }
                     crate::tools::ShellDecision::Review(reason) => {
                         self.gateway
@@ -1191,81 +1173,28 @@ impl WorkflowExecutor {
                                 },
                             )
                             .await?;
-
                         self.update_state(WorkflowState::Paused).await?;
-                        log::info!(
-                            "WorkflowExecutor {}: Paused for shell command review",
-                            self.session_id
-                        );
-                        return Ok(crate::workflow::react::observation::ReinforcedResult {
+                        return Ok(Some(ReinforcedResult {
                             content: "WAITING_FOR_USER_APPROVAL".to_string(),
                             title: format!("Bash({})", command_str),
                             summary: "Waiting for approval".to_string(),
                             is_error: false,
                             error_type: None,
                             display_type: "text".to_string(),
-                        });
+                        }));
                     }
                 }
             }
         }
 
-        // --- 2. Generic Tool Safety (FS, etc.) ---
-        if name == TOOL_WRITE_FILE || name == TOOL_EDIT_FILE {
-            if !self.auto_approve.contains(name) {
-                let file_path = args["file_path"]
-                    .as_str()
-                    .or_else(|| args["path"].as_str())
-                    .unwrap_or("unknown");
-                let mut details = format!("Operation: {}\nFile: {}\n", name, file_path);
-
-                if name == TOOL_EDIT_FILE {
-                    let old = args["old_string"].as_str().unwrap_or("");
-                    let new = args["new_string"].as_str().unwrap_or("");
-                    details.push_str(&format!(
-                        "\n--- OLD STRING ---\n{}\n\n--- NEW STRING ---\n{}",
-                        old, new
-                    ));
-                } else if name == TOOL_WRITE_FILE {
-                    let content = args["content"].as_str().unwrap_or("");
-                    if content.len() > 1000 {
-                        details.push_str(&format!("\nContent: ({} bytes)", content.len()));
-                    } else {
-                        details.push_str(&format!("\nContent:\n{}", content));
-                    }
-                }
-
-                self.gateway
-                    .send(
-                        &self.session_id,
-                        GatewayPayload::Confirm {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            action: name.to_string(),
-                            details,
-                        },
-                    )
-                    .await?;
-                self.update_state(WorkflowState::Paused).await?;
-                return Ok(crate::workflow::react::observation::ReinforcedResult {
-                    content: "WAITING_FOR_USER_APPROVAL".to_string(),
-                    title: format!("{}({})", name, file_path),
-                    summary: "Waiting for approval".to_string(),
-                    is_error: false,
-                    error_type: None,
-                    display_type: if name == TOOL_EDIT_FILE {
-                        "diff".to_string()
-                    } else {
-                        "text".to_string()
-                    },
-                });
-            }
-        }
-
-        // --- 3. Path Guard for FS tools ---
-        if name == TOOL_READ_FILE
-            || name == TOOL_WRITE_FILE
-            || name == TOOL_LIST_DIR
-            || name == TOOL_EDIT_FILE
+        // 4. Security: FS Path Guard
+        if [
+            TOOL_READ_FILE,
+            TOOL_WRITE_FILE,
+            TOOL_LIST_DIR,
+            TOOL_EDIT_FILE,
+        ]
+        .contains(&name)
         {
             if let Some(path_str) = args["file_path"].as_str().or_else(|| args["path"].as_str()) {
                 if let Ok(guard) = self.path_guard.read() {
@@ -1274,76 +1203,73 @@ impl WorkflowExecutor {
             }
         }
 
-        // --- 3. Special Core Tools ---
-        match name {
-            n if n == TOOL_ASK_USER => {
-                self.update_state(WorkflowState::Paused).await?;
-                return Ok(crate::workflow::react::observation::ReinforcedResult {
-                    content: "Waiting for user".into(),
-                    title: "AskUser".to_string(),
-                    summary: "Asked user".to_string(),
-                    is_error: false,
-                    error_type: None,
-                    display_type: "text".to_string(),
-                });
-            }
-            n if n == TOOL_FINISH_TASK => {
-                // Don't update state to Completed here immediately.
-                // We'll do it at the end of the run_loop iteration to ensure
-                // the assistant message and this tool result are fully saved and notified.
-                return Ok(crate::workflow::react::observation::ReinforcedResult {
-                    content: "Finished".into(),
-                    title: "FinishTask".to_string(),
-                    summary: "Task completed".to_string(),
-                    is_error: false,
-                    error_type: None,
-                    display_type: "text".to_string(),
-                });
-            }
-            _ => {}
+        // 5. User Interaction Pause
+        if name == TOOL_ASK_USER {
+            self.update_state(WorkflowState::Paused).await?;
+            return Ok(Some(ReinforcedResult {
+                content: "Waiting for user".into(),
+                title: "AskUser".to_string(),
+                summary: "Asked user".to_string(),
+                is_error: false,
+                error_type: None,
+                display_type: "text".to_string(),
+            }));
         }
 
-        // --- 4. Tool Call Dispatch (Local then Global) ---
-        // First try the session-specific tool manager
-        let result = if let Ok(res) = self.tool_manager.tool_call(name, args.clone()).await {
-            Ok(res)
-        } else {
-            // Then try the global tool manager (for MCP, WebSearch, etc.)
-            self.global_tool_manager.tool_call(name, args.clone()).await
-        };
+        Ok(None)
+    }
 
-        // --- 5. Post-process: Auto-summarize large web_fetch content ---
+    /// Handles summarization, Todo context enhancement, and result reinforcement after a tool has run.
+    async fn post_process_tool_result(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+        tool_call: &serde_json::Value,
+        result: Result<serde_json::Value, crate::tools::ToolError>,
+    ) -> Result<ReinforcedResult, WorkflowEngineError> {
+        // 1. Finish Task Early Return
+        if name == TOOL_FINISH_TASK {
+            return Ok(ReinforcedResult {
+                content: "Finished".into(),
+                title: "FinishTask".to_string(),
+                summary: "Task completed".to_string(),
+                is_error: false,
+                error_type: None,
+                display_type: "text".to_string(),
+            });
+        }
+
+        // 2. Auto-summarization for web_fetch
         if name == TOOL_WEB_FETCH {
             if let Ok(val) = &result {
-                if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                let content_opt = val
+                    .get("structured_content")
+                    .and_then(|sc| sc.get("content"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| val.get("content").and_then(|v| v.as_str()));
+
+                if let Some(content) = content_opt {
                     if content.len() > 15000 {
-                        log::info!("WorkflowExecutor {}: Content from web_fetch is too long ({} chars). Summarizing...", self.session_id, content.len());
                         match self.summarize_content(content).await {
-                            Ok(summary) => {
-                                return Ok(crate::workflow::react::observation::ReinforcedResult {
-                                    content: format!("[Auto-Summarized Result] {}\n\n<system-reminder>The original content was over 50000 characters and has been summarized to focus on relevant information.</system-reminder>", summary),
-                                    title: format!("Fetch({})", args["url"].as_str().unwrap_or("")),
-                                    summary: "Content summarized".to_string(),
+                            Ok(summary) if !summary.trim().is_empty() => {
+                                let url = args["url"].as_str().unwrap_or("");
+                                return Ok(ReinforcedResult {
+                                    content: format!("<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n\n<system-reminder>\n[Auto-Summarized] High-fidelity filtered content.\n</system-reminder>\n</webpage>", url, summary),
+                                    title: format!("Fetch({})", url),
+                                    summary: "Content summarized (XML)".to_string(),
                                     is_error: false,
                                     error_type: None,
                                     display_type: "text".to_string(),
-
                                 });
                             }
-                            Err(e) => {
-                                log::error!(
-                                    "WorkflowExecutor {}: Summarization failed: {}",
-                                    self.session_id,
-                                    e
-                                );
-                                // Fallback to reinforced result (which will truncate)
-                            }
+                            _ => {}
                         }
                     }
                 }
             }
         }
 
+        // 3. Reinforce with Todo Context
         if name.starts_with("todo_") {
             let todos = if let Ok(store) = self.context.main_store.read() {
                 store
@@ -1352,51 +1278,120 @@ impl WorkflowExecutor {
             } else {
                 vec![]
             };
-            Ok(
-                crate::workflow::react::observation::ObservationReinforcer::reinforce_with_context(
-                    &tool_call,
-                    &result,
-                    Some(serde_json::json!(todos)),
-                ),
-            )
+            Ok(ObservationReinforcer::reinforce_with_context(
+                tool_call,
+                &result,
+                Some(serde_json::json!(todos)),
+            ))
         } else {
-            Ok(
-                crate::workflow::react::observation::ObservationReinforcer::reinforce(
-                    &tool_call, &result,
-                ),
-            )
+            Ok(ObservationReinforcer::reinforce(tool_call, &result))
         }
     }
 
-    /// Summarizes or filters large text content with high-fidelity requirements
     async fn summarize_content(&mut self, content: &str) -> Result<String, WorkflowEngineError> {
-        let user_query = self
+        // 1. Extract Global Goal (First user message)
+        let global_goal = self
             .context
             .messages
             .first()
             .map(|m| m.message.clone())
-            .unwrap_or_else(|| "current task".to_string());
+            .unwrap_or_else(|| "General research".to_string());
 
-        let prompt = format!(
-            "Analyze and filter the following web content relative to the user's initial query. \n\n\
-            ## FILTERING CRITERIA:\n\
-            1. **STRICT PRESERVATION**: You MUST extract the following information EXACTLY as it appears in the source:\n\
-               - Financial data (Revenue, EBITDA, Ratios, Currency values).\n\
-               - Specific dates, times, and quantitative metrics.\n\
-               - Legal terms, specific names, and technical specifications.\n\
-            2. **RELEVANT EXTRACTION**: For prose and explanations, extract the specific sentences or paragraphs most relevant to the query. Prefer verbatim quotes over rephrasing to maintain evidence quality.\n\
-            3. **CULLING**: Discard all boilerplate, ads, navigation links, and repetitive background information not directly answering the query.\n\n\
-            <cs:user_query>\n{}\n</cs:user_query>\n\n\
-            <cs:source_content>\n{}\n</cs:source_content>",
-            user_query, content
+        // 2. Extract Current Task (Directly from Store)
+        let current_task = if let Ok(store) = self.context.main_store.read() {
+            store
+                .get_todo_list_for_workflow(&self.session_id)
+                .ok()
+                .and_then(|tasks| {
+                    tasks
+                        .iter()
+                        .find(|t| t["status"] == "in_progress")
+                        .and_then(|t| t["subject"].as_str().map(|s| s.to_string()))
+                })
+        } else {
+            None
+        }
+        .unwrap_or_else(|| "Executing planned steps".to_string());
+
+        // 3. Extract Immediate Intent (Last search query + last reasoning)
+        let last_search = self
+            .context
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let Some(meta) = &m.metadata {
+                    if let Some(tc) = meta.get("tool_call") {
+                        let name = tc
+                            .get("name")
+                            .or_else(|| tc.get("function").and_then(|f| f.get("name")))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if name == TOOL_WEB_SEARCH {
+                            let args_val = tc
+                                .get("arguments")
+                                .or_else(|| tc.get("function").and_then(|f| f.get("arguments")));
+
+                            if let Some(val) = args_val {
+                                // OpenAI protocol often provides arguments as a JSON string
+                                let parsed_args = if let Some(s) = val.as_str() {
+                                    serde_json::from_str::<serde_json::Value>(s)
+                                        .unwrap_or(val.clone())
+                                } else {
+                                    val.clone()
+                                };
+
+                                // Return the 'query' field or the whole JSON if not found
+                                return parsed_args
+                                    .get("query")
+                                    .and_then(|q| q.as_str())
+                                    .map(|s| s.to_string())
+                                    .or_else(|| Some(parsed_args.to_string()));
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let last_reasoning = self
+            .context
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant" && !m.message.trim().is_empty())
+            .map(|m| {
+                let text = m.message.clone();
+                // Character-safe truncation to avoid panic on multi-byte characters (CJK)
+                if text.chars().count() > 500 {
+                    text.chars().take(500).collect::<String>() + "..."
+                } else {
+                    text
+                }
+            })
+            .unwrap_or_else(|| "Analyzing content".to_string());
+
+        let immediate_intent = format!(
+            "Search Query: {} | Reasoning: {}",
+            last_search, last_reasoning
         );
+
+        // 4. Build Structure-aware Prompt
+        let system_prompt = CONTENT_FILTERING_PROMPT
+            .replace("{global_goal}", &global_goal)
+            .replace("{current_task}", &current_task)
+            .replace("{immediate_intent}", &immediate_intent);
 
         let messages = vec![
             serde_json::json!({
                 "role": "system",
-                "content": "You are a high-fidelity information filter. Your task is to process source content into a concise, evidence-dense summary while ensuring all critical numeric and factual data is preserved with 100% accuracy."
+                "content": system_prompt
             }),
-            serde_json::json!({ "role": "user", "content": prompt }),
+            serde_json::json!({
+                "role": "user",
+                "content": format!("<source_content>\n{}\n</source_content>", content)
+            }),
         ];
 
         let chat_interface = {
@@ -1600,5 +1595,29 @@ impl WorkflowExecutor {
             }
         }
         Ok(false)
+    }
+
+    async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {
+        let todo_list = {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let snapshot = store
+                .get_workflow_snapshot(&self.session_id)
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let todo_list_str = snapshot
+                .workflow
+                .todo_list
+                .unwrap_or_else(|| "[]".to_string());
+            serde_json::from_str::<serde_json::Value>(&todo_list_str)
+                .unwrap_or_else(|_| serde_json::json!([]))
+        };
+
+        self.gateway
+            .send(&self.session_id, GatewayPayload::SyncTodo { todo_list })
+            .await?;
+        Ok(())
     }
 }

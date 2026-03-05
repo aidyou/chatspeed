@@ -105,7 +105,8 @@
                         <template v-if="isReasoningExpanded(message.displayId)">
                           {{ t('workflow.thinkingExpanded') || 'Thinking Process' }}
                         </template>
-                        <template v-else-if="isRunning && !getParsedMessage(message).content && (message.metadata?.tool_calls?.length || 0) === 0 && message === lastAssistantMessage">
+                        <template
+                          v-else-if="isRunning && !getParsedMessage(message).content && (message.metadata?.tool_calls?.length || 0) === 0 && message === lastAssistantMessage">
                           {{ getReasoningPreview(message.reasoning || message.message) }}
                         </template>
                         <template v-else>
@@ -157,7 +158,8 @@
                   <div class="reasoning-header">
                     <cs name="reasoning" size="14px" class="reasoning-icon" :class="{ rotating: !chatState.content }" />
                     <span class="reasoning-text">
-                      {{ chatState.content ? (t('workflow.thoughtCompleted') || 'Thought Complete') : getReasoningPreview(chatState.reasoning) }}
+                      {{ chatState.content ? (t('workflow.thoughtCompleted') || 'Thought Complete') :
+                        getReasoningPreview(chatState.reasoning) }}
                     </span>
                   </div>
                 </div>
@@ -948,7 +950,7 @@ onMounted(async () => {
 
   windowStore.initWorkflowWindowAlwaysOnTop()
   window.addEventListener('keydown', onGlobalKeyDown)
-  
+
   // Initial scroll
   nextTick(() => scrollToBottom(true))
 })
@@ -1018,7 +1020,7 @@ const setupWorkflowEvents = async sessionId => {
       chattingParser.reset()
       chatState.value.content = ''
       chatState.value.blocks = []
-      
+
       // Force scroll for new full messages
       scrollToBottom(true)
     } else if (payload.type === 'confirm') {
@@ -1754,11 +1756,16 @@ const onGlobalKeyDown = event => {
                     .tool-name {
                       font-weight: 600;
                       color: var(--cs-text-color-primary);
-                      flex-shrink: 0;
+                      flex: 1;
+                      min-width: 0;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
                     }
 
                     .tool-target {
-                      flex: 1;
+                      flex: 0 1 auto;
+                      max-width: 50%;
                       color: var(--cs-text-color-secondary);
                       font-size: var(--cs-font-size-sm);
                       overflow: hidden;
@@ -1923,18 +1930,17 @@ const onGlobalKeyDown = event => {
                 white-space: pre-wrap;
               }
 
-              // Custom <cs:thought> tag styling
-              ::v-deep(cs-thought),
-              ::v-deep(cs\:thought) {
+              // Custom <thought> tag styling
+              thought {
                 display: block;
                 font-style: italic;
                 color: var(--cs-text-color-secondary);
                 background-color: var(--cs-bg-color-light);
                 padding: 8px 12px;
                 border-left: 3px solid var(--cs-border-color-light);
+                border-radius: var(--cs-border-radius);
                 margin: 10px 0;
                 font-size: 0.9em;
-                border-radius: var(--cs-border-radius-sm);
                 line-height: 1.5;
                 white-space: pre-wrap;
 

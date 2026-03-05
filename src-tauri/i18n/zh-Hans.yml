@@ -394,6 +394,16 @@ workflow:
   unsupported_operator: "不支持的操作符: %{operator}"
   unsupported_type_combination: "不支持的类型组合操作符: %{operator}"
   validation: "验证错误: %{details}"
+  task_finished: "任务已完成"
+  summary:
+    todo_create: "创建任务"
+    todo_update: "更新任务 '%{subject}' 为 %{status}"
+    todo_list: "获取待办列表"
+    todo_get: "获取任务详情"
+    todo_status_todo: "待办"
+    todo_status_done: "已完成"
+    todo_status_in_progress: "进行中"
+    todo_status_pending: "等待中"
   error:
     cancelled: "操作已被用户取消"
     config: "配置错误"
@@ -433,12 +443,3 @@ sensitive:
     wechat_id: "[微信ID]"
     qq_number: "[QQ号码]"
     custom_block: "[已过滤]"
-
-workflow:
-  summary:
-    todo_create: "已创建任务: %{subject}"
-    todo_update: "已更新任务 '%{subject}' 为 %{status}"
-    todo_list: "获取待办列表"
-    todo_get: "获取任务详情"
-    todo_status_todo: "待办"
-    todo_status_done: "已完成"

@@ -120,6 +120,7 @@ impl OpenAIChat {
                     })?;
 
                     for chunk in chunks {
+                        // CRITICAL: Always capture usage regardless of other fields
                         if let Some(new_usage) = chunk.usage {
                             if new_usage.total_tokens > 0 {
                                 token_usage = new_usage;
@@ -128,7 +129,7 @@ impl OpenAIChat {
                                 if token_usage.tokens_per_second == 0.0 {
                                     let completion_tokens = token_usage.completion_tokens as f64;
                                     let duration = start_time.elapsed();
-                                    token_usage.tokens_per_second = if duration.as_secs() > 0 {
+                                    token_usage.tokens_per_second = if duration.as_secs_f64() > 0.1 {
                                         completion_tokens / duration.as_secs_f64()
                                     } else {
                                         0.0
@@ -246,6 +247,11 @@ impl OpenAIChat {
                 &provider_name,
                 &callback,
             );
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            dbg!(&token_usage);
         }
 
         callback(ChatResponse::new_with_arc(

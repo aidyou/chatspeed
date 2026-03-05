@@ -431,12 +431,3 @@ sensitive:
     wechat_id: "[WeChat ID]"
     qq_number: "[QQ Number]"
     custom_block: "[Filtered]"
-
-workflow:
-  summary:
-    todo_create: "Created task: %{subject}"
-    todo_update: "Updated task '%{subject}' to %{status}"
-    todo_list: "Get todo list"
-    todo_get: "Get task details"
-    todo_status_todo: "Todo"
-    todo_status_done: "Done"
