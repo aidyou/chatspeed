@@ -960,7 +960,7 @@ impl WorkflowExecutor {
         &mut self,
         text_part: String,
         json_part: String,
-        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        _signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
             Vec<(String, ReinforcedResult, serde_json::Value)>,
@@ -968,10 +968,6 @@ impl WorkflowExecutor {
         ),
         WorkflowEngineError,
     > {
-        if self.check_stop_signal(signal_rx).await? {
-            return Ok((Vec::new(), false));
-        }
-
         // If json_part is empty, there are no tool calls.
         if json_part.is_empty() {
             return Ok((Vec::new(), false));
@@ -1041,10 +1037,6 @@ impl WorkflowExecutor {
                 args_raw
             };
 
-            if name.starts_with("todo_") {
-                has_todo_call = true;
-            }
-
             // --- 1. Sequential Pre-check (Loop detection, Security, etc.) ---
             match self.pre_dispatch_check(&name, &args, &text_part).await {
                 Ok(Some(early_result)) => {
@@ -1053,6 +1045,10 @@ impl WorkflowExecutor {
                 }
                 Err(e) => return Err(e),
                 _ => {}
+            }
+
+            if name.starts_with("todo_") {
+                has_todo_call = true;
             }
 
             // --- 2. Queue for Parallel Execution (Limit to 3 concurrent calls) ---
@@ -1081,10 +1077,6 @@ impl WorkflowExecutor {
                 .post_process_tool_result(&name, &args, &call, res)
                 .await?;
             results.push((id, reinforced, call));
-        }
-
-        if has_todo_call {
-            let _ = self.sync_todo_list().await;
         }
 
         Ok((results, has_todo_call))
@@ -1424,10 +1416,21 @@ impl WorkflowExecutor {
 
         let mut summary = String::new();
         while let Some(chunk) = rx.recv().await {
-            if chunk.r#type == crate::ai::traits::chat::MessageType::Text {
-                summary.push_str(&chunk.chunk);
-            } else if chunk.r#type == crate::ai::traits::chat::MessageType::Finished {
-                break;
+            match chunk.r#type {
+                crate::ai::traits::chat::MessageType::Text => {
+                    summary.push_str(&chunk.chunk);
+                }
+                crate::ai::traits::chat::MessageType::Finished => {
+                    break;
+                }
+                crate::ai::traits::chat::MessageType::Error => {
+                    return Err(WorkflowEngineError::Ai(crate::ai::error::AiError::ApiRequestFailed {
+                        status_code: 500,
+                        provider: "Summarizer".to_string(),
+                        details: chunk.chunk.clone(),
+                    }));
+                }
+                _ => {}
             }
         }
 
