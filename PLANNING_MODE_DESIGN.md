@@ -44,8 +44,16 @@ The following tools are always allowed: `ask_user`, `finish_task`, and `todo_*`.
 ### B. Recursion Protection
 Sub-agents **MUST NOT** have access to the `task` tool to prevent infinite recursion.
 
-## 5. UI Requirements (`Workflow.vue`)
-- **Mode Selection**: New toggle switch for Mode selection (Autonomous vs. Planning).
-- **Final Audit Switch**: A new toggle to enable/disable the "Self-Reflection Audit" before the task concludes. This allows users to skip the audit for trivial tasks.
-- **Dynamic Controls**: Both switches are editable before the workflow starts and disabled once a session is active.
-- **Plan Review UI**: Specialized "Plan Review" component for the approval stage.
+## 6. Advanced Capabilities & Future Integration
+
+### A. Long-term Memory Integration
+- **Mechanism**: Implement a persistent memory store (vector or KV) to allow Agents to remember facts, user preferences, and historical decisions across different sessions.
+- **Context Injection**: Relevant memories are retrieved and injected into the system prompt or as a separate `<memory>` block.
+
+### B. Workspace Documentation: `AGENTS.md` Support
+- **Protocol**: If an `AGENTS.md` file exists in the root of the authorized workspace, the Agent MUST read it during the initialization/planning phase.
+- **Content**: This file serves as the "team handbook," defining project-specific coding standards, architectural rules, and preferred libraries.
+
+### C. Skills System Verification
+- **Testing**: Implement a comprehensive test suite for the Skills system (`src-tauri/src/workflow/react/skills.rs`).
+- **Dynamic Loading**: Ensure skills defined in YAML/Markdown are correctly scanned, parsed, and registered as available tools or sub-agents.
