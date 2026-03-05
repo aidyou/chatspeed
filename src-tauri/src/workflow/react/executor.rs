@@ -758,16 +758,37 @@ impl WorkflowExecutor {
                     "tool".to_string()
                 };
 
+                // protocol compliance: if the role is 'user', we MUST still provide a 'tool' response first
+                // to satisfy the OpenAI requirement that assistant tool_calls are followed by tool results.
+                if role == "user" {
+                    let _ = self
+                        .add_message_and_notify(
+                            "tool".to_string(),
+                            format!("Error: Execution of '{}' failed or was rejected.", name),
+                            None,
+                            Some(StepType::Observe),
+                            true,
+                            reinforced.error_type.clone(),
+                            Some(serde_json::json!({
+                                "tool_call_id": tool_call_id,
+                                "tool_call": tool_call,
+                                "title": "System Check",
+                                "summary": "Call rejected"
+                            })),
+                        )
+                        .await?;
+                }
+
                 let compressed_signal = self
                     .add_message_and_notify(
-                        role,
+                        role.clone(),
                         reinforced.content,
                         None,
                         Some(StepType::Observe),
                         reinforced.is_error,
                         reinforced.error_type.clone(),
                         Some(serde_json::json!({
-                            "tool_call_id": tool_call_id,
+                            "tool_call_id": if role == "tool" { Some(&tool_call_id) } else { None },
                             "tool_call": tool_call,
                             "title": reinforced.title,
                             "summary": reinforced.summary,
