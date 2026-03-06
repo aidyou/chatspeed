@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-use crate::workflow::react::prompts::CORE_SYSTEM_PROMPT;
+use crate::workflow::react::prompts::{CORE_SYSTEM_PROMPT, PLANNING_MODE_PROMPT};
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -20,6 +20,7 @@ pub struct LlmProcessor {
     pub active_provider_id: i64,
     pub active_model_name: String,
     pub reasoning: bool,
+    pub planning_mode: bool,
 }
 
 impl LlmProcessor {
@@ -31,6 +32,7 @@ impl LlmProcessor {
         active_provider_id: i64,
         active_model_name: String,
         reasoning: bool,
+        planning_mode: bool,
     ) -> Self {
         Self {
             session_id,
@@ -40,6 +42,7 @@ impl LlmProcessor {
             active_provider_id,
             active_model_name,
             reasoning,
+            planning_mode,
         }
     }
 
@@ -353,6 +356,12 @@ impl LlmProcessor {
         _next_pending_task: Option<String>,
     ) -> Vec<serde_json::Value> {
         let mut full_system_prompt = String::from(CORE_SYSTEM_PROMPT);
+
+        if self.planning_mode {
+            full_system_prompt.push_str("\n\n# PLANNING MODE\n");
+            full_system_prompt.push_str(PLANNING_MODE_PROMPT);
+        }
+
         full_system_prompt.push_str("\n\n## AGENT SPECIFIC INSTRUCTIONS:\n");
         full_system_prompt.push_str(&self.agent_config.system_prompt);
 

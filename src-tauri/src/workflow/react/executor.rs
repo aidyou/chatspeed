@@ -4,7 +4,8 @@ use crate::ai::traits::chat::MessageType;
 use crate::db::{Agent, MainStore};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_TODO_CREATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH,
+    TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -133,6 +134,8 @@ pub struct WorkflowExecutor {
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub active_provider_id: i64,
     pub active_model_name: String,
+    /// Whether the agent is in planning mode (research-only).
+    pub planning_mode: bool,
     /// Detects repetitive tool calls within a sliding window.
     loop_detector: LoopDetector,
 }
@@ -151,6 +154,7 @@ impl WorkflowExecutor {
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         global_tool_manager: Arc<ToolManager>,
+        planning_mode: bool,
     ) -> Self {
         let max_contexts = agent_config.max_contexts.unwrap_or(128000) as usize;
         let context = ContextManager::new(
@@ -252,6 +256,7 @@ impl WorkflowExecutor {
             provider_id,
             model_name.clone(),
             reasoning,
+            planning_mode,
         );
 
         // Derive max_steps from agent config: use max_contexts as a hint (divide by 2000
@@ -284,6 +289,7 @@ impl WorkflowExecutor {
             tsid_generator,
             active_provider_id: provider_id,
             active_model_name: model_name,
+            planning_mode,
             loop_detector: LoopDetector::new(),
         }
     }
@@ -359,6 +365,7 @@ impl WorkflowExecutor {
                 self.path_guard.clone(),
                 self.tsid_generator.clone(),
                 custom_rules,
+                self.planning_mode,
             )))
             .await?;
         }
@@ -367,26 +374,30 @@ impl WorkflowExecutor {
         if is_allowed(TOOL_ASK_USER) {
             tm.register_tool(Arc::new(AskUser)).await?;
         }
-        if is_allowed(TOOL_FINISH_TASK) {
+        if self.planning_mode {
+            tm.register_tool(Arc::new(SubmitPlan)).await?;
+        } else if is_allowed(TOOL_FINISH_TASK) {
             tm.register_tool(Arc::new(FinishTask)).await?;
         }
 
         // 4. Multi-Agent & Skill Tools
-        tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
+        if !self.planning_mode {
+            tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
+                .await?;
+            tm.register_tool(Arc::new(
+                crate::workflow::react::orchestrator::TaskTool::new(
+                    self.sub_agent_factory.clone(),
+                    self.tsid_generator.clone(),
+                ),
+            ))
             .await?;
-        tm.register_tool(Arc::new(
-            crate::workflow::react::orchestrator::TaskTool::new(
-                self.sub_agent_factory.clone(),
-                self.tsid_generator.clone(),
-            ),
-        ))
-        .await?;
-        tm.register_tool(Arc::new(
-            crate::workflow::react::orchestrator::TaskOutputTool,
-        ))
-        .await?;
-        tm.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
+            tm.register_tool(Arc::new(
+                crate::workflow::react::orchestrator::TaskOutputTool,
+            ))
             .await?;
+            tm.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
+                .await?;
+        }
 
         // 5. Todo Manager Tools (Session Persistent)
         tm.register_tool(Arc::new(TodoCreateTool {
@@ -422,6 +433,7 @@ impl WorkflowExecutor {
         while self.state != WorkflowState::Completed
             && self.state != WorkflowState::Error
             && self.state != WorkflowState::Cancelled
+            && self.state != WorkflowState::AwaitingApproval
         {
             // --- Check signal channel for "stop" commands ---
             while let Ok(sig_str) = signal_rx.try_recv() {
@@ -1173,7 +1185,34 @@ impl WorkflowExecutor {
         args: &serde_json::Value,
         text_part: &str,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        // 1. Finish Task Guard & Self-Reflection Audit
+        // 1. Plan Submission Guard
+        if name == TOOL_SUBMIT_PLAN {
+            if text_part.trim().is_empty() {
+                return Ok(Some(ReinforcedResult {
+                    content: "<system-reminder>Error: You called 'submit_plan' but your plain text response was empty. You MUST provide a summary of your findings and why this plan is recommended in plain text BEFORE the tool call block.</system-reminder>".into(),
+                    title: "SubmitPlan Error".to_string(),
+                    summary: "Missing summary".to_string(),
+                    is_error: true,
+                    error_type: Some("NoSummary".into()),
+                    display_type: "text".to_string(),
+                }));
+            }
+
+            // A. Update internal and DB status
+            self.update_state(WorkflowState::AwaitingApproval).await?;
+            {
+                let store = self.context.main_store.write().map_err(|e| {
+                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+                })?;
+                store.update_workflow_status(&self.session_id, "awaiting_approval")?;
+            }
+
+            // B. Persist the plan in metadata for the next executor to find
+            // We append it as a system-like "final plan" or store it in workflow record if there's a field.
+            // For now, it's just a tool output.
+        }
+
+        // 2. Finish Task Guard & Self-Reflection Audit
         if name == TOOL_FINISH_TASK {
             // A. Physical Presence Check
             if text_part.trim().is_empty() {
@@ -1275,7 +1314,7 @@ impl WorkflowExecutor {
                 let policy_engine =
                     crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
 
-                match policy_engine.check(command_str) {
+                match policy_engine.check(command_str, self.planning_mode) {
                     crate::tools::ShellDecision::Allow => {}
                     crate::tools::ShellDecision::Deny(reason) => {
                         return Ok(Some(ReinforcedResult {
@@ -1328,7 +1367,7 @@ impl WorkflowExecutor {
                 let guard = self.path_guard.read().map_err(|e| {
                     WorkflowEngineError::General(format!("PathGuard lock poisoned: {}", e))
                 })?;
-                guard.validate(std::path::Path::new(path_str))?;
+                guard.validate(std::path::Path::new(path_str), self.planning_mode)?;
             }
         }
 

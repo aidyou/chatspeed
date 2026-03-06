@@ -50,6 +50,48 @@ impl ToolDefinition for AskUser {
     }
 }
 
+pub struct SubmitPlan;
+
+#[async_trait]
+impl ToolDefinition for SubmitPlan {
+    fn name(&self) -> &str {
+        crate::tools::TOOL_SUBMIT_PLAN
+    }
+    fn description(&self) -> &str {
+        "Submits a proposed plan for user review. This tool is only available in Planning Mode. \
+        The plan should be a detailed Markdown document outlining the research findings and implementation steps you intend to take. \
+        Once submitted, the session will enter an 'Awaiting Approval' state where the user can review and approve your plan before you begin execution."
+    }
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Interaction
+    }
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "plan": { "type": "string", "description": "The detailed Markdown plan." }
+                },
+                "required": ["plan"]
+            }),
+            output_schema: None,
+            disabled: false,
+            scope: Some(self.scope()),
+        }
+    }
+    async fn call(&self, _params: Value) -> NativeToolResult {
+        Ok(ToolCallResult::success(
+            Some("Plan submitted for review. Entering 'Awaiting Approval' state.".into()),
+            None,
+        ))
+    }
+}
+
 pub struct FinishTask;
 
 #[async_trait]

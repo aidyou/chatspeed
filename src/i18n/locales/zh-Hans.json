@@ -795,6 +795,9 @@
     }
   },
   "workflow": {
+    "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
+    "awaitingApproval": "待审批",
+    "approvePlan": "批准计划",
     "thinkingExpanded": "思考过程",
     "thoughtCompleted": "已思考",
     "thinking": "思考中...",

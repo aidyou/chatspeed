@@ -52,7 +52,19 @@ impl ContextManager {
                 self.session_id,
                 idx
             );
-            self.messages = snapshot.messages[idx..].to_vec();
+            
+            // Start with the initial user query if it exists and is before the summary
+            let initial_query = snapshot.messages.iter()
+                .take(idx)
+                .find(|m| m.role == "user")
+                .cloned();
+
+            let mut msgs = Vec::new();
+            if let Some(q) = initial_query {
+                msgs.push(q);
+            }
+            msgs.extend(snapshot.messages[idx..].to_vec());
+            self.messages = msgs;
         } else {
             self.messages = snapshot.messages;
         }
@@ -172,5 +184,56 @@ impl ContextManager {
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
         self.messages.clone()
+    }
+
+    /// Prunes the context for transitioning from Planning to Execution.
+    /// It keeps the initial user query and adds the final approved plan as the new anchor.
+    pub async fn prune_for_execution(&mut self, approved_plan: String) -> Result<(), WorkflowEngineError> {
+        log::info!("ContextManager {}: Pruning context for execution phase", self.session_id);
+
+        let initial_query = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            let snapshot = store.get_workflow_snapshot(&self.session_id)?;
+            snapshot.messages.iter()
+                .find(|m| m.role == "user")
+                .cloned()
+        };
+
+        // 1. Clear current messages
+        self.messages.clear();
+
+        // 2. Re-add initial query if found
+        if let Some(query) = initial_query {
+            self.messages.push(query);
+        }
+
+        // 3. Add the approved plan as a specialized summary message
+        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
+        let plan_msg = WorkflowMessage {
+            id: Some(msg_id as i64),
+            session_id: self.session_id.clone(),
+            role: "system".to_string(),
+            message: format!("# APPROVED EXECUTION PLAN\n\n{}", approved_plan),
+            reasoning: None,
+            metadata: Some(json!({ "type": "summary", "subtype": "approved_plan" })),
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let persisted_plan = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.add_workflow_message(&plan_msg)?
+        };
+
+        self.messages.push(persisted_plan);
+
+        Ok(())
     }
 }

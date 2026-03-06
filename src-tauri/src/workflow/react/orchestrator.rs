@@ -91,6 +91,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             Some(signal_rx),
             self.tsid_generator.clone(),
             self.chat_state.tool_manager.clone(),
+            false, // sub-agents always start in execution mode for now
         ))
     }
 }

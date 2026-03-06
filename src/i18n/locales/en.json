@@ -784,8 +784,10 @@
     }
   },
   "workflow": {
-    "autoApproveTooltip": "Auto-approve tools (excluding interactive tools)",
-    "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
+    "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
+    "awaitingApproval": "Awaiting Approval",
+    "approvePlan": "Approve Plan",
+    "autoApproveTooltip": "Auto-approve tools (excluding interactive tools)",    "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
     "continue": "Continue",
     "editWorkflowTitle": "Edit Workflow Title",
     "newWorkflow": "New Workflow",

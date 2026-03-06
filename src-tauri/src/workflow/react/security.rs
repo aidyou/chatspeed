@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub struct PathGuard {
     allowed_roots: Vec<(PathBuf, Option<Gitignore>)>,
+    primary_root: Option<PathBuf>,
 }
 
 impl PathGuard {
@@ -13,12 +14,13 @@ impl PathGuard {
             .filter_map(|p| p.canonicalize().ok())
             .collect();
 
+        let primary_root = canonical_roots.first().cloned();
+
         let mut roots_with_ignore = Vec::new();
         for root in canonical_roots {
             let mut builder = GitignoreBuilder::new(&root);
 
             // Hierarchical Scan: Find all .gitignore files in the tree
-            // We skip .git and node_modules to keep initialization fast.
             for entry in walkdir::WalkDir::new(&root)
                 .follow_links(false)
                 .into_iter()
@@ -29,13 +31,7 @@ impl PathGuard {
                 .filter_map(|e| e.ok())
             {
                 if entry.file_name() == ".gitignore" {
-                    if let Some(err) = builder.add(entry.path()) {
-                        log::warn!(
-                            "Error loading nested gitignore from {:?}: {}",
-                            entry.path(),
-                            err
-                        );
-                    }
+                    let _ = builder.add(entry.path());
                 }
             }
 
@@ -45,6 +41,7 @@ impl PathGuard {
 
         Self {
             allowed_roots: roots_with_ignore,
+            primary_root,
         }
     }
 
@@ -52,41 +49,15 @@ impl PathGuard {
         self.allowed_roots.iter().map(|(r, _)| r.clone()).collect()
     }
 
+    /// Checks if the normalized path is exactly one of the authorized roots.
+    pub fn is_authorized_root(&self, path: &Path) -> bool {
+        self.allowed_roots.iter().any(|(root, _)| root == path)
+    }
+
     pub fn update_allowed_roots(&mut self, allowed_roots: Vec<PathBuf>) {
-        let canonical_roots: Vec<PathBuf> = allowed_roots
-            .into_iter()
-            .filter_map(|p| p.canonicalize().ok())
-            .collect();
-
-        let mut roots_with_ignore = Vec::new();
-        for root in canonical_roots {
-            let mut builder = GitignoreBuilder::new(&root);
-
-            for entry in walkdir::WalkDir::new(&root)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| {
-                    let name = e.file_name().to_string_lossy();
-                    name != ".git" && name != "node_modules"
-                })
-                .filter_map(|e| e.ok())
-            {
-                if entry.file_name() == ".gitignore" {
-                    if let Some(err) = builder.add(entry.path()) {
-                        log::warn!(
-                            "Error loading nested gitignore from {:?}: {}",
-                            entry.path(),
-                            err
-                        );
-                    }
-                }
-            }
-
-            let gitignore = builder.build().ok();
-            roots_with_ignore.push((root, gitignore));
-        }
-
-        self.allowed_roots = roots_with_ignore;
+        let new_self = Self::new(allowed_roots);
+        self.allowed_roots = new_self.allowed_roots;
+        self.primary_root = new_self.primary_root;
     }
 
     /// Safely normalizes a path by resolving all '..' and '.' components without hitting the disk.
@@ -119,19 +90,40 @@ impl PathGuard {
     }
 
     /// Validates if the target path is within the authorized workspace and NOT ignored by .gitignore.
-    pub fn validate(&self, target: &Path) -> Result<PathBuf, WorkflowEngineError> {
-        // 1. Get the current working directory for relative path resolution
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-
-        // 2. Make the path absolute (if it isn't)
+    /// If restrict_to_planning is true, only allows access to specific directories (skills, tmp, planning).
+    pub fn validate(&self, target: &Path, restrict_to_planning: bool) -> Result<PathBuf, WorkflowEngineError> {
+        // 1. Resolve logical base for relative paths
         let abs_path = if target.is_absolute() {
             target.to_path_buf()
         } else {
-            cwd.join(target)
+            match &self.primary_root {
+                Some(root) => root.join(target),
+                None => return Err(WorkflowEngineError::Security(format!(
+                    "Relative Path Denied: {:?} - No primary workspace authorized. Please set a workspace first.",
+                    target
+                ))),
+            }
         };
 
-        // 3. Normalize: Resolve all '..' and '.' components
+        // 2. Normalize: Resolve all '..' and '.' components
         let normalized_path = Self::normalize_path(&abs_path);
+
+        // 3. Planning Mode Restrictions
+        if restrict_to_planning {
+            let is_allowed_planning_dir = self.allowed_roots.iter().any(|(root, _)| {
+                let folder_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // Precise check: must be exactly in one of the safe roots
+                let is_safe_root = ["skills", "tmp", "planning"].contains(&folder_name);
+                is_safe_root && normalized_path.starts_with(root)
+            });
+
+            if !is_allowed_planning_dir {
+                return Err(WorkflowEngineError::Security(format!(
+                    "Planning Mode Restriction: {:?} is not in allowed planning directories (skills, tmp, planning)",
+                    target
+                )));
+            }
+        }
 
         // 4. Boundary and Gitignore Check
         for (root, gitignore) in &self.allowed_roots {
@@ -139,10 +131,6 @@ impl PathGuard {
                 // Check gitignore if it exists for this root
                 if let Some(gi) = gitignore {
                     if let Ok(rel_path) = normalized_path.strip_prefix(root) {
-                        // The ignore crate's `matched` method doesn't automatically check parents
-                        // for directory-based ignores like `node_modules/`.
-                        // We must check the path itself and all its ancestor components relative to the root.
-
                         let mut current_p = PathBuf::new();
                         let components: Vec<_> = rel_path.components().collect();
 
@@ -150,9 +138,9 @@ impl PathGuard {
                             if let Component::Normal(name) = comp {
                                 current_p.push(name);
                                 let is_dir = if i < components.len() - 1 {
-                                    true // It's a parent component, so it's a directory
+                                    true 
                                 } else {
-                                    normalized_path.is_dir() // Use actual metadata if it's the leaf
+                                    normalized_path.is_dir()
                                 };
 
                                 if gi.matched(&current_p, is_dir).is_ignore() {
@@ -165,7 +153,6 @@ impl PathGuard {
                         }
                     }
                 }
-                // If it starts with an allowed root and is NOT ignored, it's valid
                 return Ok(normalized_path);
             }
         }
@@ -191,15 +178,15 @@ mod tests {
 
         // 1. Valid path
         let file1 = root_path.join("exists.txt");
-        assert!(guard.validate(&file1).is_ok());
+        assert!(guard.validate(&file1, false).is_ok());
 
         // 2. Traversal attempt
         let traversal = root_path.join("../outside.txt");
-        assert!(guard.validate(&traversal).is_err());
+        assert!(guard.validate(&traversal, false).is_err());
 
         // 3. Tricky nested traversal
         let tricky = root_path.join("sub/../../outside.txt");
-        assert!(guard.validate(&tricky).is_err());
+        assert!(guard.validate(&tricky, false).is_err());
     }
 
     #[test]
@@ -217,18 +204,18 @@ mod tests {
         let guard = PathGuard::new(vec![root_path.clone()]);
 
         // 1. Allowed file
-        assert!(guard.validate(&root_path.join("allowed.txt")).is_ok());
+        assert!(guard.validate(&root_path.join("allowed.txt"), false).is_ok());
 
         // 2. Ignored file
-        assert!(guard.validate(&root_path.join("ignored.txt")).is_err());
+        assert!(guard.validate(&root_path.join("ignored.txt"), false).is_err());
 
         // 3. File in ignored directory
         assert!(guard
-            .validate(&root_path.join("secret_dir/data.txt"))
+            .validate(&root_path.join("secret_dir/data.txt"), false)
             .is_err());
 
         // 4. The ignored directory itself
-        assert!(guard.validate(&root_path.join("secret_dir")).is_err());
+        assert!(guard.validate(&root_path.join("secret_dir"), false).is_err());
     }
 
     #[test]
@@ -237,11 +224,11 @@ mod tests {
         let guard = PathGuard::new(vec![]);
         let temp = tempdir().unwrap();
         let test_path = temp.path().join("any.txt");
-        assert!(guard.validate(&test_path).is_err());
+        assert!(guard.validate(&test_path, false).is_err());
         // Relative path also denied
-        assert!(guard.validate(Path::new("./any.txt")).is_err());
+        assert!(guard.validate(Path::new("./any.txt"), false).is_err());
         // Absolute path denied
-        assert!(guard.validate(Path::new("/tmp/any.txt")).is_err());
+        assert!(guard.validate(Path::new("/tmp/any.txt"), false).is_err());
     }
 
     #[test]
@@ -254,16 +241,16 @@ mod tests {
 
         // Path inside root1 allowed
         let file1 = root1_path.join("inside1.txt");
-        assert!(guard.validate(&file1).is_ok());
+        assert!(guard.validate(&file1, false).is_ok());
 
         // Path inside root2 allowed
         let file2 = root2_path.join("inside2.txt");
-        assert!(guard.validate(&file2).is_ok());
+        assert!(guard.validate(&file2, false).is_ok());
 
         // Path outside both roots denied
         let temp = tempdir().unwrap();
         let outside = temp.path().canonicalize().unwrap().join("outside.txt");
-        assert!(guard.validate(&outside).is_err());
+        assert!(guard.validate(&outside, false).is_err());
     }
 
     #[test]
@@ -310,20 +297,13 @@ mod tests {
         let root_path = root.path().canonicalize().unwrap();
         let guard = PathGuard::new(vec![root_path.clone()]);
 
-        // Change current directory to the root
-        let original_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&root_path).unwrap();
-
-        // Relative path from CWD should be allowed
+        // 1. Relative path from base (primary root) should be allowed
         let relative = Path::new("some_file.txt");
-        assert!(guard.validate(relative).is_ok());
+        assert!(guard.validate(relative, false).is_ok());
 
-        // Path outside root via relative traversal should be denied
+        // 2. Traversal outside root should be denied
         let traversal = Path::new("../outside.txt");
-        assert!(guard.validate(traversal).is_err());
-
-        // Restore original CWD
-        std::env::set_current_dir(&original_cwd).unwrap();
+        assert!(guard.validate(traversal, false).is_err());
     }
 
     #[test]
@@ -357,22 +337,22 @@ mod tests {
         let guard = PathGuard::new(vec![root_path.clone()]);
 
         // Wildcard denial
-        assert!(guard.validate(&root_path.join("app.log")).is_err());
+        assert!(guard.validate(&root_path.join("app.log"), false).is_err());
         // Negation allows specific file
-        assert!(guard.validate(&root_path.join("important.log")).is_ok());
+        assert!(guard.validate(&root_path.join("important.log"), false).is_ok());
         // Another wildcard denial
-        assert!(guard.validate(&root_path.join("other.tmp")).is_err());
+        assert!(guard.validate(&root_path.join("other.tmp"), false).is_err());
         // Absolute path pattern
-        assert!(guard.validate(&root_path.join("root_ignore.txt")).is_err());
+        assert!(guard.validate(&root_path.join("root_ignore.txt"), false).is_err());
         // Directory pattern denies entire directory
-        assert!(guard.validate(&root_path.join("build/output.txt")).is_err());
+        assert!(guard.validate(&root_path.join("build/output.txt"), false).is_err());
         // Subdirectory specific pattern
         assert!(guard
-            .validate(&root_path.join("subdir/ignore_in_sub.txt"))
+            .validate(&root_path.join("subdir/ignore_in_sub.txt"), false)
             .is_err());
         // File not matching any pattern allowed
         assert!(guard
-            .validate(&root_path.join("subdir/allowed.txt"))
+            .validate(&root_path.join("subdir/allowed.txt"), false)
             .is_ok());
     }
 
@@ -402,19 +382,19 @@ mod tests {
 
         // VERIFICATIONS:
         // Root file should be allowed
-        assert!(guard.validate(&root_path.join("root_file.txt")).is_ok());
+        assert!(guard.validate(&root_path.join("root_file.txt"), false).is_ok());
         
         // File in sub_dir NOT in its .gitignore should be allowed
-        assert!(guard.validate(&sub_dir.join("public.txt")).is_ok());
+        assert!(guard.validate(&sub_dir.join("public.txt"), false).is_ok());
 
         // File in sub_dir matching its local .gitignore should be DENIED
-        assert!(guard.validate(&sub_dir.join("secret_inner.txt")).is_err());
+        assert!(guard.validate(&sub_dir.join("secret_inner.txt"), false).is_err());
 
         // Directory in sub_dir matching its local .gitignore should be DENIED
-        assert!(guard.validate(&private_dir).is_err());
+        assert!(guard.validate(&private_dir, false).is_err());
 
         // File inside a directory ignored by a local .gitignore should be DENIED
-        assert!(guard.validate(&private_dir.join("data.txt")).is_err());
+        assert!(guard.validate(&private_dir.join("data.txt"), false).is_err());
     }
 
     #[test]
@@ -426,7 +406,7 @@ mod tests {
         {
             let guard = PathGuard::new(vec![root_path.clone()]);
             let outside = Path::new("/some/outside/path");
-            let err = guard.validate(outside).unwrap_err();
+            let err = guard.validate(outside, false).unwrap_err();
             match err {
                 WorkflowEngineError::Security(msg) => {
                     assert!(msg.contains("Path Access Denied"));
@@ -443,7 +423,7 @@ mod tests {
             
             // Re-create guard to load the new .gitignore
             let guard = PathGuard::new(vec![root_path.clone()]);
-            let err = guard.validate(&root_path.join("secret.txt")).unwrap_err();
+            let err = guard.validate(&root_path.join("secret.txt"), false).unwrap_err();
             match err {
                 WorkflowEngineError::Security(msg) => {
                     assert!(msg.contains("Path Access Denied"));
@@ -472,10 +452,10 @@ mod tests {
 
         // Symlink itself should be allowed (since it's inside root)
         // Note: PathGuard does not resolve symlinks, so it should allow access
-        assert!(guard.validate(&symlink_path).is_ok());
+        assert!(guard.validate(&symlink_path, false).is_ok());
 
         // The symlink target should be denied (outside root)
-        assert!(guard.validate(&outside_file).is_err());
+        assert!(guard.validate(&outside_file, false).is_err());
     }
 
     #[test]
@@ -483,5 +463,39 @@ mod tests {
     fn test_path_guard_symlink() {
         // Symlink test not applicable on non-Unix platforms
         // This test passes trivially
+    }
+
+    #[test]
+    fn test_path_guard_planning_mode() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        
+        let skills_dir = root_path.join("skills");
+        let tmp_dir = root_path.join("tmp");
+        let planning_dir = root_path.join("planning");
+        let other_dir = root_path.join("other");
+        
+        fs::create_dir(&skills_dir).unwrap();
+        fs::create_dir(&tmp_dir).unwrap();
+        fs::create_dir(&planning_dir).unwrap();
+        fs::create_dir(&other_dir).unwrap();
+        
+        let guard = PathGuard::new(vec![
+            skills_dir.clone(),
+            tmp_dir.clone(),
+            planning_dir.clone(),
+            other_dir.clone()
+        ]);
+        
+        // Allowed in planning mode
+        assert!(guard.validate(&skills_dir.join("script.py"), true).is_ok());
+        assert!(guard.validate(&tmp_dir.join("test.txt"), true).is_ok());
+        assert!(guard.validate(&planning_dir.join("plan.md"), true).is_ok());
+        
+        // Denied in planning mode
+        assert!(guard.validate(&other_dir.join("data.txt"), true).is_err());
+        
+        // Allowed in normal mode
+        assert!(guard.validate(&other_dir.join("data.txt"), false).is_ok());
     }
 }

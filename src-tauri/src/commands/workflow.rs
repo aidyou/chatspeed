@@ -5,6 +5,7 @@ use crate::workflow::react::executor::WorkflowExecutor;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
@@ -170,10 +171,12 @@ pub async fn workflow_start(
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
+    planning_mode: Option<bool>,
 ) -> Result<String, String> {
     log::debug!(
-        "[Workflow Command] workflow_start: session_id={}",
-        session_id
+        "[Workflow Command] workflow_start: session_id={}, planning_mode={:?}",
+        session_id,
+        planning_mode
     );
 
     let main_store = main_store.inner().clone();
@@ -182,6 +185,7 @@ pub async fn workflow_start(
     let gateway = gateway.inner().clone();
     let factory = factory.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let planning_mode = planning_mode.unwrap_or(false);
 
     let agent_config = {
         let store = main_store.read().map_err(|e| e.to_string())?;
@@ -198,6 +202,15 @@ pub async fn workflow_start(
 
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
+    let allowed_roots = {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
+        snapshot.workflow.allowed_paths
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .map(|paths| paths.into_iter().map(PathBuf::from).collect::<Vec<PathBuf>>())
+            .unwrap_or_default()
+    };
+
     let mut executor = WorkflowExecutor::new(
         session_id.clone(),
         main_store,
@@ -205,12 +218,13 @@ pub async fn workflow_start(
         gateway as Arc<dyn Gateway>,
         factory,
         agent_config,
-        vec![std::env::current_dir().unwrap_or_default()],
+        allowed_roots,
         app_data_dir,
         None,
         Some(signal_rx),
         tsid_generator,
         global_tool_manager,
+        planning_mode,
     );
 
     executor.init().await.map_err(|e| e.to_string())?;
@@ -251,6 +265,133 @@ pub async fn workflow_start(
     });
 
     Ok(session_id)
+}
+
+#[tauri::command]
+pub async fn workflow_approve_plan(
+    app: AppHandle,
+    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    tsid_generator: State<'_, Arc<TsidGenerator>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    factory: State<'_, Arc<dyn SubAgentFactory>>,
+    session_id: String,
+    agent_id: String,
+    plan: String,
+) -> Result<(), String> {
+    log::info!("Approving plan for session {}", session_id);
+
+    let main_store_arc = main_store.inner().clone();
+    let chat_state_arc = chat_state.inner().clone();
+    let tsid_generator_arc = tsid_generator.inner().clone();
+    let gateway_arc = gateway.inner().clone();
+    let factory_arc = factory.inner().clone();
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+
+    // 1. Initialize ContextManager and prune context
+    let mut context = crate::workflow::react::context::ContextManager::new(
+        session_id.clone(),
+        main_store_arc.clone(),
+        128000, // Default max tokens
+        tsid_generator_arc.clone(),
+    );
+
+    context
+        .prune_for_execution(plan)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 2. Update DB status to 'running'
+    {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        store
+            .update_workflow_status(&session_id, "running")
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2.5 Cleanup planning files
+    let planning_dir = app_data_dir.join("planning");
+    if planning_dir.exists() {
+        log::info!("Cleaning up planning files in {:?}", planning_dir);
+        // We delete everything in the planning dir upon approval
+        // Note: For multi-session isolation we might want to use session subdirs, 
+        // but for now we follow the "cleanup" instruction for this shared workspace.
+        let _ = std::fs::remove_dir_all(&planning_dir);
+        let _ = std::fs::create_dir_all(&planning_dir);
+    }
+
+    // 3. Start ExecutionExecutor (WorkflowExecutor with planning_mode = false)
+    let agent_config = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        store
+            .get_agent(&agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", agent_id))?
+    };
+
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
+    gateway_arc
+        .register_session_tx(session_id.clone(), signal_tx)
+        .await;
+
+    let global_tool_manager = chat_state_arc.tool_manager.clone();
+
+    let allowed_roots = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
+        snapshot.workflow.allowed_paths
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .map(|paths| paths.into_iter().map(PathBuf::from).collect::<Vec<PathBuf>>())
+            .unwrap_or_default()
+    };
+
+    let mut executor = WorkflowExecutor::new(
+        session_id.clone(),
+        main_store_arc,
+        chat_state_arc,
+        gateway_arc as Arc<dyn Gateway>,
+        factory_arc,
+        agent_config,
+        allowed_roots,
+        app_data_dir,
+        None,
+        Some(signal_rx),
+        tsid_generator_arc,
+        global_tool_manager,
+        false, // planning_mode = false
+    );
+
+    executor.init().await.map_err(|e| e.to_string())?;
+
+    // Register for external control
+    let shared_executor = Arc::new(tokio::sync::Mutex::new(executor));
+    BACKGROUND_TASKS.insert(
+        session_id.clone(),
+        BackgroundTask::SubAgent(shared_executor.clone()),
+    );
+
+    let session_id_for_spawn = session_id.clone();
+    tokio::spawn(async move {
+        log::debug!(
+            "[Workflow Engine] Entering Execution Loop for session {}",
+            session_id_for_spawn
+        );
+        let mut guard = shared_executor.lock().await;
+        if let Err(e) = guard.run_loop().await {
+            log::error!(
+                "Workflow execution error in session {}: {:?}",
+                session_id_for_spawn,
+                e
+            );
+        }
+        log::debug!(
+            "[Workflow Engine] Exited Execution Loop for session {}",
+            session_id_for_spawn
+        );
+        BACKGROUND_TASKS.remove(&session_id_for_spawn);
+    });
+
+    Ok(())
 }
 
 #[tauri::command]

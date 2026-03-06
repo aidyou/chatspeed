@@ -1,29 +1,17 @@
 <template>
   <Teleport to="body">
     <!-- Large panel -->
-    <div
-      v-if="isVisible && hasData"
-      ref="panelRef"
-      class="status-panel"
-      :class="{ collapsed: isCollapsed, dragging: isDragging }"
-      :style="panelStyle"
-    >
+    <div v-if="isVisible && hasData" ref="panelRef" class="status-panel"
+      :class="{ collapsed: isCollapsed, dragging: isDragging }" :style="panelStyle">
       <!-- Drag handle/header -->
-      <div
-        class="panel-header"
-        @mousedown="startDrag"
-        @touchstart="startDrag"
-      >
+      <div class="panel-header" @mousedown="startDrag" @touchstart="startDrag">
         <div class="header-left">
           <cs name="list" size="14px" class="drag-icon" />
           <span v-if="!isCollapsed" class="header-title">{{ t('workflow.statusPanel.title') }}</span>
         </div>
         <div class="header-actions">
           <span v-if="isCollapsed" class="collapsed-progress">{{ progressPercent }}%</span>
-          <span
-            v-if="!isCollapsed && todoList.length > 0"
-            class="task-count"
-          >
+          <span v-if="!isCollapsed && todoList.length > 0" class="task-count">
             {{ completedCount }}/{{ todoList.length }}
           </span>
           <div class="action-btn" @click.stop="toggleCollapse">
@@ -45,11 +33,8 @@
           </div>
           <div class="progress-bar-container">
             <div class="progress-bar">
-              <div
-                class="progress-fill"
-                :style="{ width: `${contextUsagePercent}%` }"
-                :class="contextUsageStatusClass"
-              />
+              <div class="progress-fill" :style="{ width: `${contextUsagePercent}%` }"
+                :class="contextUsageStatusClass" />
             </div>
             <span class="progress-text">{{ contextUsagePercent }}%</span>
           </div>
@@ -66,11 +51,7 @@
           </div>
           <div class="progress-bar-container">
             <div class="progress-bar">
-              <div
-                class="progress-fill"
-                :style="{ width: `${progressPercent}%` }"
-                :class="progressStatusClass"
-              />
+              <div class="progress-fill" :style="{ width: `${progressPercent}%` }" :class="progressStatusClass" />
             </div>
             <span class="progress-text">{{ progressPercent }}%</span>
           </div>
@@ -83,17 +64,9 @@
             <span>{{ t('workflow.statusPanel.todos') }}</span>
           </div>
           <ul class="todo-list">
-            <li
-              v-for="item in displayedTodoList"
-              :key="item.id"
-              :class="['todo-item', item.status]"
-            >
-              <cs
-                :name="getStatusIcon(item.status)"
-                :class="{ 'cs-spin': item.status === 'in_progress' }"
-                size="14px"
-                class="todo-icon"
-              />
+            <li v-for="item in displayedTodoList" :key="item.id" :class="['todo-item', item.status]">
+              <cs :name="getStatusIcon(item.status)" :class="{ 'cs-spin': item.status === 'in_progress' }" size="14px"
+                class="todo-icon" />
               <span class="todo-text" :title="item.subject || item.title">
                 {{ item.subject || item.title }}
               </span>
@@ -111,33 +84,14 @@
             <span>{{ t('workflow.statusPanel.recentOps') }}</span>
           </div>
           <ul class="operations-list">
-            <li
-              v-for="(op, index) in recentOperations"
-              :key="index"
-              :class="['op-item', op.status, op.toolType]"
-            >
+            <li v-for="(op, index) in recentOperations" :key="index" :class="['op-item', op.status, op.toolType]">
               <div class="op-main">
                 <cs :name="op.icon" size="14px" class="op-icon" />
                 <span class="op-name" :title="op.fullText">{{ op.name }}</span>
               </div>
-              <cs
-                v-if="op.status === 'running'"
-                name="loading"
-                size="12px"
-                class="op-status cs-spin"
-              />
-              <cs
-                v-else-if="op.status === 'success'"
-                name="check"
-                size="12px"
-                class="op-status success"
-              />
-              <cs
-                v-else-if="op.status === 'error'"
-                name="error"
-                size="12px"
-                class="op-status error"
-              />
+              <cs v-if="op.status === 'running'" name="loading" size="12px" class="op-status cs-spin" />
+              <cs v-else-if="op.status === 'success'" name="check" size="12px" class="op-status success" />
+              <cs v-else-if="op.status === 'error'" name="error" size="12px" class="op-status error" />
             </li>
           </ul>
         </div>
@@ -151,18 +105,10 @@
     </div>
 
     <!-- Trigger button (small circle) -->
-    <div
-      v-else-if="hasData"
-      ref="triggerRef"
-      class="status-panel-trigger"
-      :style="triggerStyle"
-      @click="onTriggerClick"
-    >
-      <div
-        class="trigger-drag-area"
-        @mousedown.stop.prevent="startTriggerDrag"
-        @touchstart.stop.prevent="startTriggerDrag"
-      ></div>
+    <div v-else-if="hasData" ref="triggerRef" class="status-panel-trigger" :style="triggerStyle"
+      @click="onTriggerClick">
+      <div class="trigger-drag-area" @mousedown.stop.prevent="startTriggerDrag"
+        @touchstart.stop.prevent="startTriggerDrag"></div>
       <cs name="list" size="18px" />
       <span v-if="progressPercent > 0" class="trigger-badge">{{ progressPercent }}%</span>
     </div>
@@ -188,6 +134,9 @@ const isTodoExpanded = ref(false)
 // Position: use left/top for unified storage
 const position = ref({ x: 0, y: 0 })
 const isPositioned = ref(false)
+
+// Edge distance (for smart positioning during resize)
+const edgeDistance = ref({ right: 20, bottom: 220 })
 
 // Drag offset
 const dragOffset = ref({ x: 0, y: 0 })
@@ -250,21 +199,21 @@ const totalTokens = computed(() => {
   const lastAssistantMsg = [...messages.value]
     .reverse()
     .find(m => m.role === 'assistant' && (m.metadata?.usage || m.metadata?.tokens || m.metadata?.input_tokens || m.metadata?.prompt_tokens))
-  
+
   if (!lastAssistantMsg) return 0
-  
+
   const meta = lastAssistantMsg.metadata
   // 1. Try ChatMetadata style (nested tokens object)
   if (meta.tokens) {
     return meta.tokens.total || (meta.tokens.prompt + meta.tokens.completion) || 0
   }
-  
+
   // 2. Try usage object style
   if (meta.usage) {
     const u = meta.usage
     return u.total_tokens || ((u.input_tokens || u.prompt_tokens || 0) + (u.output_tokens || u.completion_tokens || 0)) || 0
   }
-  
+
   // 3. Fallback to flattened style
   const input = meta.input_tokens || meta.prompt_tokens || 0
   const output = meta.output_tokens || meta.completion_tokens || 0
@@ -311,11 +260,12 @@ const getToolInfo = (name, metadata = {}) => {
     'todo_update': { icon: 'check', toolType: 'tool-todo' },
     'todo_list': { icon: 'list', toolType: 'tool-todo' },
     'todo_get': { icon: 'list', toolType: 'tool-todo' },
+    'submit_plan': { icon: 'skill-plan', toolType: 'tool-todo' },
     'finish_task': { icon: 'check-circle', toolType: 'tool-todo' }
   }
 
   const info = iconMap[name] || { icon: 'tool', toolType: 'tool-system' }
-  
+
   return {
     ...info,
     shortName: metadata.title || name.replace(/_/g, ' ')
@@ -332,7 +282,7 @@ const recentOperations = computed(() => {
   return toolMessages.map(m => {
     const meta = m.metadata || {}
     const toolCall = meta.tool_call || {}
-    
+
     // Robustly extract name (handling both ReAct and OpenAI styles)
     const func = toolCall.function || toolCall
     const name = func.name || toolCall.name || 'Tool'
@@ -462,6 +412,15 @@ const stopDrag = () => {
   document.removeEventListener('touchend', stopDrag)
 
   isPositioned.value = true
+
+  // Calculate and save edge distance
+  const width = isCollapsed.value ? COLLAPSED_WIDTH : PANEL_WIDTH
+  const height = isCollapsed.value ? COLLAPSED_HEIGHT : (panelRef.value?.offsetHeight || 250)
+  edgeDistance.value = {
+    right: window.innerWidth - position.value.x - width,
+    bottom: window.innerHeight - position.value.y - height
+  }
+
   savePosition()
 }
 
@@ -523,8 +482,12 @@ const stopTriggerDrag = () => {
   document.removeEventListener('touchmove', onTriggerDrag)
   document.removeEventListener('touchend', stopTriggerDrag)
 
-  // Save position
+  // Save position and edge distance
   if (hasDragged.value) {
+    edgeDistance.value = {
+      right: window.innerWidth - position.value.x - TRIGGER_SIZE,
+      bottom: window.innerHeight - position.value.y - TRIGGER_SIZE
+    }
     savePosition()
   }
 
@@ -580,17 +543,40 @@ const showPanel = () => {
 
 const savePosition = () => {
   localStorage.setItem('status-panel-position', JSON.stringify(position.value))
+  localStorage.setItem('status-panel-edge-distance', JSON.stringify(edgeDistance.value))
 }
 
 const restorePosition = () => {
   try {
     const saved = localStorage.getItem('status-panel-position')
-    if (saved) {
+    const savedEdge = localStorage.getItem('status-panel-edge-distance')
+
+    if (saved && savedEdge) {
       const savedPos = JSON.parse(saved)
-      // Validate position using small circle dimensions
+      const savedEdgeDist = JSON.parse(savedEdge)
+
+      // Restore edge distance
+      edgeDistance.value = savedEdgeDist
+
+      // Calculate position from edge distance
+      const width = TRIGGER_SIZE
+      const height = TRIGGER_SIZE
+      position.value = {
+        x: Math.max(0, Math.min(window.innerWidth - savedEdgeDist.right - width, window.innerWidth - width)),
+        y: Math.max(0, Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height))
+      }
+      isPositioned.value = true
+    } else if (saved) {
+      // Fallback to old position format (backward compatibility)
+      const savedPos = JSON.parse(saved)
       position.value = {
         x: Math.max(0, Math.min(savedPos.x, window.innerWidth - TRIGGER_SIZE)),
         y: Math.max(0, Math.min(savedPos.y, window.innerHeight - TRIGGER_SIZE))
+      }
+      // Calculate edge distance from absolute position
+      edgeDistance.value = {
+        right: window.innerWidth - position.value.x - TRIGGER_SIZE,
+        bottom: window.innerHeight - position.value.y - TRIGGER_SIZE
       }
       isPositioned.value = true
     }
@@ -609,6 +595,39 @@ const restorePosition = () => {
   }
 }
 
+// Ensure panel position stays within viewport bounds and maintains edge distance
+const constrainPosition = () => {
+  if (!isPositioned.value) return
+
+  // Determine current dimensions based on visibility and collapse state
+  let width, height
+  if (!isVisible.value) {
+    // Trigger button (small circle)
+    width = TRIGGER_SIZE
+    height = TRIGGER_SIZE
+  } else if (isCollapsed.value) {
+    // Collapsed panel
+    width = COLLAPSED_WIDTH
+    height = COLLAPSED_HEIGHT
+  } else {
+    // Expanded panel
+    width = PANEL_WIDTH
+    height = panelRef.value?.offsetHeight || 250
+  }
+
+  // Calculate new position based on edge distance
+  let newX = window.innerWidth - edgeDistance.value.right - width
+  let newY = window.innerHeight - edgeDistance.value.bottom - height
+
+  // Constrain to viewport bounds
+  newX = Math.max(0, Math.min(newX, window.innerWidth - width))
+  newY = Math.max(0, Math.min(newY, window.innerHeight - height))
+
+  // Update position
+  position.value = { x: newX, y: newY }
+  savePosition()
+}
+
 const onKeyDown = (e) => {
   if (e.key === 'Escape' && !isCollapsed.value) {
     isCollapsed.value = true
@@ -618,10 +637,12 @@ const onKeyDown = (e) => {
 onMounted(() => {
   restorePosition()
   document.addEventListener('keydown', onKeyDown)
+  window.addEventListener('resize', constrainPosition)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('resize', constrainPosition)
 })
 
 watch(() => workflowStore.currentWorkflowId, (newId) => {
@@ -744,7 +765,7 @@ watch(() => todoList.value, (newList) => {
 }
 
 .panel-body {
-  max-height: 400px;
+  max-height: 600px;
   overflow-y: auto;
   padding: 12px;
 }
@@ -936,22 +957,34 @@ watch(() => todoList.value, (newList) => {
     // Tool type color coding
     &.tool-file {
       border-left-color: var(--el-color-primary);
-      .op-icon { color: var(--el-color-primary); }
+
+      .op-icon {
+        color: var(--el-color-primary);
+      }
     }
 
     &.tool-network {
       border-left-color: var(--el-color-success);
-      .op-icon { color: var(--el-color-success); }
+
+      .op-icon {
+        color: var(--el-color-success);
+      }
     }
 
     &.tool-system {
       border-left-color: var(--el-color-warning);
-      .op-icon { color: var(--el-color-warning); }
+
+      .op-icon {
+        color: var(--el-color-warning);
+      }
     }
 
     &.tool-todo {
       border-left-color: #8b5cf6;
-      .op-icon { color: #8b5cf6; }
+
+      .op-icon {
+        color: #8b5cf6;
+      }
     }
 
     .op-main {
@@ -1086,6 +1119,7 @@ watch(() => todoList.value, (newList) => {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }

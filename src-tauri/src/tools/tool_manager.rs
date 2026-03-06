@@ -211,6 +211,7 @@ impl ToolManager {
             path_guard,
             tsid.clone(),
             vec![],
+            false,
         )))
         .await?;
 

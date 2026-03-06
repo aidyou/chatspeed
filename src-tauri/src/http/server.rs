@@ -81,6 +81,10 @@ pub async fn start_http_server(
     let backup_dir = app_data_dir.join("backup");
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
+    // make planning dir
+    let planning_dir = app_data_dir.join("planning");
+    std::fs::create_dir_all(&planning_dir).map_err(|e| e.to_string())?;
+
     // define cors config
     let cors = CorsLayer::new()
         .allow_origin(Any)

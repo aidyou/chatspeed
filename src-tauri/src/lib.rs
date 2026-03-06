@@ -262,6 +262,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_allowed_paths,
             get_system_skills,
             workflow_start,
+            workflow_approve_plan,
             workflow_signal,
             workflow_stop,
             workflow_get_tasks,

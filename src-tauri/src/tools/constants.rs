@@ -16,6 +16,7 @@ pub const TOOL_TODO_GET: &str = "todo_get";
 pub const TOOL_SKILL: &str = "skill";
 pub const TOOL_ASK_USER: &str = "ask_user";
 pub const TOOL_FINISH_TASK: &str = "finish_task";
+pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
 pub const TOOL_WEB_SEARCH: &str = "web_search";
 pub const TOOL_WEB_FETCH: &str = "web_fetch";
 

@@ -39,7 +39,7 @@ impl ShellPolicyEngine {
         }
     }
 
-    pub fn check(&self, command_str: &str) -> ShellDecision {
+    pub fn check(&self, command_str: &str, restrict_to_planning: bool) -> ShellDecision {
         // 1. Initial Sanity Check: Block dangerous invisible characters
         for c in command_str.chars() {
             if (c.is_control() && c != '\n' && c != '\r' && c != '\t')
@@ -92,7 +92,7 @@ impl ShellPolicyEngine {
         for (re, desc) in &nested_patterns {
             for cap in re.captures_iter(command_str) {
                 if let Some(inner) = cap.name("inner") {
-                    match self.check(inner.as_str()) {
+                    match self.check(inner.as_str(), restrict_to_planning) {
                         ShellDecision::Deny(reason) => {
                             return ShellDecision::Deny(format!(
                                 "Dangerous command in {}: {}",
@@ -172,20 +172,24 @@ impl ShellPolicyEngine {
             "python", "perl", "ruby", "node", "php", "sh", "bash", "zsh",
         ];
 
+        let destructive_commands = ["rm", "mv", "chmod", "chown"];
+
         let mut final_decision = ShellDecision::Allow;
+        let mut current_binary = String::new();
 
         for (i, token) in tokens.iter().enumerate() {
             let token_str = token.as_str();
 
             if separators.contains(&token_str) {
                 next_is_binary = true;
+                current_binary.clear();
                 continue;
             }
 
             if redirection_ops.contains(&token_str) {
                 if let Some(next_token) = tokens.get(i + 1) {
                     if !next_token.starts_with('-') {
-                        match self.validate_path_token(next_token) {
+                        match self.validate_path_token(next_token, restrict_to_planning) {
                             ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                             ShellDecision::Review(reason) => {
                                 if final_decision == ShellDecision::Allow {
@@ -205,6 +209,7 @@ impl ShellPolicyEngine {
             let clean_token = token.replace('"', "").replace('\'', "").to_lowercase();
 
             if next_is_binary {
+                current_binary = clean_token.clone();
                 if hard_deny.contains(&clean_token.as_str()) {
                     return ShellDecision::Deny(format!(
                         "System-critical command '{}' is forbidden.",
@@ -223,14 +228,37 @@ impl ShellPolicyEngine {
             }
 
             if !token.starts_with('-') {
-                match self.validate_path_token(token) {
+                match self.validate_path_token(token, restrict_to_planning) {
                     ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                     ShellDecision::Review(reason) => {
                         if final_decision == ShellDecision::Allow {
                             final_decision = ShellDecision::Review(reason);
                         }
                     }
-                    _ => {}
+                    ShellDecision::Allow => {
+                        // Root protection check:
+                        // If the current command is destructive and the path is an authorized root, DENY.
+                        if destructive_commands.contains(&current_binary.as_str()) {
+                            if let Ok(expanded) = shellexpand::full(token) {
+                                let path_str: &str = expanded.as_ref();
+                                let is_root = if let Ok(guard) = self.path_guard.read() {
+                                    let p = Path::new(path_str);
+                                    // Check absolute path or common relative aliases for root
+                                    guard.is_authorized_root(p) || 
+                                    (path_str == "." || path_str == "./")
+                                } else {
+                                    false
+                                };
+
+                                if is_root {
+                                    return ShellDecision::Deny(format!(
+                                        "Operation Denied: '{}' cannot be performed on the authorized root directory itself ({:?}).",
+                                        current_binary, path_str
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -238,7 +266,7 @@ impl ShellPolicyEngine {
         final_decision
     }
 
-    fn validate_path_token(&self, token: &str) -> ShellDecision {
+    fn validate_path_token(&self, token: &str, restrict_to_planning: bool) -> ShellDecision {
         if token.starts_with('~') {
             return ShellDecision::Deny(
                 "Tilde (~) expansion is blocked. Use absolute paths within the workspace.".into(),
@@ -257,12 +285,34 @@ impl ShellPolicyEngine {
                     let expanded_str: &str = expanded.as_ref();
                     if expanded_str.contains('/') || expanded_str.starts_with('.') {
                         let valid = if let Ok(guard) = self.path_guard.read() {
-                            guard.validate(Path::new(expanded_str))
+                            guard.validate(Path::new(expanded_str), restrict_to_planning)
                         } else {
                             Err(WorkflowEngineError::Security("Lock failed".into()))
                         };
-                        if let Err(e) = valid {
-                            return ShellDecision::Deny(format!("Boundary Violation: {}", e));
+                        match valid {
+                            Ok(path) => {
+                                // Precise Skill Check: Check if path starts with an authorized "skills" root
+                                let is_skill = if let Ok(guard) = self.path_guard.read() {
+                                    guard.allowed_roots().iter().any(|root| {
+                                        let is_skill_root = root.file_name().and_then(|n| n.to_str()) == Some("skills") 
+                                            || root.to_string_lossy().contains("/skills/")
+                                            || root.to_string_lossy().ends_with("/skills");
+                                        is_skill_root && path.starts_with(root)
+                                    })
+                                } else {
+                                    false
+                                };
+
+                                if is_skill {
+                                    return ShellDecision::Review(format!(
+                                        "Executing script within authorized skills directory: {:?}",
+                                        path
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return ShellDecision::Deny(format!("Boundary Violation: {}", e));
+                            }
                         }
                     }
                 }
@@ -281,6 +331,7 @@ impl ShellPolicyEngine {
 pub struct ShellExecute {
     policy_engine: ShellPolicyEngine,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    planning_mode: bool,
 }
 
 impl ShellExecute {
@@ -288,10 +339,12 @@ impl ShellExecute {
         path_guard: Arc<RwLock<PathGuard>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         custom_rules: Vec<ShellPolicyRule>,
+        planning_mode: bool,
     ) -> Self {
         Self {
             policy_engine: ShellPolicyEngine::new(path_guard, custom_rules),
             tsid_generator,
+            planning_mode,
         }
     }
 }
@@ -350,7 +403,7 @@ impl ToolDefinition for ShellExecute {
             .as_str()
             .ok_or(ToolError::InvalidParams("command required".into()))?;
 
-        match self.policy_engine.check(command_str) {
+        match self.policy_engine.check(command_str, self.planning_mode) {
             ShellDecision::Allow => {}
             ShellDecision::Review(reason) => {
                 return Err(ToolError::Security(format!("REVIEW_REQUIRED: {}", reason)))
@@ -463,9 +516,9 @@ mod tests {
     fn test_policy_engine_basic() {
         let (_root, root_path, guard) = setup_test_context();
         let engine = ShellPolicyEngine::new(guard, vec![]);
-        assert_eq!(engine.check("ls"), ShellDecision::Allow);
+        assert_eq!(engine.check("ls", false), ShellDecision::Allow);
         assert_eq!(
-            engine.check(&format!("ls {}", root_path.display())),
+            engine.check(&format!("ls {}", root_path.display()), false),
             ShellDecision::Allow
         );
     }
@@ -475,11 +528,11 @@ mod tests {
         let (_root, _, guard) = setup_test_context();
         let engine = ShellPolicyEngine::new(guard, vec![]);
         assert!(matches!(
-            engine.check("sudo rm -rf /"),
+            engine.check("sudo rm -rf /", false),
             ShellDecision::Deny(_)
         ));
         assert!(matches!(
-            engine.check("rm -rf test"),
+            engine.check("rm -rf test", false),
             ShellDecision::Review(_)
         ));
     }
@@ -498,7 +551,7 @@ mod tests {
             },
         ];
         let engine = ShellPolicyEngine::new(guard, rules);
-        assert!(matches!(engine.check("ls -la"), ShellDecision::Deny(_)));
-        assert_eq!(engine.check("rm -rf /safe/test"), ShellDecision::Allow);
+        assert!(matches!(engine.check("ls -la", false), ShellDecision::Deny(_)));
+        assert_eq!(engine.check("rm -rf /safe/test", false), ShellDecision::Allow);
     }
 }

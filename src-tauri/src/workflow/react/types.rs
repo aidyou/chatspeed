@@ -9,6 +9,7 @@ pub enum WorkflowState {
     Thinking,
     Executing,
     Paused,
+    AwaitingApproval,
     Completed,
     Error,
     Cancelled,

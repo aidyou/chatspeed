@@ -231,8 +231,13 @@
                 </div>
 
                 <div class="icons">
+                  <el-tooltip :content="$t('workflow.planningModeTooltip')" placement="top">
+                    <label class="icon-btn upperLayer" :class="{ active: planningMode }" @click="planningMode = !planningMode">
+                      <cs name="skill-plan" class="small" />
+                    </label>
+                  </el-tooltip>
                   <el-tooltip :content="$t('workflow.autoApproveTooltip')" placement="top">
-                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }">
+                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }" @click="autoApproveTools = !autoApproveTools">
                       <cs name="tool" class="small" />
                     </label>
                   </el-tooltip>
@@ -245,14 +250,18 @@
               </div>
               <div class="icons">
                 <el-button
-                  v-if="!isRunning && currentWorkflowId && currentWorkflow?.status !== 'completed' && currentWorkflow?.status !== 'error'"
+                  v-if="isAwaitingApproval"
+                  size="small" round type="success" @click="onApprovePlan">
+                  {{ $t('workflow.approvePlan') }}
+                </el-button>
+                <el-button
+                  v-if="!isRunning && !isAwaitingApproval && currentWorkflowId && currentWorkflow?.status !== 'completed' && currentWorkflow?.status !== 'error'"
                   size="small" round type="primary" @click="onContinue">
                   {{ $t('workflow.continue') }}
                 </el-button>
                 <cs name="stop" @click="onStop" v-if="isRunning" />
                 <cs name="send" @click="onSendMessage" :class="{ disabled: !canSendMessage }" />
-              </div>
-            </div>
+              </div>            </div>
           </div>
         </el-footer>
       </el-container>
@@ -338,6 +347,7 @@ const searchQuery = ref('')
 const inputMessage = ref('')
 const selectedAgent = ref(null)
 const autoApproveTools = ref(true)
+const planningMode = ref(false)
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const messagesRef = ref(null)
@@ -721,6 +731,7 @@ const workflows = computed(() => workflowStore.workflows)
 const currentWorkflow = computed(() => workflowStore.currentWorkflow)
 const messages = computed(() => workflowStore.messages)
 const isRunning = computed(() => workflowStore.isRunning)
+const isAwaitingApproval = computed(() => currentWorkflow.value?.status === 'awaiting_approval')
 const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 
 // Enhanced messages with pre-calculated display info
@@ -1101,7 +1112,8 @@ const startNewWorkflow = async (prompt) => {
     await invokeWrapper('workflow_start', {
       sessionId: newWorkflowId,
       agentId: selectedAgent.value.id,
-      initialPrompt: prompt
+      initialPrompt: prompt,
+      planningMode: planningMode.value
     })
     console.log('Workflow engine started successfully')
     nextTick(() => scrollToBottom())
@@ -1226,13 +1238,17 @@ const onSendMessage = async () => {
         console.error('Failed to send signal:', error)
       }
     } else {
-      // Engine is stopped (Completed or Error).
+      // Engine is stopped (Completed, Error, or Awaiting Approval).
       // DO NOT add message manually here, workflow_start will handle it and broadcast via events.
       try {
+        // If we were awaiting approval, continue in planning mode if we send a message (rejecting the plan)
+        const isCurrentlyAwaiting = currentWorkflow.value?.status === 'awaiting_approval'
+        
         await invokeWrapper('workflow_start', {
           sessionId: currentWorkflowId.value,
           agentId: selectedAgent.value.id,
-          initialPrompt: message
+          initialPrompt: message,
+          planningMode: isCurrentlyAwaiting || planningMode.value
         })
       } catch (error) {
         console.error('Failed to resume workflow:', error)
@@ -1294,6 +1310,54 @@ const onContinue = async () => {
     })
   } catch (error) {
     console.error('Failed to continue workflow:', error)
+    showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+  }
+}
+
+const onApprovePlan = async () => {
+  if (!currentWorkflowId.value) return
+
+  // Find the last assistant message that contains 'submit_plan' tool call
+  const assistantMsgs = messages.value.filter(m => m.role === 'assistant')
+  const lastAssistantMsg = assistantMsgs[assistantMsgs.length - 1]
+  
+  if (!lastAssistantMsg) return
+
+  // Extract plan from tool call arguments if available, otherwise use message content
+  let planContent = lastAssistantMsg.message
+  try {
+    const metadata = typeof lastAssistantMsg.metadata === 'string' 
+      ? JSON.parse(lastAssistantMsg.metadata) 
+      : lastAssistantMsg.metadata
+      
+    if (metadata && (metadata.tool_calls || metadata.tool)) {
+      const toolCalls = metadata.tool_calls || (metadata.tool ? [metadata.tool] : [])
+      const submitPlanCall = toolCalls.find(c => 
+        (c.name === 'submit_plan') || 
+        (c.function && c.function.name === 'submit_plan')
+      )
+      if (submitPlanCall) {
+        const args = typeof submitPlanCall.arguments === 'string'
+          ? JSON.parse(submitPlanCall.arguments)
+          : (submitPlanCall.arguments || submitPlanCall.function?.arguments || submitPlanCall.input)
+        if (args && args.plan) {
+          planContent = args.plan
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to extract plan from metadata, using raw message content instead:', e)
+  }
+
+  try {
+    await invokeWrapper('workflow_approve_plan', {
+      sessionId: currentWorkflowId.value,
+      agentId: selectedAgent.value.id,
+      plan: planContent
+    })
+    console.log('Plan approved and execution started')
+  } catch (error) {
+    console.error('Failed to approve plan:', error)
     showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
   }
 }
