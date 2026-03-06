@@ -1,7 +1,6 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{Agent, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
-use crate::workflow::react::executor::WorkflowExecutor;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
 use serde_json::{json, Value};
@@ -211,33 +210,53 @@ pub async fn workflow_start(
             .unwrap_or_default()
     };
 
-    let mut executor = WorkflowExecutor::new(
-        session_id.clone(),
-        main_store,
-        chat_state_arc,
-        gateway as Arc<dyn Gateway>,
-        factory,
-        agent_config,
-        allowed_roots,
-        app_data_dir,
-        None,
-        Some(signal_rx),
-        tsid_generator,
-        global_tool_manager,
-        planning_mode,
-    );
+    let shared_executor: Arc<tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>> = if planning_mode {
+        Arc::new(tokio::sync::Mutex::new(crate::workflow::react::planners::PlanningExecutor::new(
+            session_id.clone(),
+            main_store,
+            chat_state_arc,
+            gateway as Arc<dyn Gateway>,
+            factory,
+            agent_config,
+            allowed_roots,
+            app_data_dir,
+            None, // subagent_type
+            Some(signal_rx),
+            tsid_generator,
+            global_tool_manager,
+            crate::workflow::react::policy::ExecutionPolicy::planning(),
+        )))
+    } else {
+        Arc::new(tokio::sync::Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
+            session_id.clone(),
+            main_store,
+            chat_state_arc,
+            gateway as Arc<dyn Gateway>,
+            factory,
+            agent_config,
+            allowed_roots,
+            app_data_dir,
+            None, // subagent_type
+            Some(signal_rx),
+            tsid_generator,
+            global_tool_manager,
+            crate::workflow::react::policy::ExecutionPolicy::standard(),
+        )))
+    };
 
-    executor.init().await.map_err(|e| e.to_string())?;
+    {
+        let mut executor = shared_executor.lock().await;
+        executor.init().await.map_err(|e| e.to_string())?;
 
-    if let Some(prompt) = initial_prompt {
-        executor
-            .add_message_and_notify("user".into(), prompt, None, None, false, None, None)
-            .await
-            .map_err(|e| e.to_string())?;
+        if let Some(prompt) = initial_prompt {
+            executor
+                .add_message_and_notify("user".into(), prompt, None, None, false, None, None)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
     }
 
     // Register for external control
-    let shared_executor = Arc::new(tokio::sync::Mutex::new(executor));
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
@@ -345,7 +364,7 @@ pub async fn workflow_approve_plan(
             .unwrap_or_default()
     };
 
-    let mut executor = WorkflowExecutor::new(
+    let shared_executor: Arc<tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>> = Arc::new(tokio::sync::Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
         session_id.clone(),
         main_store_arc,
         chat_state_arc,
@@ -354,17 +373,19 @@ pub async fn workflow_approve_plan(
         agent_config,
         allowed_roots,
         app_data_dir,
-        None,
+        None, // subagent_type
         Some(signal_rx),
         tsid_generator_arc,
         global_tool_manager,
-        false, // planning_mode = false
-    );
+        crate::workflow::react::policy::ExecutionPolicy::implementation(),
+    )));
 
-    executor.init().await.map_err(|e| e.to_string())?;
+    {
+        let mut executor = shared_executor.lock().await;
+        executor.init().await.map_err(|e| e.to_string())?;
+    }
 
     // Register for external control
-    let shared_executor = Arc::new(tokio::sync::Mutex::new(executor));
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),

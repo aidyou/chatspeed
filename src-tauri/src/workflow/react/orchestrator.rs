@@ -3,7 +3,7 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
-use crate::workflow::react::executor::WorkflowExecutor;
+use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::gateway::Gateway;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 /// Represents different types of background tasks for unified management
 pub enum BackgroundTask {
     /// An autonomous sub-agent running its own ReAct loop
-    SubAgent(Arc<Mutex<WorkflowExecutor>>),
+    SubAgent(Arc<Mutex<dyn ReActExecutor>>),
     /// A raw shell command running in the background
     ShellCommand {
         command: String,
@@ -40,7 +40,7 @@ pub trait SubAgentFactory: Send + Sync {
         session_id: &str,
         task: &str,
         subagent_type: &str,
-    ) -> Result<WorkflowExecutor, WorkflowEngineError>;
+    ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError>;
 }
 
 /// The default factory used to spawn sub-agents within the ReAct system
@@ -60,7 +60,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         session_id: &str,
         _task: &str,
         subagent_type: &str,
-    ) -> Result<WorkflowExecutor, WorkflowEngineError> {
+    ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError> {
         let agent_config = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
@@ -72,7 +72,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 
         let (_signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
 
-        Ok(WorkflowExecutor::new(
+        Ok(Arc::new(Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
             session_id.to_string(),
             self.main_store.clone(),
             self.chat_state.clone(),
@@ -91,8 +91,8 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             Some(signal_rx),
             self.tsid_generator.clone(),
             self.chat_state.tool_manager.clone(),
-            false, // sub-agents always start in execution mode for now
-        ))
+            crate::workflow::react::policy::ExecutionPolicy::standard(),
+        ))))
     }
 }
 
@@ -187,7 +187,7 @@ impl ToolDefinition for TaskTool {
                 .map_err(|e| ToolError::ExecutionFailed(e))?
         );
 
-        let mut sub_executor = self
+        let sub_executor = self
             .executor_factory
             .create_executor("default_sub_agent", &task_id, prompt, subagent_type)
             .await
@@ -195,21 +195,22 @@ impl ToolDefinition for TaskTool {
                 ToolError::ExecutionFailed(format!("Failed to create sub-executor: {}", e))
             })?;
 
-        sub_executor
-            .init()
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Sub-agent init failed: {}", e)))?;
-
-        let sub_executor_arc = Arc::new(Mutex::new(sub_executor));
+        {
+            let mut guard = sub_executor.lock().await;
+            guard
+                .init()
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Sub-agent init failed: {}", e)))?;
+        }
 
         if run_in_background {
-            let exec_clone = sub_executor_arc.clone();
-            BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor_arc));
+            let exec_clone = sub_executor.clone();
+            BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
 
             tokio::spawn(async move {
                 let mut guard = exec_clone.lock().await;
                 if let Err(e) = guard.run_loop().await {
-                    log::error!("Background task {} failed: {}", guard.session_id, e);
+                    log::error!("Background task {} failed: {}", guard.session_id(), e);
                 }
             });
 
@@ -222,13 +223,14 @@ impl ToolDefinition for TaskTool {
 
         // Blocking mode: Wait for completion
         {
-            let mut guard = sub_executor_arc.lock().await;
+            let mut guard = sub_executor.lock().await;
             guard.run_loop().await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Sub-agent execution failed: {}", e))
             })?;
 
             // 1. Look for 'finish_task' in assistant messages first
-            for msg in guard.context.messages.iter().rev() {
+            let messages = guard.messages();
+            for msg in messages.iter().rev() {
                 if msg.role == "assistant" {
                     let cleaned = crate::libs::util::format_json_str(&msg.message);
                     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
@@ -279,10 +281,8 @@ impl ToolDefinition for TaskTool {
             }
 
             // 2. Fallback: last assistant message content
-            let last_assistant_msg = guard
-                .context
-                .messages
-                .iter()
+            let last_assistant_msg = messages
+                .into_iter()
                 .rev()
                 .find(|m| m.role == "assistant")
                 .ok_or_else(|| {
@@ -355,10 +355,9 @@ impl ToolDefinition for TaskOutputTool {
             BackgroundTask::SubAgent(exec_arc) => {
                 let guard = exec_arc.lock().await;
                 // Simplified: return latest assistant message or state
-                let mut result = format!("Status: {:?}. ", guard.state);
+                let mut result = format!("Status: {:?}. ", guard.state());
                 if let Some(last_msg) = guard
-                    .context
-                    .messages
+                    .messages()
                     .iter()
                     .rev()
                     .find(|m| m.role == "assistant")
@@ -439,8 +438,7 @@ impl ToolDefinition for TaskStopTool {
             match task {
                 BackgroundTask::SubAgent(exec_arc) => {
                     let mut guard = exec_arc.lock().await;
-                    guard.state = crate::workflow::react::types::WorkflowState::Completed;
-                    // Force stop
+                    guard.set_state(crate::workflow::react::types::WorkflowState::Completed);
                 }
                 BackgroundTask::ShellCommand { status, .. } => {
                     *status.lock().await = "Stopped".to_string();

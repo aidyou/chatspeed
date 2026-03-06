@@ -1,114 +1,56 @@
+use async_trait::async_trait;
+use dirs;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use tokio::time::{sleep, Duration};
+
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::ai::traits::chat::MessageType;
 use crate::db::{Agent, MainStore};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH,
-    TOOL_WRITE_FILE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
+use crate::workflow::react::intelligence::IntelligenceManager;
+use crate::workflow::react::llm::LlmProcessor;
+use crate::workflow::react::loop_detector::LoopDetector;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
-use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
+use crate::workflow::react::orchestrator::SubAgentFactory;
+use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy, PathRestriction};
 use crate::workflow::react::security::PathGuard;
+use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
-use dirs;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
-use tokio::time::{sleep, Duration};
 
 /// Default maximum ReAct steps before the agent is forced to conclude.
 const DEFAULT_MAX_STEPS: usize = 60;
 
-/// Window size for the repetition detector (number of recent tool calls to inspect).
-const LOOP_DETECT_WINDOW: usize = 8;
+/// Unified interface for ReAct executors (Planners and Runners).
+#[async_trait]
+pub trait ReActExecutor: Send + Sync {
+    async fn init(&mut self) -> Result<(), WorkflowEngineError>;
+    async fn run_loop(&mut self) -> Result<(), WorkflowEngineError>;
+    async fn add_message_and_notify(
+        &mut self,
+        role: String,
+        content: String,
+        reasoning: Option<String>,
+        step_type: Option<StepType>,
+        is_error: bool,
+        error_type: Option<String>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<bool, WorkflowEngineError>;
 
-/// Minimum repeat count within the window that triggers a loop warning.
-const LOOP_REPEAT_THRESHOLD: usize = 3;
-
-/// Detects when the agent repeats the same tool call with identical arguments.
-struct LoopDetector {
-    /// Sliding window of (tool_name, args_hash) pairs.
-    recent_calls: VecDeque<(String, u64)>,
+    // Property accessors
+    fn session_id(&self) -> String;
+    fn state(&self) -> WorkflowState;
+    fn set_state(&mut self, state: WorkflowState);
+    fn messages(&self) -> Vec<crate::db::WorkflowMessage>;
 }
-
-impl LoopDetector {
-    fn new() -> Self {
-        Self {
-            recent_calls: VecDeque::with_capacity(LOOP_DETECT_WINDOW),
-        }
-    }
-
-    /// Records a tool call and returns a warning message if a loop is detected.
-    fn record_and_check(&mut self, tool_name: &str, args: &serde_json::Value) -> Option<String> {
-        use std::hash::{Hash, Hasher};
-
-        // Canonicalize JSON to ensure consistent hashing regardless of key order
-        // serde_json::to_string on a Value uses BTreeMap internally which is sorted by default,
-        // but being explicit or using a sorted approach is safer if preserve_order is enabled.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-
-        // For Objects, we ensure keys are hashed in a stable order
-        fn hash_stable<H: Hasher>(v: &serde_json::Value, state: &mut H) {
-            match v {
-                serde_json::Value::Object(map) => {
-                    let mut keys: Vec<_> = map.keys().collect();
-                    keys.sort();
-                    for k in keys {
-                        k.hash(state);
-                        hash_stable(&map[k], state);
-                    }
-                }
-                serde_json::Value::Array(arr) => {
-                    for item in arr {
-                        hash_stable(item, state);
-                    }
-                }
-                _ => v.to_string().hash(state),
-            }
-        }
-
-        hash_stable(args, &mut hasher);
-        let args_hash = hasher.finish();
-
-        let key = (tool_name.to_string(), args_hash);
-        let repeat_count = self
-            .recent_calls
-            .iter()
-            .filter(|c| c.0 == key.0 && c.1 == key.1)
-            .count();
-
-        self.recent_calls.push_back(key);
-        if self.recent_calls.len() > LOOP_DETECT_WINDOW {
-            self.recent_calls.pop_front();
-        }
-
-        if repeat_count >= LOOP_REPEAT_THRESHOLD {
-            Some(format!(
-                "<system-reminder>LOOP DETECTED: You have called '{}' with identical arguments {} times \
-                in the last {} steps. This is unproductive repetition. You MUST change your approach NOW:\n\
-                1. If searching the web: try completely different keywords or a different data source.\n\
-                2. If fetching a URL: the content may be unavailable — mark the task as 'data_missing' and continue.\n\
-                3. If all alternatives are exhausted: accept the limitation and move to the next task.\n\
-                Do NOT call '{}' with the same parameters again.</system-reminder>",
-                tool_name,
-                repeat_count + 1,
-                LOOP_DETECT_WINDOW,
-                tool_name
-            ))
-        } else {
-            None
-        }
-    }
-}
-
-use crate::workflow::react::llm::LlmProcessor;
-use crate::workflow::react::orchestrator::SubAgentFactory;
-use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 
 pub struct WorkflowExecutor {
     pub session_id: String,
@@ -122,6 +64,7 @@ pub struct WorkflowExecutor {
     pub path_guard: Arc<RwLock<PathGuard>>,
     pub skill_scanner: SkillScanner,
     pub llm_processor: LlmProcessor,
+    pub intelligence_manager: IntelligenceManager,
     pub available_skills: HashMap<String, SkillManifest>,
     pub agent_config: Agent,
     pub state: WorkflowState,
@@ -132,12 +75,53 @@ pub struct WorkflowExecutor {
     pub auto_approve: HashSet<String>,
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
-    pub active_provider_id: i64,
-    pub active_model_name: String,
-    /// Whether the agent is in planning mode (research-only).
-    pub planning_mode: bool,
+    /// Rules and permissions for this ReAct session.
+    pub policy: ExecutionPolicy,
     /// Detects repetitive tool calls within a sliding window.
     loop_detector: LoopDetector,
+}
+
+#[async_trait]
+impl ReActExecutor for WorkflowExecutor {
+    async fn init(&mut self) -> Result<(), WorkflowEngineError> {
+        self.init_internal().await
+    }
+
+    async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
+        self.run_loop_internal().await
+    }
+
+    async fn add_message_and_notify(
+        &mut self,
+        role: String,
+        content: String,
+        reasoning: Option<String>,
+        step_type: Option<StepType>,
+        is_error: bool,
+        error_type: Option<String>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<bool, WorkflowEngineError> {
+        self.add_message_and_notify_internal(
+            role, content, reasoning, step_type, is_error, error_type, metadata,
+        )
+        .await
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
+
+    fn state(&self) -> WorkflowState {
+        self.state.clone()
+    }
+
+    fn set_state(&mut self, state: WorkflowState) {
+        self.state = state;
+    }
+
+    fn messages(&self) -> Vec<crate::db::WorkflowMessage> {
+        self.context.messages.clone()
+    }
 }
 
 impl WorkflowExecutor {
@@ -154,7 +138,7 @@ impl WorkflowExecutor {
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         global_tool_manager: Arc<ToolManager>,
-        planning_mode: bool,
+        policy: ExecutionPolicy,
     ) -> Self {
         let max_contexts = agent_config.max_contexts.unwrap_or(128000) as usize;
         let context = ContextManager::new(
@@ -253,10 +237,17 @@ impl WorkflowExecutor {
             agent_config.clone(),
             HashMap::new(), // available_skills will be populated later
             path_guard.clone(),
+            chat_state.clone(),
             provider_id,
             model_name.clone(),
             reasoning,
-            planning_mode,
+        );
+
+        let intelligence_manager = IntelligenceManager::new(
+            session_id.clone(),
+            chat_state.clone(),
+            provider_id,
+            model_name.clone(),
         );
 
         // Derive max_steps from agent config: use max_contexts as a hint (divide by 2000
@@ -278,6 +269,7 @@ impl WorkflowExecutor {
             path_guard,
             skill_scanner,
             llm_processor,
+            intelligence_manager,
             available_skills: HashMap::new(),
             agent_config,
             state: WorkflowState::Pending,
@@ -287,14 +279,12 @@ impl WorkflowExecutor {
             auto_approve,
             signal_rx,
             tsid_generator,
-            active_provider_id: provider_id,
-            active_model_name: model_name,
-            planning_mode,
+            policy,
             loop_detector: LoopDetector::new(),
         }
     }
 
-    pub async fn init(&mut self) -> Result<(), WorkflowEngineError> {
+    pub(crate) async fn init_internal(&mut self) -> Result<(), WorkflowEngineError> {
         self.context.load_history().await?;
         self.available_skills = self.skill_scanner.scan()?;
         self.llm_processor.available_skills = self.available_skills.clone();
@@ -333,27 +323,62 @@ impl WorkflowExecutor {
         };
 
         // 1. Native FS & Search Tools
-        if is_allowed(TOOL_READ_FILE) {
+        if is_allowed(TOOL_READ_FILE)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(ReadFile)).await?;
         }
-        if is_allowed(TOOL_WRITE_FILE) {
+        if is_allowed(TOOL_WRITE_FILE)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(WriteFile)).await?;
         }
-        if is_allowed(TOOL_EDIT_FILE) {
+        if is_allowed(TOOL_EDIT_FILE)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(EditFile)).await?;
         }
-        if is_allowed(TOOL_LIST_DIR) {
+        if is_allowed(TOOL_LIST_DIR)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(ListDir)).await?;
         }
-        if is_allowed(TOOL_GLOB) {
+        if is_allowed(TOOL_GLOB)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(Glob)).await?;
         }
-        if is_allowed(TOOL_GREP) {
+        if is_allowed(TOOL_GREP)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::FileSystem)
+        {
             tm.register_tool(Arc::new(Grep)).await?;
         }
 
         // 2. Shell Tool (With session-aware policy)
-        if is_allowed(TOOL_BASH) {
+        if is_allowed(TOOL_BASH)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::System)
+        {
             let custom_rules: Vec<ShellPolicyRule> = self
                 .agent_config
                 .shell_policy
@@ -365,23 +390,37 @@ impl WorkflowExecutor {
                 self.path_guard.clone(),
                 self.tsid_generator.clone(),
                 custom_rules,
-                self.planning_mode,
+                self.policy.path_restriction == PathRestriction::SandboxOnly,
             )))
             .await?;
         }
 
         // 3. Interaction Tools
-        if is_allowed(TOOL_ASK_USER) {
+        if is_allowed(TOOL_ASK_USER)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::Interaction)
+        {
             tm.register_tool(Arc::new(AskUser)).await?;
         }
-        if self.planning_mode {
+        if self.policy.phase == ExecutionPhase::Planning {
             tm.register_tool(Arc::new(SubmitPlan)).await?;
-        } else if is_allowed(TOOL_FINISH_TASK) {
+        } else if is_allowed(TOOL_FINISH_TASK)
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::Interaction)
+        {
             tm.register_tool(Arc::new(FinishTask)).await?;
         }
 
         // 4. Multi-Agent & Skill Tools
-        if !self.planning_mode {
+        if self
+            .policy
+            .allowed_categories
+            .contains(&ToolCategory::Skill)
+        {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
             tm.register_tool(Arc::new(
@@ -400,31 +439,37 @@ impl WorkflowExecutor {
         }
 
         // 5. Todo Manager Tools (Session Persistent)
-        tm.register_tool(Arc::new(TodoCreateTool {
-            session_id: self.session_id.clone(),
-            main_store: self.context.main_store.clone(),
-        }))
-        .await?;
-        tm.register_tool(Arc::new(TodoListTool {
-            session_id: self.session_id.clone(),
-            main_store: self.context.main_store.clone(),
-        }))
-        .await?;
-        tm.register_tool(Arc::new(TodoUpdateTool {
-            session_id: self.session_id.clone(),
-            main_store: self.context.main_store.clone(),
-        }))
-        .await?;
-        tm.register_tool(Arc::new(TodoGetTool {
-            session_id: self.session_id.clone(),
-            main_store: self.context.main_store.clone(),
-        }))
-        .await?;
+        if self
+            .policy
+            .allowed_categories
+            .contains(&ToolCategory::Skill)
+        {
+            tm.register_tool(Arc::new(TodoCreateTool {
+                session_id: self.session_id.clone(),
+                main_store: self.context.main_store.clone(),
+            }))
+            .await?;
+            tm.register_tool(Arc::new(TodoListTool {
+                session_id: self.session_id.clone(),
+                main_store: self.context.main_store.clone(),
+            }))
+            .await?;
+            tm.register_tool(Arc::new(TodoUpdateTool {
+                session_id: self.session_id.clone(),
+                main_store: self.context.main_store.clone(),
+            }))
+            .await?;
+            tm.register_tool(Arc::new(TodoGetTool {
+                session_id: self.session_id.clone(),
+                main_store: self.context.main_store.clone(),
+            }))
+            .await?;
+        }
 
         Ok(())
     }
 
-    pub async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
+    pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
         let mut signal_rx = self
             .signal_rx
             .take()
@@ -450,7 +495,7 @@ impl WorkflowExecutor {
                 } else if sig_json["type"] == "user_input" {
                     // Push user input to messages
                     let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
-                    self.add_message_and_notify(
+                    self.add_message_and_notify_internal(
                         "user".to_string(),
                         user_input,
                         None,
@@ -534,7 +579,7 @@ impl WorkflowExecutor {
                             ObservationReinforcer::reinforce(&tool_call_obj, &result)
                         };
 
-                        self.add_message_and_notify(
+                        self.add_message_and_notify_internal(
                             "tool".to_string(),
                             reinforced.content,
                             None,
@@ -557,7 +602,7 @@ impl WorkflowExecutor {
                             tool_name
                         );
                         let observation = format!("Error: User rejected the execution of tool '{}'. Please try an alternative approach or ask for clarification.", tool_name);
-                        self.add_message_and_notify(
+                        self.add_message_and_notify_internal(
                             "tool".to_string(),
                             observation,
                             None,
@@ -576,7 +621,7 @@ impl WorkflowExecutor {
                     continue;
                 } else {
                     let user_input = signal_json["content"].as_str().unwrap_or("").to_string();
-                    self.add_message_and_notify(
+                    self.add_message_and_notify_internal(
                         "user".to_string(),
                         user_input,
                         None,
@@ -670,7 +715,7 @@ impl WorkflowExecutor {
                 format!("{}\n\n{}", text_part, json_part)
             };
 
-            self.add_message_and_notify(
+            self.add_message_and_notify_internal(
                 "assistant".to_string(),
                 full_response,
                 Some(response_reasoning),
@@ -849,7 +894,7 @@ impl WorkflowExecutor {
                     interrupt_str
                 };
 
-                self.add_message_and_notify(
+                self.add_message_and_notify_internal(
                     "user".to_string(),
                     content,
                     None,
@@ -1030,6 +1075,7 @@ impl WorkflowExecutor {
                 self.gateway.clone(),
                 tools,
                 self.max_steps,
+                &self.policy,
             )
             .await
     }
@@ -1187,6 +1233,10 @@ impl WorkflowExecutor {
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // 1. Plan Submission Guard
         if name == TOOL_SUBMIT_PLAN {
+            if self.policy.phase != ExecutionPhase::Planning {
+                return Err(WorkflowEngineError::Security("Tool 'submit_plan' is only allowed in Planning phase.".into()));
+            }
+
             if text_part.trim().is_empty() {
                 return Ok(Some(ReinforcedResult {
                     content: "<system-reminder>Error: You called 'submit_plan' but your plain text response was empty. You MUST provide a summary of your findings and why this plan is recommended in plain text BEFORE the tool call block.</system-reminder>".into(),
@@ -1206,10 +1256,6 @@ impl WorkflowExecutor {
                 })?;
                 store.update_workflow_status(&self.session_id, "awaiting_approval")?;
             }
-
-            // B. Persist the plan in metadata for the next executor to find
-            // We append it as a system-like "final plan" or store it in workflow record if there's a field.
-            // For now, it's just a tool output.
         }
 
         // 2. Finish Task Guard & Self-Reflection Audit
@@ -1260,7 +1306,11 @@ impl WorkflowExecutor {
             }
 
             // C. Semantic Quality Audit
-            if let Some(audit_feedback) = self.run_final_audit().await? {
+            if let Some(audit_feedback) = self
+                .intelligence_manager
+                .run_final_audit(&self.context)
+                .await?
+            {
                 log::warn!(
                     "WorkflowExecutor {}: Final audit rejected the conclusion. Feedback: {}",
                     self.session_id,
@@ -1314,7 +1364,10 @@ impl WorkflowExecutor {
                 let policy_engine =
                     crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
 
-                match policy_engine.check(command_str, self.planning_mode) {
+                match policy_engine.check(
+                    command_str,
+                    self.policy.path_restriction == PathRestriction::SandboxOnly,
+                ) {
                     crate::tools::ShellDecision::Allow => {}
                     crate::tools::ShellDecision::Deny(reason) => {
                         return Ok(Some(ReinforcedResult {
@@ -1367,7 +1420,10 @@ impl WorkflowExecutor {
                 let guard = self.path_guard.read().map_err(|e| {
                     WorkflowEngineError::General(format!("PathGuard lock poisoned: {}", e))
                 })?;
-                guard.validate(std::path::Path::new(path_str), self.planning_mode)?;
+                guard.validate(
+                    std::path::Path::new(path_str),
+                    self.policy.path_restriction == PathRestriction::SandboxOnly,
+                )?;
             }
         }
 
@@ -1418,7 +1474,11 @@ impl WorkflowExecutor {
 
                 if let Some(content) = content_opt {
                     if content.len() > 15000 {
-                        match self.summarize_content(content).await {
+                        match self
+                            .intelligence_manager
+                            .summarize_web_content(content, &self.context)
+                            .await
+                        {
                             Ok(summary) if !summary.trim().is_empty() => {
                                 let url = args["url"].as_str().unwrap_or("");
                                 return Ok(ReinforcedResult {
@@ -1456,168 +1516,6 @@ impl WorkflowExecutor {
         }
     }
 
-    async fn summarize_content(&mut self, content: &str) -> Result<String, WorkflowEngineError> {
-        // 1. Extract Global Goal (First user message)
-        let global_goal = self
-            .context
-            .messages
-            .first()
-            .map(|m| m.message.clone())
-            .unwrap_or_else(|| "General research".to_string());
-
-        // 2. Extract Current Task (Directly from Store)
-        let current_task = if let Ok(store) = self.context.main_store.read() {
-            store
-                .get_todo_list_for_workflow(&self.session_id)
-                .ok()
-                .and_then(|tasks| {
-                    tasks
-                        .iter()
-                        .find(|t| t["status"] == "in_progress")
-                        .and_then(|t| t["subject"].as_str().map(|s| s.to_string()))
-                })
-        } else {
-            None
-        }
-        .unwrap_or_else(|| "Executing planned steps".to_string());
-
-        // 3. Extract Immediate Intent (Last search query + last reasoning)
-        let last_search = self
-            .context
-            .messages
-            .iter()
-            .rev()
-            .find_map(|m| {
-                if let Some(meta) = &m.metadata {
-                    if let Some(tc) = meta.get("tool_call") {
-                        let name = tc
-                            .get("name")
-                            .or_else(|| tc.get("function").and_then(|f| f.get("name")))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if name == TOOL_WEB_SEARCH {
-                            let args_val = tc
-                                .get("arguments")
-                                .or_else(|| tc.get("function").and_then(|f| f.get("arguments")));
-
-                            if let Some(val) = args_val {
-                                // OpenAI protocol often provides arguments as a JSON string
-                                let parsed_args = if let Some(s) = val.as_str() {
-                                    serde_json::from_str::<serde_json::Value>(s)
-                                        .unwrap_or(val.clone())
-                                } else {
-                                    val.clone()
-                                };
-
-                                // Return the 'query' field or the whole JSON if not found
-                                return parsed_args
-                                    .get("query")
-                                    .and_then(|q| q.as_str())
-                                    .map(|s| s.to_string())
-                                    .or_else(|| Some(parsed_args.to_string()));
-                            }
-                        }
-                    }
-                }
-                None
-            })
-            .unwrap_or_else(|| "N/A".to_string());
-
-        let last_reasoning = self
-            .context
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "assistant" && !m.message.trim().is_empty())
-            .map(|m| {
-                let text = m.message.clone();
-                // Character-safe truncation to avoid panic on multi-byte characters (CJK)
-                if text.chars().count() > 500 {
-                    text.chars().take(500).collect::<String>() + "..."
-                } else {
-                    text
-                }
-            })
-            .unwrap_or_else(|| "Analyzing content".to_string());
-
-        let immediate_intent = format!(
-            "Search Query: {} | Reasoning: {}",
-            last_search, last_reasoning
-        );
-
-        // 4. Build Structure-aware Prompt
-        let system_prompt = CONTENT_FILTERING_PROMPT
-            .replace("{global_goal}", &global_goal)
-            .replace("{current_task}", &current_task)
-            .replace("{immediate_intent}", &immediate_intent);
-
-        let messages = vec![
-            serde_json::json!({
-                "role": "system",
-                "content": system_prompt
-            }),
-            serde_json::json!({
-                "role": "user",
-                "content": format!("<source_content>\n{}\n</source_content>", content)
-            }),
-        ];
-
-        let chat_interface = {
-            let mut chats_guard = self.chat_state.chats.lock().await;
-            let protocol = crate::ccproxy::ChatProtocol::OpenAI;
-            let chat_map = chats_guard
-                .entry(protocol)
-                .or_insert_with(std::collections::HashMap::new);
-            chat_map
-                .entry(self.session_id.clone() + "_summarizer")
-                .or_insert_with(|| crate::create_chat!(self.context.main_store))
-                .clone()
-        };
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-        chat_interface
-            .chat(
-                self.active_provider_id,
-                &self.active_model_name,
-                self.session_id.clone() + "_summarizer",
-                messages,
-                None,
-                Some(crate::ai::traits::chat::ChatMetadata {
-                    reasoning: Some(true),
-                    ..Default::default()
-                }),
-                move |chunk| {
-                    let _ = tx.try_send(chunk);
-                },
-            )
-            .await
-            .map_err(WorkflowEngineError::Ai)?;
-
-        let mut summary = String::new();
-        while let Some(chunk) = rx.recv().await {
-            match chunk.r#type {
-                crate::ai::traits::chat::MessageType::Text => {
-                    summary.push_str(&chunk.chunk);
-                }
-                crate::ai::traits::chat::MessageType::Finished => {
-                    break;
-                }
-                crate::ai::traits::chat::MessageType::Error => {
-                    return Err(WorkflowEngineError::Ai(
-                        crate::ai::error::AiError::ApiRequestFailed {
-                            status_code: 500,
-                            provider: "Summarizer".to_string(),
-                            details: chunk.chunk.clone(),
-                        },
-                    ));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(summary)
-    }
-
     async fn update_state(&mut self, new_state: WorkflowState) -> Result<(), WorkflowEngineError> {
         self.state = new_state.clone();
         self.gateway
@@ -1626,7 +1524,7 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    pub(crate) async fn add_message_and_notify(
+    pub(crate) async fn add_message_and_notify_internal(
         &mut self,
         role: String,
         mut content: String,
@@ -1738,7 +1636,7 @@ impl WorkflowExecutor {
                 return Ok(true);
             } else if sig_json["type"] == "user_input" {
                 let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
-                self.add_message_and_notify(
+                self.add_message_and_notify_internal(
                     "user".to_string(),
                     user_input,
                     None,
@@ -1813,196 +1711,5 @@ impl WorkflowExecutor {
             .send(&self.session_id, GatewayPayload::SyncTodo { todo_list })
             .await?;
         Ok(())
-    }
-
-    /// Performs a hidden quality audit before allowing the task to finish.
-    async fn run_final_audit(&mut self) -> Result<Option<String>, WorkflowEngineError> {
-        log::info!(
-            "WorkflowExecutor {}: Running final quality audit...",
-            self.session_id
-        );
-
-        let messages = self.context.get_messages_for_llm();
-
-        // 1. Consolidate Mission Context
-        let user_queries: Vec<String> = messages
-            .iter()
-            .filter(|m| m.role == "user" && m.step_type.as_deref().unwrap_or_default() != "observe")
-            .map(|m| m.message.clone())
-            .collect();
-
-        let plan_text = messages
-            .iter()
-            .find(|m| {
-                m.step_type.as_deref() == Some("Plan") || m.message.contains(TOOL_TODO_CREATE)
-            })
-            .map(|m| m.message.as_str())
-            .unwrap_or("No initial plan provided.");
-
-        let todo_json = if let Ok(store) = self.context.main_store.read() {
-            store
-                .get_todo_list_for_workflow(&self.session_id)
-                .map(|t| serde_json::to_string_pretty(&t).unwrap_or_default())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-
-        // 2. Extract Audit Rejection History to ensure consistency
-        let mut audit_history = String::new();
-        for (i, m) in messages.iter().enumerate() {
-            if m.error_type.as_deref() == Some("AuditRejected") {
-                // Find the assistant response that for audit
-                if let Some(next_m) = messages.get(i - 1) {
-                    if next_m.role == "assistant" {
-                        audit_history.push_str(&format!(
-                            "<AGENT_MESSAGE>\n{}\n</AGENT_MESSAGE>\n\n",
-                            next_m.message
-                        ));
-                    }
-                }
-                audit_history.push_str(&format!(
-                    "<REJECTION_FEEDBACK>\n{}\n</REJECTION_FEEDBACK>\n\n",
-                    m.message
-                ));
-            }
-        }
-
-        let mut history = vec![
-            (serde_json::json!({
-                "role": "system",
-                "content": format!(
-                    "{}\n\n\
-                    AUDIT CONTEXT:\n\n\
-                    <USER_MISSIONS>\n{}\n</USER_MISSIONS>\n\n\
-                    <INITIAL_PLAN>\n{}\n</INITIAL_PLAN>\n\n\
-                    <CURRENT_TODO_STATUS>\n{}\n</CURRENT_TODO_STATUS>\n\n\
-                    <PREVIOUS_AUDIT_FEEDBACK>\n{}\n</PREVIOUS_AUDIT_FEEDBACK>",
-                    SELF_REFLECTION_AUDIT_PROMPT,
-                    user_queries.join("\n---\n"),
-                    plan_text,
-                    todo_json,
-                    if audit_history.is_empty() { "None".to_string() } else { audit_history }
-                )
-            })),
-        ];
-
-        // 2. Add the Target Conclusion (The Assistant message calling finish_task)
-        if let Some(target_msg) = messages.iter().rev().find(|m| {
-            m.role == "assistant"
-                && (m.message.contains(TOOL_FINISH_TASK)
-                    || m.metadata.as_ref().map_or(false, |meta| {
-                        meta.get("tool_calls")
-                            .and_then(|tc| tc.as_array())
-                            .map_or(false, |arr| {
-                                arr.iter().any(|call| {
-                                    call["name"] == TOOL_FINISH_TASK
-                                        || call["function"]["name"] == TOOL_FINISH_TASK
-                                })
-                            })
-                    }))
-        }) {
-            history.push(serde_json::json!({
-                "role": "user",
-                "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", target_msg.message)
-            }));
-        } else {
-            // Fallback: If we can't find it exactly, use the very last assistant message
-            if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
-                history.push(serde_json::json!({
-                    "role": "user",
-                    "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", last_msg.message)
-                }));
-            }
-        }
-
-        let chat_interface = {
-            let mut chats_guard = self.chat_state.chats.lock().await;
-            chats_guard
-                .entry(crate::ccproxy::ChatProtocol::OpenAI)
-                .or_default()
-                .entry(self.session_id.clone() + "_auditor")
-                .or_insert_with(|| crate::create_chat!(self.context.main_store))
-                .clone()
-        };
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        // Spawn the LLM call in a separate task so we can process the stream concurrently
-        let session_id_audit = self.session_id.clone() + "_auditor";
-        let provider_id = self.active_provider_id;
-        let model_name = self.active_model_name.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = chat_interface
-                .chat(
-                    provider_id,
-                    &model_name,
-                    session_id_audit,
-                    history,
-                    None,
-                    None,
-                    move |chunk| {
-                        let _ = tx.try_send(chunk);
-                    },
-                )
-                .await
-            {
-                log::error!("WorkflowExecutor audit background task failed: {}", e);
-            }
-        });
-
-        let mut result = String::new();
-        while let Some(chunk) = rx.recv().await {
-            match chunk.r#type {
-                MessageType::Text => {
-                    result.push_str(&chunk.chunk);
-                }
-                MessageType::Finished => {
-                    break;
-                }
-                MessageType::Error => {
-                    log::error!("WorkflowExecutor audit LLM error: {}", chunk.chunk);
-                    return Ok(None); // Fail open
-                }
-                _ => {}
-            }
-        }
-
-        let result = result.trim();
-
-        let audit_json: serde_json::Value =
-            match serde_json::from_str(crate::libs::util::format_json_str(result).as_str()) {
-                Ok(v) => v,
-                Err(_) => {
-                    // Fallback for non-JSON responses
-                    let result_upper = result.to_uppercase();
-                    if result_upper.contains("APPROVED") && !result_upper.contains("REJECTED") {
-                        serde_json::json!({ "approved": true })
-                    } else {
-                        let feedback = if result_upper.contains("REJECTED:") {
-                            let idx = result_upper.find("REJECTED:").unwrap();
-                            result[idx + 9..].trim().to_string()
-                        } else {
-                            result.to_string()
-                        };
-                        serde_json::json!({ "approved": false, "reason": feedback })
-                    }
-                }
-            };
-
-        #[cfg(debug_assertions)]
-        dbg!(&audit_json);
-
-        if audit_json["approved"].as_bool().unwrap_or(false) {
-            Ok(None)
-        } else {
-            let feedback = audit_json["reason"].as_str().unwrap_or("").trim();
-            if feedback.is_empty() || feedback.to_uppercase() == "REJECTED" {
-                Ok(Some("The conclusion was rejected by audit. Please review the global goals and ensure all requirements are addressed in your final report.".to_string()))
-            } else {
-                Ok(Some(feedback.to_string()))
-            }
-        }
     }
 }

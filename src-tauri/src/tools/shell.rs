@@ -538,20 +538,24 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_engine_custom_rules() {
-        let (_root, _, guard) = setup_test_context();
-        let rules = vec![
-            ShellPolicyRule {
-                pattern: "^ls -la$".to_string(),
-                decision: ShellDecision::Deny("Forbidden".into()),
-            },
-            ShellPolicyRule {
-                pattern: "rm -rf /safe/.*".to_string(),
-                decision: ShellDecision::Allow,
-            },
-        ];
-        let engine = ShellPolicyEngine::new(guard, rules);
-        assert!(matches!(engine.check("ls -la", false), ShellDecision::Deny(_)));
-        assert_eq!(engine.check("rm -rf /safe/test", false), ShellDecision::Allow);
+    fn test_policy_engine_root_protection() {
+        let (_root, root_path, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // 1. Attempt to remove the root directory itself (Absolute path)
+        let cmd_root = format!("rm -rf {}", root_path.display());
+        assert!(matches!(engine.check(&cmd_root, false), ShellDecision::Deny(_)));
+
+        // 2. Attempt to remove the root via "." or "./"
+        assert!(matches!(engine.check("rm -rf .", false), ShellDecision::Deny(_)));
+        assert!(matches!(engine.check("rm -rf ./", false), ShellDecision::Deny(_)));
+
+        // 3. Attempt to move the root
+        let cmd_mv = format!("mv {} /tmp/moved_root", root_path.display());
+        assert!(matches!(engine.check(&cmd_mv, false), ShellDecision::Deny(_)));
+
+        // 4. NORMAL FILE removal inside root should NOT be hard-denied (it should be Review)
+        let cmd_file = format!("rm {}", root_path.join("file.txt").display());
+        assert!(matches!(engine.check(&cmd_file, false), ShellDecision::Review(_)));
     }
 }

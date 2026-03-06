@@ -1,16 +1,17 @@
-use crate::ai::interaction::chat_completion::AiChatEnum;
+use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{MCPToolDeclaration, MessageType};
 use crate::db::{Agent, WorkflowMessage};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
+use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::SkillManifest;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
-use crate::workflow::react::prompts::{CORE_SYSTEM_PROMPT, PLANNING_MODE_PROMPT};
+use crate::workflow::react::prompts::{CORE_SYSTEM_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT};
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -20,7 +21,6 @@ pub struct LlmProcessor {
     pub active_provider_id: i64,
     pub active_model_name: String,
     pub reasoning: bool,
-    pub planning_mode: bool,
 }
 
 impl LlmProcessor {
@@ -29,10 +29,10 @@ impl LlmProcessor {
         agent_config: Agent,
         available_skills: HashMap<String, SkillManifest>,
         path_guard: Arc<RwLock<PathGuard>>,
+        _chat_state: Arc<ChatState>,
         active_provider_id: i64,
         active_model_name: String,
         reasoning: bool,
-        planning_mode: bool,
     ) -> Self {
         Self {
             session_id,
@@ -42,7 +42,6 @@ impl LlmProcessor {
             active_provider_id,
             active_model_name,
             reasoning,
-            planning_mode,
         }
     }
 
@@ -55,6 +54,7 @@ impl LlmProcessor {
         gateway: Arc<dyn Gateway>,
         tools: Vec<MCPToolDeclaration>,
         max_steps: usize,
+        policy: &ExecutionPolicy,
     ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
@@ -89,6 +89,7 @@ impl LlmProcessor {
             max_steps,
             state_snapshot,
             next_pending_task,
+            policy,
         );
 
         // 5. Perform the LLM Call
@@ -354,12 +355,22 @@ impl LlmProcessor {
         _max_steps: usize,
         state_snapshot: Option<String>,
         _next_pending_task: Option<String>,
+        policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
         let mut full_system_prompt = String::from(CORE_SYSTEM_PROMPT);
 
-        if self.planning_mode {
-            full_system_prompt.push_str("\n\n# PLANNING MODE\n");
-            full_system_prompt.push_str(PLANNING_MODE_PROMPT);
+        match policy.phase {
+            ExecutionPhase::Planning => {
+                full_system_prompt.push_str("\n\n# PLANNING MODE\n");
+                full_system_prompt.push_str(PLANNING_MODE_PROMPT);
+            }
+            ExecutionPhase::Implementation => {
+                full_system_prompt.push_str("\n\n# EXECUTION MODE\n");
+                full_system_prompt.push_str(EXECUTION_MODE_PROMPT);
+            }
+            ExecutionPhase::Standard => {
+                // No specialized prefix for standard ReAct
+            }
         }
 
         full_system_prompt.push_str("\n\n## AGENT SPECIFIC INSTRUCTIONS:\n");
