@@ -1,4 +1,3 @@
-// modules
 mod ai;
 mod ccproxy;
 mod commands;
@@ -342,7 +341,8 @@ pub async fn run() -> crate::error::Result<()> {
             // When the user clicks on the close button of a window, everything except the settings window is only hidden.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 match window.label() {
-                    "main" => {
+                    // For these windows, we just hide them.
+                    "main" | "assistant" | "workflow" => {
                         api.prevent_close();
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
@@ -352,23 +352,7 @@ pub async fn run() -> crate::error::Result<()> {
                                 log::debug!("Window '{}' hidden", window.label());
                             }
                         } else {
-                            log::debug!(
-                                "Window '{}' is not visible, skipping hide",
-                                window.label()
-                            );
-                        }
-                    }
-                    // For these windows, we just hide them.
-                    "assistant" | "toolbar" | "workflow" => {
-                        api.prevent_close();
-                        // Only hide the window if it's currently visible.
-                        if window.is_visible().unwrap_or(false) {
-                            if let Err(e) = window.hide() {
-                                warn!("Failed to hide window '{}': {}", window.label(), e);
-                            } else {
-                                log::debug!("Window '{}' hidden", window.label());
-                            }
-                        } else {
+                            #[cfg(debug_assertions)]
                             log::debug!("Window '{}' is already hidden", window.label());
                         }
                     }

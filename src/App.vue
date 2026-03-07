@@ -31,6 +31,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
 import { useChatStore } from '@/stores/chat'
 import { useSkillStore } from '@/stores/skill'
+import { useAgentStore } from '@/stores/agent'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
@@ -42,6 +43,7 @@ const mcpStore = useMcpStore()
 const modelStore = useModelStore()
 const chatStore = useChatStore()
 const skillStore = useSkillStore()
+const agentStore = useAgentStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const proxyGroupStore = useProxyGroupStore()
@@ -263,7 +265,14 @@ const handleShortcut = async event => {
       const windowLabel = currentWindow.label
 
       // Only handle the close event of the current window
-      if (windowLabel === 'main' || windowLabel === 'settings' || windowLabel === 'note') {
+      if (
+        windowLabel === 'main' ||
+        windowLabel === 'settings' ||
+        windowLabel === 'note' ||
+        windowLabel === 'workflow' ||
+        windowLabel === 'assistant' ||
+        windowLabel === 'proxy_switcher'
+      ) {
         // Check if the current window is indeed the active window
         const isFocused = await currentWindow.isFocused()
         if (isFocused) {

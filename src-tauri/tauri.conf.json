@@ -59,21 +59,6 @@
         "create": false
       },
       {
-        "label": "toolbar",
-        "title": "Toolbar",
-        "url": "/toolbar",
-        "width": 300,
-        "height": 50,
-        "titleBarStyle": "Overlay",
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "visible": false,
-        "skipTaskbar": true,
-        "center": true,
-        "create": false
-      },
-      {
         "label": "settings",
         "title": "",
         "url": "/settings",
@@ -121,7 +106,10 @@
     ],
     "withGlobalTauri": true,
     "security": {
-      "capabilities": ["default", "scraper"]
+      "capabilities": [
+        "default",
+        "scraper"
+      ]
     }
   },
   "bundle": {
@@ -134,7 +122,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["assets"],
+    "resources": [
+      "assets"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",
