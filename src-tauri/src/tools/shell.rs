@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::process::Command;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
+use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone, serde::Deserialize)]
@@ -189,7 +190,7 @@ impl ShellPolicyEngine {
             if redirection_ops.contains(&token_str) {
                 if let Some(next_token) = tokens.get(i + 1) {
                     if !next_token.starts_with('-') {
-                        match self.validate_path_token(next_token, restrict_to_planning) {
+                        match self.validate_path_token(next_token, restrict_to_planning, false) {
                             ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                             ShellDecision::Review(reason) => {
                                 if final_decision == ShellDecision::Allow {
@@ -228,7 +229,8 @@ impl ShellPolicyEngine {
             }
 
             if !token.starts_with('-') {
-                match self.validate_path_token(token, restrict_to_planning) {
+                let is_delete = current_binary == "rm";
+                match self.validate_path_token(token, restrict_to_planning, is_delete) {
                     ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                     ShellDecision::Review(reason) => {
                         if final_decision == ShellDecision::Allow {
@@ -242,10 +244,7 @@ impl ShellPolicyEngine {
                             if let Ok(expanded) = shellexpand::full(token) {
                                 let path_str: &str = expanded.as_ref();
                                 let is_root = if let Ok(guard) = self.path_guard.read() {
-                                    let p = Path::new(path_str);
-                                    // Check absolute path or common relative aliases for root
-                                    guard.is_authorized_root(p) || 
-                                    (path_str == "." || path_str == "./")
+                                    guard.is_authorized_root(Path::new(path_str))
                                 } else {
                                     false
                                 };
@@ -266,7 +265,7 @@ impl ShellPolicyEngine {
         final_decision
     }
 
-    fn validate_path_token(&self, token: &str, restrict_to_planning: bool) -> ShellDecision {
+    fn validate_path_token(&self, token: &str, restrict_to_planning: bool, is_delete: bool) -> ShellDecision {
         if token.starts_with('~') {
             return ShellDecision::Deny(
                 "Tilde (~) expansion is blocked. Use absolute paths within the workspace.".into(),
@@ -285,20 +284,15 @@ impl ShellPolicyEngine {
                     let expanded_str: &str = expanded.as_ref();
                     if expanded_str.contains('/') || expanded_str.starts_with('.') {
                         let valid = if let Ok(guard) = self.path_guard.read() {
-                            guard.validate(Path::new(expanded_str), restrict_to_planning)
+                            guard.validate(Path::new(expanded_str), restrict_to_planning, true, is_delete)
                         } else {
                             Err(WorkflowEngineError::Security("Lock failed".into()))
                         };
                         match valid {
                             Ok(path) => {
-                                // Precise Skill Check: Check if path starts with an authorized "skills" root
+                                // Precise Skill Check: Check if path starts with an authorized skill root
                                 let is_skill = if let Ok(guard) = self.path_guard.read() {
-                                    guard.allowed_roots().iter().any(|root| {
-                                        let is_skill_root = root.file_name().and_then(|n| n.to_str()) == Some("skills") 
-                                            || root.to_string_lossy().contains("/skills/")
-                                            || root.to_string_lossy().ends_with("/skills");
-                                        is_skill_root && path.starts_with(root)
-                                    })
+                                    guard.is_within_skill_root(&path)
                                 } else {
                                     false
                                 };
@@ -411,7 +405,7 @@ impl ToolDefinition for ShellExecute {
             ShellDecision::Deny(reason) => return Err(ToolError::Security(reason)),
         }
 
-        let _timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
+        let timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
         let run_in_background = params["run_in_background"].as_bool().unwrap_or(false);
 
         if run_in_background {
@@ -438,13 +432,14 @@ impl ToolDefinition for ShellExecute {
             );
 
             tokio::spawn(async move {
-                let output = if cfg!(target_os = "windows") {
+                let cmd_future = if cfg!(target_os = "windows") {
                     Command::new("cmd").args(["/C", &cmd_to_run]).output()
                 } else {
                     Command::new("sh").args(["-c", &cmd_to_run]).output()
                 };
-                match output {
-                    Ok(out) => {
+
+                match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
+                    Ok(Ok(out)) => {
                         *stdout_arc.lock().await = String::from_utf8_lossy(&out.stdout).to_string();
                         *stderr_arc.lock().await = String::from_utf8_lossy(&out.stderr).to_string();
                         *status_arc.lock().await = if out.status.success() {
@@ -453,8 +448,12 @@ impl ToolDefinition for ShellExecute {
                             "Error".into()
                         };
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         *stderr_arc.lock().await = format!("Failed to spawn: {}", e);
+                        *status_arc.lock().await = "Error".into();
+                    }
+                    Err(_) => {
+                        *stderr_arc.lock().await = format!("Command timed out after {}ms", timeout_ms);
                         *status_arc.lock().await = "Error".into();
                     }
                 }
@@ -466,28 +465,33 @@ impl ToolDefinition for ShellExecute {
             ));
         }
 
-        let output = if cfg!(target_os = "windows") {
+        let cmd_future = if cfg!(target_os = "windows") {
             Command::new("cmd").args(["/C", command_str]).output()
         } else {
             Command::new("sh").args(["-c", command_str]).output()
-        }
-        .map_err(|e| ToolError::ExecutionFailed(format!("Spawn failed: {}", e)))?;
+        };
 
-        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if stdout.len() > 30_000 {
-            stdout.truncate(30_000);
-            stdout.push_str("\n[Truncated]");
-        }
+        match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
+            Ok(Ok(output)) => {
+                let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                if stdout.len() > 30_000 {
+                    stdout.truncate(30_000);
+                    stdout.push_str("\n[Truncated]");
+                }
 
-        if output.status.success() {
-            Ok(ToolCallResult::success(Some(stdout), None))
-        } else {
-            Err(ToolError::ExecutionFailed(format!(
-                "Exit {}. STDOUT: {}\nSTDERR: {}",
-                output.status,
-                stdout,
-                String::from_utf8_lossy(&output.stderr)
-            )))
+                if output.status.success() {
+                    Ok(ToolCallResult::success(Some(stdout), None))
+                } else {
+                    Err(ToolError::ExecutionFailed(format!(
+                        "Exit {}. STDOUT: {}\nSTDERR: {}",
+                        output.status,
+                        stdout,
+                        String::from_utf8_lossy(&output.stderr)
+                    )))
+                }
+            }
+            Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
+            Err(_) => Err(ToolError::ExecutionFailed(format!("Command timed out after {}ms", timeout_ms))),
         }
     }
 }
@@ -505,10 +509,12 @@ mod tests {
     ) {
         let root = tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
-        let guard = Arc::new(RwLock::new(PathGuard::new(vec![
-            root_path.clone(),
-            std::env::current_dir().unwrap(),
-        ])));
+        // Updated to use three-argument constructor for PathGuard
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![root_path.clone(), std::env::current_dir().unwrap()],
+            vec![],
+            vec![]
+        )));
         (root, root_path, guard)
     }
 

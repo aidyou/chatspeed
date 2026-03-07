@@ -61,19 +61,13 @@
           <el-form-item :label="$t('settings.agent.name')" prop="name">
             <el-input v-model="agentForm.name" />
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.agentType')" prop="agentType">
-            <el-radio-group v-model="agentForm.agentType">
-              <el-radio-button value="autonomous">{{ $t('settings.agent.autonomousMode') }}</el-radio-button>
-              <el-radio-button value="planning">{{ $t('settings.agent.planningMode') }}</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
             <el-input v-model="agentForm.description" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
             <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" />
           </el-form-item>
-          <el-form-item v-if="agentForm.agentType === 'planning'" :label="$t('settings.agent.planningPrompt')"
+          <el-form-item :label="$t('settings.agent.planningPrompt')"
             prop="planningPrompt">
             <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" />
           </el-form-item>
@@ -249,7 +243,6 @@ const defaultFormData = {
   name: '',
   description: '',
   systemPrompt: '',
-  agentType: 'autonomous',
   planningPrompt: `Please act as an expert project manager. Analyze the user's request and provide a clear, step-by-step plan to achieve the goal. The plan should be a list of tasks. For each task, describe what needs to be done and why it's necessary. Ensure the plan is logical, efficient, and covers all aspects of the request. Your final output should only be the plan itself, without any conversational text before or after it.`,
   availableTools: [],
   autoApprove: [],

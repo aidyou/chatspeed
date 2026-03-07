@@ -2,8 +2,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
-use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::engine::ReActExecutor;
+use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -72,27 +72,61 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 
         let (_signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
 
-        Ok(Arc::new(Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
-            session_id.to_string(),
-            self.main_store.clone(),
-            self.chat_state.clone(),
-            self.gateway.clone(),
-            Arc::new(DefaultSubAgentFactory {
-                main_store: self.main_store.clone(),
-                chat_state: self.chat_state.clone(),
-                gateway: self.gateway.clone(),
-                app_data_dir: self.app_data_dir.clone(),
-                tsid_generator: self.tsid_generator.clone(),
-            }),
-            agent_config,
-            vec![], // Allowed paths inherited or managed by the caller
-            self.app_data_dir.clone(),
-            Some(subagent_type.to_string()),
-            Some(signal_rx),
-            self.tsid_generator.clone(),
-            self.chat_state.tool_manager.clone(),
-            crate::workflow::react::policy::ExecutionPolicy::standard(),
-        ))))
+        let policy = if subagent_type == "Planning" {
+            crate::workflow::react::policy::ExecutionPolicy::planning()
+        } else {
+            crate::workflow::react::policy::ExecutionPolicy::standard()
+        };
+
+        if subagent_type == "Planning" {
+            Ok(Arc::new(Mutex::new(
+                crate::workflow::react::planners::PlanningExecutor::new(
+                    session_id.to_string(),
+                    self.main_store.clone(),
+                    self.chat_state.clone(),
+                    self.gateway.clone(),
+                    Arc::new(DefaultSubAgentFactory {
+                        main_store: self.main_store.clone(),
+                        chat_state: self.chat_state.clone(),
+                        gateway: self.gateway.clone(),
+                        app_data_dir: self.app_data_dir.clone(),
+                        tsid_generator: self.tsid_generator.clone(),
+                    }),
+                    agent_config,
+                    vec![],
+                    self.app_data_dir.clone(),
+                    Some(subagent_type.to_string()),
+                    Some(signal_rx),
+                    self.tsid_generator.clone(),
+                    self.chat_state.tool_manager.clone(),
+                    policy,
+                ),
+            )))
+        } else {
+            Ok(Arc::new(Mutex::new(
+                crate::workflow::react::runners::ExecutionExecutor::new(
+                    session_id.to_string(),
+                    self.main_store.clone(),
+                    self.chat_state.clone(),
+                    self.gateway.clone(),
+                    Arc::new(DefaultSubAgentFactory {
+                        main_store: self.main_store.clone(),
+                        chat_state: self.chat_state.clone(),
+                        gateway: self.gateway.clone(),
+                        app_data_dir: self.app_data_dir.clone(),
+                        tsid_generator: self.tsid_generator.clone(),
+                    }),
+                    agent_config,
+                    vec![],
+                    self.app_data_dir.clone(),
+                    Some(subagent_type.to_string()),
+                    Some(signal_rx),
+                    self.tsid_generator.clone(),
+                    self.chat_state.tool_manager.clone(),
+                    policy,
+                ),
+            )))
+        }
     }
 }
 

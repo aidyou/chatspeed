@@ -18,8 +18,6 @@ pub struct Agent {
     pub description: Option<String>,
     /// System prompt for the agent
     pub system_prompt: String,
-    /// Type of the agent, e.g., 'autonomous' or 'planning'
-    pub agent_type: String,
     /// Prompt for the planning phase
     pub planning_prompt: Option<String>,
     /// JSON array of available tool IDs
@@ -54,7 +52,6 @@ impl Agent {
         name: String,
         description: Option<String>,
         system_prompt: String,
-        agent_type: String,
         planning_prompt: Option<String>,
         available_tools: Option<String>,
         auto_approve: Option<String>,
@@ -71,7 +68,6 @@ impl Agent {
             name,
             description,
             system_prompt,
-            agent_type,
             planning_prompt,
             available_tools,
             auto_approve,
@@ -96,9 +92,6 @@ impl From<&Row<'_>> for Agent {
             name: row.get("name").unwrap_or_default(),
             description: row.get("description").ok(),
             system_prompt: row.get("system_prompt").unwrap_or_default(),
-            agent_type: row
-                .get("agent_type")
-                .unwrap_or_else(|_| "autonomous".to_string()),
             planning_prompt: row.get("planning_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
             auto_approve: row.get("auto_approve").ok(),
@@ -139,14 +132,13 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 agent.id,
                 agent.name,
                 agent.description,
                 agent.system_prompt,
-                agent.agent_type,
                 agent.planning_prompt,
                 agent.available_tools,
                 agent.auto_approve,
@@ -159,7 +151,6 @@ impl MainStore {
                 agent.max_contexts,
             ],
         )?;
-
         tx.commit()?;
 
         Ok(agent.id.clone())
@@ -188,13 +179,26 @@ impl MainStore {
 
         // Update the agent
         tx.execute(
-            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, models = ?11, shell_policy = ?12, allowed_paths = ?13, max_contexts = ?14, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?15",
+            "UPDATE agents SET
+                name = ?1,
+                description = ?2,
+                system_prompt = ?3,
+                planning_prompt = ?4,
+                available_tools = ?5,
+                auto_approve = ?6,
+                plan_model = ?7,
+                act_model = ?8,
+                vision_model = ?9,
+                models = ?10,
+                shell_policy = ?11,
+                allowed_paths = ?12,
+                max_contexts = ?13,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?14",
             params![
                 agent.name,
                 agent.description,
                 agent.system_prompt,
-                agent.agent_type,
                 agent.planning_prompt,
                 agent.available_tools,
                 agent.auto_approve,

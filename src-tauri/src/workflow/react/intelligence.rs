@@ -236,13 +236,13 @@ impl IntelligenceManager {
                 if let Some(next_m) = messages.get(i - 1) {
                     if next_m.role == "assistant" {
                         audit_history.push_str(&format!(
-                            "<AGENT_MESSAGE>\n{}\n</AGENT_MESSAGE>\n\n",
+                            "<agent_message>\n{}\n</agent_message>\n\n",
                             next_m.message
                         ));
                     }
                 }
                 audit_history.push_str(&format!(
-                    "<REJECTION_FEEDBACK>\n{}\n</REJECTION_FEEDBACK>\n\n",
+                    "<rejection_feedback>\n{}\n</rejection_feedback>\n\n",
                     m.message
                 ));
             }
@@ -254,10 +254,10 @@ impl IntelligenceManager {
                 "content": format!(
                     "{}\n\n\
                     AUDIT CONTEXT:\n\n\
-                    <USER_MISSIONS>\n{}\n</USER_MISSIONS>\n\n\
-                    <INITIAL_PLAN>\n{}\n</INITIAL_PLAN>\n\n\
-                    <CURRENT_TODO_STATUS>\n{}\n</CURRENT_TODO_STATUS>\n\n\
-                    <PREVIOUS_AUDIT_FEEDBACK>\n{}\n</PREVIOUS_AUDIT_FEEDBACK>",
+                    <user_missions>\n{}\n</user_missions>\n\n\
+                    <initial_plan>\n{}\n</initial_plan>\n\n\
+                    <current_todo_status>\n{}\n</current_todo_status>\n\n\
+                    <previous_audit_feedback>\n{}\n</previous_audit_feedback>",
                     SELF_REFLECTION_AUDIT_PROMPT,
                     user_queries.join("\n---\n"),
                     plan_text,
@@ -284,14 +284,14 @@ impl IntelligenceManager {
         }) {
             history.push(serde_json::json!({
                 "role": "user",
-                "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", target_msg.message)
+                "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", target_msg.message)
             }));
         } else {
             // Fallback: If we can't find it exactly, use the very last assistant message
             if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
                 history.push(serde_json::json!({
                     "role": "user",
-                    "content": format!("<PROPOSED_CONCLUSION>\n{}\n</PROPOSED_CONCLUSION>", last_msg.message)
+                    "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", last_msg.message)
                 }));
             }
         }

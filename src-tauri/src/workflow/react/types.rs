@@ -3,7 +3,7 @@ use strum::{Display, EnumString};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
+#[strum(serialize_all = "snake_case")]
 pub enum WorkflowState {
     Pending,
     Thinking,

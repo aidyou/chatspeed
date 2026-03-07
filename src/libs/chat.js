@@ -262,7 +262,7 @@ export function buildUserMessage(inputMessage, quoteMessage) {
   if (!quoteMessage) {
     return inputMessage || ''
   }
-  return `<quoted-response>\n${quoteMessage}\n</quoted-response>\n\n<system-reminder>User quoted your response. Please respond considering the quoted content.</system-reminder>\n\n${inputMessage}`
+  return `<quoted-response>\n${quoteMessage}\n</quoted-response>\n\n<SYSTEM_REMINDER>User quoted your response. Please respond considering the quoted content.</SYSTEM_REMINDER>\n\n${inputMessage}`
 }
 
 /**
@@ -421,7 +421,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   if (!content) return ''
 
   // remove reminder
-  content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
+  content = content.replace(/<SYSTEM_REMINDER>[\s\S]+?<\/SYSTEM_REMINDER>/gi, '')
 
   // Remove AI-generated non-standard references [[1]](http://domain.com) -> [[1]]
   content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {

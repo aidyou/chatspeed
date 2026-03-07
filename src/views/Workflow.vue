@@ -198,13 +198,16 @@
                 </div>
 
                 <!-- Authorized Paths -->
-                <div v-if="currentWorkflowId" class="allowed-paths-wrap">
-                  <el-popover placement="top" :width="300" trigger="click" popper-class="paths-popover">
+                <div class="allowed-paths-wrap">
+                  <el-popover placement="top" :width="300" trigger="click" popper-class="paths-popover"
+                    :disabled="!canEditPaths">
                     <template #reference>
-                      <div class="paths-summary upperLayer" :class="{ empty: allowedPaths.length === 0 }">
+                      <div class="paths-summary upperLayer"
+                        :class="{ empty: currentPaths.length === 0, disabled: !canEditPaths }"
+                        @click="!canEditPaths && showPathsDisabledMessage()">
                         <cs name="folder" size="14px" />
                         <span class="path-text">{{ displayAllowedPath || $t('settings.agent.workingDirectory') }}</span>
-                        <span v-if="allowedPaths && allowedPaths.length > 1" class="path-count">+{{ allowedPaths.length
+                        <span v-if="currentPaths && currentPaths.length > 1" class="path-count">+{{ currentPaths.length
                           - 1 }}</span>
                       </div>
                     </template>
@@ -216,13 +219,13 @@
                         </el-button>
                       </div>
                       <div class="paths-list">
-                        <div v-for="(path, idx) in allowedPaths" :key="idx" class="path-item">
+                        <div v-for="(path, idx) in currentPaths" :key="idx" class="path-item">
                           <span class="path-name" :title="path">{{ path }}</span>
                           <div class="path-ops">
                             <cs name="trash" size="12px" @click="onRemovePath(idx)" />
                           </div>
                         </div>
-                        <div v-if="allowedPaths.length === 0" class="empty-paths">
+                        <div v-if="currentPaths.length === 0" class="empty-paths">
                           {{ $t('settings.agent.authorizedPathsTip') }}
                         </div>
                       </div>
@@ -232,12 +235,14 @@
 
                 <div class="icons">
                   <el-tooltip :content="$t('workflow.planningModeTooltip')" placement="top">
-                    <label class="icon-btn upperLayer" :class="{ active: planningMode }" @click="planningMode = !planningMode">
+                    <label class="icon-btn upperLayer" :class="{ active: planningMode }"
+                      @click="planningMode = !planningMode">
                       <cs name="skill-plan" class="small" />
                     </label>
                   </el-tooltip>
                   <el-tooltip :content="$t('workflow.autoApproveTooltip')" placement="top">
-                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }" @click="autoApproveTools = !autoApproveTools">
+                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }"
+                      @click="autoApproveTools = !autoApproveTools">
                       <cs name="tool" class="small" />
                     </label>
                   </el-tooltip>
@@ -249,9 +254,7 @@
                 </div>
               </div>
               <div class="icons">
-                <el-button
-                  v-if="isAwaitingApproval"
-                  size="small" round type="success" @click="onApprovePlan">
+                <el-button v-if="isAwaitingApproval" size="small" round type="success" @click="onApprovePlan">
                   {{ $t('workflow.approvePlan') }}
                 </el-button>
                 <el-button
@@ -261,7 +264,8 @@
                 </el-button>
                 <cs name="stop" @click="onStop" v-if="isRunning" />
                 <cs name="send" @click="onSendMessage" :class="{ disabled: !canSendMessage }" />
-              </div>            </div>
+              </div>
+            </div>
           </div>
         </el-footer>
       </el-container>
@@ -396,8 +400,11 @@ watch(inputMessage, (newVal) => {
   }
 })
 
-watch(filteredSystemSkills, () => {
-  selectedSkillIndex.value = 0
+watch(selectedAgent, (newAgent, oldAgent) => {
+  if (newAgent?.id !== oldAgent?.id) {
+    // Clear pending paths when switching agents
+    pendingPaths.value = []
+  }
 })
 
 // Authorized paths management
@@ -414,8 +421,40 @@ const allowedPaths = computed(() => {
   }
 })
 
+// Pending paths for new workflow (cached locally until workflow is created)
+const pendingPaths = ref([])
+
+// Current paths: use workflow paths if available, pending paths for new workflow, or agent paths as default
+const currentPaths = computed(() => {
+  if (currentWorkflowId.value) {
+    return allowedPaths.value
+  }
+  // No workflow - use pending paths if any, otherwise show agent's paths as reference
+  if (pendingPaths.value.length > 0) {
+    return pendingPaths.value
+  }
+  // Show agent's default paths as reference (read-only display)
+  if (!selectedAgent.value) return []
+  try {
+    const paths = selectedAgent.value.allowedPaths
+    if (!paths) return []
+    return typeof paths === 'string' ? JSON.parse(paths) : paths
+  } catch (e) {
+    return []
+  }
+})
+
+// Can edit paths if we have a workflow, or if we have a selected agent (for new workflow)
+const canEditPaths = computed(() => {
+  return !!currentWorkflowId.value || !!selectedAgent.value
+})
+
+const showPathsDisabledMessage = () => {
+  showMessage(t('workflow.selectAgentFirst'), 'warning')
+}
+
 const displayAllowedPath = computed(() => {
-  const paths = allowedPaths.value
+  const paths = currentPaths.value
   console.log('Workflow.vue: computing displayAllowedPath for:', paths)
   if (!paths || paths.length === 0) return t('settings.agent.workingDirectory')
   const firstPath = paths[0]
@@ -435,15 +474,23 @@ const onAddPath = async () => {
       title: t('settings.agent.selectDirectory')
     })
     if (selected) {
-      const newPaths = [...allowedPaths.value]
-      if (!newPaths.includes(selected)) {
-        newPaths.push(selected)
-        await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-        // Immediately notify executor to update path_guard in memory
-        await invokeWrapper('workflow_signal', {
-          sessionId: currentWorkflowId.value,
-          signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
-        })
+      if (currentWorkflowId.value) {
+        // Editing existing workflow
+        const newPaths = [...allowedPaths.value]
+        if (!newPaths.includes(selected)) {
+          newPaths.push(selected)
+          await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
+          // Immediately notify executor to update path_guard in memory
+          await invokeWrapper('workflow_signal', {
+            sessionId: currentWorkflowId.value,
+            signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+          })
+        }
+      } else {
+        // No workflow yet - cache in pendingPaths
+        if (!pendingPaths.value.includes(selected)) {
+          pendingPaths.value.push(selected)
+        }
       }
     }
   } catch (error) {
@@ -452,14 +499,20 @@ const onAddPath = async () => {
 }
 
 const onRemovePath = async (index) => {
-  const newPaths = [...allowedPaths.value]
-  newPaths.splice(index, 1)
-  await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-  // Immediately notify executor
-  await invokeWrapper('workflow_signal', {
-    sessionId: currentWorkflowId.value,
-    signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
-  })
+  if (currentWorkflowId.value) {
+    // Editing existing workflow
+    const newPaths = [...allowedPaths.value]
+    newPaths.splice(index, 1)
+    await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
+    // Immediately notify executor
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+    })
+  } else {
+    // No workflow yet - remove from pendingPaths
+    pendingPaths.value.splice(index, 1)
+  }
 }
 
 // Message expansion state
@@ -866,11 +919,11 @@ watch(
   { deep: true }
 )
 
-// Helper to remove <system-reminder>...</system-reminder> tags from content
+// Helper to remove <SYSTEM_REMINDER>...</SYSTEM_REMINDER> tags from content
 const removeSystemReminder = (content) => {
   if (!content) return ''
   // Handle multiline content and multiple tags
-  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim()
+  return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
 // Helper to parse message content
@@ -1074,11 +1127,13 @@ const startNewWorkflow = async (prompt) => {
 
   try {
     console.log('Initiating workflow creation...')
-    // Get allowed paths from selected agent
-    let agentAllowedPaths = []
-    if (selectedAgent.value.allowedPaths) {
+    // Get allowed paths: use pendingPaths if any, otherwise fall back to agent's paths
+    let workflowAllowedPaths = []
+    if (pendingPaths.value.length > 0) {
+      workflowAllowedPaths = [...pendingPaths.value]
+    } else if (selectedAgent.value.allowedPaths) {
       try {
-        agentAllowedPaths = typeof selectedAgent.value.allowedPaths === 'string'
+        workflowAllowedPaths = typeof selectedAgent.value.allowedPaths === 'string'
           ? JSON.parse(selectedAgent.value.allowedPaths)
           : selectedAgent.value.allowedPaths
       } catch (e) {
@@ -1093,7 +1148,7 @@ const startNewWorkflow = async (prompt) => {
         userQuery: prompt,
         agentId: selectedAgent.value.id,
         status: 'pending',
-        allowedPaths: JSON.stringify(agentAllowedPaths),
+        allowedPaths: JSON.stringify(workflowAllowedPaths),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -1101,6 +1156,9 @@ const startNewWorkflow = async (prompt) => {
 
     const newWorkflowId = typeof res === 'string' ? res : (res.id || res)
     console.log('Workflow session created:', newWorkflowId)
+
+    // Clear pending paths after workflow is created
+    pendingPaths.value = []
 
     // 2. Sync UI state
     await workflowStore.loadWorkflows()
@@ -1243,7 +1301,7 @@ const onSendMessage = async () => {
       try {
         // If we were awaiting approval, continue in planning mode if we send a message (rejecting the plan)
         const isCurrentlyAwaiting = currentWorkflow.value?.status === 'awaiting_approval'
-        
+
         await invokeWrapper('workflow_start', {
           sessionId: currentWorkflowId.value,
           agentId: selectedAgent.value.id,
@@ -1320,20 +1378,20 @@ const onApprovePlan = async () => {
   // Find the last assistant message that contains 'submit_plan' tool call
   const assistantMsgs = messages.value.filter(m => m.role === 'assistant')
   const lastAssistantMsg = assistantMsgs[assistantMsgs.length - 1]
-  
+
   if (!lastAssistantMsg) return
 
   // Extract plan from tool call arguments if available, otherwise use message content
   let planContent = lastAssistantMsg.message
   try {
-    const metadata = typeof lastAssistantMsg.metadata === 'string' 
-      ? JSON.parse(lastAssistantMsg.metadata) 
+    const metadata = typeof lastAssistantMsg.metadata === 'string'
+      ? JSON.parse(lastAssistantMsg.metadata)
       : lastAssistantMsg.metadata
-      
+
     if (metadata && (metadata.tool_calls || metadata.tool)) {
       const toolCalls = metadata.tool_calls || (metadata.tool ? [metadata.tool] : [])
-      const submitPlanCall = toolCalls.find(c => 
-        (c.name === 'submit_plan') || 
+      const submitPlanCall = toolCalls.find(c =>
+        (c.name === 'submit_plan') ||
         (c.function && c.function.name === 'submit_plan')
       )
       if (submitPlanCall) {
@@ -1434,6 +1492,9 @@ const onDeleteWorkflow = id => {
 const createNewWorkflow = () => {
   // Clear current workflow
   workflowStore.clearCurrentWorkflow()
+
+  // Clear pending paths
+  pendingPaths.value = []
 
   // Clear input and focus
   inputMessage.value = ''
@@ -2321,7 +2382,12 @@ const onGlobalKeyDown = event => {
                     opacity: 0.8;
                   }
 
-                  &:hover {
+                  &.disabled {
+                    cursor: not-allowed;
+                    opacity: 0.5;
+                  }
+
+                  &:hover:not(.disabled) {
                     border-color: var(--cs-color-primary);
                     color: var(--cs-color-primary);
                   }

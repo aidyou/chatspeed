@@ -52,9 +52,11 @@ impl ContextManager {
                 self.session_id,
                 idx
             );
-            
+
             // Start with the initial user query if it exists and is before the summary
-            let initial_query = snapshot.messages.iter()
+            let initial_query = snapshot
+                .messages
+                .iter()
                 .take(idx)
                 .find(|m| m.role == "user")
                 .cloned();
@@ -183,41 +185,98 @@ impl ContextManager {
     }
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
-        self.messages.clone()
+        let mut llm_messages = self.messages.clone();
+
+        for msg in llm_messages.iter_mut() {
+            // 1. Wrap the initial user query
+            if msg.role == "user" && !msg.message.starts_with("<user_query>") {
+                msg.message = format!("<user_query>\n{}\n</user_query>", msg.message);
+            }
+
+            // 2. Wrap Approved Plan components if metadata exists
+            if let Some(meta) = &msg.metadata {
+                if meta["subtype"] == "approved_plan" {
+                    let plan = meta["plan_content"].as_str().unwrap_or("");
+                    let todos = meta["todo_content"].as_str().unwrap_or("[]");
+                    
+                    msg.message = format!(
+                        "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
+                        plan,
+                        todos
+                    );
+                }
+            }
+        }
+
+        llm_messages
     }
 
     /// Prunes the context for transitioning from Planning to Execution.
     /// It keeps the initial user query and adds the final approved plan as the new anchor.
-    pub async fn prune_for_execution(&mut self, approved_plan: String) -> Result<(), WorkflowEngineError> {
-        log::info!("ContextManager {}: Pruning context for execution phase", self.session_id);
+    pub async fn prune_for_execution(
+        &mut self,
+        approved_plan: String,
+    ) -> Result<(), WorkflowEngineError> {
+        log::info!(
+            "ContextManager {}: Pruning context for execution phase",
+            self.session_id
+        );
 
         let initial_query = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
             let snapshot = store.get_workflow_snapshot(&self.session_id)?;
-            snapshot.messages.iter()
-                .find(|m| m.role == "user")
-                .cloned()
+            snapshot.messages.iter().find(|m| m.role == "user").cloned()
         };
 
-        // 1. Clear current messages
+        // 1. Physical Database Pruning: Delete all intermediate steps but keep initial query ID
+        {
+            let store = self.main_store.write().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            let keep_ids = initial_query.as_ref().and_then(|m| m.id).map(|id| vec![id]).unwrap_or_default();
+            store.delete_workflow_messages(&self.session_id, keep_ids)?;
+        }
+
+        // 2. Clear current in-memory messages
         self.messages.clear();
 
-        // 2. Re-add initial query if found
+        // 3. Re-add initial query to memory if found
         if let Some(query) = initial_query {
             self.messages.push(query);
         }
 
-        // 3. Add the approved plan as a specialized summary message
-        let msg_id = self.tsid_generator.generate_u64().map_err(|e| WorkflowEngineError::General(e))?;
+        // 3. Fetch current todo items to inject into context
+        let todo_json = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            let todos = store.get_todo_list_for_workflow(&self.session_id)?;
+            serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
+        };
+
+        // 4. Add the approved plan as a specialized summary message
+        let msg_id = self
+            .tsid_generator
+            .generate_u64()
+            .map_err(|e| WorkflowEngineError::General(e))?;
         let plan_msg = WorkflowMessage {
             id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
             role: "system".to_string(),
-            message: format!("# APPROVED EXECUTION PLAN\n\n{}", approved_plan),
+            message: format!(
+                "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
+                approved_plan,
+                todo_json
+            ),
             reasoning: None,
-            metadata: Some(json!({ "type": "summary", "subtype": "approved_plan" })),
+            metadata: Some(json!({ 
+                "type": "summary", 
+                "subtype": "approved_plan",
+                "plan_content": approved_plan,
+                "todo_content": todo_json
+            })),
             step_type: None,
             step_index: 0,
             is_error: false,

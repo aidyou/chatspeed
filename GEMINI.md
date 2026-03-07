@@ -62,6 +62,7 @@ This section outlines the coding standards, architectural patterns, and workflow
 - **Safety First**: Never introduce invalid syntax. Avoid potentially panicking code in production.
 - **Context Awareness**: Always read the latest source code and configuration files (e.g., `Cargo.toml`, `package.json`) before making modifications.
 - **Dependency Management**: Verify existing dependencies before adding new ones.
+- **Testing Persistence**: NEVER delete existing test cases unless the code being tested has been explicitly removed. Always adapt and update tests to remain valid with any API or logic changes.
 
 ### 2. Backend Development (Rust & Tauri)
 - **Framework**: Use **Tauri v2** standards and documentation.

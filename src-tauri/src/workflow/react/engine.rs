@@ -9,8 +9,8 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::db::{Agent, MainStore};
 use crate::tools::{
-    ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
+    ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_GLOB, TOOL_GREP,
+    TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -21,7 +21,7 @@ use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::loop_detector::LoopDetector;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::SubAgentFactory;
-use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy, PathRestriction};
+use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
@@ -75,6 +75,7 @@ pub struct WorkflowExecutor {
     pub auto_approve: HashSet<String>,
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    pub subagent_type: Option<String>,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Detects repetitive tool calls within a sliding window.
@@ -149,40 +150,70 @@ impl WorkflowExecutor {
         );
 
         let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
-            serde_json::from_str(m).unwrap_or_default()
+            serde_json::from_str(m).unwrap_or_else(|e| {
+                log::error!("[Workflow Executor] Failed to parse agent models JSON for session {}: {}. Original string: {}", session_id, e, m);
+                serde_json::json!({})
+            })
         } else {
             serde_json::json!({
-                "plan": agent_config.plan_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
-                "act": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
-                "vision": agent_config.vision_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                "plan": agent_config.plan_model.as_deref().and_then(|s| {
+                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                        log::error!("[Workflow Executor] Failed to parse plan_model JSON: {}", e);
+                        e
+                    }).ok()
+                }),
+                "act": agent_config.act_model.as_deref().and_then(|s| {
+                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                        log::error!("[Workflow Executor] Failed to parse act_model JSON: {}", e);
+                        e
+                    }).ok()
+                }),
+                "vision": agent_config.vision_model.as_deref().and_then(|s| {
+                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                        log::error!("[Workflow Executor] Failed to parse vision_model JSON: {}", e);
+                        e
+                    }).ok()
+                }),
             })
         };
 
-        let target_type = subagent_type.unwrap_or_else(|| "General".to_string());
+        let target_type = subagent_type
+            .clone()
+            .unwrap_or_else(|| "General".to_string());
         let act_model = models_val.get("act").cloned().unwrap_or_default();
+        let plan_model = models_val.get("plan").cloned().unwrap_or_default();
 
-        let active_model = match target_type.as_str() {
-            "Programming" => models_val
-                .get("coding")
-                .cloned()
-                .filter(|m| !m["model"].is_null())
-                .unwrap_or_else(|| act_model.clone()),
-            "Vision" => models_val
-                .get("vision")
-                .cloned()
-                .filter(|m| !m["model"].is_null())
-                .unwrap_or_else(|| act_model.clone()),
-            "Writing" => models_val
-                .get("copywriting")
-                .cloned()
-                .filter(|m| !m["model"].is_null())
-                .unwrap_or_else(|| act_model.clone()),
-            "Browsing" => models_val
-                .get("browsing")
-                .cloned()
-                .filter(|m| !m["model"].is_null())
-                .unwrap_or_else(|| act_model.clone()),
-            _ => act_model.clone(),
+        let active_model = if policy.phase == ExecutionPhase::Planning || target_type == "Planning" {
+            // Prioritize the plan model during planning phase
+            if !plan_model["model"].is_null() {
+                plan_model
+            } else {
+                act_model.clone()
+            }
+        } else {
+            match target_type.as_str() {
+                "Programming" => models_val
+                    .get("coding")
+                    .cloned()
+                    .filter(|m| !m["model"].is_null())
+                    .unwrap_or_else(|| act_model.clone()),
+                "Vision" => models_val
+                    .get("vision")
+                    .cloned()
+                    .filter(|m| !m["model"].is_null())
+                    .unwrap_or_else(|| act_model.clone()),
+                "Writing" => models_val
+                    .get("copywriting")
+                    .cloned()
+                    .filter(|m| !m["model"].is_null())
+                    .unwrap_or_else(|| act_model.clone()),
+                "Browsing" => models_val
+                    .get("browsing")
+                    .cloned()
+                    .filter(|m| !m["model"].is_null())
+                    .unwrap_or_else(|| act_model.clone()),
+                _ => act_model.clone(),
+            }
         };
 
         let provider_id = active_model["id"].as_i64().unwrap_or(0);
@@ -193,44 +224,49 @@ impl WorkflowExecutor {
             ContextCompressor::new(chat_state.clone(), provider_id, model_name.clone());
         let skill_scanner = SkillScanner::new(app_data_dir.clone());
 
-        // Auto-add system and application paths to allowed_paths
-        let mut final_allowed_paths = allowed_paths;
+        // 1. Define Sandbox Roots (Strictly writable in Planning Mode)
+        let mut sandbox_paths = Vec::new();
+        let mut skill_paths = Vec::new();
 
-        // 1. Add skill search paths
+        // Planning dir in AppData (Session-isolated)
+        let planning_dir = app_data_dir.join("planning").join(&session_id);
+        let _ = std::fs::create_dir_all(&planning_dir);
+        sandbox_paths.push(planning_dir);
+
+        // Standard Skill Search Paths (Provided by SkillScanner)
         for skill_path in skill_scanner.get_search_paths() {
-            final_allowed_paths.push(skill_path);
+            // We ensure they are included in both sandbox (for write) and skill_roots (for identity)
+            sandbox_paths.push(skill_path.clone());
+            skill_paths.push(skill_path);
         }
 
-        // 2. Add ~/.chatspeed directory
+        // System Temp
+        sandbox_paths.push(std::env::temp_dir());
+
+        // Global ~/.chatspeed (used for general storage)
         if let Some(home) = dirs::home_dir() {
-            final_allowed_paths.push(home.join(".chatspeed"));
+            let chatspeed_home = home.join(".chatspeed");
+            sandbox_paths.push(chatspeed_home);
         }
 
-        // 3. Add system temp directory
-        final_allowed_paths.push(std::env::temp_dir());
+        // 2. Workspace Roots
 
-        // 4. Canonicalize and Deduplicate
-        let mut unique_paths = HashSet::new();
-        let processed_paths: Vec<PathBuf> = final_allowed_paths
-            .into_iter()
-            .filter_map(|p| {
-                let abs_p = if p.is_absolute() {
-                    p
-                } else {
-                    std::env::current_dir().unwrap_or_default().join(p)
-                };
-                // We use canonicalize if it exists, otherwise just normalize
-                abs_p.canonicalize().ok().or(Some(abs_p))
-            })
-            .filter(|p| unique_paths.insert(p.clone()))
-            .collect();
+        let workspace_paths = allowed_paths;
 
-        let path_guard = Arc::new(RwLock::new(PathGuard::new(processed_paths)));
+        let path_guard = Arc::new(RwLock::new(PathGuard::new(
+            workspace_paths,
+            sandbox_paths,
+            skill_paths,
+        )));
         let tool_manager = Arc::new(ToolManager::new());
 
-        let auto_approve: HashSet<String> =
-            serde_json::from_str(agent_config.auto_approve.as_deref().unwrap_or("[]"))
-                .unwrap_or_default();
+        let auto_approve: HashSet<String> = {
+            let json_str = agent_config.auto_approve.as_deref().unwrap_or("[]");
+            serde_json::from_str(json_str).unwrap_or_else(|e| {
+                log::error!("[Workflow Executor] Failed to parse auto_approve JSON for session {}: {}. Original: {}", session_id, e, json_str);
+                HashSet::new()
+            })
+        };
 
         let llm_processor = LlmProcessor::new(
             session_id.clone(),
@@ -279,6 +315,7 @@ impl WorkflowExecutor {
             auto_approve,
             signal_rx,
             tsid_generator,
+            subagent_type,
             policy,
             loop_detector: LoopDetector::new(),
         }
@@ -390,7 +427,7 @@ impl WorkflowExecutor {
                 self.path_guard.clone(),
                 self.tsid_generator.clone(),
                 custom_rules,
-                self.policy.path_restriction == PathRestriction::SandboxOnly,
+                self.policy.phase == ExecutionPhase::Planning,
             )))
             .await?;
         }
@@ -423,13 +460,19 @@ impl WorkflowExecutor {
         {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
-            tm.register_tool(Arc::new(
-                crate::workflow::react::orchestrator::TaskTool::new(
-                    self.sub_agent_factory.clone(),
-                    self.tsid_generator.clone(),
-                ),
-            ))
-            .await?;
+
+            // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
+            // if the current executor is NOT itself a sub-agent.
+            if self.subagent_type.is_none() {
+                tm.register_tool(Arc::new(
+                    crate::workflow::react::orchestrator::TaskTool::new(
+                        self.sub_agent_factory.clone(),
+                        self.tsid_generator.clone(),
+                    ),
+                ))
+                .await?;
+            }
+
             tm.register_tool(Arc::new(
                 crate::workflow::react::orchestrator::TaskOutputTool,
             ))
@@ -648,10 +691,10 @@ impl WorkflowExecutor {
                     .add_message(
                         "user".to_string(),
                         format!(
-                            "<system-reminder>STEP BUDGET EXHAUSTED: You have used {} out of {} \
+                            "<SYSTEM_REMINDER>STEP BUDGET EXHAUSTED: You have used {} out of {} \
                             allowed steps. You MUST conclude the task immediately. Do NOT perform \
                             any more research. Call 'finish_task' with a summary of what you have \
-                            found so far, clearly noting any incomplete sections.</system-reminder>",
+                            found so far, clearly noting any incomplete sections.</SYSTEM_REMINDER>",
                             self.current_step, self.max_steps
                         ),
                         None,
@@ -668,10 +711,10 @@ impl WorkflowExecutor {
                     .add_message(
                         "user".to_string(),
                         format!(
-                            "<system-reminder>STEP BUDGET WARNING: You are at step {} of {}. \
+                            "<SYSTEM_REMINDER>STEP BUDGET WARNING: You are at step {} of {}. \
                             Only {} steps remain. Start wrapping up: complete your most critical \
                             pending tasks and prepare a final answer. Avoid starting new research \
-                            threads.</system-reminder>",
+                            threads.</SYSTEM_REMINDER>",
                             self.current_step,
                             self.max_steps,
                             self.max_steps - self.current_step
@@ -746,14 +789,14 @@ impl WorkflowExecutor {
                 let error_msg = if self.consecutive_no_tool_calls >= 3 {
                     let remaining = self.max_steps.saturating_sub(self.current_step);
                     format!(
-                        "<system-reminder>CRITICAL ERROR: You have failed to call a tool for {} consecutive turns. \
+                        "<SYSTEM_REMINDER>CRITICAL ERROR: You have failed to call a tool for {} consecutive turns. \
                         This is wasting your limited step budget ({}/{} steps used, {} remaining). \
                         To maintain execution state and avoid eventual task failure, your next response MUST conclude with a valid tool call. \
-                        If you are truly finished, provide a summary and call 'finish_task'.</system-reminder>",
+                        If you are truly finished, provide a summary and call 'finish_task'.</SYSTEM_REMINDER>",
                         self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining
                     )
                 } else {
-                    "<system-reminder>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</system-reminder>".to_string()
+                    "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
                 };
 
                 // Avoid appending multiple identical reminders if AI is stuck
@@ -1231,103 +1274,16 @@ impl WorkflowExecutor {
         args: &serde_json::Value,
         text_part: &str,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        // 1. Plan Submission Guard
-        if name == TOOL_SUBMIT_PLAN {
-            if self.policy.phase != ExecutionPhase::Planning {
-                return Err(WorkflowEngineError::Security("Tool 'submit_plan' is only allowed in Planning phase.".into()));
-            }
-
-            if text_part.trim().is_empty() {
-                return Ok(Some(ReinforcedResult {
-                    content: "<system-reminder>Error: You called 'submit_plan' but your plain text response was empty. You MUST provide a summary of your findings and why this plan is recommended in plain text BEFORE the tool call block.</system-reminder>".into(),
-                    title: "SubmitPlan Error".to_string(),
-                    summary: "Missing summary".to_string(),
-                    is_error: true,
-                    error_type: Some("NoSummary".into()),
-                    display_type: "text".to_string(),
-                }));
-            }
-
-            // A. Update internal and DB status
-            self.update_state(WorkflowState::AwaitingApproval).await?;
-            {
-                let store = self.context.main_store.write().map_err(|e| {
-                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-                })?;
-                store.update_workflow_status(&self.session_id, "awaiting_approval")?;
-            }
+        // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
+        match name {
+            TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
+            TOOL_FINISH_TASK => return self.handle_finish_task_intercept(text_part).await,
+            TOOL_ASK_USER => return self.handle_ask_user_intercept().await,
+            _ => {}
         }
 
-        // 2. Finish Task Guard & Self-Reflection Audit
-        if name == TOOL_FINISH_TASK {
-            // A. Physical Presence Check
-            if text_part.trim().is_empty() {
-                return Ok(Some(ReinforcedResult {
-                    content: "<system-reminder>Error: You called 'finish_task' but your plain text response was empty. You MUST provide a comprehensive summary or report in plain text BEFORE the tool call block to inform the user of your results.</system-reminder>".into(),
-                    title: "FinishTask Error".to_string(),
-                    summary: "Missing summary".to_string(),
-                    is_error: true,
-                    error_type: Some("NoSummary".into()),
-                    display_type: "text".to_string(),
-                }));
-            }
-
-            // B. Hard-check: Todo Items Status
-            if let Ok(store) = self.context.main_store.read() {
-                if let Ok(todos) = store.get_todo_list_for_workflow(&self.session_id) {
-                    let has_failures = todos.iter().any(|t| {
-                        let s = t["status"].as_str().unwrap_or("");
-                        s == "failed" || s == "data_missing"
-                    });
-
-                    // If there are failures, we allow exiting (consistent with 'Fail Fast' principle)
-                    if !has_failures {
-                        let active_tasks: Vec<String> = todos
-                            .iter()
-                            .filter(|t| {
-                                let s = t["status"].as_str().unwrap_or("");
-                                s == "pending" || s == "in_progress"
-                            })
-                            .map(|t| t["subject"].as_str().unwrap_or("Untitled").to_string())
-                            .collect();
-
-                        if !active_tasks.is_empty() {
-                            return Ok(Some(ReinforcedResult {
-                                content: format!("<system-reminder>Block: You still have active tasks: {}. You MUST either complete them, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling finish_task.</system-reminder>", active_tasks.join(", ")),
-                                title: "Tasks Pending".to_string(),
-                                summary: "Incomplete todos".to_string(),
-                                is_error: true,
-                                error_type: Some("PendingTodos".into()),
-                                display_type: "text".to_string(),
-                            }));
-                        }
-                    }
-                }
-            }
-
-            // C. Semantic Quality Audit
-            if let Some(audit_feedback) = self
-                .intelligence_manager
-                .run_final_audit(&self.context)
-                .await?
-            {
-                log::warn!(
-                    "WorkflowExecutor {}: Final audit rejected the conclusion. Feedback: {}",
-                    self.session_id,
-                    audit_feedback
-                );
-                return Ok(Some(ReinforcedResult {
-                    content: format!("<system-reminder>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call finish_task.</system-reminder>", audit_feedback),
-                    title: "Audit Rejected".to_string(),
-                    summary: "Audit failed".to_string(),
-                    is_error: true,
-                    error_type: Some("AuditRejected".into()),
-                    display_type: "text".to_string(),
-                }));
-            }
-        }
-
-        // 2. Loop Detection
+        // --- 2. Security & Runtime Checks (Bash, FS, Loops) ---
+        // 2.1 Loop Detection
         let loop_warning = self.loop_detector.record_and_check(name, args);
         if let Some(ref warning) = loop_warning {
             log::warn!(
@@ -1335,7 +1291,6 @@ impl WorkflowExecutor {
                 self.session_id,
                 name
             );
-            // Inject as a user-side reminder so it shows up in LLM context
             let _ = self
                 .context
                 .add_message(
@@ -1351,93 +1306,25 @@ impl WorkflowExecutor {
                 .await;
         }
 
-        // 3. Security: Shell Auditing
+        // 2.2 Shell Auditing
         if name == TOOL_BASH {
-            let command_str = args["command"].as_str().unwrap_or("");
-            if !self.auto_approve.contains(name) {
-                let custom_rules: Vec<crate::tools::ShellPolicyRule> = self
-                    .agent_config
-                    .shell_policy
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or_default();
-                let policy_engine =
-                    crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
-
-                match policy_engine.check(
-                    command_str,
-                    self.policy.path_restriction == PathRestriction::SandboxOnly,
-                ) {
-                    crate::tools::ShellDecision::Allow => {}
-                    crate::tools::ShellDecision::Deny(reason) => {
-                        return Ok(Some(ReinforcedResult {
-                            content: format!(
-                                "Error: Command blocked by security policy. Reason: {}",
-                                reason
-                            ),
-                            title: format!("Bash({})", command_str),
-                            summary: "Blocked".to_string(),
-                            is_error: true,
-                            error_type: Some("Security".to_string()),
-                            display_type: "text".to_string(),
-                        }));
-                    }
-                    crate::tools::ShellDecision::Review(reason) => {
-                        self.gateway
-                            .send(
-                                &self.session_id,
-                                GatewayPayload::Confirm {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    action: TOOL_BASH.to_string(),
-                                    details: format!("{} (Policy: {})", command_str, reason),
-                                },
-                            )
-                            .await?;
-                        self.update_state(WorkflowState::Paused).await?;
-                        return Ok(Some(ReinforcedResult {
-                            content: "WAITING_FOR_USER_APPROVAL".to_string(),
-                            title: format!("Bash({})", command_str),
-                            summary: "Waiting for approval".to_string(),
-                            is_error: false,
-                            error_type: None,
-                            display_type: "text".to_string(),
-                        }));
-                    }
-                }
+            if let Some(result) = self.handle_bash_security_intercept(args).await? {
+                return Ok(Some(result));
             }
         }
 
-        // 4. Security: FS Path Guard
+        // 2.3 FS Path Guard
         if [
             TOOL_READ_FILE,
             TOOL_WRITE_FILE,
             TOOL_LIST_DIR,
             TOOL_EDIT_FILE,
+            TOOL_GLOB,
+            TOOL_GREP,
         ]
         .contains(&name)
         {
-            if let Some(path_str) = args["file_path"].as_str().or_else(|| args["path"].as_str()) {
-                let guard = self.path_guard.read().map_err(|e| {
-                    WorkflowEngineError::General(format!("PathGuard lock poisoned: {}", e))
-                })?;
-                guard.validate(
-                    std::path::Path::new(path_str),
-                    self.policy.path_restriction == PathRestriction::SandboxOnly,
-                )?;
-            }
-        }
-
-        // 5. User Interaction Pause
-        if name == TOOL_ASK_USER {
-            self.update_state(WorkflowState::Paused).await?;
-            return Ok(Some(ReinforcedResult {
-                content: "Waiting for user".into(),
-                title: "AskUser".to_string(),
-                summary: "Asked user".to_string(),
-                is_error: false,
-                error_type: None,
-                display_type: "text".to_string(),
-            }));
+            self.handle_fs_path_guard_intercept(name, args)?;
         }
 
         Ok(None)
@@ -1482,7 +1369,7 @@ impl WorkflowExecutor {
                             Ok(summary) if !summary.trim().is_empty() => {
                                 let url = args["url"].as_str().unwrap_or("");
                                 return Ok(ReinforcedResult {
-                                    content: format!("<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n\n<system-reminder>\n[Auto-Summarized] High-fidelity filtered content.\n</system-reminder>\n</webpage>", url, summary),
+                                    content: format!("<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n\n<SYSTEM_REMINDER>\n[Auto-Summarized] High-fidelity filtered content.\n</SYSTEM_REMINDER>\n</webpage>", url, summary),
                                     title: format!("Fetch({})", url),
                                     summary: "Content summarized (XML)".to_string(),
                                     is_error: false,
@@ -1516,11 +1403,30 @@ impl WorkflowExecutor {
         }
     }
 
-    async fn update_state(&mut self, new_state: WorkflowState) -> Result<(), WorkflowEngineError> {
+    pub(crate) async fn update_state(
+        &mut self,
+        new_state: WorkflowState,
+    ) -> Result<(), WorkflowEngineError> {
         self.state = new_state.clone();
+
+        // 1. Sync to Gateway (UI)
         self.gateway
-            .send(&self.session_id, GatewayPayload::State { state: new_state })
+            .send(
+                &self.session_id,
+                GatewayPayload::State {
+                    state: new_state.clone(),
+                },
+            )
             .await?;
+
+        // 2. Sync to Database (Single Source of Truth)
+        let db_status = new_state.to_string();
+
+        let store = self.context.main_store.write().map_err(|e| {
+            WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+        })?;
+        store.update_workflow_status(&self.session_id, &db_status)?;
+
         Ok(())
     }
 
@@ -1703,8 +1609,10 @@ impl WorkflowExecutor {
                 .workflow
                 .todo_list
                 .unwrap_or_else(|| "[]".to_string());
-            serde_json::from_str::<serde_json::Value>(&todo_list_str)
-                .unwrap_or_else(|_| serde_json::json!([]))
+            serde_json::from_str::<serde_json::Value>(&todo_list_str).unwrap_or_else(|e| {
+                log::error!("[Workflow Executor] Failed to parse todo_list JSON for session {}: {}. Original: {}", self.session_id, e, todo_list_str);
+                serde_json::json!([])
+            })
         };
 
         self.gateway

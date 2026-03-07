@@ -116,7 +116,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
@@ -239,10 +239,10 @@ const formatNumber = (num) => {
   return new Intl.NumberFormat().format(num)
 }
 
-// Helper to remove <system-reminder>...</system-reminder> tags
+// Helper to remove <SYSTEM_REMINDER>...</SYSTEM_REMINDER> tags
 const removeSystemReminder = (content) => {
   if (!content) return ''
-  return content.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '').trim()
+  return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
 const getToolInfo = (name, metadata = {}) => {
@@ -636,6 +636,40 @@ const onKeyDown = (e) => {
 
 onMounted(() => {
   restorePosition()
+
+  // Ensure panel stays within viewport on initial load
+  // If not positioned yet, we need to verify default position doesn't overflow
+  if (!isPositioned.value) {
+    const panelHeight = PANEL_HEIGHT
+    const panelWidth = PANEL_WIDTH
+    const defaultRight = 20
+    const defaultBottom = 220
+
+    // Calculate what left/top would be for default right/bottom positioning
+    let targetLeft = window.innerWidth - panelWidth - defaultRight
+    let targetTop = window.innerHeight - panelHeight - defaultBottom
+
+    // Constrain to viewport bounds with 20px margin
+    targetLeft = Math.max(20, Math.min(targetLeft, window.innerWidth - panelWidth - 20))
+    targetTop = Math.max(20, Math.min(targetTop, window.innerHeight - panelHeight - 20))
+
+    // If constrained position differs from default, we need to set it explicitly
+    if (targetLeft !== window.innerWidth - panelWidth - defaultRight ||
+        targetTop !== window.innerHeight - panelHeight - defaultBottom) {
+      position.value = { x: targetLeft, y: targetTop }
+      isPositioned.value = true
+      // Calculate edge distance for this position
+      edgeDistance.value = {
+        right: window.innerWidth - position.value.x - panelWidth,
+        bottom: window.innerHeight - position.value.y - panelHeight
+      }
+      savePosition()
+    }
+  } else {
+    // Already positioned (from localStorage), ensure it's still valid
+    constrainPosition()
+  }
+
   document.addEventListener('keydown', onKeyDown)
   window.addEventListener('resize', constrainPosition)
 })
@@ -651,12 +685,15 @@ watch(() => workflowStore.currentWorkflowId, (newId) => {
   }
 })
 
-watch(() => todoList.value, (newList) => {
-  const hasNewInProgress = newList.some(item => item.status === 'in_progress')
-  if (hasNewInProgress && isCollapsed.value) {
-    isCollapsed.value = false
+watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
+  // When data first appears (panel becomes visible), ensure it's within viewport
+  if (hasDataNow && !hadDataBefore) {
+    // Wait for DOM to render with actual content height
+    nextTick(() => {
+      constrainPosition()
+    })
   }
-}, { deep: true })
+})
 </script>
 
 <style lang="scss" scoped>

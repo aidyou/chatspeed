@@ -4,6 +4,7 @@ pub mod engine;
 pub mod error;
 pub mod gateway;
 pub mod intelligence;
+pub mod interceptors;
 pub mod llm;
 pub mod loop_detector;
 pub mod observation;

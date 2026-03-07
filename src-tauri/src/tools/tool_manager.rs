@@ -205,7 +205,7 @@ impl ToolManager {
             .inner()
             .clone();
         let path_guard = Arc::new(std::sync::RwLock::new(
-            crate::workflow::react::security::PathGuard::new(vec![]),
+            crate::workflow::react::security::PathGuard::new(vec![], vec![], vec![]),
         ));
         self.register_tool(Arc::new(crate::tools::ShellExecute::new(
             path_guard,

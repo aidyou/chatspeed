@@ -94,7 +94,7 @@ impl ObservationReinforcer {
                         if let Some(next) = next_pending {
                             let subject = next["subject"].as_str().unwrap_or("Untitled");
                             list_str.push_str(&format!(
-                                "<system-reminder>Next pending task: {}\n</system-reminder>",
+                                "<SYSTEM_REMINDER>Next pending task: {}\n</SYSTEM_REMINDER>",
                                 subject
                             ));
                         } else {
@@ -106,7 +106,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<system-reminder>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.</system-reminder>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -130,7 +130,7 @@ impl ObservationReinforcer {
                                     url
                                 ));
                             }
-                            formatted.push_str("<system-reminder>Analyze these results carefully. Select the 1-3 most relevant and authoritative URLs, then use web_fetch to extract detailed data. Do NOT search again with similar keywords.</system-reminder>");
+                            formatted.push_str("<SYSTEM_REMINDER>Analyze these results carefully. Select the 1-3 most relevant and authoritative URLs, then use web_fetch to extract detailed data. Do NOT search again with similar keywords.</SYSTEM_REMINDER>");
                             raw_res = formatted;
                         }
                     }
@@ -149,7 +149,7 @@ impl ObservationReinforcer {
                         _ => "If you expected data, try adjusting your search terms or checking if the target exists.",
                     };
                     ReinforcedResult {
-                        content: format!("Tool '{}' executed successfully but returned no data. <system-reminder>{}</system-reminder>", tool_name, empty_hint),
+                        content: format!("Tool '{}' executed successfully but returned no data. <SYSTEM_REMINDER>{}</SYSTEM_REMINDER>", tool_name, empty_hint),
                         title,
                         summary: "No data returned".to_string(),
                         is_error: false,
@@ -162,7 +162,10 @@ impl ObservationReinforcer {
                         None => &raw_res,
                     };
                     ReinforcedResult {
-                        content: format!("[Result truncated to 20000 chars] {}\n<system-reminder>The output was truncated. Use more specific search patterns or read smaller chunks if needed.</system-reminder>", truncated),
+                        content: format!(
+                            "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output truncated to 20000 chars. Use specific search patterns or read smaller chunks.</SYSTEM_REMINDER>",
+                            truncated
+                        ),
                         title,
                         summary: format!("{} (Truncated)", summary),
                         is_error: false,
@@ -427,22 +430,22 @@ impl ObservationReinforcer {
     fn generate_recovery_hint(tool_name: &str, error_type: &str) -> String {
         match (tool_name, error_type) {
             ("web_search", "Network") => {
-                "<system-reminder>Search failed due to network error. Try once more with the same query. If it fails again, try a completely different search engine keyword or mark the sub-task as data_missing.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>Search failed due to network error. Try once more with the same query. If it fails again, try a completely different search engine keyword or mark the sub-task as data_missing.</SYSTEM_REMINDER>".to_string()
             }
             ("web_fetch", "Network") | ("web_fetch", _) => {
-                "<system-reminder>Failed to fetch this URL. Do NOT retry the same URL. Instead: (1) try an alternative URL from your search results, or (2) if no alternatives exist, mark the data as unavailable and move to the next task.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>Failed to fetch this URL. Do NOT retry the same URL. Instead: (1) try an alternative URL from your search results, or (2) if no alternatives exist, mark the data as unavailable and move to the next task.</SYSTEM_REMINDER>".to_string()
             }
             ("web_search", _) => {
-                "<system-reminder>Search failed. Try rephrasing your query with different keywords. If the topic is China-related, try searching in Chinese.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>Search failed. Try rephrasing your query with different keywords. If the topic is China-related, try searching in Chinese.</SYSTEM_REMINDER>".to_string()
             }
             (_, "Security") => {
-                "<system-reminder>Path is outside your authorized workspace. Use list_dir to find valid paths or ask the user to grant access.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>Path is outside your authorized workspace. Use list_dir to find valid paths or ask the user to grant access.</SYSTEM_REMINDER>".to_string()
             }
             (_, "InvalidParams") => {
-                "<system-reminder>Check the tool's input schema. Ensure all required fields are provided with correct types.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>Check the tool's input schema. Ensure all required fields are provided with correct types.</SYSTEM_REMINDER>".to_string()
             }
             (_, "Io") => {
-                "<system-reminder>File I/O error. Verify the path exists using list_dir before retrying.</system-reminder>".to_string()
+                "<SYSTEM_REMINDER>File I/O error. Verify the path exists using list_dir before retrying.</SYSTEM_REMINDER>".to_string()
             }
             _ => String::new(),
         }

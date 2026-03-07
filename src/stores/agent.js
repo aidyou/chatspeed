@@ -71,10 +71,10 @@ const _transformFromBackend = (backendAgent) => {
   return {
     id: backendAgent.id,
     name: backendAgent.name,
-    description: backendAgent.description || '',
+    description: backendAgent.description,
     systemPrompt: backendAgent.system_prompt,
-    agentType: backendAgent.agent_type || 'autonomous',
-    planningPrompt: backendAgent.planning_prompt || '',
+    planningPrompt: backendAgent.planning_prompt,
+
     availableTools: backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : [],
     autoApprove: backendAgent.auto_approve ? JSON.parse(backendAgent.auto_approve) : [],
     planModel: models.plan,
@@ -113,11 +113,10 @@ const _transformToBackend = (frontendAgent) => {
   });
 
   return {
-    id: frontendAgent.id,
+    id: frontendAgent.id || '',
     name: frontendAgent.name.trim(),
     description: frontendAgent.description?.trim() || '',
     system_prompt: frontendAgent.systemPrompt.trim(),
-    agent_type: frontendAgent.agentType || 'autonomous',
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),

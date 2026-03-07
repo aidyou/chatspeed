@@ -15,8 +15,11 @@ use tauri::{AppHandle, Manager, State};
 #[tauri::command]
 pub async fn add_agent(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent: Agent,
+    tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
+    mut agent: Agent,
 ) -> Result<String, String> {
+    // auto generate id
+    agent.id = tsid_generator.generate().map_err(|e| e.to_string())?;
     let store = state.read().map_err(|e| e.to_string())?;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
     Ok(id)
@@ -203,45 +206,60 @@ pub async fn workflow_start(
 
     let allowed_roots = {
         let store = main_store.read().map_err(|e| e.to_string())?;
-        let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
-        snapshot.workflow.allowed_paths
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .allowed_paths
             .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .map(|paths| paths.into_iter().map(PathBuf::from).collect::<Vec<PathBuf>>())
+            .map(|paths| {
+                paths
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<PathBuf>>()
+            })
             .unwrap_or_default()
     };
 
-    let shared_executor: Arc<tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>> = if planning_mode {
-        Arc::new(tokio::sync::Mutex::new(crate::workflow::react::planners::PlanningExecutor::new(
-            session_id.clone(),
-            main_store,
-            chat_state_arc,
-            gateway as Arc<dyn Gateway>,
-            factory,
-            agent_config,
-            allowed_roots,
-            app_data_dir,
-            None, // subagent_type
-            Some(signal_rx),
-            tsid_generator,
-            global_tool_manager,
-            crate::workflow::react::policy::ExecutionPolicy::planning(),
-        )))
+    let shared_executor: Arc<
+        tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
+    > = if planning_mode {
+        Arc::new(tokio::sync::Mutex::new(
+            crate::workflow::react::planners::PlanningExecutor::new(
+                session_id.clone(),
+                main_store,
+                chat_state_arc,
+                gateway as Arc<dyn Gateway>,
+                factory,
+                agent_config,
+                allowed_roots,
+                app_data_dir,
+                None, // subagent_type
+                Some(signal_rx),
+                tsid_generator,
+                global_tool_manager,
+                crate::workflow::react::policy::ExecutionPolicy::planning(),
+            ),
+        ))
     } else {
-        Arc::new(tokio::sync::Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
-            session_id.clone(),
-            main_store,
-            chat_state_arc,
-            gateway as Arc<dyn Gateway>,
-            factory,
-            agent_config,
-            allowed_roots,
-            app_data_dir,
-            None, // subagent_type
-            Some(signal_rx),
-            tsid_generator,
-            global_tool_manager,
-            crate::workflow::react::policy::ExecutionPolicy::standard(),
-        )))
+        Arc::new(tokio::sync::Mutex::new(
+            crate::workflow::react::runners::ExecutionExecutor::new(
+                session_id.clone(),
+                main_store,
+                chat_state_arc,
+                gateway as Arc<dyn Gateway>,
+                factory,
+                agent_config,
+                allowed_roots,
+                app_data_dir,
+                None, // subagent_type
+                Some(signal_rx),
+                tsid_generator,
+                global_tool_manager,
+                crate::workflow::react::policy::ExecutionPolicy::standard(),
+            ),
+        ))
     };
 
     {
@@ -320,22 +338,28 @@ pub async fn workflow_approve_plan(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 2. Update DB status to 'running'
+    // 2. Update DB status to 'thinking' (the initial state of the executor)
     {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
-            .update_workflow_status(&session_id, "running")
+            .update_workflow_status(
+                &session_id,
+                &crate::workflow::react::types::WorkflowState::Thinking.to_string(),
+            )
             .map_err(|e| e.to_string())?;
     }
 
-    // 2.5 Cleanup planning files
-    let planning_dir = app_data_dir.join("planning");
+    // 2.5 Cleanup planning files (Session-isolated)
+    let planning_dir = app_data_dir.join("planning").join(&session_id);
     if planning_dir.exists() {
-        log::info!("Cleaning up planning files in {:?}", planning_dir);
-        // We delete everything in the planning dir upon approval
-        // Note: For multi-session isolation we might want to use session subdirs, 
-        // but for now we follow the "cleanup" instruction for this shared workspace.
+        log::info!(
+            "Cleaning up planning files for session {} in {:?}",
+            session_id,
+            planning_dir
+        );
         let _ = std::fs::remove_dir_all(&planning_dir);
+        // We don't necessarily need to recreate it here as the next executor will handle its own setup,
+        // but creating it is fine for consistency.
         let _ = std::fs::create_dir_all(&planning_dir);
     }
 
@@ -357,32 +381,64 @@ pub async fn workflow_approve_plan(
 
     let allowed_roots = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
-        snapshot.workflow.allowed_paths
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .allowed_paths
             .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .map(|paths| paths.into_iter().map(PathBuf::from).collect::<Vec<PathBuf>>())
+            .map(|paths| {
+                paths
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<PathBuf>>()
+            })
             .unwrap_or_default()
     };
 
-    let shared_executor: Arc<tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>> = Arc::new(tokio::sync::Mutex::new(crate::workflow::react::runners::ExecutionExecutor::new(
-        session_id.clone(),
-        main_store_arc,
-        chat_state_arc,
-        gateway_arc as Arc<dyn Gateway>,
-        factory_arc,
-        agent_config,
-        allowed_roots,
-        app_data_dir,
-        None, // subagent_type
-        Some(signal_rx),
-        tsid_generator_arc,
-        global_tool_manager,
-        crate::workflow::react::policy::ExecutionPolicy::implementation(),
-    )));
+    let shared_executor: Arc<
+        tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
+    > = Arc::new(tokio::sync::Mutex::new(
+        crate::workflow::react::runners::ExecutionExecutor::new(
+            session_id.clone(),
+            main_store_arc,
+            chat_state_arc,
+            gateway_arc.clone() as Arc<dyn Gateway>,
+            factory_arc,
+            agent_config,
+            allowed_roots,
+            app_data_dir,
+            None, // subagent_type
+            Some(signal_rx),
+            tsid_generator_arc,
+            global_tool_manager,
+            crate::workflow::react::policy::ExecutionPolicy::implementation(),
+        ),
+    ));
 
     {
         let mut executor = shared_executor.lock().await;
         executor.init().await.map_err(|e| e.to_string())?;
+
+        // 4. Notify frontend of the new pruned history (Approved Plan + Initial Query)
+        for msg in executor.messages() {
+            let _ = gateway_arc
+                .send(
+                    &session_id,
+                    crate::workflow::react::types::GatewayPayload::Message {
+                        role: msg.role.clone(),
+                        content: msg.message.clone(),
+                        reasoning: msg.reasoning.clone(),
+                        step_type: msg.step_type.as_ref().and_then(|s| s.parse().ok()),
+                        step_index: msg.step_index,
+                        is_error: msg.is_error,
+                        error_type: msg.error_type.clone(),
+                        metadata: msg.metadata.clone(),
+                    },
+                )
+                .await;
+        }
     }
 
     // Register for external control
@@ -435,7 +491,9 @@ pub async fn workflow_stop(
     log::info!("Stopping workflow session: {}", session_id);
 
     // 1. Inject an asynchronous signal. This is non-blocking and doesn't require executor lock.
-    let _ = gateway.inject_input(&session_id, "{\"type\": \"stop\"}".to_string()).await;
+    let _ = gateway
+        .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
+        .await;
 
     // 2. Mark as cancelled in BACKGROUND_TASKS if it's still there (best effort)
     // We don't wait for the lock here to avoid hanging the UI.

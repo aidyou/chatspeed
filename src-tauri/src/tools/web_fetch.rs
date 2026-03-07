@@ -126,21 +126,18 @@ impl ToolDefinition for WebFetch {
         }
 
         // Get optional selector
-        let content_format_str = params["format"]
-            .as_str()
-            .unwrap_or("markdown");
-            
-        let content_format: crate::scraper::types::StrapeContentFormat = content_format_str
-            .to_string()
-            .into();
-            
+        let content_format_str = params["format"].as_str().unwrap_or("markdown");
+
+        let content_format: crate::scraper::types::StrapeContentFormat =
+            content_format_str.to_string().into();
+
         let mut keep_link = params["keep_link"].as_bool().unwrap_or(false);
-        
+
         // Force keep_link to true if format is 'links' or if we're on a portal/list page
         if content_format_str == "links" {
             keep_link = true;
         }
-        
+
         let keep_image = params["keep_image"].as_bool().unwrap_or(false);
         let request = ScrapeRequest::Content(ContentOptions {
             url: url.to_string(),
@@ -170,7 +167,7 @@ impl ToolDefinition for WebFetch {
             )
         };
 
-        let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<system-reminder>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</system-reminder>", &url);
+        let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<SYSTEM_REMINDER>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</SYSTEM_REMINDER>", &url);
 
         let content_formated = if content.is_empty() {
             empty_prompt

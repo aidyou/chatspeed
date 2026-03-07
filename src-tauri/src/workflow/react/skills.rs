@@ -37,12 +37,7 @@ impl SkillScanner {
             search_paths.push(home.join(".agents").join("skills"));
         }
 
-        // 3. ~/.claude/skills (Priority 3 - compatibility)
-        if let Some(home) = dirs::home_dir() {
-            search_paths.push(home.join(".claude").join("skills"));
-        }
-
-        // 4. software data dir (Priority 4)
+        // 3. software data dir (Priority 3)
         search_paths.push(app_data_dir.join("skills"));
 
         Self { search_paths }
