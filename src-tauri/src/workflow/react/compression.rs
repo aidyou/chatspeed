@@ -3,10 +3,10 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
+
 use serde_json::json;
 use std::sync::Arc;
-
-use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
 
 pub struct ContextCompressor {
     pub chat_state: Arc<ChatState>,
@@ -81,7 +81,8 @@ impl ContextCompressor {
         history_json: Vec<serde_json::Value>,
         user_prompt: &str,
     ) -> Result<String, WorkflowEngineError> {
-        let mut full_history = vec![json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT })];
+        let mut full_history =
+            vec![json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT })];
         full_history.extend(history_json);
         full_history.push(json!({ "role": "user", "content": user_prompt }));
 

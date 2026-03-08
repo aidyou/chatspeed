@@ -2,6 +2,7 @@ use crate::db::MainStore;
 use crate::db::WorkflowMessage;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::types::StepType;
+
 use serde_json::json;
 use std::sync::Arc;
 
@@ -198,7 +199,7 @@ impl ContextManager {
                 if meta["subtype"] == "approved_plan" {
                     let plan = meta["plan_content"].as_str().unwrap_or("");
                     let todos = meta["todo_content"].as_str().unwrap_or("[]");
-                    
+
                     msg.message = format!(
                         "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
                         plan,
@@ -209,6 +210,15 @@ impl ContextManager {
         }
 
         llm_messages
+    }
+
+    /// Gets the initial user query for the session.
+    pub fn get_initial_query(&self) -> String {
+        self.messages
+            .iter()
+            .find(|m| m.role == "user")
+            .map(|m| m.message.clone())
+            .unwrap_or_default()
     }
 
     /// Prunes the context for transitioning from Planning to Execution.
@@ -235,7 +245,11 @@ impl ContextManager {
             let store = self.main_store.write().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
-            let keep_ids = initial_query.as_ref().and_then(|m| m.id).map(|id| vec![id]).unwrap_or_default();
+            let keep_ids = initial_query
+                .as_ref()
+                .and_then(|m| m.id)
+                .map(|id| vec![id])
+                .unwrap_or_default();
             store.delete_workflow_messages(&self.session_id, keep_ids)?;
         }
 
@@ -267,12 +281,11 @@ impl ContextManager {
             role: "system".to_string(),
             message: format!(
                 "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
-                approved_plan,
-                todo_json
+                approved_plan, todo_json
             ),
             reasoning: None,
-            metadata: Some(json!({ 
-                "type": "summary", 
+            metadata: Some(json!({
+                "type": "summary",
                 "subtype": "approved_plan",
                 "plan_content": approved_plan,
                 "todo_content": todo_json

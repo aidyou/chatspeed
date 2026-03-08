@@ -2,10 +2,77 @@ use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::observation::ReinforcedResult;
-use crate::workflow::react::policy::ExecutionPhase;
+use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, WorkflowState};
 
 impl WorkflowExecutor {
+    /// Determines if a tool call should be intercepted for user approval based on the current ApprovalLevel.
+    pub(crate) fn should_intercept_for_approval(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> bool {
+        // Full mode never intercepts
+        if self.policy.approval_level == ApprovalLevel::Full {
+            return false;
+        }
+
+        // If already in auto_approve list, don't intercept
+        if self.auto_approve.contains(name) {
+            return false;
+        }
+
+        // Default mode: intercept everything not in auto_approve
+        if self.policy.approval_level == ApprovalLevel::Default {
+            return true;
+        }
+
+        // Smart mode: allow read-only tools, intercept mutations and risky bash
+        if self.policy.approval_level == ApprovalLevel::Smart {
+            let is_read_only_tool = name.starts_with("read_")
+                || name.starts_with("list_")
+                || name.starts_with("get_")
+                || name.starts_with("todo_list")
+                || name.starts_with("todo_get")
+                || name.contains("search")
+                || name.contains("fetch")
+                || name == "glob"
+                || name == "grep";
+
+            if is_read_only_tool {
+                return false;
+            }
+
+            // Special handling for bash in Smart mode:
+            // Auto-approve common read-only commands
+            if name == TOOL_BASH {
+                let command_str = args["command"].as_str().unwrap_or("").trim().to_lowercase();
+                let read_only_bash_cmds = [
+                    "ls",
+                    "pwd",
+                    "date",
+                    "git status",
+                    "git log",
+                    "git diff",
+                    "cat ",
+                    "grep ",
+                    "find ",
+                    "file ",
+                    "stat ",
+                ];
+                let is_read_only_bash = read_only_bash_cmds
+                    .iter()
+                    .any(|&p| command_str.starts_with(p));
+                return !is_read_only_bash; // Intercept if NOT read-only
+            }
+
+            // All other tools (write_file, edit_file, delete_*, etc.) should be intercepted
+            return true;
+        }
+
+        true
+    }
+
     pub(crate) async fn handle_submit_plan_intercept(
         &mut self,
         text_part: &str,
@@ -85,19 +152,27 @@ impl WorkflowExecutor {
             }
         }
 
-        if let Some(audit_feedback) = self
-            .intelligence_manager
-            .run_final_audit(&self.context)
-            .await?
-        {
-            return Ok(Some(ReinforcedResult {
-                content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call finish_task.</SYSTEM_REMINDER>", audit_feedback),
-                title: "Audit Rejected".to_string(),
-                summary: "Audit failed".to_string(),
-                is_error: true,
-                error_type: Some("AuditRejected".into()),
-                display_type: "text".to_string(),
-            }));
+        // 3. Optional Hidden AI quality audit
+        if self.agent_config.final_audit.unwrap_or(false) {
+            log::info!(
+                "WorkflowExecutor {}: Performing final quality audit...",
+                self.session_id
+            );
+            self.update_state(WorkflowState::Auditing).await?;
+            if let Some(audit_feedback) = self
+                .intelligence_manager
+                .run_final_audit(&self.context)
+                .await?
+            {
+                return Ok(Some(ReinforcedResult {
+                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call finish_task.</SYSTEM_REMINDER>", audit_feedback),
+                    title: "Audit Rejected".to_string(),
+                    summary: "Audit failed".to_string(),
+                    is_error: true,
+                    error_type: Some("AuditRejected".into()),
+                    display_type: "text".to_string(),
+                }));
+            }
         }
         Ok(None)
     }

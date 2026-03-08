@@ -36,6 +36,10 @@ pub struct Agent {
     pub shell_policy: Option<String>,
     /// JSON array of authorized directory paths
     pub allowed_paths: Option<String>,
+    /// Whether the agent's tasks require final audit
+    pub final_audit: Option<bool>,
+    /// Approval level for tool calls (default, smart, full)
+    pub approval_level: Option<String>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -61,6 +65,8 @@ impl Agent {
         models: Option<String>,
         shell_policy: Option<String>,
         allowed_paths: Option<String>,
+        final_audit: Option<bool>,
+        approval_level: Option<String>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
@@ -77,6 +83,8 @@ impl Agent {
             models,
             shell_policy,
             allowed_paths,
+            final_audit,
+            approval_level,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -101,6 +109,8 @@ impl From<&Row<'_>> for Agent {
             models: row.get("models").ok(),
             shell_policy: row.get("shell_policy").ok(),
             allowed_paths: row.get("allowed_paths").ok(),
+            final_audit: row.get("final_audit").ok(),
+            approval_level: row.get("approval_level").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -132,8 +142,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 agent.id,
                 agent.name,
@@ -148,6 +158,8 @@ impl MainStore {
                 agent.models,
                 agent.shell_policy,
                 agent.allowed_paths,
+                agent.final_audit,
+                agent.approval_level,
                 agent.max_contexts,
             ],
         )?;
@@ -192,9 +204,11 @@ impl MainStore {
                 models = ?10,
                 shell_policy = ?11,
                 allowed_paths = ?12,
-                max_contexts = ?13,
+                final_audit = ?13,
+                approval_level = ?14,
+                max_contexts = ?15,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?14",
+             WHERE id = ?16",
             params![
                 agent.name,
                 agent.description,
@@ -208,6 +222,8 @@ impl MainStore {
                 agent.models,
                 agent.shell_policy,
                 agent.allowed_paths,
+                agent.final_audit,
+                agent.approval_level,
                 agent.max_contexts,
                 agent.id,
             ],

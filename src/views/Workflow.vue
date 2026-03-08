@@ -22,35 +22,44 @@
 
     <div class="workflow-main">
       <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed }" class="sidebar">
-        <div class="sidebar-header upperLayer">
-          <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
-            <template #prefix>
-              <cs name="search" />
-            </template>
-          </el-input>
-        </div>
-        <div v-show="!sidebarCollapsed" class="workflow-list">
-          <div class="list">
-            <div class="item" v-for="wf in filteredWorkflows" :key="wf.id" @click="selectWorkflow(wf.id)"
-              @mouseenter="hoveredWorkflowIndex = wf.id" @mouseleave="hoveredWorkflowIndex = null" :class="{
-                active: wf.id === currentWorkflowId,
-                disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
-              }">
-              <div class="workflow-title">{{ wf.title || wf.userQuery }}</div>
-              <div class="workflow-status" v-if="wf.status">
-                <span :class="['status-indicator', wf.status.toLowerCase()]"></span>
-                {{ wf.status }}
+        <div v-show="!sidebarCollapsed" class="sidebar-tabs-container">
+          <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
+            <el-tab-pane :label="$t('workflow.historyTab')" name="history">
+              <div class="sidebar-header upperLayer">
+                <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
+                  <template #prefix>
+                    <cs name="search" />
+                  </template>
+                </el-input>
               </div>
-              <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
-                <div class="icon icon-edit" @click.stop="onEditWorkflow(wf.id)">
-                  <cs name="edit" />
-                </div>
-                <div class="icon icon-delete" @click.stop="onDeleteWorkflow(wf.id)">
-                  <cs name="delete" />
+              <div class="workflow-list">
+                <div class="list">
+                  <div class="item" v-for="wf in filteredWorkflows" :key="wf.id" @click="selectWorkflow(wf.id)"
+                    @mouseenter="hoveredWorkflowIndex = wf.id" @mouseleave="hoveredWorkflowIndex = null" :class="{
+                      active: wf.id === currentWorkflowId,
+                      disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
+                    }">
+                    <div class="workflow-title">{{ wf.title || wf.userQuery }}</div>
+                    <div class="workflow-status" v-if="wf.status">
+                      <span :class="['status-indicator', wf.status.toLowerCase()]"></span>
+                      {{ wf.status }}
+                    </div>
+                    <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
+                      <div class="icon icon-edit" @click.stop="onEditWorkflow(wf.id)">
+                        <cs name="edit" />
+                      </div>
+                      <div class="icon icon-delete" @click.stop="onDeleteWorkflow(wf.id)">
+                        <cs name="delete" />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            </el-tab-pane>
+            <el-tab-pane :label="$t('workflow.filesTab')" name="files">
+              <FileTree :paths="currentPaths" />
+            </el-tab-pane>
+          </el-tabs>
         </div>
       </el-aside>
 
@@ -164,6 +173,19 @@
                   </div>
                 </div>
                 <markdown v-if="chatState.content" :content="chatState.content" />
+
+                <!-- Retry Countdown -->
+                <div v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0" class="retry-status-alert">
+                  <el-alert type="warning" :closable="false" show-icon>
+                    <template #title>
+                      {{ $t('workflow.retrying', {
+                        attempt: chatState.retryInfo.attempt,
+                        total: chatState.retryInfo.total,
+                        seconds: chatState.retryInfo.nextRetryIn
+                      }) }}
+                    </template>
+                  </el-alert>
+                </div>
               </div>
             </div>
           </div>
@@ -180,6 +202,15 @@
               :class="{ active: idx === selectedSkillIndex }" @click="onSkillSelect(skill)">
               <div class="command-name">/{{ skill.name }}</div>
               <div class="command-desc">{{ skill.description }}</div>
+            </div>
+          </div>
+
+          <!-- File At-mention Suggestion Panel -->
+          <div v-if="showFileSuggestions && fileSuggestions.length > 0" class="slash-command-panel file-suggestion-panel compact">
+            <div v-for="(file, idx) in fileSuggestions" :key="file.path" class="command-item"
+              :class="{ active: idx === selectedFileIndex }" @click="onFileSelect(file)">
+              <cs :name="file.is_directory ? 'folder' : 'file'" size="14px" class="file-icon" />
+              <span class="file-path">{{ file.relative_path }}</span>
             </div>
           </div>
 
@@ -240,12 +271,39 @@
                       <cs name="skill-plan" class="small" />
                     </label>
                   </el-tooltip>
-                  <el-tooltip :content="$t('workflow.autoApproveTooltip')" placement="top">
-                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }"
-                      @click="autoApproveTools = !autoApproveTools">
-                      <cs name="tool" class="small" />
-                    </label>
+
+                  <!-- Final Audit Toggle -->
+                  <el-tooltip :content="$t('workflow.finalAuditTooltip')" placement="top">
+                    <div class="final-audit-toggle upperLayer" @click="toggleFinalAuditMode">
+                      <cs name="check-circle" class="small" :class="finalAuditMode" />
+                      <span class="audit-label" v-if="finalAuditMode !== 'agent'">{{ finalAuditMode.toUpperCase()
+                        }}</span>
+                    </div>
                   </el-tooltip>
+
+                  <!-- Approval Level Dropdown -->
+                  <el-dropdown trigger="click" @command="val => approvalLevel = val">
+                    <div class="icon-btn upperLayer" :class="{ 'warning-mode': approvalLevel === 'full' }">
+                      <cs
+                        :name="approvalLevel === 'default' ? 'tool' : (approvalLevel === 'smart' ? 'brain' : 'warning')"
+                        class="small" />
+                    </div>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="default" :class="{ active: approvalLevel === 'default' }">
+                          {{ $t('settings.agent.approvalLevelDefault') }}
+                        </el-dropdown-item>
+                        <el-dropdown-item command="smart" :class="{ active: approvalLevel === 'smart' }">
+                          {{ $t('settings.agent.approvalLevelSmart') }}
+                        </el-dropdown-item>
+                        <el-dropdown-item command="full" class="danger-option"
+                          :class="{ active: approvalLevel === 'full' }">
+                          {{ $t('settings.agent.approvalLevelFull') }}
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+
                   <el-tooltip :content="$t('workflow.newWorkflow')" :hide-after="0" :enterable="false" placement="top">
                     <label @click="createNewWorkflow" :class="{ disabled: isRunning }">
                       <cs name="new-chat" class="small" :class="{ disabled: isRunning }" />
@@ -291,7 +349,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -309,6 +367,7 @@ import Markdown from '@/components/chat/Markdown.vue'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
+import FileTree from '@/components/workflow/FileTree.vue'
 
 // Import types
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser'
@@ -346,16 +405,32 @@ const editWorkflowId = ref(null)
 const editWorkflowTitle = ref('')
 
 const sidebarCollapsed = ref(!windowStore.workflowSidebarShow)
-const sidebarWidth = computed(() => (sidebarCollapsed.value ? '0px' : '200px'))
+const sidebarWidth = computed(() => (sidebarCollapsed.value ? '0px' : '300px')) // Increased width for tabs
+const activeSidebarTab = ref('history')
 const searchQuery = ref('')
 const inputMessage = ref('')
 const selectedAgent = ref(null)
-const autoApproveTools = ref(true)
+const approvalLevel = ref('default') // 'default', 'smart', 'full'
+const finalAuditMode = ref('agent') // 'agent', 'on', 'off'
 const planningMode = ref(false)
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const messagesRef = ref(null)
 const inputRef = ref(null)
+
+// Retry timer reference for memory safety
+let retryCountdownTimer = null
+
+const clearRetryTimer = () => {
+  if (retryCountdownTimer) {
+    clearInterval(retryCountdownTimer)
+    retryCountdownTimer = null
+  }
+}
+
+onUnmounted(() => {
+  clearRetryTimer()
+})
 
 // System Skills (from ~/.chatspeed/skills etc) slash command logic
 const systemSkills = ref([])
@@ -370,6 +445,58 @@ const filteredSystemSkills = computed(() => {
     (skill.description && skill.description.toLowerCase().includes(query))
   )
 })
+
+// File At-mention logic
+const showFileSuggestions = ref(false)
+const selectedFileIndex = ref(0)
+const fileSuggestions = ref([])
+const fileQuery = ref('')
+const ignoreNextSearch = ref(false)
+
+const searchFiles = async (query) => {
+  if (ignoreNextSearch.value) return
+  if (!currentPaths.value || currentPaths.value.length === 0) return
+  try {
+    const results = await invokeWrapper('search_workspace_files', {
+      paths: currentPaths.value,
+      query: query
+    })
+    fileSuggestions.value = results || []
+    showFileSuggestions.value = fileSuggestions.value.length > 0
+    selectedFileIndex.value = 0
+  } catch (error) {
+    console.error('Failed to search files:', error)
+  }
+}
+
+const onFileSelect = (file) => {
+  ignoreNextSearch.value = true
+  const cursorPosition = inputRef.value?.$el.querySelector('textarea').selectionStart || 0
+  const textBeforeCursor = inputMessage.value.slice(0, cursorPosition)
+  const textAfterCursor = inputMessage.value.slice(cursorPosition)
+
+  // Replace the @query part with @path
+  const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, `@${file.relative_path} `)
+  inputMessage.value = newTextBefore + textAfterCursor
+
+  showFileSuggestions.value = false
+  selectedFileIndex.value = 0
+
+  nextTick(() => {
+    if (inputRef.value) {
+      inputRef.value.focus()
+      const newPos = newTextBefore.length
+      const textarea = inputRef.value?.$el.querySelector('textarea')
+      if (textarea) {
+        textarea.setSelectionRange(newPos, newPos)
+      }
+    }
+    // Allow search again after UI has updated
+    setTimeout(() => {
+      ignoreNextSearch.value = false
+    }, 100)
+  })
+}
 
 const fetchSystemSkills = async () => {
   try {
@@ -397,6 +524,18 @@ watch(inputMessage, (newVal) => {
     selectedSkillIndex.value = 0
   } else if (!newVal.startsWith('/') || newVal === '') {
     showSkillSuggestions.value = false
+  }
+
+  // At-mention detection
+  if (inputRef.value) {
+    const cursorPosition = inputRef.value?.$el.querySelector('textarea').selectionStart || 0
+    const textBeforeCursor = newVal.slice(0, cursorPosition)
+    const match = textBeforeCursor.match(/@([^\s]*)$/)
+    if (match) {
+      searchFiles(match[1])
+    } else {
+      showFileSuggestions.value = false
+    }
   }
 })
 
@@ -1092,6 +1231,23 @@ const setupWorkflowEvents = async sessionId => {
       approvalAction.value = payload.action
       approvalDetails.value = payload.details
       approvalVisible.value = true
+    } else if (payload.type === 'retry_status') {
+      // Handle 429 retry status
+      chatState.value.retryInfo = {
+        attempt: payload.attempt,
+        total: payload.total_attempts,
+        nextRetryIn: payload.next_retry_in_seconds
+      }
+
+      // Auto-decrement timer
+      clearRetryTimer()
+      retryCountdownTimer = setInterval(() => {
+        if (chatState.value.retryInfo && chatState.value.retryInfo.nextRetryIn > 0) {
+          chatState.value.retryInfo.nextRetryIn--
+        } else {
+          clearRetryTimer()
+        }
+      }, 1000)
     } else if (payload.type === 'sync_todo') {
       workflowStore.setTodoList(payload.todo_list)
     }
@@ -1319,6 +1475,7 @@ const onSendMessage = async () => {
 const onInputKeyDown = event => {
   if (composing.value || compositionJustEnded.value) return
 
+  // Handle Slash Command Suggestions
   if (showSkillSuggestions.value) {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -1330,18 +1487,46 @@ const onInputKeyDown = event => {
       return
     }
     if (event.key === 'ArrowUp') {
-      event.preventDefault() // Prevent cursor moving to start
+      event.preventDefault()
       selectedSkillIndex.value = (selectedSkillIndex.value - 1 + filteredSystemSkills.value.length) % filteredSystemSkills.value.length
       return
     }
     if (event.key === 'ArrowDown') {
-      event.preventDefault() // Prevent cursor moving to end
+      event.preventDefault()
       selectedSkillIndex.value = (selectedSkillIndex.value + 1) % filteredSystemSkills.value.length
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
       showSkillSuggestions.value = false
+      return
+    }
+  }
+
+  // Handle File At-mention Suggestions
+  if (showFileSuggestions.value) {
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      if (fileSuggestions.value.length > 0) {
+        onFileSelect(fileSuggestions.value[selectedFileIndex.value])
+      } else {
+        showFileSuggestions.value = false
+      }
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedFileIndex.value = (selectedFileIndex.value - 1 + fileSuggestions.value.length) % fileSuggestions.value.length
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedFileIndex.value = (selectedFileIndex.value + 1) % fileSuggestions.value.length
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      showFileSuggestions.value = false
       return
     }
   }
@@ -1526,6 +1711,51 @@ const onGlobalKeyDown = event => {
 </script>
 
 <style lang="scss">
+.sidebar-tabs-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .sidebar-tabs {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    :deep(.el-tabs__header) {
+      margin: 0;
+      padding: 0 10px;
+      background: var(--cs-bg-color);
+    }
+
+    :deep(.el-tabs__content) {
+      flex: 1;
+      overflow: hidden;
+
+      .el-tab-pane {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+    }
+  }
+}
+
+.retry-status-alert {
+  margin-top: 12px;
+  max-width: 500px;
+
+  .el-alert {
+    border-radius: var(--cs-border-radius-lg);
+    border: 1px solid var(--el-color-warning-light-5);
+    background-color: var(--el-color-warning-light-9);
+  }
+}
+
+.danger-option {
+  color: var(--el-color-danger) !important;
+  font-weight: bold;
+}
+
 .workflow-layout {
   height: 100vh;
   overflow: hidden;
@@ -1544,6 +1774,35 @@ const onGlobalKeyDown = event => {
       flex-direction: column;
       height: 100%;
       transition: width 0.3s ease;
+
+      .sidebar-tabs-container {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+
+        .sidebar-tabs {
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+
+          :deep(.el-tabs__header) {
+            margin: 0;
+            padding: 0 10px;
+            background: var(--cs-bg-color);
+          }
+
+          :deep(.el-tabs__content) {
+            flex: 1;
+            overflow: hidden;
+
+            .el-tab-pane {
+              height: 100%;
+              display: flex;
+              flex-direction: column;
+            }
+          }
+        }
+      }
 
       .sidebar-header {
         padding: 10px;
@@ -2175,7 +2434,40 @@ const onGlobalKeyDown = event => {
           z-index: 100;
           padding: 4px;
 
+          &.file-suggestion-panel.compact {
+            padding: 2px;
+            .command-item {
+              flex-direction: row;
+              align-items: center;
+              padding: 6px 10px;
+              gap: 8px;
+
+              .file-icon {
+                flex-shrink: 0;
+                color: var(--cs-text-color-secondary);
+                font-size: 14px;
+              }
+
+              .file-path {
+                flex: 1;
+                font-size: 13px;
+                color: var(--cs-text-color-primary);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-family: var(--cs-font-family-mono, monospace);
+              }
+
+              &.active {
+                background-color: var(--cs-active-bg-color);
+                .file-path, .file-icon {
+                  color: var(--el-color-primary);
+                }
+              }
+            }
+          }
           .command-item {
+
             padding: 8px 12px;
             cursor: pointer;
             border-radius: var(--cs-border-radius-sm);
@@ -2345,6 +2637,51 @@ const onGlobalKeyDown = event => {
               flex-direction: row;
               justify-content: flex-start;
               align-items: center;
+              gap: 8px;
+
+              .final-audit-toggle {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                cursor: pointer;
+                padding: 4px 8px;
+                border-radius: var(--cs-border-radius-sm);
+                transition: all 0.2s;
+
+                &:hover {
+                  background: var(--cs-hover-bg-color);
+                }
+
+                .cs {
+                  font-size: 14px;
+
+                  &.agent {
+                    color: var(--cs-text-color-placeholder);
+                  }
+
+                  &.on {
+                    color: var(--el-color-success);
+                  }
+
+                  &.off {
+                    color: var(--el-color-danger);
+                    opacity: 0.6;
+                  }
+                }
+
+                .audit-label {
+                  font-size: 9px;
+                  font-weight: bold;
+                  color: var(--cs-text-color-secondary);
+                }
+              }
+
+              .warning-mode {
+                .cs {
+                  color: var(--el-color-danger) !important;
+                  animation: pulse 2s infinite;
+                }
+              }
 
               .agent-selector-wrap {
                 color: var(--cs-color-primary);

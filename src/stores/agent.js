@@ -21,14 +21,8 @@ import { sendSyncState } from '@/libs/sync';
  * @property {Object} browsingModel - The model used for browsing tasks.
  * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
- */
-
-/**
- * @typedef {Object} Tool
- * @property {string} id - The unique identifier of the tool.
- * @property {string} name - The name of the tool.
- * @property {string} description - The description of the tool.
- * @property {string} category - The category of the tool (e.g., "Web", "FS", "System").
+ * @property {boolean} finalAudit - Whether the agent requires final audit.
+ * @property {string} approvalLevel - Approval level (default, smart, full).
  */
 
 const label = getCurrentWebviewWindow().label;
@@ -42,30 +36,40 @@ const _transformFromBackend = (backendAgent) => {
 
   const parseModel = (modelStr) => {
     try {
-      if (modelStr && typeof modelStr === 'string') return JSON.parse(modelStr);
-      if (modelStr && typeof modelStr === 'object') return modelStr;
+      if (modelStr && typeof modelStr === 'string' && modelStr.trim().startsWith('{')) return JSON.parse(modelStr);
+      if (modelStr && typeof modelStr === 'object') return modelObj;
     } catch (e) {
       console.error('Failed to parse model string:', modelStr, e);
     }
-    return { id: '', model: '' };
+    return { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 };
   };
 
   let models = {
-    plan: parseModel(backendAgent.plan_model),
-    act: parseModel(backendAgent.act_model),
-    vision: parseModel(backendAgent.vision_model),
-    coding: { id: '', model: '' },
-    copywriting: { id: '', model: '' },
-    browsing: { id: '', model: '' }
+    plan: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+    act: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+    vision: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+    coding: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+    copywriting: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+    browsing: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 }
   };
 
   if (backendAgent.models) {
     try {
       const unifiedModels = JSON.parse(backendAgent.models);
-      models = { ...models, ...unifiedModels };
+      // Merge with defaults to ensure temperature exists
+      Object.keys(models).forEach(key => {
+        if (unifiedModels[key]) {
+          models[key] = { ...models[key], ...unifiedModels[key] };
+        }
+      });
     } catch (e) {
       console.error('Failed to parse unified models JSON:', e);
     }
+  } else {
+    // Fallback to individual fields
+    models.plan = { ...models.plan, ...parseModel(backendAgent.plan_model) };
+    models.act = { ...models.act, ...parseModel(backendAgent.act_model) };
+    models.vision = { ...models.vision, ...parseModel(backendAgent.vision_model) };
   }
 
   return {
@@ -86,7 +90,9 @@ const _transformFromBackend = (backendAgent) => {
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
     models: backendAgent.models || '',
-    maxContexts: backendAgent.max_contexts || 128000
+    maxContexts: backendAgent.max_contexts || 128000,
+    finalAudit: !!backendAgent.final_audit,
+    approvalLevel: backendAgent.approval_level || 'default'
   };
 };
 
@@ -126,7 +132,9 @@ const _transformToBackend = (frontendAgent) => {
     act_model: stringifyModel(frontendAgent.actModel),
     vision_model: stringifyModel(frontendAgent.visionModel),
     models: modelsJson,
-    max_contexts: frontendAgent.maxContexts
+    max_contexts: frontendAgent.maxContexts,
+    final_audit: frontendAgent.finalAudit ? 1 : 0,
+    approval_level: frontendAgent.approvalLevel || 'default'
   };
 };
 

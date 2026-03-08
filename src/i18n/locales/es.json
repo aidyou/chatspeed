@@ -72,6 +72,15 @@
     "mcpDisabled": "Deshabilitar herramientas MCP",
     "mcpEnabled": "Habilitar herramientas MCP",
     "translationSkillPromptEmpty": "El mensaje de la habilidad de traducción no puede estar vacío",
+    "workflow": {
+      "planning": "Planificando...",
+      "executing": "Ejecutando tarea: {task}",
+      "approvalRequired": "Aprobación requerida",
+      "approve": "Aprobar",
+      "deny": "Rechazar",
+      "taskCompleted": "Tarea completada",
+      "error": "Error de flujo de trabajo: {error}"
+    },
     "addAttachment": "Añadir adjunto",
     "dragOrClickToSelectFile": "Arrastra el archivo aquí o haz clic para seleccionar",
     "selectFile": "Seleccionar archivo",
@@ -131,7 +140,11 @@
     "search": "Buscar",
     "unpin": "Desfijar",
     "updateButtonText": "Actualizar",
-    "uploadFailed": "Error al subir el archivo"
+    "uploadFailed": "Error al subir el archivo",
+    "delete": "Eliminar",
+    "more": "Más",
+    "refresh": "Actualizar",
+    "to": "a"
   },
   "menu": {
     "about": "Acerca de",
@@ -145,7 +158,8 @@
     "scraperTest": "Prueba del scraper",
     "setting": "Configuración",
     "skill": "Habilidad",
-    "proxy_switcher": "Selector de proxy"
+    "proxy_switcher": "Selector de proxy",
+    "workflow": "Flujo de trabajo"
   },
   "note": {
     "searchNotePlaceholder": "Buscar en notas"
@@ -196,7 +210,40 @@
       "title": "Gestión de agentes",
       "toolsLabel": "Herramientas",
       "updateSuccess": "¡Agente actualizado con éxito!",
-      "visionModel": "Modelo de visión"
+      "visionModel": "Modelo de visión",
+      "aliasName": "Alias del modelo",
+      "approvalLevel": "Nivel de aprobación",
+      "approvalLevelDefault": "Seguir configuración del agente",
+      "approvalLevelFull": "Completo (alto riesgo)",
+      "approvalLevelSmart": "Aprobación inteligente (solo intercepta operaciones de escritura)",
+      "authorizedPaths": "Directorios autorizados",
+      "authorizedPathsAdd": "Añadir directorio",
+      "authorizedPathsTip": "El agente solo podrá leer y escribir archivos en estos directorios (y sus subdirectorios).",
+      "browsingModel": "Modelo de navegación",
+      "codingModel": "Modelo de codificación",
+      "copywritingModel": "Modelo de redacción",
+      "finalAudit": "Auditoría final",
+      "group": "Grupo de proxy",
+      "modeProvider": "Proveedor",
+      "modeProxy": "Proxy",
+      "planningPromptPlaceholder": "Deje en blanco para usar la lógica de planificación predeterminada del sistema. Si personaliza, guíe al modelo para generar una lista clara de tareas.",
+      "security": "Política de seguridad",
+      "selectDirectory": "Seleccionar directorio",
+      "shellDecisionAllow": "Permitir",
+      "shellDecisionDeny": "Denegar",
+      "shellDecisionReview": "Revisar",
+      "shellPolicy": "Política de auditoría de shell",
+      "shellPolicyAdd": "Añadir regla",
+      "shellPolicyClear": "Limpiar reglas",
+      "shellPolicyClearConfirm": "¿Está seguro de que desea limpiar todas las reglas de auditoría de shell? Esta acción no se puede deshacer.",
+      "shellPolicyClearTitle": "Limpiar reglas de shell",
+      "shellPolicyDecision": "Decisión",
+      "shellPolicyImportDefault": "Importar predeterminados",
+      "shellPolicyImportDefaultConfirm": "¿Está seguro de que desea importar las reglas de shell de solo lectura predeterminadas? Esto añadirá más de 50 reglas de comandos de solo lectura comunes.",
+      "shellPolicyImportDefaultTitle": "Importar reglas predeterminadas",
+      "shellPolicyPattern": "Patrón de coincidencia (Regex/Glob)",
+      "temperature": "Temperatura",
+      "workingDirectory": "Directorio de trabajo"
     },
     "general": {
       "advancedSettings": "Configuración avanzada",
@@ -308,7 +355,8 @@
         "generalTooltip": "Se utiliza para tareas sencillas en el flujo de trabajo, como resúmenes de texto, extracción de información, etc.",
         "reasoning": "Modelo de razonamiento",
         "reasoningTooltip": "Se utiliza principalmente para tareas complejas en el flujo de trabajo, incluyendo la planificación, el resumen de los resultados del análisis, etc."
-      }
+      },
+      "workflowWindowVisibleShortcut": "Ventana de flujo de trabajo"
     },
     "mcp": {
       "added": "Añadido",
@@ -464,7 +512,8 @@
         "bySetting": "Según la configuración de red",
         "http": "Proxy HTTP",
         "none": "Sin proxy"
-      }
+      },
+      "contextSize": "Tamaño de contexto"
     },
     "proxy": {
       "addNow": "Añadir ahora",
@@ -552,7 +601,9 @@
           "supportGroupAndCompat": "Soporta grupos y modo de compatibilidad",
           "title": "Lista de API",
           "type": "Tipo de interfaz"
-        }
+        },
+        "retryOn429": "Número de reintentos 429",
+        "retryOn429Tip": "Número de reintentos con retroceso exponencial cuando el servidor devuelve un código de estado 429. Establezca 0 para desactivar."
       },
       "stats": {
         "allTime": "Todo el tiempo",
@@ -593,7 +644,13 @@
         "today": "Hoy",
         "toolCompat": "Modo de compatibilidad",
         "topProvider": "Modelo popular",
-        "yes": "Sí"
+        "yes": "Sí",
+        "activeModels": "Modelos activos",
+        "dailyRequestsTitle": "Tendencia diaria de solicitudes y tasa de error",
+        "errorRate": "Tasa de error",
+        "providerTokenUsageTitle": "Uso de tokens por proveedor",
+        "totalRequests": "Total de solicitudes",
+        "totalTokens": "Total de tokens"
       },
       "tabs": {
         "groups": "Grupos de proxy",
@@ -749,7 +806,50 @@
   },
   "workflow": {
     "todoList": {
-      "title": "Lista de tareas"
+      "title": "Lista de tareas",
+      "next": "Siguiente"
+    },
+    "planningModeTooltip": "Modo de planificación: Investigación y estrategia de IA antes de la ejecución",
+    "awaitingApproval": "Esperando aprobación",
+    "approvePlan": "Aprobar plan",
+    "autoApproveTooltip": "Aprobar automáticamente herramientas (excluyendo herramientas interactivas)",
+    "confirmDeleteWorkflow": "¿Está seguro de que desea eliminar este flujo de trabajo? Esta acción no se puede deshacer.",
+    "continue": "Continuar",
+    "editWorkflowTitle": "Editar título del flujo de trabajo",
+    "newWorkflow": "Nuevo flujo de trabajo",
+    "retrying": "Solicitud muy frecuente, reintentando (intento {attempt}/{total}), esperando {seconds} segundos...",
+    "startFailed": "Error al iniciar el flujo de trabajo: {error}",
+    "thinking": "Pensando...",
+    "thinkingExpanded": "Pensando (expandido)",
+    "thoughtCompleted": "Pensamiento completado",
+    "workflowTitle": "Título del flujo de trabajo",
+    "filesTab": "Archivos",
+    "finishTask": "Finalizar tarea",
+    "finalAuditTooltip": "Modo de auditoría final: La IA realiza automáticamente una revisión de calidad antes de completar la tarea",
+    "historyTab": "Conversación",
+    "todo": {
+      "create": "Crear tarea",
+      "createBatch": "Crear tareas por lotes",
+      "update": "Actualizar tarea",
+      "list": "Listar tareas",
+      "view": "Ver tarea",
+      "statusCompleted": "completada",
+      "statusInProgress": "en progreso",
+      "statusPending": "pendiente"
+    },
+    "approval": {
+      "action": "Acción pendiente",
+      "details": "Detalles de la acción",
+      "title": "Aprobación de seguridad",
+      "warning": "Esta operación tiene riesgos potenciales. Por favor, confirme si desea continuar."
+    },
+    "statusPanel": {
+      "title": "Estado",
+      "progress": "Progreso",
+      "todos": "Tareas",
+      "recentOps": "Operaciones recientes",
+      "empty": "Vacío",
+      "contextUsage": "Uso del contexto"
     }
   }
 }

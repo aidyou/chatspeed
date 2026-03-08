@@ -8,6 +8,7 @@ pub enum WorkflowState {
     Pending,
     Thinking,
     Executing,
+    Auditing,
     Paused,
     AwaitingApproval,
     Completed,
@@ -56,6 +57,12 @@ pub enum GatewayPayload {
     },
     SyncTodo {
         todo_list: serde_json::Value,
+    },
+    /// Status message for retry logic (e.g., 429 exponential backoff)
+    RetryStatus {
+        attempt: u32,
+        total_attempts: u32,
+        next_retry_in_seconds: u32,
     },
     Error {
         message: String,

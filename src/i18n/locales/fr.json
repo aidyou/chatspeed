@@ -72,6 +72,15 @@
     "toolArgs": "Arguments",
     "toolResult": "Résultat",
     "translationSkillPromptEmpty": "L'invite de la compétence de traduction ne peut pas être vide.",
+    "workflow": {
+      "planning": "Planification en cours...",
+      "executing": "Exécution de la tâche : {task}",
+      "approvalRequired": "Approbation requise",
+      "approve": "Approuver",
+      "deny": "Refuser",
+      "taskCompleted": "Tâche terminée",
+      "error": "Erreur de flux de travail : {error}"
+    },
     "addAttachment": "Ajouter une pièce jointe",
     "dragOrClickToSelectFile": "Faites glisser le fichier ici ou cliquez pour sélectionner",
     "selectFile": "Sélectionner un fichier",
@@ -131,7 +140,11 @@
     "search": "Rechercher",
     "unpin": "Désépingler",
     "updateButtonText": "Mettre à jour",
-    "uploadFailed": "Échec du téléchargement du fichier"
+    "uploadFailed": "Échec du téléchargement du fichier",
+    "delete": "Supprimer",
+    "more": "Plus",
+    "refresh": "Actualiser",
+    "to": "à"
   },
   "menu": {
     "about": "À propos",
@@ -145,7 +158,8 @@
     "scraperTest": "Test du scraper",
     "setting": "Paramètres",
     "skill": "Compétence",
-    "proxy_switcher": "Sélecteur de proxy"
+    "proxy_switcher": "Sélecteur de proxy",
+    "workflow": "Flux de travail"
   },
   "note": {
     "searchNotePlaceholder": "Rechercher dans les notes"
@@ -196,7 +210,40 @@
       "title": "Gestion des agents",
       "toolsLabel": "Outils",
       "updateSuccess": "Agent mis à jour avec succès !",
-      "visionModel": "Modèle de vision"
+      "visionModel": "Modèle de vision",
+      "aliasName": "Alias du modèle",
+      "approvalLevel": "Niveau d'approbation",
+      "approvalLevelDefault": "Suivre la configuration de l'agent",
+      "approvalLevelFull": "Ouverture complète (risque élevé)",
+      "approvalLevelSmart": "Approbation intelligente (intercepte uniquement les opérations d'écriture)",
+      "authorizedPaths": "Répertoires autorisés",
+      "authorizedPathsAdd": "Ajouter un répertoire",
+      "authorizedPathsTip": "L'agent ne pourra lire et écrire des fichiers que dans ces répertoires (et leurs sous-répertoires).",
+      "browsingModel": "Modèle de navigation",
+      "codingModel": "Modèle de codage",
+      "copywritingModel": "Modèle de rédaction",
+      "finalAudit": "Audit final",
+      "group": "Groupe de proxy",
+      "modeProvider": "Fournisseur",
+      "modeProxy": "Proxy",
+      "planningPromptPlaceholder": "Laissez vide pour utiliser la logique de planification par défaut du système. Si vous personnalisez, guidez le modèle pour qu'il génère une liste de tâches claire.",
+      "security": "Politique de sécurité",
+      "selectDirectory": "Sélectionner un répertoire",
+      "shellDecisionAllow": "Autoriser",
+      "shellDecisionDeny": "Refuser",
+      "shellDecisionReview": "Examiner",
+      "shellPolicy": "Politique d'audit du shell",
+      "shellPolicyAdd": "Ajouter une règle",
+      "shellPolicyClear": "Effacer les règles",
+      "shellPolicyClearConfirm": "Êtes-vous sûr de vouloir effacer toutes les règles d'audit du shell ? Cette action ne peut pas être annulée.",
+      "shellPolicyClearTitle": "Effacer les règles du shell",
+      "shellPolicyDecision": "Décision",
+      "shellPolicyImportDefault": "Importer les valeurs par défaut",
+      "shellPolicyImportDefaultConfirm": "Êtes-vous sûr de vouloir importer les règles de shell en lecture seule par défaut ? Cela ajoutera plus de 50 règles de commandes en lecture seule courantes.",
+      "shellPolicyImportDefaultTitle": "Importer les règles par défaut",
+      "shellPolicyPattern": "Motif de correspondance (Regex/Glob)",
+      "temperature": "Température",
+      "workingDirectory": "Répertoire de travail"
     },
     "general": {
       "advancedSettings": "Paramètres avancés",
@@ -308,7 +355,8 @@
         "generalTooltip": "Utilisé pour les tâches simples dans le workflow, telles que le résumé de texte, l'extraction d'informations, etc.",
         "reasoning": "Modèle de raisonnement",
         "reasoningTooltip": "Principalement utilisé pour les tâches complexes dans le workflow, y compris la planification, le résumé des résultats d'analyse, etc."
-      }
+      },
+      "workflowWindowVisibleShortcut": "Fenêtre de flux de travail"
     },
     "mcp": {
       "added": "Ajouté",
@@ -464,7 +512,8 @@
         "bySetting": "Utiliser les paramètres réseau",
         "http": "Proxy HTTP",
         "none": "Pas de proxy"
-      }
+      },
+      "contextSize": "Taille du contexte"
     },
     "proxy": {
       "addNow": "Ajouter maintenant",
@@ -552,7 +601,9 @@
           "replaceModelAndKey": "Remplacez {model} par le nom du modèle et {key} par la clé API",
           "replaceGroupModelKey": "Remplacez {group} par le nom du groupe, {model} par le nom du modèle et {key} par la clé API",
           "supportGroupAndCompat": "Prend en charge les groupes et le mode de compatibilité"
-        }
+        },
+        "retryOn429": "Nombre de tentatives 429",
+        "retryOn429Tip": "Nombre de tentatives de backoff exponentiel lorsque le serveur renvoie un code d'état 429. Définissez sur 0 pour désactiver."
       },
       "stats": {
         "allTime": "Tout le temps",
@@ -593,7 +644,13 @@
         "today": "Aujourd'hui",
         "toolCompat": "Mode de compatibilité",
         "topProvider": "Modèle populaire",
-        "yes": "Oui"
+        "yes": "Oui",
+        "activeModels": "Modèles actifs",
+        "dailyRequestsTitle": "Tendance quotidienne des requêtes et du taux d'erreur",
+        "errorRate": "Taux d'erreur",
+        "providerTokenUsageTitle": "Utilisation des tokens par fournisseur",
+        "totalRequests": "Total des requêtes",
+        "totalTokens": "Total des tokens"
       },
       "tabs": {
         "groups": "Groupes de proxy",
@@ -749,7 +806,50 @@
   },
   "workflow": {
     "todoList": {
-      "title": "Liste des tâches"
+      "title": "Liste des tâches",
+      "next": "Suivant"
+    },
+    "planningModeTooltip": "Mode de planification : Recherche et stratégie IA avant exécution",
+    "awaitingApproval": "En attente d'approbation",
+    "approvePlan": "Approuver le plan",
+    "autoApproveTooltip": "Approuver automatiquement les outils (sauf outils interactifs)",
+    "confirmDeleteWorkflow": "Êtes-vous sûr de vouloir supprimer ce flux de travail ? Cette action ne peut pas être annulée.",
+    "continue": "Continuer",
+    "editWorkflowTitle": "Modifier le titre du flux de travail",
+    "newWorkflow": "Nouveau flux de travail",
+    "retrying": "Requête trop fréquente, nouvelle tentative (tentative {attempt}/{total}), attente de {seconds} secondes...",
+    "startFailed": "Échec du démarrage du flux de travail: {error}",
+    "thinking": "Réflexion en cours...",
+    "thinkingExpanded": "Réflexion (déployée)",
+    "thoughtCompleted": "Réflexion terminée",
+    "workflowTitle": "Titre du flux de travail",
+    "filesTab": "Fichiers",
+    "finishTask": "Terminer la tâche",
+    "finalAuditTooltip": "Mode d'audit final : L'IA effectue automatiquement une révision de la qualité avant de terminer la tâche",
+    "historyTab": "Conversation",
+    "todo": {
+      "create": "Créer une tâche",
+      "createBatch": "Créer des tâches en lot",
+      "update": "Mettre à jour la tâche",
+      "list": "Lister les tâches",
+      "view": "Voir la tâche",
+      "statusCompleted": "terminée",
+      "statusInProgress": "en cours",
+      "statusPending": "en attente"
+    },
+    "approval": {
+      "action": "Action en attente",
+      "details": "Détails de l'action",
+      "title": "Approbation de sécurité",
+      "warning": "Cette opération présente des risques potentiels. Veuillez confirmer si vous souhaitez continuer."
+    },
+    "statusPanel": {
+      "title": "Statut",
+      "progress": "Progression",
+      "todos": "Tâches",
+      "recentOps": "Opérations récentes",
+      "empty": "Vide",
+      "contextUsage": "Utilisation du contexte"
     }
   }
 }

@@ -1,8 +1,9 @@
-use serde::Serialize;
-use thiserror::Error;
+use crate::ai::error::AiError;
 use crate::db::error::StoreError;
 use crate::tools::ToolError;
-use crate::ai::error::AiError;
+
+use serde::Serialize;
+use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "type", content = "details")]

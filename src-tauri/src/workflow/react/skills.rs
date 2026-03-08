@@ -1,4 +1,5 @@
 use crate::workflow::react::error::WorkflowEngineError;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -97,11 +98,14 @@ impl SkillScanner {
 
                                 // Fallback: regex for name and description
                                 let name_re = regex::Regex::new(r"(?m)^name:\s*(.+)$").unwrap();
-                                let desc_re = regex::Regex::new(r"(?m)^description:\s*(.+)$").unwrap();
+                                let desc_re =
+                                    regex::Regex::new(r"(?m)^description:\s*(.+)$").unwrap();
 
                                 if let Some(cap) = name_re.captures(yaml_part) {
-                                    let skill_name = cap.get(1).unwrap().as_str().trim().to_string();
-                                    let description = desc_re.captures(yaml_part)
+                                    let skill_name =
+                                        cap.get(1).unwrap().as_str().trim().to_string();
+                                    let description = desc_re
+                                        .captures(yaml_part)
                                         .and_then(|c| c.get(1))
                                         .map(|m| m.as_str().trim().to_string())
                                         .unwrap_or_default();
@@ -117,7 +121,8 @@ impl SkillScanner {
                             }
                         }
                     }
-                }            }
+                }
+            }
         }
 
         // 2. Check for skill.json or manifest.json (Legacy/Generic)
@@ -129,7 +134,11 @@ impl SkillScanner {
                     match serde_json::from_str::<SkillManifest>(&content) {
                         Ok(manifest) => return Some(manifest),
                         Err(e) => {
-                            log::warn!("Failed to parse JSON manifest in {:?}: {}", manifest_path, e);
+                            log::warn!(
+                                "Failed to parse JSON manifest in {:?}: {}",
+                                manifest_path,
+                                e
+                            );
                         }
                     }
                 }
@@ -137,4 +146,5 @@ impl SkillScanner {
         }
 
         None
-    }}
+    }
+}

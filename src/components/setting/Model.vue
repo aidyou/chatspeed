@@ -174,8 +174,13 @@
           <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
             <el-tooltip :content="$t('settings.model.temperaturePlaceholder')" placement="top" :hide-after="0"
               :enterable="false" transition="none">
-              <el-slider v-model="modelForm.temperature" :min="0" :max="2" :step="0.1" show-input :show-tooltip="false"
-                input-size="small" />
+              <div style="display: flex; align-items: center; width: 100%; gap: 12px;">
+                <el-slider v-model="modelForm.temperature" :min="-0.1" :max="2" :step="0.1" :show-tooltip="false"
+                  style="flex: 1;" />
+                <span style="font-size: 12px; min-width: 32px; text-align: right;">
+                  {{ modelForm.temperature < 0 ? 'Off' : modelForm.temperature.toFixed(1) }}
+                </span>
+              </div>
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.topP')" prop="topP">
@@ -317,6 +322,14 @@
       </el-form-item>
       <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
         <el-switch v-model="modelConfigForm.imageInput" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
+        <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :max="2000000" :step="1024"
+          controls-position="right" style="width: 100%" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
+        <el-input-number v-model="modelConfigForm.maxTokens" :min="0" :max="128000" :step="1024"
+          controls-position="right" style="width: 100%" />
       </el-form-item>
 
       <el-divider border-style="dashed" />
@@ -559,7 +572,7 @@ const defaultFormData = {
   baseUrl: '',
   apiKey: '',
   maxTokens: 4096,
-  temperature: 0.8,
+  temperature: -0.1,
   topP: 0,
   topK: 0,
   presencePenalty: 0.0,
@@ -886,6 +899,8 @@ const defaultModelConfig = {
   functionCall: false,
   reasoning: false,
   imageInput: false,
+  contextSize: 128000,
+  maxTokens: 0,
   customParams: []
 }
 const modelConfigRules = {

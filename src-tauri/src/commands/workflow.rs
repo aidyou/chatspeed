@@ -1,79 +1,182 @@
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::db::{Agent, MainStore, Workflow, WorkflowMessage};
+use crate::db::{MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use chrono::{DateTime, Local};
+use glob::glob;
+use regex::Regex;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 // ==========================================
-// 1. Agent Configuration Commands
+// 0. Helper Functions for @mentions
 // ==========================================
 
-#[tauri::command]
-pub async fn add_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
-    mut agent: Agent,
-) -> Result<String, String> {
-    // auto generate id
-    agent.id = tsid_generator.generate().map_err(|e| e.to_string())?;
-    let store = state.read().map_err(|e| e.to_string())?;
-    let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
-    Ok(id)
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}K", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
-#[tauri::command]
-pub async fn update_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent: Agent,
-) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store.update_agent(&agent).map_err(|e| e.to_string())?;
-    Ok(())
+fn get_file_metadata_info(path: &Path) -> String {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return "Unknown metadata".to_string(),
+    };
+    let size_str = format_size(metadata.len());
+    let modified: String = metadata
+        .modified()
+        .map(|m| {
+            let dt: DateTime<Local> = m.into();
+            dt.format("%b %d %H:%M").to_string()
+        })
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    format!("Size: {}, Modified: {}", size_str, modified)
 }
 
-#[tauri::command]
-pub async fn delete_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    id: String,
-) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store.delete_agent(&id).map_err(|e| e.to_string())?;
-    Ok(())
-}
+fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
+    let mut enhanced_prompt = prompt.to_string();
+    let re = Regex::new(r"@([^\s]+)").unwrap();
 
-#[tauri::command]
-pub async fn get_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    id: String,
-) -> Result<Option<Agent>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let agent = store.get_agent(&id).map_err(|e| e.to_string())?;
-    Ok(agent)
-}
+    let mut injections = Vec::new();
+    let mut handled_patterns = std::collections::HashSet::new();
 
-#[tauri::command]
-pub async fn get_all_agents(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-) -> Result<Vec<Agent>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let agents = store.get_all_agents().map_err(|e| e.to_string())?;
-    Ok(agents)
-}
+    for cap in re.captures_iter(prompt) {
+        let pattern = &cap[1];
+        if handled_patterns.contains(pattern) {
+            continue;
+        }
+        handled_patterns.insert(pattern.to_string());
 
-#[tauri::command]
-pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Result<Value, String> {
-    // Core Native Tools + Adapted MCP Tools (Dynamic Metadata from Global Manager)
-    // The unified manager now returns everything in a single list.
-    let native_meta = chat_state.tool_manager.get_all_native_tool_metadata().await;
-    Ok(json!(native_meta))
+        let mut target_paths = Vec::new();
+        if pattern.contains('*') || pattern.contains('?') {
+            for base in allowed_paths {
+                let full_pattern = Path::new(base).join(pattern).to_string_lossy().to_string();
+                if let Ok(paths) = glob(&full_pattern) {
+                    for entry in paths.flatten() {
+                        target_paths.push((entry, pattern.to_string()));
+                    }
+                }
+            }
+        } else {
+            for base in allowed_paths {
+                let full_path = Path::new(base).join(pattern);
+                if full_path.exists() {
+                    target_paths.push((full_path, pattern.to_string()));
+                    break;
+                }
+            }
+        }
+
+        for (path, rel_pattern) in target_paths {
+            if injections.len() >= 20 {
+                break;
+            }
+
+            if path.is_file() {
+                let metadata = match fs::metadata(&path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let size = metadata.len();
+                let info = get_file_metadata_info(&path);
+
+                if size > 500 * 1024 {
+                    injections.push(format!(
+                        "\n<file_content path={}>\n[File too large to show full content]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Above are its basic attributes. If you need to analyze the file content, use 'read_file' or 'grep' tools to read specific parts as needed.</SYSTEM_REMINDER>",
+                        rel_pattern, info, rel_pattern
+                    ));
+                } else {
+                    match fs::read(&path) {
+                        Ok(bytes) => {
+                            if let Ok(content) = String::from_utf8(bytes) {
+                                injections.push(format!(
+                                    "\n<file_content path={}>\n{}\n</file_content>\n<SYSTEM_REMINDER>The user referenced file {}. Above is its complete content. Please use this information to answer the user's request.</SYSTEM_REMINDER>",
+                                    rel_pattern, content, rel_pattern
+                                ));
+                            } else {
+                                injections.push(format!(
+                                    "\n<file_content path={}>\n[Binary File or Invalid Encoding]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a binary file {} that cannot be displayed as text directly.</SYSTEM_REMINDER>",
+                                    rel_pattern, info, rel_pattern
+                                ));
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+            } else if path.is_dir() {
+                let mut entries = Vec::new();
+                if let Ok(rd) = fs::read_dir(&path) {
+                    for entry in rd.flatten() {
+                        if let Ok(meta) = entry.metadata() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            let is_dir = meta.is_dir();
+                            let size = meta.len();
+                            let mtime = meta
+                                .modified()
+                                .map(|t| {
+                                    let dt: DateTime<Local> = t.into();
+                                    dt.format("%b %d %H:%M").to_string()
+                                })
+                                .unwrap_or_else(|_| "-".to_string());
+                            entries.push((is_dir, name, size, mtime));
+                        }
+                    }
+                }
+
+                entries.sort_by(|a, b| {
+                    b.0.cmp(&a.0)
+                        .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+                });
+
+                let entry_count = entries.len();
+                entries.truncate(50);
+
+                let mut list_str = String::new();
+                for (is_dir, name, size, mtime) in entries {
+                    let prefix = if is_dir { "d" } else { "-" };
+                    list_str.push_str(&format!(
+                        "{} {:>8} {} {}\n",
+                        prefix,
+                        format_size(size),
+                        mtime,
+                        name
+                    ));
+                }
+
+                if entry_count > 50 {
+                    list_str.push_str(&format!("... and {} more items\n", entry_count - 50));
+                }
+
+                injections.push(format!(
+                    "\n<list_dir path={}>\n{}\n</list_dir>\n<SYSTEM_REMINDER>The user referenced directory {}. Above is the list of its sub-items (directories first, then sorted alphabetically, showing up to 50 items). Please refer to this structure when answering.</SYSTEM_REMINDER>",
+                    rel_pattern, list_str, rel_pattern
+                ));
+            }
+        }
+    }
+
+    if !injections.is_empty() {
+        enhanced_prompt.push_str("\n\n--- Referenced Files/Directories ---");
+        for inj in injections {
+            enhanced_prompt.push_str(&inj);
+        }
+    }
+
+    enhanced_prompt
 }
 
 // ==========================================
-// 2. Workflow Session Persistence Commands
+// Workflow Session Persistence Commands
 // ==========================================
 
 #[tauri::command]
@@ -81,12 +184,6 @@ pub async fn create_workflow(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     workflow: Workflow,
 ) -> Result<String, String> {
-    log::info!(
-        "Creating workflow: id={}, agent_id={}, allowed_paths={:?}",
-        workflow.id,
-        workflow.agent_id,
-        workflow.allowed_paths
-    );
     let store = state.read().map_err(|e| e.to_string())?;
     let created = store
         .create_workflow(
@@ -133,6 +230,18 @@ pub async fn get_workflow_snapshot(
 }
 
 #[tauri::command]
+pub async fn add_workflow_message(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    message: WorkflowMessage,
+) -> Result<i64, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let res = store
+        .add_workflow_message(&message)
+        .map_err(|e| e.to_string())?;
+    Ok(res.id.unwrap_or(0))
+}
+
+#[tauri::command]
 pub async fn update_workflow_title(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     session_id: String,
@@ -175,13 +284,7 @@ pub async fn workflow_start(
     initial_prompt: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
-    log::debug!(
-        "[Workflow Command] workflow_start: session_id={}, planning_mode={:?}",
-        session_id,
-        planning_mode
-    );
-
-    let main_store = main_store.inner().clone();
+    let main_store_arc = main_store.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
     let gateway = gateway.inner().clone();
@@ -189,8 +292,28 @@ pub async fn workflow_start(
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
 
+    let (mut processed_prompt, allowed_paths) = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        let wf = snapshot.workflow;
+        let paths: Vec<String> = wf
+            .allowed_paths
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        let prompt = initial_prompt
+            .clone()
+            .unwrap_or_else(|| wf.user_query.clone());
+        (prompt, paths)
+    };
+
+    if initial_prompt.is_some() {
+        processed_prompt = inject_at_mentions(&processed_prompt, &allowed_paths);
+    }
+
     let agent_config = {
-        let store = main_store.read().map_err(|e| e.to_string())?;
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
             .get_agent(&agent_id)
             .map_err(|e| e.to_string())?
@@ -205,7 +328,7 @@ pub async fn workflow_start(
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
     let allowed_roots = {
-        let store = main_store.read().map_err(|e| e.to_string())?;
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
@@ -228,14 +351,14 @@ pub async fn workflow_start(
         Arc::new(tokio::sync::Mutex::new(
             crate::workflow::react::planners::PlanningExecutor::new(
                 session_id.clone(),
-                main_store,
+                main_store_arc.clone(),
                 chat_state_arc,
                 gateway as Arc<dyn Gateway>,
                 factory,
                 agent_config,
                 allowed_roots,
                 app_data_dir,
-                None, // subagent_type
+                None,
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
@@ -246,14 +369,14 @@ pub async fn workflow_start(
         Arc::new(tokio::sync::Mutex::new(
             crate::workflow::react::runners::ExecutionExecutor::new(
                 session_id.clone(),
-                main_store,
+                main_store_arc.clone(),
                 chat_state_arc,
                 gateway as Arc<dyn Gateway>,
                 factory,
                 agent_config,
                 allowed_roots,
                 app_data_dir,
-                None, // subagent_type
+                None,
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
@@ -266,15 +389,22 @@ pub async fn workflow_start(
         let mut executor = shared_executor.lock().await;
         executor.init().await.map_err(|e| e.to_string())?;
 
-        if let Some(prompt) = initial_prompt {
+        if initial_prompt.is_some() {
             executor
-                .add_message_and_notify("user".into(), prompt, None, None, false, None, None)
+                .add_message_and_notify(
+                    "user".into(),
+                    processed_prompt,
+                    None,
+                    None,
+                    false,
+                    None,
+                    None,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }
     }
 
-    // Register for external control
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
@@ -282,22 +412,14 @@ pub async fn workflow_start(
 
     let session_id_for_spawn = session_id.clone();
     tokio::spawn(async move {
-        log::debug!(
-            "[Workflow Engine] Entering run_loop for session {}",
-            session_id_for_spawn
-        );
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             log::error!(
-                "Workflow execution error in session {}: {:?}",
+                "Workflow error in session {}: {:?}",
                 session_id_for_spawn,
                 e
             );
         }
-        log::debug!(
-            "[Workflow Engine] Exited run_loop for session {}",
-            session_id_for_spawn
-        );
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
     });
 
@@ -316,8 +438,6 @@ pub async fn workflow_approve_plan(
     agent_id: String,
     plan: String,
 ) -> Result<(), String> {
-    log::info!("Approving plan for session {}", session_id);
-
     let main_store_arc = main_store.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator_arc = tsid_generator.inner().clone();
@@ -325,11 +445,10 @@ pub async fn workflow_approve_plan(
     let factory_arc = factory.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
 
-    // 1. Initialize ContextManager and prune context
     let mut context = crate::workflow::react::context::ContextManager::new(
         session_id.clone(),
         main_store_arc.clone(),
-        128000, // Default max tokens
+        128000,
         tsid_generator_arc.clone(),
     );
 
@@ -338,7 +457,6 @@ pub async fn workflow_approve_plan(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 2. Update DB status to 'thinking' (the initial state of the executor)
     {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
@@ -349,21 +467,12 @@ pub async fn workflow_approve_plan(
             .map_err(|e| e.to_string())?;
     }
 
-    // 2.5 Cleanup planning files (Session-isolated)
     let planning_dir = app_data_dir.join("planning").join(&session_id);
     if planning_dir.exists() {
-        log::info!(
-            "Cleaning up planning files for session {} in {:?}",
-            session_id,
-            planning_dir
-        );
         let _ = std::fs::remove_dir_all(&planning_dir);
-        // We don't necessarily need to recreate it here as the next executor will handle its own setup,
-        // but creating it is fine for consistency.
         let _ = std::fs::create_dir_all(&planning_dir);
     }
 
-    // 3. Start ExecutionExecutor (WorkflowExecutor with planning_mode = false)
     let agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
@@ -409,7 +518,7 @@ pub async fn workflow_approve_plan(
             agent_config,
             allowed_roots,
             app_data_dir,
-            None, // subagent_type
+            None,
             Some(signal_rx),
             tsid_generator_arc,
             global_tool_manager,
@@ -421,7 +530,6 @@ pub async fn workflow_approve_plan(
         let mut executor = shared_executor.lock().await;
         executor.init().await.map_err(|e| e.to_string())?;
 
-        // 4. Notify frontend of the new pruned history (Approved Plan + Initial Query)
         for msg in executor.messages() {
             let _ = gateway_arc
                 .send(
@@ -441,7 +549,6 @@ pub async fn workflow_approve_plan(
         }
     }
 
-    // Register for external control
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
@@ -449,22 +556,14 @@ pub async fn workflow_approve_plan(
 
     let session_id_for_spawn = session_id.clone();
     tokio::spawn(async move {
-        log::debug!(
-            "[Workflow Engine] Entering Execution Loop for session {}",
-            session_id_for_spawn
-        );
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             log::error!(
-                "Workflow execution error in session {}: {:?}",
+                "Workflow error in session {}: {:?}",
                 session_id_for_spawn,
                 e
             );
         }
-        log::debug!(
-            "[Workflow Engine] Exited Execution Loop for session {}",
-            session_id_for_spawn
-        );
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
     });
 
@@ -488,17 +587,9 @@ pub async fn workflow_stop(
     gateway: State<'_, Arc<TauriGateway>>,
     session_id: String,
 ) -> Result<(), String> {
-    log::info!("Stopping workflow session: {}", session_id);
-
-    // 1. Inject an asynchronous signal. This is non-blocking and doesn't require executor lock.
     let _ = gateway
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await;
-
-    // 2. Mark as cancelled in BACKGROUND_TASKS if it's still there (best effort)
-    // We don't wait for the lock here to avoid hanging the UI.
-    // The executor's run_loop will see the signal and stop itself.
-
     Ok(())
 }
 
@@ -516,25 +607,6 @@ pub async fn workflow_get_tasks() -> Result<Value, String> {
     Ok(json!(tasks))
 }
 
-// --- Legacy placeholders ---
-
-#[tauri::command]
-pub async fn add_workflow_message(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    message: WorkflowMessage,
-) -> Result<WorkflowMessage, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let msg = store
-        .add_workflow_message(&message)
-        .map_err(|e| e.to_string())?;
-    Ok(msg)
-}
-
-#[tauri::command]
-pub async fn get_workflow_session_key() -> Result<String, String> {
-    Ok("".into())
-}
-
 #[tauri::command]
 pub async fn update_workflow_todo_list(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
@@ -548,6 +620,127 @@ pub async fn update_workflow_todo_list(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct WorkspaceFile {
+    pub name: String,
+    pub relative_path: String,
+    pub path: String,
+    pub is_directory: bool,
+    pub score: i32,
+}
+
+#[tauri::command]
+pub async fn search_workspace_files(
+    paths: Vec<String>,
+    query: String,
+) -> Result<Vec<WorkspaceFile>, String> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+    for base_path in paths {
+        let base = Path::new(&base_path);
+        if !base.exists() {
+            continue;
+        }
+        let walker = ignore::WalkBuilder::new(base)
+            .hidden(true)
+            .git_ignore(true)
+            .ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .require_git(false)
+            .build();
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if path == base {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let rel_path = path
+                .strip_prefix(base)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+            let name_lower = name.to_lowercase();
+            let mut score = 0;
+            if !query_lower.is_empty() {
+                if name_lower == query_lower {
+                    score += 100;
+                } else if name_lower.starts_with(&query_lower) {
+                    score += 50;
+                } else if name_lower.contains(&query_lower) {
+                    score += 20;
+                } else if rel_path.to_lowercase().contains(&query_lower) {
+                    score += 10;
+                } else {
+                    continue;
+                }
+            } else {
+                score = 1;
+            }
+            let depth = path
+                .components()
+                .count()
+                .saturating_sub(base.components().count());
+            score -= (depth as i32) * 2;
+            if let Some(ext) = path
+                .extension()
+                .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
+            {
+                match ext.as_str() {
+                    "bash" | "c" | "cpp" | "css" | "go" | "groovy" | "h" | "hpp" | "htm"
+                    | "html" | "ini" | "java" | "js" | "jsx" | "json" | "kotlin" | "less"
+                    | "lua" | "perl" | "php" | "plsql" | "py" | "r" | "rs" | "ruby" | "scala"
+                    | "sass" | "scss" | "sh" | "sql" | "stylus" | "swift" | "toml" | "ts"
+                    | "tsx" | "vue" | "xml" | "yaml" | "yml" => {
+                        score += 5;
+                    }
+                    "md" | "txt" | "csv" | "tsv" | "log" | "rst" | "readme" => {
+                        score += 5;
+                    }
+                    "dockerfile" | "dockerignore" | "gitignore" | "gitattributes" | "npmrc"
+                    | "yarnrc" | "babelrc" | "eslintrc" | "prettierrc" | "webpack.config"
+                    | "vite.config" | "rollup.config" | "tsconfig" | "jsconfig" | "makefile"
+                    | "cmake" | "gradle" => {
+                        score += 3;
+                    }
+                    _ => {}
+                }
+            }
+            results.push(WorkspaceFile {
+                name,
+                relative_path: rel_path,
+                path: path.to_string_lossy().to_string(),
+                is_directory: path.is_dir(),
+                score,
+            });
+            if results.len() > 1000 {
+                break;
+            }
+        }
+    }
+    results.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    results.truncate(50);
+    Ok(results)
+}
+
 use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 
 #[tauri::command]
@@ -556,7 +749,6 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
     let scanner = SkillScanner::new(app_data_dir);
     let skills_map = scanner.scan().map_err(|e| e.to_string())?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
-    // Sort by name for consistent UI
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(skills)
 }
@@ -582,4 +774,9 @@ pub async fn workflow_chat_completion() -> Result<(), String> {
 #[tauri::command]
 pub async fn workflow_call_tool() -> Result<(), String> {
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_workflow_session_key() -> Result<String, String> {
+    Ok("".into())
 }

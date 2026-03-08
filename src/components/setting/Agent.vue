@@ -67,13 +67,12 @@
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
             <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" />
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.planningPrompt')"
-            prop="planningPrompt">
-            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" />
+          <el-form-item :label="$t('settings.agent.planningPrompt')" prop="planningPrompt">
+            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5"
+              :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.maxContexts')" prop="maxContexts">
-            <el-input-number v-model="agentForm.maxContexts" :min="1000" :max="1000000" :step="1000"
-              controls-position="right" style="width: 100%" />
+          <el-form-item :label="$t('settings.agent.finalAudit')" prop="finalAudit">
+            <el-switch v-model="agentForm.finalAudit" />
           </el-form-item>
         </el-tab-pane>
 
@@ -117,6 +116,26 @@
                         </el-select>
                       </template>
                     </div>
+                    <div class="params-row" style="margin-top: 8px; padding: 0 4px;">
+                      <span class="param-label">{{ $t('settings.agent.temperature') }}</span>
+                      <el-slider v-model="agentForm[role.key + 'Model'].temperature" :min="-0.1" :max="2" :step="0.1"
+                        size="small" style="flex: 1; margin-left: 12px;" />
+                      <span class="param-value" style="font-size: 11px; min-width: 24px; text-align: right;">{{
+                        (agentForm[role.key + 'Model']?.temperature ?? -0.1) < 0 ? 'Off' : agentForm[role.key + 'Model'
+                        ]?.temperature?.toFixed(1) || '0.0' }}</span>
+                    </div>
+                    <div class="params-row compact-params" style="margin-top: 4px;">
+                      <div class="param-item">
+                        <span class="param-label">{{ $t('settings.model.contextSize') }}</span>
+                        <el-input-number v-model="agentForm[role.key + 'Model'].contextSize" :min="1024" :max="2000000" :step="1024"
+                          size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                      <div class="param-item">
+                        <span class="param-label">{{ $t('settings.model.maxTokens') }}</span>
+                        <el-input-number v-model="agentForm[role.key + 'Model'].maxTokens" :min="0" :max="128000" :step="1024"
+                          size="small" controls-position="right" style="width: 80px" />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </el-col>
@@ -125,6 +144,13 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
+          <el-form-item :label="$t('settings.agent.approvalLevel')" prop="approvalLevel">
+            <el-select v-model="agentForm.approvalLevel" style="width: 100%">
+              <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
+              <el-option :label="$t('settings.agent.approvalLevelSmart')" value="smart" />
+              <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
+            </el-select>
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools">
             <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
               multiple filterable>
@@ -239,25 +265,28 @@ const modelRoles = [
   { key: 'browsing' }
 ]
 
+const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
+const CORE_MANAGEMENT_TOOLS = ['task', 'task_output', 'task_stop', 'todo_create', 'todo_list', 'todo_update', 'todo_get', 'skill', 'ask_user', 'finish_task', 'submit_plan']
+
 const defaultFormData = {
   name: '',
   description: '',
   systemPrompt: '',
-  planningPrompt: `Please act as an expert project manager. Analyze the user's request and provide a clear, step-by-step plan to achieve the goal. The plan should be a list of tasks. For each task, describe what needs to be done and why it's necessary. Ensure the plan is logical, efficient, and covers all aspects of the request. Your final output should only be the plan itself, without any conversational text before or after it.`,
+  planningPrompt: '',
   availableTools: [],
   autoApprove: [],
   shellPolicy: [],
   allowedPaths: [],
-  planModel: { id: '', model: '' },
-  actModel: { id: '', model: '' },
-  visionModel: { id: '', model: '' },
-  codingModel: { id: '', model: '' },
-  copywritingModel: { id: '', model: '' },
-  browsingModel: { id: '', model: '' },
-  maxContexts: 128000
+  planModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  actModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  visionModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  codingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  copywritingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  browsingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  maxContexts: 128000,
+  finalAudit: false,
+  approvalLevel: 'default'
 }
-
-const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 
 const agentForm = ref({ ...defaultFormData })
 
@@ -266,11 +295,13 @@ const modelModes = reactive({ plan: 'provider', act: 'provider', vision: 'provid
 const proxyGroups = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
 const proxyAliases = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
 
-// Computed property: available tools sorted by name
+// Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {
-  return [...availableTools.value].sort((a, b) => {
-    return a.name.localeCompare(b.name, 'zh-Hans')
-  })
+  return [...availableTools.value]
+    .filter(t => !CORE_MANAGEMENT_TOOLS.includes(t.id))
+    .sort((a, b) => {
+      return a.name.localeCompare(b.name, 'zh-Hans')
+    })
 })
 
 // Computed property: auto-approve tool options (filtered and sorted)
@@ -575,7 +606,13 @@ const editAgent = async id => {
         try {
           const modelsObj = JSON.parse(agentData.models)
           modelRoles.forEach(role => {
-            if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key]
+            if (modelsObj[role.key]) {
+              agentForm.value[role.key + 'Model'] = modelsObj[role.key]
+              // Ensure temperature exists
+              if (agentForm.value[role.key + 'Model'].temperature === undefined) {
+                agentForm.value[role.key + 'Model'].temperature = -0.1
+              }
+            }
           })
         } catch (e) { console.error(e) }
       }
@@ -802,25 +839,58 @@ onMounted(() => {
         display: flex;
         gap: 4px;
       }
+
+      .params-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        &.compact-params {
+          justify-content: space-between;
+          padding: 0 4px;
+
+          .param-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+          }
+        }
+
+        .param-label {
+          font-size: 11px;
+          color: var(--cs-text-color-secondary);
+          white-space: nowrap;
+        }
+      }
     }
   }
 
-  .shell-policy-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: var(--cs-space-md);
+  .danger-option {
+    color: var(--el-color-danger) !important;
+    font-weight: bold;
+  }
 
-    h3 {
-      margin: 0;
-      font-size: var(--cs-font-size-md);
-      color: var(--cs-text-color-primary);
-    }
+  .security-group {
+    margin-bottom: var(--cs-space-lg);
+    display: block;
 
-    .shell-policy-actions {
+    .shell-policy-header {
       display: flex;
-      gap: var(--cs-space-sm);
+      justify-content: space-between;
       align-items: center;
+      margin-bottom: var(--cs-space-sm);
+
+      h3 {
+        margin: 0;
+        font-size: var(--cs-font-size-md);
+        color: var(--cs-text-color-primary);
+      }
+
+      .shell-policy-actions {
+        display: flex;
+        gap: var(--cs-space-sm);
+        align-items: center;
+      }
     }
   }
 

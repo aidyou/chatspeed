@@ -1,5 +1,5 @@
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::ai::traits::chat::{MCPToolDeclaration, MessageType};
+use crate::ai::traits::chat::{ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType};
 use crate::db::{Agent, WorkflowMessage};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -7,12 +7,15 @@ use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::SkillManifest;
+use crate::workflow::react::types::GatewayPayload;
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
-    CORE_SYSTEM_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT,
+    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT,
 };
 
 pub struct LlmProcessor {
@@ -48,6 +51,7 @@ impl LlmProcessor {
     }
 
     /// Prepares and calls the LLM with the current context.
+    /// Implements exponential backoff for 429 errors and drafting instructions for non-reasoning models.
     pub async fn call(
         &self,
         context: &mut ContextManager,
@@ -57,10 +61,11 @@ impl LlmProcessor {
         tools: Vec<MCPToolDeclaration>,
         max_steps: usize,
         policy: &ExecutionPolicy,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
-        // 1. Extract the latest state_snapshot from compression history (if any).
+        // 1. Context Normalization & Prompt Injection
         let state_snapshot = raw_history.iter().rev().find_map(|m| {
             if m.role == "system"
                 && m.metadata
@@ -73,18 +78,10 @@ impl LlmProcessor {
             }
         });
 
-        // 2. Extract the next pending todo item for progress display.
-        let next_pending_task = {
-            // Look for the most recent todo_list / todo_update result content in history
-            // We parse the session todo from stored messages via the reinforced snapshots.
-            // Fallback: none.
-            None::<String>
-        };
+        // Extract the next pending todo item for progress display.
+        let next_pending_task = None::<String>;
 
-        // 3. Context Normalization
         let history = self.normalize_history(raw_history);
-
-        // 4. Build System Prompt & Environment Reminders
         let final_history = self.inject_prompts(
             history,
             current_step,
@@ -94,176 +91,290 @@ impl LlmProcessor {
             policy,
         );
 
-        // 5. Perform the LLM Call
-        let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
+        // 2. Retry Loop for 429 (Rate Limiting) with Exponential Backoff
+        let mut retry_count = 0;
+        let max_retries = 10;
+        let mut last_error = None;
 
-        let session_id_for_rx = self.session_id.clone();
-        let gateway_for_rx = gateway.clone();
+        while retry_count <= max_retries {
+            // Check for immediate stop signal before each call
+            self.check_signal(signal_rx).await?;
 
-        // Drain the channel in a separate task to avoid blocking the chat loop.
-        // This ensures chunks are forwarded to the gateway in real-time.
-        let rx_processor = tokio::spawn(async move {
-            let mut plain_text = String::new();
-            let mut tool_calls_json = String::new();
-            let mut full_reasoning = String::new();
-            let mut final_metadata = None;
+            let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
+            let session_id_for_rx = self.session_id.clone();
+            let gateway_for_rx = gateway.clone();
 
-            while let Some(chunk) = rx.recv().await {
-                match chunk.r#type {
-                    MessageType::Text => {
-                        gateway_for_rx
-                            .send(
-                                &session_id_for_rx,
-                                crate::workflow::react::types::GatewayPayload::Chunk {
-                                    content: chunk.chunk.clone(),
-                                },
-                            )
-                            .await?;
-                        plain_text.push_str(&chunk.chunk);
-                    }
-                    MessageType::Reasoning => {
-                        gateway_for_rx
-                            .send(
-                                &session_id_for_rx,
-                                crate::workflow::react::types::GatewayPayload::ReasoningChunk {
-                                    content: chunk.chunk.clone(),
-                                },
-                            )
-                            .await?;
-                        full_reasoning.push_str(&chunk.chunk);
-                    }
-                    MessageType::ToolCalls => {
-                        // Standardize tool call IDs using our own unique generator
-                        let mut tool_calls_val: serde_json::Value =
-                            serde_json::from_str(&chunk.chunk).unwrap_or(serde_json::json!([]));
+            // Task to process streaming chunks
+            let rx_processor =
+                tokio::spawn(async move {
+                    let mut plain_text = String::new();
+                    let mut tool_calls_json = String::new();
+                    let mut full_reasoning = String::new();
+                    let mut final_metadata = None;
 
-                        // Case 1: OpenAI style array [ {id, function: {name, arguments}}, ... ]
-                        if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
-                            for tool_call in tool_calls_array {
-                                if let Some(tool_call_obj) = tool_call.as_object_mut() {
-                                    tool_call_obj.insert(
-                                        "id".to_string(),
-                                        serde_json::json!(crate::ccproxy::get_tool_id()),
-                                    );
+                    while let Some(chunk) = rx.recv().await {
+                        match chunk.r#type {
+                            MessageType::Text => {
+                                gateway_for_rx
+                                    .send(
+                                        &session_id_for_rx,
+                                        GatewayPayload::Chunk {
+                                            content: chunk.chunk.clone(),
+                                        },
+                                    )
+                                    .await?;
+                                plain_text.push_str(&chunk.chunk);
+                            }
+                            MessageType::Reasoning => {
+                                gateway_for_rx
+                                    .send(
+                                        &session_id_for_rx,
+                                        GatewayPayload::ReasoningChunk {
+                                            content: chunk.chunk.clone(),
+                                        },
+                                    )
+                                    .await?;
+                                full_reasoning.push_str(&chunk.chunk);
+                            }
+                            MessageType::ToolCalls => {
+                                let mut tool_calls_val: serde_json::Value =
+                                    serde_json::from_str(&chunk.chunk)
+                                        .unwrap_or(serde_json::json!([]));
+
+                                if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
+                                    for tool_call in tool_calls_array {
+                                        if let Some(tool_call_obj) = tool_call.as_object_mut() {
+                                            tool_call_obj.insert(
+                                                "id".to_string(),
+                                                serde_json::json!(crate::ccproxy::get_tool_id()),
+                                            );
+                                        }
+                                    }
+                                } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
+                                    if let Some(tool_obj) = tool_wrapper.as_object_mut() {
+                                        tool_obj.insert(
+                                            "id".to_string(),
+                                            serde_json::json!(crate::ccproxy::get_tool_id()),
+                                        );
+                                    }
+                                } else if tool_calls_val.is_object()
+                                    && tool_calls_val.get("name").is_some()
+                                {
+                                    if let Some(tool_obj) = tool_calls_val.as_object_mut() {
+                                        tool_obj.insert(
+                                            "id".to_string(),
+                                            serde_json::json!(crate::ccproxy::get_tool_id()),
+                                        );
+                                    }
                                 }
+                                tool_calls_json = serde_json::to_string(&tool_calls_val)
+                                    .unwrap_or(chunk.chunk.clone());
+                            }
+                            MessageType::Finished => {
+                                final_metadata = chunk.metadata.clone();
+                            }
+                            MessageType::Error => {
+                                return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>(
+                        (plain_text, tool_calls_json, full_reasoning, final_metadata),
+                    )
+                });
+
+            let tx_for_chat = tx.clone();
+
+            // Construct custom headers to disable silent proxy-level retries
+            let custom_headers = vec![CustomHeader {
+                key: "x-cs-retry-max-count".to_string(),
+                value: "0".to_string(),
+            }];
+
+            // Extract model parameters (temperature, max_tokens) from agent config
+            let mut temperature = None;
+            let mut max_tokens = None;
+
+            if let Some(ref models_json) = self.agent_config.models {
+                if let Ok(models_obj) = serde_json::from_str::<serde_json::Value>(models_json) {
+                    if let Some(models_map) = models_obj.as_object() {
+                        // Find the config entry that matches the active model name (or alias)
+                        for (_role, config) in models_map {
+                            let model_id = config["id"].as_str().unwrap_or("");
+                            if model_id == self.active_model_name {
+                                // Temperature: any value < 0 is treated as "Off/Unset"
+                                if let Some(temp) = config["temperature"].as_f64() {
+                                    if temp >= 0.0 {
+                                        temperature = Some(temp as f32);
+                                    }
+                                }
+                                // Max Output Tokens: 0 or less is treated as "Unset"
+                                if let Some(mt) = config["maxTokens"].as_i64() {
+                                    if mt > 0 {
+                                        max_tokens = Some(mt as u32);
+                                    }
+                                }
+                                break;
                             }
                         }
-                        // Case 2: ReAct style object { "tool": { "name", "arguments", ... } }
-                        else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
-                            if let Some(tool_obj) = tool_wrapper.as_object_mut() {
-                                tool_obj.insert(
-                                    "id".to_string(),
-                                    serde_json::json!(crate::ccproxy::get_tool_id()),
-                                );
-                            }
-                        }
-                        // Case 3: Single tool object { "name", "arguments", ... }
-                        else if tool_calls_val.is_object() && tool_calls_val.get("name").is_some()
-                        {
-                            if let Some(tool_obj) = tool_calls_val.as_object_mut() {
-                                tool_obj.insert(
-                                    "id".to_string(),
-                                    serde_json::json!(crate::ccproxy::get_tool_id()),
-                                );
-                            }
-                        }
-
-                        tool_calls_json =
-                            serde_json::to_string(&tool_calls_val).unwrap_or(chunk.chunk.clone());
                     }
-                    MessageType::Finished => {
-                        final_metadata = chunk.metadata.clone();
-                    }
-                    MessageType::Error => {
-                        return Err(WorkflowEngineError::General(chunk.chunk.clone()));
-                    }
-                    _ => {}
-                }
-            }
-            Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>((
-                plain_text,
-                tool_calls_json,
-                full_reasoning,
-                final_metadata,
-            ))
-        });
-
-        let tx_for_chat = tx.clone();
-        chat_interface
-            .chat(
-                self.active_provider_id,
-                &self.active_model_name,
-                self.session_id.clone(),
-                final_history,
-                Some(tools),
-                Some(crate::ai::traits::chat::ChatMetadata {
-                    reasoning: Some(self.reasoning),
-                    ..Default::default()
-                }),
-                move |chunk| {
-                    let _ = tx_for_chat.try_send(chunk);
-                },
-            )
-            .await
-            .map_err(WorkflowEngineError::Ai)?;
-
-        // Close the local channel sender to ensure the receiver task finishes
-        drop(tx);
-        let (mut plain_text, tool_calls_json, mut full_reasoning, final_metadata) = rx_processor
-            .await
-            .map_err(|e| WorkflowEngineError::General(format!("RX task failed: {}", e)))??;
-
-        // --- Post-processing: Extract model-native <think> blocks if present ---
-        // We keep <thought> in the plain_text so it stays in the conversation history
-        // and can be styled by the frontend without triggering API field conflicts.
-        if plain_text.contains("<think>") || plain_text.contains("</think>") {
-            let mut extracted_reasoning = String::new();
-            let mut cleaned_content = String::new();
-            let mut current_pos = 0;
-
-            while let Some(start_idx) = plain_text[current_pos..].find("<think>") {
-                let absolute_start = current_pos + start_idx;
-                cleaned_content.push_str(&plain_text[current_pos..absolute_start]);
-
-                let remainder = &plain_text[absolute_start + 7..];
-                if let Some(end_idx) = remainder.find("</think>") {
-                    let absolute_end = absolute_start + 7 + end_idx;
-                    let reasoning = &plain_text[absolute_start + 7..absolute_end];
-                    if !extracted_reasoning.is_empty() {
-                        extracted_reasoning.push_str("\n\n");
-                    }
-                    extracted_reasoning.push_str(reasoning.trim());
-                    current_pos = absolute_end + 8;
-                } else {
-                    if !extracted_reasoning.is_empty() {
-                        extracted_reasoning.push_str("\n\n");
-                    }
-                    extracted_reasoning.push_str(remainder.trim());
-                    current_pos = plain_text.len();
-                    break;
                 }
             }
 
-            if current_pos < plain_text.len() {
-                cleaned_content.push_str(&plain_text[current_pos..]);
-            } else if current_pos == 0 {
-                cleaned_content.push_str(&plain_text);
-            }
+            let chat_res = chat_interface
+                .chat(
+                    self.active_provider_id,
+                    &self.active_model_name,
+                    self.session_id.clone(),
+                    final_history.clone(),
+                    Some(tools.clone()),
+                    Some(ChatMetadata {
+                        reasoning: Some(self.reasoning),
+                        custom_headers: Some(custom_headers),
+                        temperature,
+                        max_tokens,
+                        ..Default::default()
+                    }),
+                    move |chunk| {
+                        let _ = tx_for_chat.try_send(chunk);
+                    },
+                )
+                .await;
 
-            if !extracted_reasoning.is_empty() {
-                if !full_reasoning.is_empty() {
-                    full_reasoning.push_str("\n\n");
+            drop(tx); // Close channel
+
+            match chat_res {
+                Ok(_) => {
+                    let (mut plain_text, tool_calls_json, mut full_reasoning, final_metadata) =
+                        rx_processor.await.map_err(|e| {
+                            WorkflowEngineError::General(format!("RX task failed: {}", e))
+                        })??;
+
+                    // --- Post-processing: Extract model-native <think> or <thought> blocks ---
+                    let has_think = plain_text.to_lowercase().contains("<think>");
+                    let has_thought = plain_text.to_lowercase().contains("<thought>");
+
+                    if has_think || has_thought {
+                        let mut extracted_reasoning = String::new();
+                        let mut cleaned_content = String::new();
+                        let mut current_pos = 0;
+                        let text_lower = plain_text.to_lowercase();
+
+                        let tag_pairs = [("<think>", "</think>"), ("<thought>", "</thought>")];
+
+                        // Find the first occurrence of any start tag
+                        while let Some((pos, s, e)) = tag_pairs.iter().find_map(|(s, e)| {
+                            text_lower[current_pos..]
+                                .find(s)
+                                .map(|idx| (current_pos + idx, *s, *e))
+                        }) {
+                            cleaned_content.push_str(&plain_text[current_pos..pos]);
+
+                            let tag_len = s.len();
+                            let remainder_lower = &text_lower[pos + tag_len..];
+                            if let Some(end_idx) = remainder_lower.find(e) {
+                                let absolute_end = pos + tag_len + end_idx;
+                                let reasoning = &plain_text[pos + tag_len..absolute_end];
+                                if !extracted_reasoning.is_empty() {
+                                    extracted_reasoning.push_str("\n\n");
+                                }
+                                extracted_reasoning.push_str(reasoning.trim());
+                                current_pos = absolute_end + e.len();
+                            } else {
+                                // Unclosed tag: take everything till the end
+                                let reasoning = &plain_text[pos + tag_len..];
+                                if !extracted_reasoning.is_empty() {
+                                    extracted_reasoning.push_str("\n\n");
+                                }
+                                extracted_reasoning.push_str(reasoning.trim());
+                                current_pos = plain_text.len();
+                                break;
+                            }
+                        }
+
+                        if current_pos < plain_text.len() {
+                            cleaned_content.push_str(&plain_text[current_pos..]);
+                        }
+
+                        if !extracted_reasoning.is_empty() {
+                            if !full_reasoning.is_empty() {
+                                full_reasoning.push_str("\n\n");
+                            }
+                            full_reasoning.push_str(&extracted_reasoning);
+                        }
+
+                        // Final cleanup: remove all variants of thinking tags from plain_text
+                        plain_text = cleaned_content
+                            .replace("<think>", "")
+                            .replace("</think>", "")
+                            .replace("<THINK>", "")
+                            .replace("</THINK>", "")
+                            .replace("<thought>", "")
+                            .replace("</thought>", "")
+                            .replace("<THOUGHT>", "")
+                            .replace("</THOUGHT>", "")
+                            .trim()
+                            .to_string();
+                    }
+
+                    return Ok((plain_text, tool_calls_json, full_reasoning, final_metadata));
                 }
-                full_reasoning.push_str(&extracted_reasoning);
-            }
+                Err(e) => {
+                    let is_rate_limit = e.to_string().contains("429");
+                    if is_rate_limit && retry_count < max_retries {
+                        retry_count += 1;
+                        let wait_secs = 2u32.pow(retry_count - 1);
 
-            plain_text = cleaned_content.replace("</think>", "").trim().to_string();
+                        log::warn!("WorkflowExecutor {}: LLM rate limited (429). Retrying in {}s (attempt {}/{})",
+                            self.session_id, wait_secs, retry_count, max_retries);
+
+                        gateway
+                            .send(
+                                &self.session_id,
+                                GatewayPayload::RetryStatus {
+                                    attempt: retry_count,
+                                    total_attempts: max_retries,
+                                    next_retry_in_seconds: wait_secs,
+                                },
+                            )
+                            .await?;
+
+                        tokio::select! {
+                            _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
+                            _ = self.check_signal(signal_rx) => {
+                                return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                            }
+                        }
+                        last_error = Some(WorkflowEngineError::Ai(e));
+                        continue;
+                    }
+                    return Err(WorkflowEngineError::Ai(e));
+                }
+            }
         }
 
-        Ok((plain_text, tool_calls_json, full_reasoning, final_metadata))
+        Err(last_error
+            .unwrap_or_else(|| WorkflowEngineError::General("Max retries exceeded".to_string())))
     }
 
-    /// Normalizes history to handle irregular message sequences.
+    async fn check_signal(
+        &self,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<(), WorkflowEngineError> {
+        while let Ok(sig_str) = signal_rx.try_recv() {
+            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
+            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
+                log::info!(
+                    "WorkflowExecutor {}: Stop signal received in LLM processor",
+                    self.session_id
+                );
+                return Err(WorkflowEngineError::General("STOP_SIGNAL".into()));
+            }
+        }
+        Ok(())
+    }
+
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
 
@@ -275,7 +386,6 @@ impl LlmProcessor {
                 .as_ref()
                 .and_then(|meta| meta.get("tool_calls").cloned());
 
-            // Standardize Tool Result messages
             let tool_call_id = if role == "tool" {
                 m.metadata
                     .as_ref()
@@ -285,7 +395,7 @@ impl LlmProcessor {
                 None
             };
 
-            // Dynamic System Reminder for Errors
+            // Restore: Dynamic System Reminder for Errors
             if role == "tool" && m.is_error {
                 let meta = m.metadata.as_ref();
                 let tool_name = meta
@@ -311,7 +421,6 @@ impl LlmProcessor {
                 content = format!("{}\n\n{}", content, reminder);
             }
 
-            // Logic: Merge consecutive roles (except tool results and system prompts)
             if let Some(last) = history.last_mut() {
                 if last["role"] == role && role != "tool" && role != "system" {
                     let last_content = last["content"].as_str().unwrap_or("");
@@ -326,30 +435,22 @@ impl LlmProcessor {
                 }
             }
 
-            // Skip empty user messages unless they have tool_calls (though user doesn't usually)
             if role == "user" && content.trim().is_empty() {
                 continue;
             }
 
-            let mut msg = serde_json::json!({
-                "role": role,
-                "content": content,
-            });
-
+            let mut msg = serde_json::json!({ "role": role, "content": content });
             if let Some(tc) = tool_calls {
                 msg["tool_calls"] = tc;
             }
             if let Some(tid) = tool_call_id {
                 msg["tool_call_id"] = serde_json::json!(tid);
             }
-
             history.push(msg);
         }
-
         history
     }
 
-    /// Injects system prompt, environmental info, and reminders into history.
     fn inject_prompts(
         &self,
         mut history: Vec<serde_json::Value>,
@@ -359,13 +460,9 @@ impl LlmProcessor {
         _next_pending_task: Option<String>,
         policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
-        // --- 1. Build System Prompt (Identity & Environment) ---
         let mut system_parts = Vec::new();
-
-        // 1.1 Core Rulebook
         system_parts.push(CORE_SYSTEM_PROMPT.to_string());
 
-        // 1.2 Agent Specific Instructions (Identity)
         if !self.agent_config.system_prompt.is_empty() {
             system_parts.push(format!(
                 "<AGENT_SPECIFIC_INSTRUCTIONS>\n{}\n</AGENT_SPECIFIC_INSTRUCTIONS>",
@@ -373,14 +470,16 @@ impl LlmProcessor {
             ));
         }
 
-        // 1.3 Environmental Context (Date, OS, Skills)
+        if !self.reasoning {
+            system_parts.push(DRAFTING_PROMPT.to_string());
+        }
+
         let reminders = self.build_reminders(current_step, max_steps);
         system_parts.push(format!(
             "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
             reminders
         ));
 
-        // 1.4 Context Continuity (Last Snapshot)
         if let Some(snapshot) = state_snapshot {
             system_parts.push(format!(
                 "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
@@ -390,7 +489,6 @@ impl LlmProcessor {
 
         let combined_system_prompt = system_parts.join("\n\n---\n\n");
 
-        // Apply System Prompt
         if let Some(sys_msg) = history.iter_mut().find(|m| m["role"] == "system") {
             sys_msg["content"] = serde_json::json!(combined_system_prompt);
         } else {
@@ -400,13 +498,13 @@ impl LlmProcessor {
             );
         }
 
-        // --- 2. Inject Phase Instructions into the FIRST User Message ---
         let phase_instruction = match policy.phase {
-            ExecutionPhase::Planning => {
-                // Priority: 1. Agent custom planning prompt, 2. Global default
-                self.agent_config.planning_prompt.as_deref().filter(|s| !s.trim().is_empty())
-                    .unwrap_or(PLANNING_MODE_PROMPT)
-            }
+            ExecutionPhase::Planning => self
+                .agent_config
+                .planning_prompt
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(PLANNING_MODE_PROMPT),
             ExecutionPhase::Implementation => EXECUTION_MODE_PROMPT,
             ExecutionPhase::Standard => "",
         };
@@ -414,12 +512,9 @@ impl LlmProcessor {
         if !phase_instruction.is_empty() {
             if let Some(first_user_msg) = history.iter_mut().find(|m| m["role"] == "user") {
                 let original_content = first_user_msg["content"].as_str().unwrap_or("");
-                
-                // Wrap with clear boundaries
                 first_user_msg["content"] = serde_json::json!(format!(
                     "<PHASE_INSTRUCTIONS>\n{}\n</PHASE_INSTRUCTIONS>\n\n{}",
-                    phase_instruction,
-                    original_content
+                    phase_instruction, original_content
                 ));
             }
         }
@@ -429,8 +524,6 @@ impl LlmProcessor {
 
     fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
         let mut reminders = String::new();
-
-        // 1. Available Skills
         if !self.available_skills.is_empty() {
             reminders.push_str("## AVAILABLE SKILLS:\n");
             for skill in self.available_skills.values() {
@@ -445,11 +538,16 @@ impl LlmProcessor {
         } else {
             vec![]
         };
-
         let cwd = allowed_roots.first().cloned().unwrap_or_default();
+
         let is_git = if !cwd.as_os_str().is_empty() {
             std::process::Command::new("git")
-                .args(["-C", &cwd.to_string_lossy(), "rev-parse", "--is-inside-work-tree"])
+                .args([
+                    "-C",
+                    &cwd.to_string_lossy(),
+                    "rev-parse",
+                    "--is-inside-work-tree",
+                ])
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
                 .unwrap_or(false)
@@ -457,17 +555,24 @@ impl LlmProcessor {
             false
         };
 
-        let mut env_info = String::from("Environment\nYou have been invoked in the following environment:\n");
+        let mut env_info =
+            String::from("Environment\nYou have been invoked in the following environment:\n");
         if !cwd.as_os_str().is_empty() {
             env_info.push_str(&format!(" - Primary working directory: {:?}\n", cwd));
-            
+
             if is_git {
                 let branch = std::process::Command::new("git")
-                    .args(["-C", &cwd.to_string_lossy(), "rev-parse", "--abbrev-ref", "HEAD"])
+                    .args([
+                        "-C",
+                        &cwd.to_string_lossy(),
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "HEAD",
+                    ])
                     .output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                     .unwrap_or_else(|_| "unknown".into());
-                
+
                 let status = std::process::Command::new("git")
                     .args(["-C", &cwd.to_string_lossy(), "status", "--short"])
                     .output()
@@ -522,7 +627,6 @@ impl LlmProcessor {
             platform, shell, os_version
         ));
 
-        // Step progress block
         let progress_info = if max_steps > 0 {
             let remaining = max_steps.saturating_sub(current_step);
             format!("\n - Step: {current_step} / {max_steps} (remaining: {remaining})")
@@ -537,8 +641,6 @@ impl LlmProcessor {
     }
 }
 
-/// Generates context-aware system reminders for tool errors.
-/// This helps the AI agent recover from failures with actionable guidance.
 pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str) -> String {
     match error_type {
         "Security" => {

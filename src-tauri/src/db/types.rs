@@ -80,6 +80,12 @@ pub struct ModelConfig {
     pub reasoning: Option<bool>,
     #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
     pub function_call: Option<bool>,
+    #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
+    pub context_size: Option<i32>,
+    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     #[serde(rename = "customParams", skip_serializing_if = "Option::is_none")]
     pub custom_params: Option<Value>,
 }
@@ -92,6 +98,9 @@ impl Default for ModelConfig {
             group: String::new(),
             reasoning: Some(false),
             function_call: None,
+            context_size: Some(128000),
+            max_tokens: Some(0),
+            temperature: Some(-0.1),
             custom_params: None,
         }
     }

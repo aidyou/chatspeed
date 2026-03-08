@@ -38,6 +38,7 @@ use tauri::Manager;
 // use commands::toolbar::*;
 use crate::error::AppError;
 use ai::interaction::chat_completion::ChatState;
+use commands::agent::*;
 use commands::ccproxy::*;
 use commands::chat::*;
 use commands::clipboard::*;
@@ -138,6 +139,14 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
         .invoke_handler(tauri::generate_handler![
+            // agent command
+            add_agent,
+            update_agent,
+            delete_agent,
+            get_agent,
+            get_all_agents,
+            get_available_tools,
+
             // settings
             get_all_config,
             set_config,
@@ -225,6 +234,8 @@ pub async fn run() -> crate::error::Result<()> {
             // fs
             image_preview,
             read_text_file,
+            get_git_status,
+            list_dir,
 
             // window
             open_setting_window,
@@ -241,30 +252,25 @@ pub async fn run() -> crate::error::Result<()> {
 
             // workflow
             // run_dag_workflow,
-            add_agent,
-            update_agent,
-            delete_agent,
-            get_agent,
-            get_all_agents,
-            get_available_tools,
-            workflow_chat_completion,
-            workflow_call_tool,
-            create_workflow,
             add_workflow_message,
+            create_workflow,
             delete_workflow,
+            get_system_skills,
+            get_workflow_session_key,
             get_workflow_snapshot,
             list_workflows,
-            get_workflow_session_key,
+            search_workspace_files,
+            update_workflow_allowed_paths,
             update_workflow_status,
             update_workflow_title,
             update_workflow_todo_list,
-            update_workflow_allowed_paths,
-            get_system_skills,
-            workflow_start,
             workflow_approve_plan,
-            workflow_signal,
-            workflow_stop,
+            workflow_call_tool,
+            workflow_chat_completion,
             workflow_get_tasks,
+            workflow_signal,
+            workflow_start,
+            workflow_stop,
 
             // dev tools
             test_scrape,

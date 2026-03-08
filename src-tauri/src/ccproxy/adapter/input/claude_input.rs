@@ -217,9 +217,17 @@ pub fn from_claude(
         tool_choice,
         // stream: false, // Stream handling is managed by the handler, not in the request body itself.
         stream: req.stream.unwrap_or(false),
-        temperature: req
-            .temperature
-            .map(|t| clamp_to_protocol_range(t, ChatProtocol::Claude, Parameter::Temperature)),
+        temperature: req.temperature.and_then(|t| {
+            if t < 0.0 {
+                None
+            } else {
+                Some(clamp_to_protocol_range(
+                    t,
+                    ChatProtocol::Claude,
+                    Parameter::Temperature,
+                ))
+            }
+        }),
         max_tokens: if req.max_tokens <= 0 {
             None
         } else {

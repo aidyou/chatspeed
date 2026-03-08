@@ -9,6 +9,77 @@ use std::fs;
 
 use crate::error::{AppError, Result};
 
+use std::collections::HashMap;
+use std::process::Command;
+use serde_json::Value;
+
+#[tauri::command]
+pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError::General {
+            message: format!("Failed to execute git: {}", e),
+        })?;
+
+    if !output.status.success() {
+        return Ok(HashMap::new()); // Not a git repo or other error, return empty
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut status_map = HashMap::new();
+    let base_path = Path::new(path);
+
+    for line in stdout.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let status = line[..2].trim().to_string();
+        let relative_path = line[3..].to_string();
+        
+        // Convert to absolute path for easier matching in frontend
+        let absolute_path = base_path.join(relative_path).to_string_lossy().to_string();
+        status_map.insert(absolute_path, status);
+    }
+
+    Ok(status_map)
+}
+
+#[tauri::command]
+pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
+    let entries = fs::read_dir(path).map_err(|e| AppError::General {
+        message: format!("Failed to read directory: {}", e),
+    })?;
+
+    let mut list = Vec::new();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path_buf = entry.path();
+            let is_dir = path_buf.is_dir();
+            let name = entry.file_name().to_string_lossy().to_string();
+            
+            list.push(serde_json::json!({
+                "name": name,
+                "path": path_buf.to_string_lossy().to_string(),
+                "is_dir": is_dir,
+            }));
+        }
+    }
+    
+    // Sort: directories first, then alphabetical
+    list.sort_by(|a, b| {
+        let a_is_dir = a["is_dir"].as_bool().unwrap_or(false);
+        let b_is_dir = b["is_dir"].as_bool().unwrap_or(false);
+        if a_is_dir != b_is_dir {
+            return b_is_dir.cmp(&a_is_dir);
+        }
+        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+    });
+
+    Ok(list)
+}
+
 /// Read text file content
 ///
 /// Reads the content of a text file.

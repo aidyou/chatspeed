@@ -19,6 +19,16 @@ pub enum ExecutionPhase {
     Standard,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ApprovalLevel {
+    /// Follow agent config's auto_approve list
+    Default,
+    /// Only allow read-only operations, block all mutations unless approved
+    Smart,
+    /// Allow all tool calls without confirmation (High Risk)
+    Full,
+}
+
 /// ExecutionPolicy defines the rules and permissions for a ReAct session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPolicy {
@@ -29,6 +39,8 @@ pub struct ExecutionPolicy {
     pub path_restriction: PathRestriction,
     /// The current operational phase
     pub phase: ExecutionPhase,
+    /// Level of automatic approval for tool calls
+    pub approval_level: ApprovalLevel,
 }
 
 impl ExecutionPolicy {
@@ -44,6 +56,7 @@ impl ExecutionPolicy {
             ],
             path_restriction: PathRestriction::SandboxOnly,
             phase: ExecutionPhase::Planning,
+            approval_level: ApprovalLevel::Default,
         }
     }
 
@@ -61,6 +74,7 @@ impl ExecutionPolicy {
             ],
             path_restriction: PathRestriction::FullAuthorized,
             phase: ExecutionPhase::Implementation,
+            approval_level: ApprovalLevel::Default,
         }
     }
 
@@ -78,6 +92,7 @@ impl ExecutionPolicy {
             ],
             path_restriction: PathRestriction::FullAuthorized,
             phase: ExecutionPhase::Standard,
+            approval_level: ApprovalLevel::Default,
         }
     }
 }

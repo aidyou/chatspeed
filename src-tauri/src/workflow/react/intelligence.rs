@@ -1,11 +1,12 @@
-use std::sync::Arc;
 use crate::ai::chat::openai::OpenAIChat;
-use crate::ai::interaction::chat_completion::{ChatState, AiChatEnum};
-use crate::ai::traits::chat::{MessageType, ChatMetadata};
+use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
+use crate::ai::traits::chat::{ChatMetadata, MessageType};
+use crate::tools::{TOOL_FINISH_TASK, TOOL_TODO_CREATE, TOOL_WEB_SEARCH};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
-use crate::tools::{TOOL_WEB_SEARCH, TOOL_TODO_CREATE, TOOL_FINISH_TASK};
+
+use std::sync::Arc;
 
 /// IntelligenceManager handles high-level AI decision making tasks
 /// like content summarization and quality auditing.
@@ -196,7 +197,10 @@ impl IntelligenceManager {
     }
 
     /// Performs a hidden quality audit before allowing the task to finish.
-    pub async fn run_final_audit(&self, context: &ContextManager) -> Result<Option<String>, WorkflowEngineError> {
+    pub async fn run_final_audit(
+        &self,
+        context: &ContextManager,
+    ) -> Result<Option<String>, WorkflowEngineError> {
         log::info!(
             "IntelligenceManager {}: Running final quality audit...",
             self.session_id
@@ -381,5 +385,96 @@ impl IntelligenceManager {
                 Ok(Some(feedback.to_string()))
             }
         }
+    }
+
+    /// Generates a concise title for the workflow session based on the user's initial query.
+    pub async fn generate_workflow_title(
+        &self,
+        user_query: &str,
+    ) -> Result<String, WorkflowEngineError> {
+        let (provider_id, model_name) = {
+            let store = self
+                .chat_state
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let gen_model_config: String =
+                store.get_config("conversation_title_gen_model", "".to_string());
+
+            if !gen_model_config.is_empty() {
+                let config: serde_json::Value =
+                    serde_json::from_str(&gen_model_config).unwrap_or_default();
+                let p_id = config["id"].as_i64().unwrap_or(self.active_provider_id);
+                let m_name = config["model"]
+                    .as_str()
+                    .unwrap_or(&self.active_model_name)
+                    .to_string();
+                (p_id, m_name)
+            } else {
+                (self.active_provider_id, self.active_model_name.clone())
+            }
+        };
+
+        let system_prompt = "You are a helpful assistant that generates extremely concise, descriptive titles for chat conversations. \
+                             Your title must be under 10 words, preferably 3-5 words. Do not use quotes or special formatting.";
+        let user_prompt = format!(
+            "Generate a title for a workflow with the following initial request:\n\n\"{}\"",
+            user_query
+        );
+
+        let messages = vec![
+            serde_json::json!({ "role": "system", "content": system_prompt }),
+            serde_json::json!({ "role": "user", "content": user_prompt }),
+        ];
+
+        let chat_interface = {
+            let mut chats_guard = self.chat_state.chats.lock().await;
+            chats_guard
+                .entry(crate::ccproxy::ChatProtocol::OpenAI)
+                .or_default()
+                .entry(self.session_id.clone() + "_title_gen")
+                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
+                .clone()
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let session_id_title = self.session_id.clone() + "_title_gen";
+
+        tokio::spawn(async move {
+            let _ = chat_interface
+                .chat(
+                    provider_id,
+                    &model_name,
+                    session_id_title,
+                    messages,
+                    None,
+                    None,
+                    move |chunk| {
+                        let _ = tx.try_send(chunk);
+                    },
+                )
+                .await;
+        });
+
+        let mut title = String::new();
+        while let Some(chunk) = rx.recv().await {
+            if chunk.r#type == MessageType::Text {
+                title.push_str(&chunk.chunk);
+            } else if chunk.r#type == MessageType::Finished {
+                break;
+            }
+        }
+
+        let final_title = title.trim().trim_matches('"').to_string();
+        if !final_title.is_empty() {
+            let store = self
+                .chat_state
+                .main_store
+                .write()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let _ = store.update_workflow_title(&self.session_id, &final_title);
+        }
+
+        Ok(final_title)
     }
 }

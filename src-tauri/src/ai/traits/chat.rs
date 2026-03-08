@@ -374,6 +374,7 @@ pub struct ChatMetadata {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<u32>,
+    pub context_size: Option<i32>,
     pub max_tokens: Option<u32>,
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,

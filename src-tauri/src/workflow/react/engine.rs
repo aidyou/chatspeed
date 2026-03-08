@@ -3,7 +3,6 @@ use dirs;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tokio::time::{sleep, Duration};
 
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
@@ -141,14 +140,6 @@ impl WorkflowExecutor {
         global_tool_manager: Arc<ToolManager>,
         policy: ExecutionPolicy,
     ) -> Self {
-        let max_contexts = agent_config.max_contexts.unwrap_or(128000) as usize;
-        let context = ContextManager::new(
-            session_id.clone(),
-            main_store,
-            max_contexts,
-            tsid_generator.clone(),
-        );
-
         let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
             serde_json::from_str(m).unwrap_or_else(|e| {
                 log::error!("[Workflow Executor] Failed to parse agent models JSON for session {}: {}. Original string: {}", session_id, e, m);
@@ -183,7 +174,8 @@ impl WorkflowExecutor {
         let act_model = models_val.get("act").cloned().unwrap_or_default();
         let plan_model = models_val.get("plan").cloned().unwrap_or_default();
 
-        let active_model = if policy.phase == ExecutionPhase::Planning || target_type == "Planning" {
+        let active_model = if policy.phase == ExecutionPhase::Planning || target_type == "Planning"
+        {
             // Prioritize the plan model during planning phase
             if !plan_model["model"].is_null() {
                 plan_model
@@ -219,6 +211,24 @@ impl WorkflowExecutor {
         let provider_id = active_model["id"].as_i64().unwrap_or(0);
         let model_name = active_model["model"].as_str().unwrap_or("").to_string();
         let reasoning = active_model["reasoning"].as_bool().unwrap_or(false);
+
+        // Determine max_contexts with priority: Model Specific > Agent Config > Default
+        let max_contexts = if let Some(cs) = active_model["contextSize"].as_i64() {
+            if cs > 0 {
+                cs as usize
+            } else {
+                agent_config.max_contexts.unwrap_or(128000) as usize
+            }
+        } else {
+            agent_config.max_contexts.unwrap_or(128000) as usize
+        };
+
+        let context = ContextManager::new(
+            session_id.clone(),
+            main_store,
+            max_contexts,
+            tsid_generator.clone(),
+        );
 
         let compressor =
             ContextCompressor::new(chat_state.clone(), provider_id, model_name.clone());
@@ -332,7 +342,23 @@ impl WorkflowExecutor {
 
         if let Some(last_msg) = self.context.messages.last() {
             self.current_step = last_msg.step_index as usize;
+        } else {
+            // New workflow session: generate title from user query
+            let user_query = self.context.get_initial_query();
+            if !user_query.is_empty() {
+                let im = IntelligenceManager::new(
+                    self.session_id.clone(),
+                    self.chat_state.clone(),
+                    self.llm_processor.active_provider_id,
+                    self.llm_processor.active_model_name.clone(),
+                );
+                // Fire and forget title generation to not block init
+                tokio::spawn(async move {
+                    let _ = im.generate_workflow_title(&user_query).await;
+                });
+            }
         }
+
         self.update_state(WorkflowState::Thinking).await?;
         Ok(())
     }
@@ -735,8 +761,40 @@ impl WorkflowExecutor {
                 self.session_id,
                 self.current_step
             );
-            let (text_part, json_part, response_reasoning, usage) =
-                self.call_llm_with_retry(&mut signal_rx).await?;
+
+            // Directly call the enhanced LLM processor with integrated retry and signal handling
+            let mut tools = self.tool_manager.get_tool_calling_spec(None, None).await?;
+            let global_tools = self
+                .global_tool_manager
+                .get_tool_calling_spec(None, None)
+                .await?;
+            tools.extend(global_tools);
+
+            let chat_interface = {
+                let mut chats_guard = self.chat_state.chats.lock().await;
+                let protocol = crate::ccproxy::ChatProtocol::OpenAI;
+                let chat_map = chats_guard
+                    .entry(protocol)
+                    .or_insert_with(std::collections::HashMap::new);
+                chat_map
+                    .entry(self.session_id.clone())
+                    .or_insert_with(|| crate::create_chat!(self.context.main_store))
+                    .clone()
+            };
+
+            let (text_part, json_part, response_reasoning, usage) = self
+                .llm_processor
+                .call(
+                    &mut self.context,
+                    self.current_step,
+                    chat_interface,
+                    self.gateway.clone(),
+                    tools,
+                    self.max_steps,
+                    &self.policy,
+                    &mut signal_rx,
+                )
+                .await?;
 
             // --- 3. Check for stop signal after LLM call ---
             if self.check_stop_signal(&mut signal_rx).await? {
@@ -973,156 +1031,6 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    async fn call_llm_with_retry(
-        &mut self,
-        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
-    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
-        let mut retry_count = 0;
-        let max_retries = 10;
-        let mut last_error = None;
-        while retry_count < max_retries {
-            // --- 1. Check for explicit Stop/Cancel state ---
-            if self.state == WorkflowState::Completed
-                || self.state == WorkflowState::Error
-                || self.state == WorkflowState::Cancelled
-            {
-                return Err(WorkflowEngineError::General(
-                    "Execution stopped by user".into(),
-                ));
-            }
-
-            // --- 2. Check signal channel for "stop" commands ---
-            // We use select! to allow immediate interruption of the LLM call
-            let res = {
-                let llm_call = self.call_llm();
-                tokio::pin!(llm_call);
-
-                tokio::select! {
-                    result = &mut llm_call => result,
-                    signal = signal_rx.recv() => {
-                        if let Some(sig_str) = signal {
-                            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-                            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                                Err(WorkflowEngineError::General("STOP_SIGNAL_RECEIVED".into()))
-                            } else {
-                                // For other signals like user_input, we currently just wait for LLM
-                                llm_call.await
-                            }
-                        } else {
-                            llm_call.await
-                        }
-                    }
-                }
-            };
-
-            // Handle the result outside the select block to avoid multiple borrows of self
-            let res = match res {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    if let WorkflowEngineError::General(ref msg) = e {
-                        if msg == "STOP_SIGNAL_RECEIVED" {
-                            log::info!(
-                                "WorkflowExecutor {}: Received STOP signal during LLM call",
-                                self.session_id
-                            );
-                            self.update_state(WorkflowState::Cancelled).await?;
-                            return Err(WorkflowEngineError::General(
-                                "Stopped by user signal".into(),
-                            ));
-                        }
-                    }
-                    Err(e)
-                }
-            };
-
-            match res {
-                Ok((text, json, reasoning, usage)) => return Ok((text, json, reasoning, usage)),
-                Err(e) => {
-                    log::warn!(
-                        "WorkflowExecutor {}: LLM call failed (attempt {}): {}",
-                        self.session_id,
-                        retry_count + 1,
-                        e
-                    );
-
-                    // --- 3. Fatal Error Detection (401/403) ---
-                    let err_msg = e.to_string();
-                    if err_msg.contains("401")
-                        || err_msg.contains("Unauthorized")
-                        || err_msg.contains("403")
-                    {
-                        log::error!("WorkflowExecutor {}: Fatal authentication error detected. Terminating.", self.session_id);
-                        self.update_state(WorkflowState::Error).await?;
-                        return Err(e);
-                    }
-
-                    last_error = Some(e);
-                    retry_count += 1;
-                    if retry_count < max_retries {
-                        let wait_duration = Duration::from_secs(2u64.pow(retry_count as u32));
-                        log::info!(
-                            "WorkflowExecutor {}: Waiting {:?} before retry...",
-                            self.session_id,
-                            wait_duration
-                        );
-
-                        tokio::select! {
-                            _ = sleep(wait_duration) => {}
-                            msg = signal_rx.recv() => {
-                                if let Some(sig_str) = msg {
-                                    let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-                                    if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                                        log::info!("WorkflowExecutor {}: Received STOP signal during retry wait", self.session_id);
-                                        self.update_state(WorkflowState::Cancelled).await?;
-                                        return Err(WorkflowEngineError::General("Execution stopped by user".into()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Err(last_error.unwrap_or(WorkflowEngineError::General(
-            "Max retries exceeded".to_string(),
-        )))
-    }
-
-    async fn call_llm(
-        &mut self,
-    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
-        let mut tools = self.tool_manager.get_tool_calling_spec(None, None).await?;
-        let global_tools = self
-            .global_tool_manager
-            .get_tool_calling_spec(None, None)
-            .await?;
-        tools.extend(global_tools);
-
-        let chat_interface = {
-            let mut chats_guard = self.chat_state.chats.lock().await;
-            let protocol = crate::ccproxy::ChatProtocol::OpenAI;
-            let chat_map = chats_guard
-                .entry(protocol)
-                .or_insert_with(std::collections::HashMap::new);
-            chat_map
-                .entry(self.session_id.clone())
-                .or_insert_with(|| crate::create_chat!(self.context.main_store))
-                .clone()
-        };
-
-        self.llm_processor
-            .call(
-                &mut self.context,
-                self.current_step,
-                chat_interface,
-                self.gateway.clone(),
-                tools,
-                self.max_steps,
-                &self.policy,
-            )
-            .await
-    }
-
     async fn execute_tools(
         &mut self,
         text_part: String,
@@ -1282,8 +1190,13 @@ impl WorkflowExecutor {
             _ => {}
         }
 
-        // --- 2. Security & Runtime Checks (Bash, FS, Loops) ---
-        // 2.1 Loop Detection
+        // --- 2. Approval Policy Enforcement ---
+        if self.should_intercept_for_approval(name, args) {
+            return self.handle_approval_interception(name, args).await;
+        }
+
+        // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
+        // 3.1 Loop Detection
         let loop_warning = self.loop_detector.record_and_check(name, args);
         if let Some(ref warning) = loop_warning {
             log::warn!(
@@ -1306,14 +1219,14 @@ impl WorkflowExecutor {
                 .await;
         }
 
-        // 2.2 Shell Auditing
+        // 3.2 Shell Auditing
         if name == TOOL_BASH {
             if let Some(result) = self.handle_bash_security_intercept(args).await? {
                 return Ok(Some(result));
             }
         }
 
-        // 2.3 FS Path Guard
+        // 3.3 FS Path Guard
         if [
             TOOL_READ_FILE,
             TOOL_WRITE_FILE,
@@ -1328,6 +1241,39 @@ impl WorkflowExecutor {
         }
 
         Ok(None)
+    }
+
+    /// Helper to pause execution and request user approval for a tool.
+    async fn handle_approval_interception(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        log::info!(
+            "WorkflowExecutor {}: Intercepting tool '{}' for approval",
+            self.session_id,
+            name
+        );
+        self.update_state(WorkflowState::Paused).await?;
+        self.gateway
+            .send(
+                &self.session_id,
+                GatewayPayload::Confirm {
+                    id: crate::ccproxy::get_tool_id(),
+                    action: name.to_string(),
+                    details: serde_json::to_string_pretty(args).unwrap_or_default(),
+                },
+            )
+            .await?;
+
+        Ok(Some(ReinforcedResult {
+            content: format!("Paused: Waiting for user approval to execute '{}'.", name),
+            title: name.to_string(),
+            summary: "Awaiting approval".to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+        }))
     }
 
     /// Handles summarization, Todo context enhancement, and result reinforcement after a tool has run.

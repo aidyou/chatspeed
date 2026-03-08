@@ -101,7 +101,17 @@ pub fn from_gemini(
         .generation_config
         .as_ref()
         .and_then(|config| config.temperature)
-        .map(|t| clamp_to_protocol_range(t, ChatProtocol::Gemini, Parameter::Temperature));
+        .and_then(|t| {
+            if t < 0.0 {
+                None
+            } else {
+                Some(clamp_to_protocol_range(
+                    t,
+                    ChatProtocol::Gemini,
+                    Parameter::Temperature,
+                ))
+            }
+        });
     let max_tokens = req.generation_config.as_ref().and_then(|config| {
         config
             .max_output_tokens

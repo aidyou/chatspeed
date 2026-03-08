@@ -56,4 +56,14 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "agents_v5_allowed_paths",
         "ALTER TABLE agents ADD COLUMN allowed_paths TEXT"
     ),
+    // Add final_audit boolean column to agents
+    (
+        "agents_v5_final_audit",
+        "ALTER TABLE agents ADD COLUMN final_audit BOOLEAN DEFAULT 0"
+    ),
+    // Add approval_level column to agents
+    (
+        "agents_v5_approval_level",
+        "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'"
+    ),
 ];

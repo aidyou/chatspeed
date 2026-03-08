@@ -113,9 +113,16 @@ pub fn from_openai(
         tools,
         tool_choice,
         stream: req.stream.unwrap_or(false),
-        temperature: req.temperature.map(|t| {
-            // Clamp to OpenAI range first, then it will be adapted in backend adapters
-            clamp_to_protocol_range(t, ChatProtocol::OpenAI, Parameter::Temperature)
+        temperature: req.temperature.and_then(|t| {
+            if t < 0.0 {
+                None
+            } else {
+                Some(clamp_to_protocol_range(
+                    t,
+                    ChatProtocol::OpenAI,
+                    Parameter::Temperature,
+                ))
+            }
         }),
         max_tokens: req
             .max_tokens
