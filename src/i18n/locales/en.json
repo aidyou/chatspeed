@@ -27,8 +27,10 @@
     "errorOnGenerateTitle": "Failed to generate title: {error}",
     "errorOnGetCurrentConversationId": "Failed to get current conversation ID: {error}",
     "errorOnGoToChat": "Failed to go to chat: {error}",
+    "errorOnLoadConversations": "Failed to load conversations: {error}",
     "errorOnLoadMessages": "Failed to load messages: {error}",
     "errorOnMoveWindow": "Failed to move window: {error}",
+    "moduleUnavailable": "Module unavailable",
     "errorOnSaveMessage": "Failed to save conversation information: {error}",
     "preparingAttachments": "Preparing attachments...",
     "analyzingImages": "Analyzing images...",
@@ -98,15 +100,6 @@
     "translationSkillPromptEmpty": "Prompt for translation skill cannot be empty",
     "useSkills": "Use Skills",
     "addAttachment": "Add Attachment",
-    "workflow": {
-      "planning": "Planning...",
-      "executing": "Executing task: {task}",
-      "approvalRequired": "Approval Required",
-      "approve": "Approve",
-      "deny": "Deny",
-      "taskCompleted": "Task Completed",
-      "error": "Workflow Error: {error}"
-    },
     "dragOrClickToSelectFile": "Drag file here or click to select",
     "selectFile": "Select File",
     "supportedImageFormats": "Images: JPG, PNG, GIF, WEBP, SVG, BMP",
@@ -116,6 +109,8 @@
     "errorOnAddAttachment": "Failed to add attachment: {error}"
   },
   "common": {
+    "approve": "Approve",
+    "approveAll": "Approve All",
     "autoHide": "Auto-hide when window loses focus",
     "cancel": "Cancel",
     "clear": "Clear",
@@ -137,6 +132,7 @@
     "noData": "No Data",
     "openUrlError": "Failed to open URL",
     "pin": "Pin",
+    "reject": "Reject",
     "restart": "Restart",
     "refresh": "Refresh",
     "save": "Save",
@@ -144,7 +140,8 @@
     "to": "to",
     "unpin": "Unpin",
     "updateButtonText": "Update",
-    "uploadFailed": "File upload failed"
+    "uploadFailed": "File upload failed",
+    "collapse": "Collapse"
   },
   "menu": {
     "about": "About",
@@ -165,14 +162,11 @@
     "searchNotePlaceholder": "Search Notes"
   },
   "proxySwitcher": {
-    "title": "Proxy Switcher",
-    "toolCompatMode": "Tool Mode",
-    "activate": "Activate"
+    "title": "Proxy Switcher"
   },
   "settings": {
     "agent": {
       "actModel": "Act Model",
-      "agentType": "Agent Type",
       "add": "Add Agent",
       "addSuccess": "Agent added successfully!",
       "approvalLevel": "Approval Level",
@@ -186,9 +180,6 @@
       "autonomousMode": "Autonomous Mode",
       "availableTools": "Available Tools",
       "basicInfo": "Basic Info",
-      "browsingModel": "Browsing Model",
-      "codingModel": "Coding Model",
-      "copywritingModel": "Copywriting Model",
       "copy": "Copy Agent",
       "delete": "Delete Agent",
       "deleteConfirm": "Are you sure you want to delete the agent \"{name}\"?",
@@ -199,32 +190,23 @@
       "edit": "Edit Agent",
       "fetchFailed": "Failed to fetch agent",
       "finalAudit": "Final Audit",
-      "maxContexts": "Max Contexts Length",
       "models": "Model Configuration",
       "modeProvider": "Provider",
       "modeProxy": "Proxy",
-      "group": "Proxy Group",
-      "aliasName": "Model Alias",
       "name": "Agent Name",
       "nameRequired": "Please enter agent name",
       "noAgents": "No agents found",
-      "notFound": "Agent not found",
       "planModel": "Planning Model",
       "planningMode": "Planning Mode",
       "planningPrompt": "Planning Prompt",
       "planningPromptPlaceholder": "Leave blank to use system default planning logic. If customizing, guide the model to output a clear task list.",
       "reorderFailed": "Failed to reorder agent: {error}",
       "saveFailed": "Failed to save agent: {error}",
-      "selectActModel": "Select Act Model",
       "selectAutoApproveTools": "Select Auto-Approve Tools",
       "selectAvailableTools": "Select Available Tools",
-      "selectPlanModel": "Select Plan Model",
-      "selectProvider": "Select Provider",
-      "selectVisionModel": "Select Vision Model",
       "security": "Security Policy",
       "shellPolicy": "Shell Audit Policy",
       "shellPolicyPattern": "Match Pattern (Regex/Glob)",
-      "shellPolicyDecision": "Decision",
       "shellPolicyAdd": "Add Rule",
       "shellDecisionAllow": "Allow",
       "shellDecisionReview": "Review",
@@ -241,7 +223,6 @@
       "title": "Agent Management",
       "toolsLabel": "Tools",
       "updateSuccess": "Agent updated successfully!",
-      "visionModel": "Vision Model",
       "workingDirectory": "Working Directory",
       "selectDirectory": "Select Directory"
     },
@@ -670,7 +651,6 @@
       "addGroup": "Add Group",
       "addNow": "Add Now",
       "addSuccess": "Group added successfully!",
-      "addTitle": "Add Group",
       "batchUpdate": "Batch Update",
       "batchUpdateTitle": "Batch Update Group Settings",
       "copyGroup": "Copy Group",
@@ -680,7 +660,6 @@
       "deleteGroup": "Delete Group",
       "deleteSuccess": "Group deleted successfully!",
       "editGroup": "Edit Group",
-      "editTitle": "Edit Group",
       "noGroupsFound": "No groups found.",
       "saveFailed": "Failed to save group: {error}",
       "selectFieldsToUpdate": "Select Fields to Update",
@@ -696,15 +675,12 @@
         "compat": "Compat Mode",
         "native": "Native Call"
       },
-      "updateConfirm": "Are you sure you want to update the {count} selected groups?",
       "updateSuccess": "Group updated successfully!",
       "form": {
         "description": "Description",
         "descriptionPlaceholder": "Please enter a description",
         "disabled": "Disabled",
         "loadFromTemplate": "Load from Template",
-        "maxContext": "Max Context Length",
-        "maxContextPlaceholder": "Please refer to the release information or interface information of each model, a value of 0 will not be set",
         "modelInjectionCondition": "Model Injection Condition",
         "modelInjectionConditionPlaceholder": "Inject only when model id matches, leave blank for no limit, use * to match multiple characters, ? to match a single character",
         "name": "Group Name",
@@ -806,7 +782,6 @@
   },
   "workflow": {
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
-    "awaitingApproval": "Awaiting Approval",
     "approvePlan": "Approve Plan",
     "approval": {
       "action": "Pending Action",
@@ -814,7 +789,7 @@
       "title": "Security Approval",
       "warning": "This operation has potential risks. Please confirm whether to continue."
     },
-    "autoApproveTooltip": "Auto-approve tools (excluding interactive tools)",    "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
+    "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
     "continue": "Continue",
     "editWorkflowTitle": "Edit Workflow Title",
     "newWorkflow": "New Workflow",
@@ -849,6 +824,7 @@
       "recentOps": "Recent Operations",
       "empty": "Empty",
       "contextUsage": "Context Usage"
-    }
+    },
+    "selectAgentFirst": "Please select an agent first"
   }
 }

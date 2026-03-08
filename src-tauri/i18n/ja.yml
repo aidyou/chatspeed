@@ -4,6 +4,7 @@ command:
     failed_to_read: "クリップボードの読み取りに失敗しました：%{error}"
     failed_to_write: "クリップボードへの書き込みに失敗しました：%{error}"
   fs:
+    read_file_failed: "ファイルの読み取りに失敗しました：%{error}"
     image_preview_failed: "画像プレビューの生成に失敗しました：%{error}"
     unknown_filename: "不明なファイル名.png"
   window:

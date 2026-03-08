@@ -4,6 +4,7 @@ command:
     failed_to_read: "클립보드 읽기 실패: %{error}"
     failed_to_write: "클립보드 쓰기 실패: %{error}"
   fs:
+    read_file_failed: "파일 읽기 실패: %{error}"
     image_preview_failed: "이미지 미리보기 생성 실패: %{error}"
     unknown_filename: "알수없는파일명.png"
   window:

@@ -4,6 +4,7 @@ command:
     failed_to_read: "Error al leer del portapapeles: %{error}"
     failed_to_write: "Error al escribir en el portapapeles: %{error}"
   fs:
+    read_file_failed: "Error al leer el archivo: %{error}"
     image_preview_failed: "Error al generar la vista previa de la imagen: %{error}"
     unknown_filename: "NombreDeArchivoDesconocido.png"
   window:

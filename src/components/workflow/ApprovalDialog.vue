@@ -20,8 +20,12 @@
     <template #footer>
       <div class="dialog-footer">
         <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
-        <el-button type="primary" @click="onApprove" :loading="loading" round>{{ $t('common.approve') }}</el-button>
-        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{ $t('workflow.approveAll') }}</el-button>
+        <el-button type="primary" @click="onApprove" :loading="loading" round>{{
+          $t('common.approve')
+        }}</el-button>
+        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{
+          $t('common.approveAll')
+        }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -44,7 +48,7 @@ const { t } = useI18n()
 
 const visible = computed({
   get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val)
+  set: val => emit('update:modelValue', val)
 })
 
 const title = computed(() => t('workflow.approval.title'))
@@ -69,7 +73,7 @@ const onReject = () => {
     display: flex;
     align-items: center;
     gap: var(--cs-space-sm);
-    
+
     .label {
       font-weight: bold;
       color: var(--cs-text-color-primary);

@@ -72,15 +72,6 @@
     "mcpDisabled": "Desativar ferramentas MCP",
     "mcpEnabled": "Ativar ferramentas MCP",
     "translationSkillPromptEmpty": "O prompt da habilidade de tradução não pode estar vazio",
-    "workflow": {
-      "planning": "Planejando...",
-      "executing": "Executando tarefa: {task}",
-      "approvalRequired": "Aprovação necessária",
-      "approve": "Aprovar",
-      "deny": "Negar",
-      "taskCompleted": "Tarefa concluída",
-      "error": "Erro de fluxo de trabalho: {error}"
-    },
     "addAttachment": "Adicionar anexo",
     "dragOrClickToSelectFile": "Arraste o arquivo para cá ou clique para selecionar",
     "selectFile": "Selecionar arquivo",
@@ -113,7 +104,9 @@
     },
     "transaction": {
       "autoDetection": "Detecção automática"
-    }
+    },
+    "errorOnLoadConversations": "Erro ao carregar conversas: {error}",
+    "moduleUnavailable": "Módulo não disponível"
   },
   "common": {
     "autoHide": "Definir a janela para \"Ocultar automaticamente ao perder o foco\"",
@@ -144,7 +137,11 @@
     "delete": "Excluir",
     "more": "Mais",
     "refresh": "Atualizar",
-    "to": "para"
+    "to": "para",
+    "approve": "Aprovar",
+    "approveAll": "Aprovar tudo",
+    "reject": "Rejeitar",
+    "collapse": "Recolher"
   },
   "menu": {
     "about": "Sobre",
@@ -165,14 +162,11 @@
     "searchNotePlaceholder": "Pesquisar anotações"
   },
   "proxySwitcher": {
-    "title": "Alternador de proxy",
-    "toolCompatMode": "Modo de ferramenta",
-    "activate": "Ativar"
+    "title": "Alternador de proxy"
   },
   "settings": {
     "agent": {
       "actModel": "Modelo de Ação",
-      "agentType": "Tipo de Agente",
       "add": "Adicionar Agente",
       "addSuccess": "Agente adicionado com sucesso!",
       "autoApprove": "Ferramentas de Aprovação Automática",
@@ -188,30 +182,22 @@
       "description": "Descrição",
       "edit": "Editar Agente",
       "fetchFailed": "Falha ao buscar o agente",
-      "maxContexts": "Comprimento Máximo do Contexto",
       "models": "Modelos",
       "name": "Nome do Agente",
       "nameRequired": "Por favor, insira o nome do agente",
       "noAgents": "Nenhum agente encontrado",
-      "notFound": "Agente não encontrado",
       "planModel": "Modelo de Planejamento",
       "planningMode": "Modo de Planejamento",
       "planningPrompt": "Prompt de Planejamento",
       "reorderFailed": "Falha ao reordenar o agente: {error}",
       "saveFailed": "Falha ao salvar o agente: {error}",
-      "selectActModel": "Selecionar Modelo de Ação",
       "selectAutoApproveTools": "Selecionar Ferramentas de Aprovação Automática",
       "selectAvailableTools": "Selecionar Ferramentas Disponíveis",
-      "selectPlanModel": "Selecionar Modelo de Planejamento",
-      "selectProvider": "Selecionar Provedor",
-      "selectVisionModel": "Selecionar Modelo de Visão",
       "systemPrompt": "Prompt do Sistema",
       "systemPromptRequired": "Por favor, insira o prompt do sistema",
       "title": "Gerenciamento de Agentes",
       "toolsLabel": "Ferramentas",
       "updateSuccess": "Agente atualizado com sucesso!",
-      "visionModel": "Modelo de Visão",
-      "aliasName": "Alias do Modelo",
       "approvalLevel": "Nível de Aprovação",
       "approvalLevelDefault": "Seguir Configuração do Agente",
       "approvalLevelFull": "Totalmente Aberto (Alto Risco)",
@@ -219,11 +205,7 @@
       "authorizedPaths": "Diretórios Autorizados",
       "authorizedPathsAdd": "Adicionar Diretório",
       "authorizedPathsTip": "O agente só poderá ler e escrever arquivos nestes diretórios (e seus subdiretórios).",
-      "browsingModel": "Modelo de Navegação",
-      "codingModel": "Modelo de Codificação",
-      "copywritingModel": "Modelo de Redação",
       "finalAudit": "Auditoria Final",
-      "group": "Grupo de Proxy",
       "modeProvider": "Provedor",
       "modeProxy": "Proxy",
       "planningPromptPlaceholder": "Deixe em branco para usar a lógica de planejamento padrão do sistema. Se personalizar, oriente o modelo a gerar uma lista clara de tarefas.",
@@ -237,7 +219,6 @@
       "shellPolicyClear": "Limpar Regras",
       "shellPolicyClearConfirm": "Tem certeza de que deseja limpar todas as regras de auditoria de shell? Esta ação não pode ser desfeita.",
       "shellPolicyClearTitle": "Limpar Regras de Shell",
-      "shellPolicyDecision": "Decisão",
       "shellPolicyImportDefault": "Importar Padrões",
       "shellPolicyImportDefaultConfirm": "Tem certeza de que deseja importar as regras de shell somente leitura padrão? Isso adicionará 50+ regras de comandos somente leitura comuns.",
       "shellPolicyImportDefaultTitle": "Importar Regras Padrão",
@@ -670,7 +651,6 @@
       "addGroup": "Adicionar grupo",
       "addNow": "Adicionar agora",
       "addSuccess": "¡Grupo adicionado com sucesso!",
-      "addTitle": "Adicionar grupo",
       "batchUpdate": "Atualização em lote",
       "batchUpdateTitle": "Atualização em lote das configurações de grupo",
       "copyGroup": "Copiar grupo",
@@ -680,7 +660,6 @@
       "deleteGroup": "Excluir grupo",
       "deleteSuccess": "¡Grupo excluído com sucesso!",
       "editGroup": "Editar grupo",
-      "editTitle": "Editar grupo",
       "noGroupsFound": "Nenhum grupo encontrado.",
       "saveFailed": "Falha ao salvar o grupo: {error}",
       "selectFieldsToUpdate": "Selecionar campos para atualizar",
@@ -696,15 +675,12 @@
         "compat": "Modo de compatibilidade",
         "native": "Chamada nativa"
       },
-      "updateConfirm": "Tem certeza de que deseja atualizar os {count} grupos selecionados?",
       "updateSuccess": "¡Grupo atualizado com sucesso!",
       "form": {
         "description": "Descrição",
         "descriptionPlaceholder": "Insira uma descrição",
         "disabled": "Desativado",
         "loadFromTemplate": "Carregar do modelo",
-        "maxContext": "Comprimento máximo do contexto",
-        "maxContextPlaceholder": "Consulte as informações de lançamento ou as informações da interface de cada modelo, um valor de 0 não será definido",
         "modelInjectionCondition": "Condição de injeção do modelo",
         "modelInjectionConditionPlaceholder": "Injetar apenas quando o ID do modelo corresponder, deixar em branco para sem limite, usar * para corresponder a vários caracteres, ? para um único caractere",
         "name": "Nome do grupo",
@@ -810,9 +786,7 @@
       "next": "Próximo"
     },
     "planningModeTooltip": "Modo de planejamento: Pesquisa e estratégia de IA antes da execução",
-    "awaitingApproval": "Aguardando aprovação",
     "approvePlan": "Aprovar plano",
-    "autoApproveTooltip": "Aprovar automaticamente ferramentas (exceto ferramentas interativas)",
     "confirmDeleteWorkflow": "Tem certeza de que deseja excluir este fluxo de trabalho? Esta ação não pode ser desfeita.",
     "continue": "Continuar",
     "editWorkflowTitle": "Editar título do fluxo de trabalho",
@@ -850,6 +824,7 @@
       "recentOps": "Operações recentes",
       "empty": "Vazio",
       "contextUsage": "Uso do contexto"
-    }
+    },
+    "selectAgentFirst": "Por favor, selecione um agente primeiro"
   }
 }

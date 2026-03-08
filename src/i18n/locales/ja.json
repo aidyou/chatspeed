@@ -72,15 +72,6 @@
     "mcpDisabled": "MCPツールを無効にする",
     "mcpEnabled": "MCPツールを有効にする",
     "translationSkillPromptEmpty": "翻訳スキルのプロンプトは必須です",
-    "workflow": {
-      "planning": "計画中...",
-      "executing": "タスク実行中：{task}",
-      "approvalRequired": "承認が必要です",
-      "approve": "承認",
-      "deny": "拒否",
-      "taskCompleted": "タスク完了",
-      "error": "ワークフローエラー：{error}"
-    },
     "addAttachment": "添付ファイルの追加",
     "dragOrClickToSelectFile": "ファイルをここにドラッグするか、クリックして選択してください",
     "selectFile": "ファイルを選択",
@@ -113,7 +104,9 @@
     },
     "transaction": {
       "autoDetection": "自動検出"
-    }
+    },
+    "errorOnLoadConversations": "会話の読み込みに失敗しました：{error}",
+    "moduleUnavailable": "モジュールが利用できません"
   },
   "common": {
     "autoHide": "ウィンドウを「フォーカスを失うと自動的に非表示」に設定する",
@@ -144,7 +137,11 @@
     "delete": "削除",
     "more": "もっと見る",
     "refresh": "更新",
-    "to": "〜"
+    "to": "〜",
+    "approve": "承認",
+    "approveAll": "すべて承認",
+    "reject": "拒否",
+    "collapse": "折りたたむ"
   },
   "menu": {
     "about": "バージョン情報",
@@ -165,17 +162,13 @@
     "searchNotePlaceholder": "智記を検索"
   },
   "proxySwitcher": {
-    "title": "プロキシ切り替え",
-    "toolCompatMode": "ツールモード",
-    "activate": "有効化"
+    "title": "プロキシ切り替え"
   },
   "settings": {
     "agent": {
-      "agentType": "エージェントタイプ",
       "actModel": "行動モデル",
       "add": "エージェントを追加",
       "addSuccess": "エージェントが正常に追加されました！",
-      "aliasName": "モデルエイリアス",
       "approvalLevel": "承認レベル",
       "approvalLevelDefault": "エージェント設定に従う",
       "approvalLevelFull": "フルオープン（高リスク）",
@@ -187,9 +180,6 @@
       "autonomousMode": "自律モード",
       "availableTools": "利用可能なツール",
       "basicInfo": "基本情報",
-      "browsingModel": "ブラウジングモデル",
-      "codingModel": "コーディングモデル",
-      "copywritingModel": "コピーライティングモデル",
       "copy": "エージェントをコピー",
       "delete": "エージェントを削除",
       "deleteConfirm": "エージェント「{name}」を削除してもよろしいですか？",
@@ -200,15 +190,12 @@
       "edit": "エージェントを編集",
       "fetchFailed": "エージェントの取得に失敗しました",
       "finalAudit": "最終監査",
-      "group": "プロキシグループ",
-      "maxContexts": "最大コンテキスト長",
       "modeProvider": "プロバイダー",
       "modeProxy": "プロキシ",
       "models": "モデル",
       "name": "エージェント名",
       "nameRequired": "エージェント名を入力してください",
       "noAgents": "エージェントが見つかりません",
-      "notFound": "エージェントが見つかりません",
       "planModel": "計画モデル",
       "planningMode": "計画モード",
       "planningPrompt": "計画プロンプト",
@@ -216,13 +203,9 @@
       "reorderFailed": "エージェントの並べ替えに失敗しました：{error}",
       "saveFailed": "エージェントの保存に失敗しました：{error}",
       "security": "セキュリティポリシー",
-      "selectActModel": "行動モデルを選択",
       "selectAutoApproveTools": "自動承認ツールを選択",
       "selectAvailableTools": "利用可能なツールを選択",
       "selectDirectory": "ディレクトリを選択",
-      "selectPlanModel": "計画モデルを選択",
-      "selectProvider": "プロバイダーを選択",
-      "selectVisionModel": "ビジョンモデルを選択",
       "shellDecisionAllow": "許可",
       "shellDecisionDeny": "拒否",
       "shellDecisionReview": "レビュー",
@@ -231,7 +214,6 @@
       "shellPolicyClear": "ルールをクリア",
       "shellPolicyClearConfirm": "すべてのシェル監査ルールをクリアしてもよろしいですか？この操作は元に戻せません。",
       "shellPolicyClearTitle": "シェルルールをクリア",
-      "shellPolicyDecision": "決定",
       "shellPolicyImportDefault": "デフォルトをインポート",
       "shellPolicyImportDefaultConfirm": "デフォルトの読み取り専用シェルルールをインポートしてもよろしいですか？これにより、50 以上の一般的な読み取り専用コマンドルールが追加されます。",
       "shellPolicyImportDefaultTitle": "デフォルトルールをインポート",
@@ -242,7 +224,6 @@
       "title": "エージェント管理",
       "toolsLabel": "ツール",
       "updateSuccess": "エージェントが正常に更新されました！",
-      "visionModel": "ビジョンモデル",
       "workingDirectory": "作業ディレクトリ"
     },
     "general": {
@@ -670,7 +651,6 @@
       "addGroup": "グループを追加",
       "addNow": "今すぐ追加",
       "addSuccess": "グループが正常に追加されました！",
-      "addTitle": "グループを追加",
       "batchUpdate": "一括更新",
       "batchUpdateTitle": "グループ設定の一括更新",
       "copyGroup": "グループをコピー",
@@ -680,7 +660,6 @@
       "deleteGroup": "グループを削除",
       "deleteSuccess": "グループが正常に削除されました！",
       "editGroup": "グループを編集",
-      "editTitle": "グループを編集",
       "noGroupsFound": "グループが見つかりません。",
       "saveFailed": "グループの保存に失敗しました：{error}",
       "selectFieldsToUpdate": "更新するフィールドを選択",
@@ -696,15 +675,12 @@
         "compat": "互換モード",
         "native": "ネイティブ呼び出し"
       },
-      "updateConfirm": "選択した {count} 個のグループを更新してもよろしいですか？",
       "updateSuccess": "グループが正常に更新されました！",
       "form": {
         "description": "説明",
         "descriptionPlaceholder": "説明を入力してください",
         "disabled": "無効",
         "loadFromTemplate": "テンプレートから読み込む",
-        "maxContext": "最大コンテキスト長",
-        "maxContextPlaceholder": "各モデルのリリース情報またはインターフェース情報を参照してください。0は設定しないことを意味します",
         "modelInjectionCondition": "モデル注入条件",
         "modelInjectionConditionPlaceholder": "モデルIDが一致する場合のみ注入。空の場合は制限なし。*は任意の文字列、?は単一の文字に一致します",
         "name": "グループ名",
@@ -810,9 +786,7 @@
       "next": "次へ"
     },
     "planningModeTooltip": "計画モード：実行前に AI の研究と戦略を立てます",
-    "awaitingApproval": "承認待ち",
     "approvePlan": "計画を承認",
-    "autoApproveTooltip": "ツールを自動承認（インタラクティブツールを除く）",
     "confirmDeleteWorkflow": "このワークフローを削除してもよろしいですか？この操作は元に戻せません。",
     "continue": "続行",
     "editWorkflowTitle": "ワークフロータイトルを編集",
@@ -850,6 +824,7 @@
       "recentOps": "最近の操作",
       "empty": "空",
       "contextUsage": "コンテキスト使用量"
-    }
+    },
+    "selectAgentFirst": "まずエージェントを選択してください"
   }
 }

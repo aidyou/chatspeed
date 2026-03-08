@@ -4,6 +4,7 @@ command:
     failed_to_read: "讀取剪貼簿失敗：%{error}"
     failed_to_write: "寫入剪貼簿失敗：%{error}"
   fs:
+    read_file_failed: "讀取檔案失敗：%{error}"
     image_preview_failed: "產生圖片預覽失敗：%{error}"
     unknown_filename: "未知檔案名稱.png"
   window:

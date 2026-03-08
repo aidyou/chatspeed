@@ -4,6 +4,7 @@ command:
     failed_to_read: "Échec de la lecture du presse-papiers : %{error}"
     failed_to_write: "Échec de l'écriture dans le presse-papiers : %{error}"
   fs:
+    read_file_failed: "Échec de la lecture du fichier : %{error}"
     image_preview_failed: "Échec de la génération de l'aperçu de l'image : %{error}"
     unknown_filename: "NomDeFichierInconnu.png"
   window:

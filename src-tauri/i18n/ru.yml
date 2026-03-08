@@ -4,6 +4,7 @@ command:
     failed_to_read: "Не удалось прочитать из буфера обмена: %{error}"
     failed_to_write: "Не удалось записать в буфер обмена: %{error}"
   fs:
+    read_file_failed: "Не удалось прочитать файл: %{error}"
     image_preview_failed: "Не удалось создать предварительный просмотр изображения: %{error}"
     unknown_filename: "НеизвестноеИмяФайла.png"
   window:

@@ -72,15 +72,6 @@
     "mcpDisabled": "MCP-Werkzeuge deaktivieren",
     "mcpEnabled": "MCP-Werkzeuge aktivieren",
     "translationSkillPromptEmpty": "Der Prompt für die Übersetzungsfähigkeit darf nicht leer sein.",
-    "workflow": {
-      "planning": "Planung läuft...",
-      "executing": "Aufgabe wird ausgeführt: {task}",
-      "approvalRequired": "Genehmigung erforderlich",
-      "approve": "Genehmigen",
-      "deny": "Ablehnen",
-      "taskCompleted": "Aufgabe abgeschlossen",
-      "error": "Workflow-Fehler: {error}"
-    },
     "addAttachment": "Anhang hinzufügen",
     "dragOrClickToSelectFile": "Datei hierher ziehen oder zum Auswählen klicken",
     "selectFile": "Datei auswählen",
@@ -113,7 +104,9 @@
     },
     "transaction": {
       "autoDetection": "Automatische Erkennung"
-    }
+    },
+    "errorOnLoadConversations": "Fehler beim Laden der Dialoge: {error}",
+    "moduleUnavailable": "Modul nicht verfügbar"
   },
   "common": {
     "autoHide": "Fenster auf „Automatisch ausblenden, wenn der Fokus verloren geht“ setzen",
@@ -144,7 +137,11 @@
     "to": "zu",
     "unpin": "Loslösen",
     "updateButtonText": "Aktualisieren",
-    "uploadFailed": "Datei-Upload fehlgeschlagen"
+    "uploadFailed": "Datei-Upload fehlgeschlagen",
+    "approve": "Genehmigen",
+    "approveAll": "Alle genehmigen",
+    "reject": "Ablehnen",
+    "collapse": "Einklappen"
   },
   "menu": {
     "about": "Über",
@@ -165,14 +162,11 @@
     "searchNotePlaceholder": "Notiz durchsuchen"
   },
   "proxySwitcher": {
-    "title": "Proxy-Umschalter",
-    "toolCompatMode": "Tool-Modus",
-    "activate": "Aktivieren"
+    "title": "Proxy-Umschalter"
   },
   "settings": {
     "agent": {
       "actModel": "Aktionsmodell",
-      "agentType": "Agententyp",
       "add": "Agent hinzufügen",
       "addSuccess": "Agent erfolgreich hinzugefügt!",
       "autoApprove": "Tools automatisch genehmigen",
@@ -188,30 +182,22 @@
       "description": "Beschreibung",
       "edit": "Agent bearbeiten",
       "fetchFailed": "Fehler beim Abrufen des Agenten",
-      "maxContexts": "Maximale Kontextlänge",
       "models": "Modelle",
       "name": "Agentenname",
       "nameRequired": "Bitte geben Sie den Agentennamen ein",
       "noAgents": "Keine Agenten gefunden",
-      "notFound": "Agent nicht gefunden",
       "planModel": "Planungsmodell",
       "planningMode": "Planungsmodus",
       "planningPrompt": "Planungs-Prompt",
       "reorderFailed": "Fehler beim Sortieren des Agenten: {error}",
       "saveFailed": "Fehler beim Speichern des Agenten: {error}",
-      "selectActModel": "Aktionsmodell auswählen",
       "selectAutoApproveTools": "Tools für die automatische Genehmigung auswählen",
       "selectAvailableTools": "Verfügbare Tools auswählen",
-      "selectPlanModel": "Planungsmodell auswählen",
-      "selectProvider": "Anbieter auswählen",
-      "selectVisionModel": "Vision-Modell auswählen",
       "systemPrompt": "System-Prompt",
       "systemPromptRequired": "Bitte geben Sie einen System-Prompt ein",
       "title": "Agentenverwaltung",
       "toolsLabel": "Tools",
       "updateSuccess": "Agent erfolgreich aktualisiert!",
-      "visionModel": "Vision-Modell",
-      "aliasName": "Modellalias",
       "approvalLevel": "Genehmigungsstufe",
       "approvalLevelDefault": "Nach Agentenkonfiguration",
       "approvalLevelFull": "Vollständig (Hochrisiko)",
@@ -219,11 +205,7 @@
       "authorizedPaths": "Autorisierte Verzeichnisse",
       "authorizedPathsAdd": "Verzeichnis hinzufügen",
       "authorizedPathsTip": "Der Agent kann nur Dateien in diesen Verzeichnissen (und deren Unterverzeichnissen) lesen und schreiben. Wenn nicht konfiguriert, funktionieren einige Dateiverwaltungstools möglicherweise nicht.",
-      "browsingModel": "Surfmodell",
-      "codingModel": "Codemodell",
-      "copywritingModel": "Schreibmodell",
       "finalAudit": "Abschlussprüfung durchführen",
-      "group": "Proxy-Gruppe",
       "modeProvider": "Anbieter",
       "modeProxy": "Proxy",
       "planningPromptPlaceholder": "Leer lassen, um die standardmäßige Planungslogik des Systems zu verwenden. Für benutzerdefinierte Einstellungen sollten Sie das Modell auffordern, eine klare Aufgabenliste auszugeben.",
@@ -234,7 +216,6 @@
       "shellDecisionDeny": "Ablehnen (Deny)",
       "shellPolicy": "Shell-Auditing-Regeln",
       "shellPolicyPattern": "Musterabgleich (Regex/Glob)",
-      "shellPolicyDecision": "Entscheidung",
       "shellPolicyAdd": "Regel hinzufügen",
       "shellPolicyClear": "Regeln löschen",
       "shellPolicyClearTitle": "Shell-Regeln löschen",
@@ -670,7 +651,6 @@
       "addGroup": "Gruppe hinzufügen",
       "addNow": "Jetzt hinzufügen",
       "addSuccess": "Gruppe erfolgreich hinzugefügt!",
-      "addTitle": "Gruppe hinzufügen",
       "batchUpdate": "Stapel-Update",
       "batchUpdateTitle": "Gruppeneinstellungen im Stapel aktualisieren",
       "copyGroup": "Gruppe kopieren",
@@ -680,7 +660,6 @@
       "deleteGroup": "Gruppe löschen",
       "deleteSuccess": "Gruppe erfolgreich gelöscht!",
       "editGroup": "Gruppe bearbeiten",
-      "editTitle": "Gruppe bearbeiten",
       "noGroupsFound": "Keine Gruppen gefunden.",
       "saveFailed": "Fehler beim Speichern der Gruppe: {error}",
       "selectFieldsToUpdate": "Zu aktualisierende Felder auswählen",
@@ -696,15 +675,12 @@
         "compat": "Kompatibilitätsmodus",
         "native": "Nativer Aufruf"
       },
-      "updateConfirm": "Sind Sie sicher, dass Sie die {count} ausgewählten Gruppen aktualisieren möchten?",
       "updateSuccess": "Gruppe erfolgreich aktualisiert!",
       "form": {
         "description": "Beschreibung",
         "descriptionPlaceholder": "Beschreibung eingeben",
         "disabled": "Deaktiviert",
         "loadFromTemplate": "Von Vorlage laden",
-        "maxContext": "Maximale Kontextlänge",
-        "maxContextPlaceholder": "Beziehen Sie sich auf Modellspezifikationen oder API-Infos, 0 bedeutet nicht festgelegt",
         "modelInjectionCondition": "Modell-Injektionsbedingung",
         "modelInjectionConditionPlaceholder": "Nur injizieren, wenn die Modell-ID übereinstimmt (Platzhalter * und ? unterstützt)",
         "name": "Gruppenname",
@@ -806,7 +782,6 @@
   },
   "workflow": {
     "planningModeTooltip": "Planungsmodus: KI-Recherche und Strategien vor der Ausführung",
-    "awaitingApproval": "Wartet auf Genehmigung",
     "approvePlan": "Plan genehmigen",
     "thinking": "Denke nach...",
     "thinkingExpanded": "Denkprozess",
@@ -817,7 +792,6 @@
       "title": "Sicherheitsgenehmigung",
       "warning": "Dieser Vorgang birgt potenzielle Risiken. Bitte bestätigen Sie, ob Sie fortfahren möchten."
     },
-    "autoApproveTooltip": "Tools automatisch genehmigen (außer interaktive Tools)",
     "confirmDeleteWorkflow": "Sind Sie sicher, dass Sie diesen Workflow löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
     "continue": "Fortsetzen",
     "editWorkflowTitle": "Workflow-Titel bearbeiten",
@@ -850,6 +824,7 @@
       "statusPending": "Ausstehend"
     },
     "finishTask": "Aufgabe abschließen",
-    "workflowTitle": "Workflow-Titel"
+    "workflowTitle": "Workflow-Titel",
+    "selectAgentFirst": "Bitte wählen Sie zuerst einen Agenten aus"
   }
 }

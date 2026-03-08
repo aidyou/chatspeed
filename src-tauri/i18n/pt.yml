@@ -4,6 +4,7 @@ command:
     failed_to_read: "Falha ao ler da área de transferência: %{error}"
     failed_to_write: "Falha ao escrever na área de transferência: %{error}"
   fs:
+    read_file_failed: "Falha ao ler o arquivo: %{error}"
     image_preview_failed: "Falha ao gerar a pré-visualização da imagem: %{error}"
     unknown_filename: "NomeDeArquivoDesconhecido.png"
   window:

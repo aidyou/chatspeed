@@ -73,15 +73,6 @@
     "toolArgs": "參數",
     "toolResult": "結果",
     "translationSkillPromptEmpty": "翻譯技能的提示詞不能為空",
-    "workflow": {
-      "planning": "正在規劃...",
-      "executing": "正在執行任務：{task}",
-      "approvalRequired": "需要審批",
-      "approve": "批准",
-      "deny": "拒絕",
-      "taskCompleted": "任務已完成",
-      "error": "工作流程錯誤：{error}"
-    },
     "addAttachment": "添加附件",
     "dragOrClickToSelectFile": "拖拽文件到此處或點擊選擇",
     "selectFile": "選擇文件",
@@ -113,7 +104,9 @@
     },
     "transaction": {
       "autoDetection": "自動偵測"
-    }
+    },
+    "errorOnLoadConversations": "載入對話失敗：{error}",
+    "moduleUnavailable": "模組不可用"
   },
   "common": {
     "autoHide": "將視窗設定為「失去焦點後自動隱藏」",
@@ -144,7 +137,11 @@
     "to": "到",
     "unpin": "取消置頂",
     "updateButtonText": "更新",
-    "uploadFailed": "檔案上傳失敗"
+    "uploadFailed": "檔案上傳失敗",
+    "approve": "批准",
+    "approveAll": "全部批准",
+    "reject": "拒絕",
+    "collapse": "摺疊"
   },
   "menu": {
     "about": "關於",
@@ -165,13 +162,10 @@
     "searchNotePlaceholder": "搜尋智記"
   },
   "proxySwitcher": {
-    "title": "代理切換",
-    "toolCompatMode": "工具模式",
-    "activate": "激活"
+    "title": "代理切換"
   },
   "settings": {
     "agent": {
-      "agentType": "智能體類型",
       "actModel": "行動模型",
       "add": "新增智能體",
       "addSuccess": "智能體新增成功！",
@@ -188,30 +182,22 @@
       "description": "描述",
       "edit": "編輯智能體",
       "fetchFailed": "取得智能體失敗",
-      "maxContexts": "最大上下文長度",
       "models": "模型",
       "name": "智能體名稱",
       "nameRequired": "請輸入智能體名稱",
       "noAgents": "未找到智能體",
-      "notFound": "未找到智能體",
       "planModel": "規劃模型",
       "planningMode": "規劃模式",
       "planningPrompt": "規劃提示詞",
       "reorderFailed": "智能體排序失敗：{error}",
       "saveFailed": "智能體儲存失敗：{error}",
-      "selectActModel": "選擇行動模型",
       "selectAutoApproveTools": "選擇自動批准工具",
       "selectAvailableTools": "選擇可用工具",
-      "selectPlanModel": "選擇規劃模型",
-      "selectProvider": "選擇提供商",
-      "selectVisionModel": "選擇視覺模型",
       "systemPrompt": "系統提示詞",
       "systemPromptRequired": "請輸入系統提示詞",
       "title": "智能體管理",
       "toolsLabel": "工具",
       "updateSuccess": "智能體更新成功！",
-      "visionModel": "視覺模型",
-      "aliasName": "模型別名",
       "approvalLevel": "審批級別",
       "approvalLevelDefault": "按智能體配置",
       "approvalLevelFull": "全開 (高風險)",
@@ -219,11 +205,7 @@
       "authorizedPaths": "授權目錄",
       "authorizedPathsAdd": "新增目錄",
       "authorizedPathsTip": "智能體將只能讀寫這些目錄（及其子目錄）下的文件。如果不配置，部分文件操作工具可能無法使用。",
-      "browsingModel": "沖浪模型",
-      "codingModel": "代碼模型",
-      "copywritingModel": "寫作模型",
       "finalAudit": "執行終審",
-      "group": "代理分組",
       "modeProvider": "供應商",
       "modeProxy": "代理",
       "planningPromptPlaceholder": "留空則使用系統默認規劃邏輯。若要自定義，請引導模型輸出清晰的任務列表。",
@@ -234,7 +216,6 @@
       "shellDecisionDeny": "拒絕 (Deny)",
       "shellPolicy": "Shell 審計規則",
       "shellPolicyPattern": "匹配模式 (Regex/Glob)",
-      "shellPolicyDecision": "決策",
       "shellPolicyAdd": "新增規則",
       "shellPolicyClear": "清空規則",
       "shellPolicyClearTitle": "清空 Shell 規則",
@@ -670,7 +651,6 @@
       "addGroup": "添加分組",
       "addNow": "立即添加",
       "addSuccess": "分組添加成功！",
-      "addTitle": "添加分組",
       "batchUpdate": "批量更新",
       "batchUpdateTitle": "批量更新分組設置",
       "copyGroup": "複製分組",
@@ -680,7 +660,6 @@
       "deleteGroup": "刪除分組",
       "deleteSuccess": "分組刪除成功！",
       "editGroup": "編輯分組",
-      "editTitle": "編輯分組",
       "noGroupsFound": "未找到任何分組。",
       "saveFailed": "分組保存失敗：{error}",
       "selectFieldsToUpdate": "選擇要更新的字段",
@@ -696,15 +675,12 @@
         "compat": "兼容模式",
         "native": "原生調用"
       },
-      "updateConfirm": "確定要更新選中的 {count} 個分組嗎？",
       "updateSuccess": "分組更新成功！",
       "form": {
         "description": "描述",
         "descriptionPlaceholder": "請輸入描述",
         "disabled": "禁用",
         "loadFromTemplate": "從模板加載",
-        "maxContext": "最大上下文長度",
-        "maxContextPlaceholder": "請參考各模型的發布信息或者接口信息，0 值將不設置",
         "modelInjectionCondition": "模型注入条件",
         "modelInjectionConditionPlaceholder": "模型 id 匹配時才注入，留空不限，可以用 *匹配任意多個字符，用?匹配單個字符",
         "name": "分組名稱",
@@ -806,7 +782,6 @@
   },
   "workflow": {
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
-    "awaitingApproval": "等待審核",
     "approvePlan": "審核通過",
     "thinkingExpanded": "思考中（已展開）",
     "thoughtCompleted": "思考完成",
@@ -817,7 +792,6 @@
       "title": "安全審核",
       "warning": "此操作有潛在風險，請確認是否繼續。"
     },
-    "autoApproveTooltip": "自動審核工具（不包括互動工具）",
     "confirmDeleteWorkflow": "確定要刪除此工作流程嗎？此操作無法復原。",
     "continue": "繼續",
     "editWorkflowTitle": "編輯工作流程標題",
@@ -850,6 +824,7 @@
       "statusPending": "待定"
     },
     "finishTask": "完成任務",
-    "workflowTitle": "工作流程標題"
+    "workflowTitle": "工作流程標題",
+    "selectAgentFirst": "請先選擇一個智能體"
   }
 }

@@ -72,15 +72,6 @@
     "toolArgs": "Arguments",
     "toolResult": "Résultat",
     "translationSkillPromptEmpty": "L'invite de la compétence de traduction ne peut pas être vide.",
-    "workflow": {
-      "planning": "Planification en cours...",
-      "executing": "Exécution de la tâche : {task}",
-      "approvalRequired": "Approbation requise",
-      "approve": "Approuver",
-      "deny": "Refuser",
-      "taskCompleted": "Tâche terminée",
-      "error": "Erreur de flux de travail : {error}"
-    },
     "addAttachment": "Ajouter une pièce jointe",
     "dragOrClickToSelectFile": "Faites glisser le fichier ici ou cliquez pour sélectionner",
     "selectFile": "Sélectionner un fichier",
@@ -113,7 +104,9 @@
     },
     "transaction": {
       "autoDetection": "Détection automatique"
-    }
+    },
+    "errorOnLoadConversations": "Erreur lors du chargement des conversations : {error}",
+    "moduleUnavailable": "Module non disponible"
   },
   "common": {
     "autoHide": "Masquer automatiquement lorsque la fenêtre perd le focus",
@@ -144,7 +137,11 @@
     "delete": "Supprimer",
     "more": "Plus",
     "refresh": "Actualiser",
-    "to": "à"
+    "to": "à",
+    "approve": "Approuver",
+    "approveAll": "Tout approuver",
+    "reject": "Rejeter",
+    "collapse": "Réduire"
   },
   "menu": {
     "about": "À propos",
@@ -165,14 +162,11 @@
     "searchNotePlaceholder": "Rechercher dans les notes"
   },
   "proxySwitcher": {
-    "title": "Sélecteur de proxy",
-    "toolCompatMode": "Mode outil",
-    "activate": "Activer"
+    "title": "Sélecteur de proxy"
   },
   "settings": {
     "agent": {
       "actModel": "Modèle d'action",
-      "agentType": "Type d'agent",
       "add": "Ajouter un agent",
       "addSuccess": "Agent ajouté avec succès !",
       "autoApprove": "Outils à approbation automatique",
@@ -188,30 +182,22 @@
       "description": "Description",
       "edit": "Modifier l'agent",
       "fetchFailed": "Échec de la récupération de l'agent",
-      "maxContexts": "Longueur maximale du contexte",
       "models": "Modèles",
       "name": "Nom de l'agent",
       "nameRequired": "Veuillez saisir le nom de l'agent",
       "noAgents": "Aucun agent trouvé",
-      "notFound": "Agent non trouvé",
       "planModel": "Modèle de planification",
       "planningMode": "Mode de planification",
       "planningPrompt": "Invite de planification",
       "reorderFailed": "Échec de la réorganisation de l'agent : {error}",
       "saveFailed": "Échec de l'enregistrement de l'agent : {error}",
-      "selectActModel": "Sélectionner le modèle d'action",
       "selectAutoApproveTools": "Sélectionner les outils à approbation automatique",
       "selectAvailableTools": "Sélectionner les outils disponibles",
-      "selectPlanModel": "Sélectionner le modèle de planification",
-      "selectProvider": "Sélectionner le fournisseur",
-      "selectVisionModel": "Sélectionner le modèle de vision",
       "systemPrompt": "Invite système",
       "systemPromptRequired": "Veuillez saisir l'invite système",
       "title": "Gestion des agents",
       "toolsLabel": "Outils",
       "updateSuccess": "Agent mis à jour avec succès !",
-      "visionModel": "Modèle de vision",
-      "aliasName": "Alias du modèle",
       "approvalLevel": "Niveau d'approbation",
       "approvalLevelDefault": "Suivre la configuration de l'agent",
       "approvalLevelFull": "Ouverture complète (risque élevé)",
@@ -219,11 +205,7 @@
       "authorizedPaths": "Répertoires autorisés",
       "authorizedPathsAdd": "Ajouter un répertoire",
       "authorizedPathsTip": "L'agent ne pourra lire et écrire des fichiers que dans ces répertoires (et leurs sous-répertoires).",
-      "browsingModel": "Modèle de navigation",
-      "codingModel": "Modèle de codage",
-      "copywritingModel": "Modèle de rédaction",
       "finalAudit": "Audit final",
-      "group": "Groupe de proxy",
       "modeProvider": "Fournisseur",
       "modeProxy": "Proxy",
       "planningPromptPlaceholder": "Laissez vide pour utiliser la logique de planification par défaut du système. Si vous personnalisez, guidez le modèle pour qu'il génère une liste de tâches claire.",
@@ -237,7 +219,6 @@
       "shellPolicyClear": "Effacer les règles",
       "shellPolicyClearConfirm": "Êtes-vous sûr de vouloir effacer toutes les règles d'audit du shell ? Cette action ne peut pas être annulée.",
       "shellPolicyClearTitle": "Effacer les règles du shell",
-      "shellPolicyDecision": "Décision",
       "shellPolicyImportDefault": "Importer les valeurs par défaut",
       "shellPolicyImportDefaultConfirm": "Êtes-vous sûr de vouloir importer les règles de shell en lecture seule par défaut ? Cela ajoutera plus de 50 règles de commandes en lecture seule courantes.",
       "shellPolicyImportDefaultTitle": "Importer les règles par défaut",
@@ -670,7 +651,6 @@
       "addGroup": "Ajouter un groupe",
       "addNow": "Ajouter maintenant",
       "addSuccess": "Groupe ajouté avec succès !",
-      "addTitle": "Ajouter un groupe",
       "batchUpdate": "Mise à jour groupée",
       "batchUpdateTitle": "Mise à jour groupée des paramètres",
       "copyGroup": "Copier le groupe",
@@ -680,7 +660,6 @@
       "deleteGroup": "Supprimer le groupe",
       "deleteSuccess": "Groupe supprimé avec succès !",
       "editGroup": "Modifier le groupe",
-      "editTitle": "Modifier le groupe",
       "noGroupsFound": "Aucun groupe trouvé.",
       "saveFailed": "Échec de l'enregistrement : {error}",
       "selectFieldsToUpdate": "Champs à mettre à jour",
@@ -696,15 +675,12 @@
         "compat": "Mode de compatibilité",
         "native": "Appel natif"
       },
-      "updateConfirm": "Voulez-vous mettre à jour les {count} groupes sélectionnés ?",
       "updateSuccess": "Groupe mis à jour avec succès !",
       "form": {
         "description": "Description",
         "descriptionPlaceholder": "Entrer une description",
         "disabled": "Désactivé",
         "loadFromTemplate": "Charger du modèle",
-        "maxContext": "Taille max du contexte",
-        "maxContextPlaceholder": "Référez-vous aux specs du modèle, 0 pour non défini",
         "modelInjectionCondition": "Condition d'injection du modèle",
         "modelInjectionConditionPlaceholder": "Injecter si l'ID correspond (wildcards * et ? supportés)",
         "name": "Nom du groupe",
@@ -810,9 +786,7 @@
       "next": "Suivant"
     },
     "planningModeTooltip": "Mode de planification : Recherche et stratégie IA avant exécution",
-    "awaitingApproval": "En attente d'approbation",
     "approvePlan": "Approuver le plan",
-    "autoApproveTooltip": "Approuver automatiquement les outils (sauf outils interactifs)",
     "confirmDeleteWorkflow": "Êtes-vous sûr de vouloir supprimer ce flux de travail ? Cette action ne peut pas être annulée.",
     "continue": "Continuer",
     "editWorkflowTitle": "Modifier le titre du flux de travail",
@@ -850,6 +824,7 @@
       "recentOps": "Opérations récentes",
       "empty": "Vide",
       "contextUsage": "Utilisation du contexte"
-    }
+    },
+    "selectAgentFirst": "Veuillez d'abord sélectionner un agent"
   }
 }

@@ -4,6 +4,7 @@ command:
     failed_to_read: "Lesen des Clipboards fehlgeschlagen: %{error}"
     failed_to_write: "Schreiben in das Clipboard fehlgeschlagen: %{error}"
   fs:
+    read_file_failed: "Lesen der Datei fehlgeschlagen: %{error}"
     image_preview_failed: "Bildvorschau konnte nicht generiert werden: %{error}"
     unknown_filename: "UnbekannterDateiname.png"
   window:

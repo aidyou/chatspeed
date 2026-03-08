@@ -4,6 +4,7 @@ command:
     failed_to_read: "读取剪贴板失败: %{error}"
     failed_to_write: "写入剪贴板失败: %{error}"
   fs:
+    read_file_failed: "读取文件失败: %{error}"
     image_preview_failed: "生成图片预览失败: %{error}"
     unknown_filename: "未知文件名.png"
   window:
