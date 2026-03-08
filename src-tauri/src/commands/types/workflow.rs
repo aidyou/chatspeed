@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::{ai::traits::chat::MCPToolDeclaration, db::Agent};
+use crate::db::Agent;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentPayload {
@@ -44,15 +43,4 @@ impl From<AgentPayload> for Agent {
             payload.max_contexts,
         )
     }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct WorkflowChatPayload {
-    pub model_id: String,
-    pub provider_id: i64,
-    pub messages: Vec<Value>,
-    pub temperature: f32,
-    pub available_tools: Vec<String>,
-    pub ts_tools: Vec<MCPToolDeclaration>,
 }

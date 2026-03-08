@@ -79,10 +79,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
         try {
           const todos = JSON.parse(snapshot.workflow.todoList);
           todoList.value = todos;
-          
-          // Still sync with todo manager for tool consistency
-          const { setTodoListForWorkflow } = await import('@/pkg/workflow/tools/todoList');
-          setTodoListForWorkflow(workflowId, todos);
         } catch (e) {
           console.error('Failed to parse todo list from workflow:', e);
           todoList.value = [];

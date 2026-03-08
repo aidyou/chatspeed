@@ -182,6 +182,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
 #[tauri::command]
 pub async fn create_workflow(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
     workflow: Workflow,
 ) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -193,6 +194,11 @@ pub async fn create_workflow(
             workflow.allowed_paths,
         )
         .map_err(|e| e.to_string())?;
+
+    // Generate and store session key for proxy authentication
+    let session_key = format!("sk-{}", uuid::Uuid::new_v4());
+    chat_state.workflow_keys.insert(created.id.clone(), session_key);
+
     Ok(created.id)
 }
 
@@ -767,16 +773,13 @@ pub async fn update_workflow_allowed_paths(
 }
 
 #[tauri::command]
-pub async fn workflow_chat_completion() -> Result<(), String> {
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn workflow_call_tool() -> Result<(), String> {
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_workflow_session_key() -> Result<String, String> {
-    Ok("".into())
+pub async fn get_workflow_session_key(
+    chat_state: State<'_, Arc<ChatState>>,
+    workflow_id: String,
+) -> Result<String, String> {
+    chat_state
+        .workflow_keys
+        .get(&workflow_id)
+        .map(|v| v.clone())
+        .ok_or_else(|| format!("Session key for workflow {} not found", workflow_id))
 }

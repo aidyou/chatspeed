@@ -256,8 +256,8 @@ pub async fn run() -> crate::error::Result<()> {
             create_workflow,
             delete_workflow,
             get_system_skills,
-            get_workflow_session_key,
             get_workflow_snapshot,
+            get_workflow_session_key,
             list_workflows,
             search_workspace_files,
             update_workflow_allowed_paths,
@@ -265,8 +265,6 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_title,
             update_workflow_todo_list,
             workflow_approve_plan,
-            workflow_call_tool,
-            workflow_chat_completion,
             workflow_get_tasks,
             workflow_signal,
             workflow_start,
@@ -646,7 +644,6 @@ pub async fn run() -> crate::error::Result<()> {
             // Reason: Event handlers may immediately try to access states via handle.state()
             // If states are not yet registered, this will cause a panic
             // See: src-tauri/src/workflow/helper.rs for state usage in listeners
-            crate::workflow::helper::listen_for_workflow_ready(app.handle());
             // === END EVENT LISTENERS SECTION ===
 
             // === BACKGROUND TASKS SECTION ===

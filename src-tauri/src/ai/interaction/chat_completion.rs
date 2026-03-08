@@ -9,6 +9,7 @@ use tokio::sync::{
     Mutex,
 };
 
+use crate::ccproxy::ChatProtocol;
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -30,7 +31,6 @@ use crate::{
     libs::window_channels::WindowChannels,
 };
 use crate::{ccproxy::CCProxyError, constants::DEFAULT_WEB_SEARCH_TOOL};
-use crate::{ccproxy::ChatProtocol, commands::types::workflow::WorkflowChatPayload};
 
 macro_rules! init_chats {
     () => {{
@@ -66,12 +66,6 @@ macro_rules! impl_chat_method {
     };
 }
 
-// New struct for pending workflows
-pub struct PendingWorkflow {
-    pub app_handle: AppHandle,
-    pub payload: WorkflowChatPayload,
-}
-
 #[derive(Clone)]
 pub enum AiChatEnum {
     OpenAI(OpenAIChat),
@@ -84,7 +78,6 @@ pub struct ChatState {
     pub messages_history: Arc<Mutex<HashMap<String, Vec<Value>>>>,
     pub dispatcher_input_tx: Sender<Arc<ChatResponse>>,
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
-    pub pending_workflow_chat_completions: Arc<DashMap<String, PendingWorkflow>>,
     /// Temporary keys for workflow sessions, mapping workflow_id -> key
     pub workflow_keys: Arc<DashMap<String, String>>,
 }
@@ -108,7 +101,6 @@ impl ChatState {
             messages_history: Arc::new(Mutex::new(HashMap::new())),
             dispatcher_input_tx,
             main_store,
-            pending_workflow_chat_completions: Arc::new(DashMap::new()),
             workflow_keys: Arc::new(DashMap::new()),
         });
 
