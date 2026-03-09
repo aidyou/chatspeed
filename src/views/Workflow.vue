@@ -103,7 +103,7 @@
                   </div>
                   <div v-if="isMessageExpanded(message)" class="tool-detail">
                     <markdown v-if="message.toolDisplay.displayType === 'diff'"
-                      :content="removeSystemReminder(message.message)" />
+                      :content="getDiffMarkdown(removeSystemReminder(message.message))" />
                     <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                       <div class="choice-question">{{ parseChoiceContent(removeSystemReminder(message.message)).question
                       }}
@@ -859,7 +859,7 @@ const formatToolTitle = (name, args) => {
 
     'edit_file': (args) => {
       const path = args.file_path || args.path || ''
-      return { icon: 'edit', toolType: 'tool-file', action: 'Edit', target: path }
+      return { icon: 'edit', toolType: 'tool-file', action: `Edit ${path}`, target: '' }
     },
 
     'list_dir': (args) => {
@@ -1152,6 +1152,29 @@ const removeSystemReminder = (content) => {
   return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
+const getDiffMarkdown = (content) => {
+  try {
+    const data = JSON.parse(content)
+    const oldStr = data.old_string || ''
+    const newStr = data.new_string || data.content || ''
+    const filePath = data.file_path || data.path || 'file'
+    
+    // Line-based simple diff
+    const oldLines = oldStr.split('\n')
+    const newLines = newStr.split('\n')
+    let diff = ''
+    
+    if (oldStr) {
+      oldLines.forEach(line => { if (line.trim()) diff += `- ${line}\n` })
+    }
+    newLines.forEach(line => { if (line.trim()) diff += `+ ${line}\n` })
+    
+    return `\`\`\`diff\n--- Original\n+++ Modified\n${diff || ' (No changes)'}\n\`\`\``
+  } catch (e) {
+    return content
+  }
+}
+
 const parseChoiceContent = (content) => {
   try {
     return JSON.parse(content)
@@ -1252,6 +1275,17 @@ onMounted(async () => {
   // Load the last workflow if available
   if (workflowStore.workflows.length > 0) {
     await selectWorkflow(workflowStore.workflows[0].id)
+    
+    // Check if we need to show approval dialog after loading
+    nextTick(() => {
+      const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
+      if (currentWorkflow.value?.status === 'awaiting_approval' && lastMsg?.role === 'tool') {
+        approvalRequestId.value = lastMsg.metadata?.tool_call_id || 'restored'
+        approvalAction.value = lastMsg.toolDisplay.action
+        approvalDetails.value = removeSystemReminder(lastMsg.message)
+        approvalVisible.value = true
+      }
+    })
   }
 
   windowStore.initWorkflowWindowAlwaysOnTop()
@@ -1535,14 +1569,6 @@ const onSendMessage = async () => {
     // 2. Decide: Signal or Re-start?
     const isPaused = currentWorkflow.value?.status === 'paused'
     if (isRunning.value || isPaused) {
-      // 1. Add to UI and DB manually for immediate feedback in running loop
-      await workflowStore.addMessage({
-        sessionId: currentWorkflowId.value,
-        role: 'user',
-        message: message
-      })
-      nextTick(() => scrollToBottom())
-
       // Just send signal to the running loop
       try {
         const signal = JSON.stringify({
