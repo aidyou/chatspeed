@@ -205,7 +205,7 @@ impl WorkflowExecutor {
                 max_contexts as usize,
                 tsid_generator.clone(),
             ),
-            tool_manager: chat_state.tool_manager.clone(),
+            tool_manager: Arc::new(ToolManager::new()),
             global_tool_manager,
             chat_state,
             gateway,
