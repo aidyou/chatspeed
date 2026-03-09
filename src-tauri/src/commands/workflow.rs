@@ -705,14 +705,56 @@ pub async fn workflow_approve_plan(
 
 #[tauri::command]
 pub async fn workflow_signal(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
+    factory: State<'_, Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>,
     session_id: String,
     signal: String,
-) -> Result<(), String> {
-    gateway
-        .inject_input(&session_id, signal)
-        .await
-        .map_err(|e| e.to_string())
+) -> Result<String, String> {
+    let gateway_arc = gateway.inner().clone();
+
+    // Try to inject signal into existing running loop
+    match gateway_arc.inject_input(&session_id, signal.clone()).await {
+        Ok(_) => Ok("Signal injected".to_string()),
+        Err(_) => {
+            // If injection fails, the engine is likely not running (e.g. after a restart)
+            // If the signal is user_input, we can resume the workflow by starting it again
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
+                if val["type"] == "user_input" {
+                    if let Some(content) = val["content"].as_str() {
+                        log::info!("[Workflow] No active channel for session {}, attempting to resume with new input", session_id);
+                        
+                        // Find the agent ID for this session from DB
+                        let agent_id = {
+                            let store = state.read().map_err(|e| e.to_string())?;
+                            let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
+                            snapshot.workflow.agent_id
+                        };
+
+                        // Use our robust workflow_start logic to resume
+                        workflow_start(
+                            app,
+                            state,
+                            chat_state,
+                            tsid_generator,
+                            gateway,
+                            factory,
+                            session_id,
+                            agent_id,
+                            Some(content.to_string()),
+                            None,
+                        ).await?;
+                        
+                        return Ok("Workflow resumed with input".to_string());
+                    }
+                }
+            }
+            Err(format!("Failed to send signal: No active session for {}", session_id))
+        }
+    }
 }
 
 #[tauri::command]

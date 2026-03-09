@@ -5,13 +5,13 @@
         <cs :name="node.is_dir ? (isExpanded ? 'ext-folder-open' : 'ext-folder') : getFileIcon(node.name)"
           size="14px" />
       </span>
-      <span class="node-name">{{ node.name }}</span>
-      <div v-if="gitCode" class="git-status" :class="gitStatusClass" :title="gitCode"></div>
+      <span class="node-name" :class="gitStatusClass">{{ node.name }}</span>
+      <div v-if="node.git_status" class="git-status" :class="gitStatusClass" :title="node.git_status"></div>
     </div>
 
     <div v-if="node.is_dir && isExpanded" class="node-children">
       <tree-node v-for="child in children" :key="child.path" :node="child" :expanded-map="expandedMap"
-        :git-status="gitStatus" @toggle="$emit('toggle', $event)" @preview="$emit('preview', $event)" />
+        @toggle="$emit('toggle', $event)" @preview="$emit('preview', $event)" />
     </div>
   </div>
 </template>
@@ -22,8 +22,7 @@ import { invokeWrapper } from '@/libs/tauri'
 
 const props = defineProps({
   node: Object,
-  expandedMap: Object,
-  gitStatus: Object // Map
+  expandedMap: Object
 })
 
 const emit = defineEmits(['toggle', 'preview'])
@@ -31,15 +30,9 @@ const emit = defineEmits(['toggle', 'preview'])
 const isExpanded = computed(() => props.expandedMap.has(props.node.path))
 const children = ref([])
 
-const gitCode = computed(() => {
-  // Try to match the full path in gitStatus Map
-  // Note: git status returns paths relative to repo root
-  return props.gitStatus.get(props.node.path.replace(/\\/g, '/'))
-})
-
 const gitStatusClass = computed(() => {
-  if (!gitCode.value) return ''
-  const code = gitCode.value.trim()
+  if (!props.node.git_status) return ''
+  const code = props.node.git_status.trim()
   if (code === 'M') return 'modified'
   if (code === 'A' || code === '??') return 'added'
   if (code === 'D') return 'deleted'
@@ -141,6 +134,19 @@ watch(isExpanded, (newVal) => {
       overflow: hidden;
       text-overflow: ellipsis;
       flex: 1;
+
+      &.modified {
+        color: #e6a23c;
+      }
+
+      &.added {
+        color: #67c23a;
+      }
+
+      &.deleted {
+        color: #f56c6c;
+        text-decoration: line-through;
+      }
     }
 
     .node-icon {

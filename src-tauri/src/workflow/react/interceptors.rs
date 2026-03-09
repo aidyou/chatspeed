@@ -1,3 +1,4 @@
+use serde_json::json;
 use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -103,19 +104,31 @@ impl WorkflowExecutor {
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let question = args["question"].as_str().unwrap_or("Waiting for your response...");
+        let options = args["options"].as_array();
 
         // We no longer send a Confirm signal here to avoid redundant popups.
         // The message is already displayed in the chat stream.
         // We just pause the engine and wait for user input in the main text area.
         self.update_state(WorkflowState::Paused).await?;
 
+        // Format content as JSON if we have options, otherwise just the question
+        let content = if let Some(opts) = options {
+            json!({
+                "question": question,
+                "options": opts
+            })
+            .to_string()
+        } else {
+            question.to_string()
+        };
+
         Ok(Some(ReinforcedResult {
-            content: question.to_string(),
+            content,
             title: "Ask User".to_string(),
             summary: "Waiting for user".to_string(),
             is_error: false,
             error_type: None,
-            display_type: "text".to_string(),
+            display_type: if options.is_some() { "choice" } else { "text" }.to_string(),
         }))
     }
 

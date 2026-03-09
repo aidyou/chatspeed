@@ -29,7 +29,7 @@
         </div>
         <div v-if="isExpanded(root)" class="children">
           <tree-node v-for="child in getChildren(root)" :key="child.path" :node="child" :expanded-map="expandedNodes"
-            :git-status="gitStatusMap" @toggle="toggleExpand" @preview="previewFile" />
+            @toggle="toggleExpand" @preview="previewFile" />
         </div>
       </div>
     </div>
@@ -63,7 +63,6 @@ const emit = defineEmits(['addPath', 'removePath'])
 const roots = computed(() => props.paths)
 const expandedNodes = ref(new Map())
 const childrenMap = ref(new Map())
-const gitStatusMap = ref(new Map())
 const loading = ref(false)
 
 // Preview state
@@ -110,27 +109,8 @@ const loadDir = async (path) => {
   try {
     const list = await invokeWrapper('list_dir', { path })
     childrenMap.value.set(path, list)
-    
-    // Also fetch git status for the root if it's a new expansion at top level
-    if (roots.value.includes(path)) {
-      await fetchGitStatus(path)
-    }
   } catch (e) {
     console.error('Failed to load directory:', path, e)
-  }
-}
-
-const fetchGitStatus = async (rootPath) => {
-  try {
-    const status = await invokeWrapper('get_git_status', { path: rootPath })
-    // Backend now returns absolute paths as keys
-    Object.entries(status).forEach(([absPath, code]) => {
-      // Standardize path separator for consistent matching
-      const normalizedPath = absPath.replace(/\\/g, '/')
-      gitStatusMap.value.set(normalizedPath, code)
-    })
-  } catch (e) {
-    // Ignore errors (e.g. not a git repo)
   }
 }
 
@@ -139,19 +119,11 @@ const getChildren = (path) => childrenMap.value.get(path) || []
 const refreshAll = async () => {
   loading.value = true
   const expanded = Array.from(expandedNodes.value.keys())
-  gitStatusMap.value.clear()
   
   for (const path of expanded) {
     await loadDir(path)
   }
   
-  // Refresh roots that might not be in expandedNodes but are visible
-  for (const root of roots.value) {
-    if (!expandedNodes.value.has(root)) {
-       // Just refresh git status for roots
-       await fetchGitStatus(root)
-    }
-  }
   loading.value = false
 }
 
@@ -176,7 +148,6 @@ watch(() => props.paths, (newPaths) => {
   // Clear state when roots change
   expandedNodes.value.clear()
   childrenMap.value.clear()
-  gitStatusMap.value.clear()
 }, { deep: true })
 
 onMounted(() => {

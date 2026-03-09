@@ -33,7 +33,12 @@ impl ToolDefinition for AskUser {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "question": { "type": "string", "description": "The complete question to ask the user. Should be clear and specific." }
+                    "question": { "type": "string", "description": "The complete question to ask the user. Should be clear and specific." },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of buttons for the user to click for a quick response."
+                    }
                 },
                 "required": ["question"]
             }),

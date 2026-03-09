@@ -45,10 +45,12 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
 
     Ok(status_map)
 }
-
 #[tauri::command]
 pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
     let mut list = Vec::new();
+
+    // Get git status for the directory if it's a git repo
+    let git_statuses = get_git_status(path).await.unwrap_or_default();
 
     // Use ignore crate to respect .gitignore and filter common files
     let mut walker = ignore::WalkBuilder::new(path);
@@ -84,10 +86,16 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
         }
 
         let is_dir = path_buf.is_dir();
+        let path_str = path_buf.to_string_lossy().to_string();
+
+        // Find git status for this file (keys in git_statuses are absolute paths)
+        let status = git_statuses.get(&path_str).cloned();
+
         list.push(serde_json::json!({
             "name": name,
-            "path": path_buf.to_string_lossy().to_string(),
+            "path": path_str,
             "is_dir": is_dir,
+            "git_status": status,
         }));
     }
 

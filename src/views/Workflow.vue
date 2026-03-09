@@ -21,12 +21,8 @@
     </titlebar>
 
     <div class="workflow-main">
-      <el-aside
-        :width="sidebarWidth"
-        :class="{ collapsed: sidebarCollapsed, dragging: isDragging }"
-        class="sidebar"
-        :style="sidebarStyle"
-      >
+      <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }" class="sidebar"
+        :style="sidebarStyle">
         <div v-show="!sidebarCollapsed" class="sidebar-tabs-container">
           <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
             <el-tab-pane :label="$t('workflow.historyTab')" name="history">
@@ -69,12 +65,8 @@
       </el-aside>
 
       <!-- Resize Handle -->
-      <div
-        v-if="!sidebarCollapsed"
-        class="sidebar-resize-handle"
-        :class="{ dragging: isDragging }"
-        @mousedown="onResizeStart"
-      />
+      <div v-if="!sidebarCollapsed" class="sidebar-resize-handle" :class="{ dragging: isDragging }"
+        @mousedown="onResizeStart" />
 
       <!-- main container -->
       <el-container class="main-container">
@@ -112,6 +104,17 @@
                   <div v-if="isMessageExpanded(message)" class="tool-detail">
                     <markdown v-if="message.toolDisplay.displayType === 'diff'"
                       :content="removeSystemReminder(message.message)" />
+                    <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
+                      <div class="choice-question">{{ parseChoiceContent(removeSystemReminder(message.message)).question
+                      }}
+                      </div>
+                      <div class="choice-options">
+                        <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
+                          :key="opt" size="small" plain round :disabled="isRunning" @click="sendUserChoice(opt)">
+                          {{ opt }}
+                        </el-button>
+                      </div>
+                    </div>
                     <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
                   </div>
                 </div>
@@ -219,7 +222,8 @@
           </div>
 
           <!-- File At-mention Suggestion Panel -->
-          <div v-if="showFileSuggestions && fileSuggestions.length > 0" class="slash-command-panel file-suggestion-panel compact">
+          <div v-if="showFileSuggestions && fileSuggestions.length > 0"
+            class="slash-command-panel file-suggestion-panel compact">
             <div v-for="(file, idx) in fileSuggestions" :key="file.path" class="command-item"
               :class="{ active: idx === selectedFileIndex }" @click="onFileSelect(file)">
               <cs :name="file.is_directory ? 'folder' : 'file'" size="14px" class="file-icon" />
@@ -229,8 +233,16 @@
 
           <div class="input">
             <div v-if="currentWorkflow?.status === 'paused'" class="input-status-hint">
-              <cs name="talk" size="12px" />
-              <span>AI is waiting for your response...</span>
+              <div class="hint-header">
+                <cs name="talk" size="12px" />
+                <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
+              </div>
+              <div v-if="activeAskUser" class="hint-options">
+                <el-button v-for="opt in activeAskUser.options" :key="opt" size="small" plain round
+                  @click="inputMessage = opt">
+                  {{ opt }}
+                </el-button>
+              </div>
             </div>
             <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
@@ -562,8 +574,8 @@ watch(inputMessage, (newVal) => {
 })
 
 watch(selectedAgent, (newAgent, oldAgent) => {
-  if (newAgent?.id !== oldAgent?.id) {
-    // Clear pending paths when switching agents
+  // Only clear pending paths if the agent ID actually changed to a different one
+  if (newAgent && oldAgent && newAgent.id !== oldAgent.id) {
     pendingPaths.value = []
   }
 })
@@ -766,6 +778,17 @@ const lastAssistantMessage = computed(() => {
   return enhancedMessages.value
     .filter(m => m.role === 'assistant')
     .pop()
+})
+
+// Active Ask User question and options for the input area
+const activeAskUser = computed(() => {
+  if (currentWorkflow.value?.status !== 'paused') return null
+  // Look for the very last tool message which is an Ask User
+  const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
+  if (lastMsg?.role === 'tool' && lastMsg.toolDisplay?.action === 'Ask User' && lastMsg.toolDisplay?.displayType === 'choice') {
+    return parseChoiceContent(removeSystemReminder(lastMsg.message))
+  }
+  return null
 })
 
 // Helper functions for truncating text (UTF-8 safe)
@@ -1127,6 +1150,22 @@ const removeSystemReminder = (content) => {
   if (!content) return ''
   // Handle multiline content and multiple tags
   return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
+}
+
+const parseChoiceContent = (content) => {
+  try {
+    return JSON.parse(content)
+  } catch (e) {
+    return { question: content, options: [] }
+  }
+}
+
+const sendUserChoice = async (option) => {
+  if (isRunning.value) return
+
+  // Directly send message using existing logic
+  inputMessage.value = option
+  onSendMessage()
 }
 
 // Helper to parse message content
@@ -1494,7 +1533,8 @@ const onSendMessage = async () => {
     await startNewWorkflow(message)
   } else {
     // 2. Decide: Signal or Re-start?
-    if (isRunning.value) {
+    const isPaused = currentWorkflow.value?.status === 'paused'
+    if (isRunning.value || isPaused) {
       // 1. Add to UI and DB manually for immediate feedback in running loop
       await workflowStore.addMessage({
         sessionId: currentWorkflowId.value,
@@ -1509,6 +1549,12 @@ const onSendMessage = async () => {
           type: 'user_input',
           content: message
         })
+        
+        // Optimistic update to clear the "AI is waiting" hint immediately
+        if (isPaused) {
+          workflowStore.updateWorkflowStatus(currentWorkflowId.value, 'thinking')
+        }
+
         const res = await invokeWrapper('workflow_signal', {
           sessionId: currentWorkflowId.value,
           signal: signal
@@ -1741,14 +1787,20 @@ const onDeleteWorkflow = id => {
 }
 
 const createNewWorkflow = () => {
-  // Clear current workflow
+  // 1. Capture current environment before clearing
+  const currentPathsToPreserve = [...currentPaths.value]
+  const currentAgentToPreserve = selectedAgent.value
+
+  // 2. Clear only the session-specific state in the store
   workflowStore.clearCurrentWorkflow()
 
-  // Clear pending paths
-  pendingPaths.value = []
+  // 3. Restore environment into local state for the next workflow
+  pendingPaths.value = currentPathsToPreserve
+  selectedAgent.value = currentAgentToPreserve
 
-  // Clear input and focus
+  // 4. Reset only the user input
   inputMessage.value = ''
+
   nextTick(() => {
     if (inputRef.value) {
       inputRef.value.focus()
@@ -1789,7 +1841,7 @@ const onGlobalKeyDown = event => {
 
     :deep(.el-tabs__header) {
       margin: 0;
-      padding: 0 10px 0 15px;
+      padding: 0 15px;
       background: var(--cs-bg-color);
     }
 
@@ -1856,13 +1908,13 @@ const onGlobalKeyDown = event => {
           display: flex;
           flex-direction: column;
 
-          :deep(.el-tabs__header) {
+          .el-tabs__header {
             margin: 0;
-            padding: 0 10px;
+            padding: 0 var(--cs-space);
             background: var(--cs-bg-color);
           }
 
-          :deep(.el-tabs__content) {
+          .el-tabs__content {
             flex: 1;
             overflow: hidden;
 
@@ -1870,13 +1922,14 @@ const onGlobalKeyDown = event => {
               height: 100%;
               display: flex;
               flex-direction: column;
+              padding: 0 var(--cs-space);
             }
           }
         }
       }
 
       .sidebar-header {
-        padding: 10px;
+        padding: var(--cs-space) 0;
         flex-shrink: 0;
 
         .el-input {
@@ -2313,6 +2366,26 @@ const onGlobalKeyDown = event => {
                   border-left: 2px solid var(--cs-border-color);
                   font-family: var(--cs-font-family-mono, monospace);
 
+                  .choice-container {
+                    padding: 12px;
+                    background: var(--cs-bg-color-light);
+                    border-radius: var(--cs-border-radius-md);
+                    margin-top: 8px;
+
+                    .choice-question {
+                      font-size: var(--cs-font-size-sm);
+                      margin-bottom: 12px;
+                      color: var(--cs-text-color-primary);
+                      line-height: 1.5;
+                    }
+
+                    .choice-options {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                    }
+                  }
+
                   .raw-content {
                     margin: 0;
                     white-space: pre-wrap;
@@ -2532,6 +2605,7 @@ const onGlobalKeyDown = event => {
 
           &.file-suggestion-panel.compact {
             padding: 2px;
+
             .command-item {
               flex-direction: row;
               align-items: center;
@@ -2556,12 +2630,15 @@ const onGlobalKeyDown = event => {
 
               &.active {
                 background-color: var(--cs-active-bg-color);
-                .file-path, .file-icon {
+
+                .file-path,
+                .file-icon {
                   color: var(--el-color-primary);
                 }
               }
             }
           }
+
           .command-item {
 
             padding: 8px 12px;
@@ -2662,14 +2739,41 @@ const onGlobalKeyDown = event => {
 
           .input-status-hint {
             display: flex;
-            align-items: center;
-            gap: 6px;
+            flex-direction: column;
+            gap: 8px;
             font-size: 11px;
             color: var(--el-color-primary);
-            padding: 4px 8px;
+            padding: 8px;
             background: var(--el-color-primary-light-9);
             border-radius: var(--cs-border-radius-sm);
             margin-bottom: 8px;
+
+            .hint-header {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+            }
+
+            .hint-options {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+              padding-left: 18px;
+
+              .el-button {
+                font-size: 11px;
+                height: 24px;
+                padding: 0 8px;
+                margin: 0;
+                background: var(--cs-bg-color);
+                border-color: var(--el-color-primary-light-7);
+
+                &:hover {
+                  background: var(--el-color-primary);
+                  color: white;
+                }
+              }
+            }
           }
 
           .icons {
