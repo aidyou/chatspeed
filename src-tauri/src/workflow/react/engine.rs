@@ -421,6 +421,10 @@ impl WorkflowExecutor {
         {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
+            tm.register_tool(Arc::new(SkillListReferences::new(self.available_skills.clone())))
+                .await?;
+            tm.register_tool(Arc::new(SkillLoadReference::new(self.available_skills.clone())))
+                .await?;
 
             // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
             // if the current executor is NOT itself a sub-agent.
@@ -483,6 +487,7 @@ impl WorkflowExecutor {
             && self.state != WorkflowState::Error
             && self.state != WorkflowState::Cancelled
             && self.state != WorkflowState::AwaitingApproval
+            && self.state != WorkflowState::AwaitingAutoApproval
         {
             // Check stop signal at loop start
             if self.check_stop_signal(&mut signal_rx).await? {
