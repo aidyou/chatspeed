@@ -2,9 +2,14 @@
   <div class="file-tree">
     <div class="tree-header">
       <span class="title">{{ $t('settings.agent.authorizedPaths') }}</span>
-      <el-tooltip :content="$t('common.refresh')" placement="top">
-        <cs name="refresh" class="refresh-icon" @click="refreshAll" :class="{ rotating: loading }" />
-      </el-tooltip>
+      <div class="header-actions">
+        <el-tooltip :content="$t('settings.agent.addPath')" placement="top">
+          <cs name="add" class="action-icon" @click="onAddPath" />
+        </el-tooltip>
+        <el-tooltip :content="$t('common.refresh')" placement="top">
+          <cs name="refresh" class="action-icon refresh-icon" @click="refreshAll" :class="{ rotating: loading }" />
+        </el-tooltip>
+      </div>
     </div>
 
     <div v-if="roots.length === 0" class="empty-tree">
@@ -13,9 +18,14 @@
 
     <div v-else class="tree-content">
       <div v-for="root in roots" :key="root" class="root-container">
-        <div class="root-item" @click="toggleExpand(root)">
-          <cs :name="isExpanded(root) ? 'folder-open' : 'folder'" size="14px" />
-          <span class="root-name" :title="root">{{ getDirName(root) }}</span>
+        <div class="root-item">
+          <div class="root-info" @click="toggleExpand(root)">
+            <cs :name="isExpanded(root) ? 'ext-folder-open' : 'ext-folder'" size="14px" />
+            <span class="root-name" :title="root">{{ getDirName(root) }}</span>
+          </div>
+          <div class="root-actions">
+            <cs name="trash" size="12px" class="action-btn remove-btn" @click.stop="onRemovePath(root)" />
+          </div>
         </div>
         <div v-if="isExpanded(root)" class="children">
           <tree-node v-for="child in getChildren(root)" :key="child.path" :node="child" :expanded-map="expandedNodes"
@@ -36,6 +46,7 @@
 
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
+import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
 import Markdown from '@/components/chat/Markdown.vue'
 import TreeNode from './TreeNode.vue'
@@ -46,6 +57,8 @@ const props = defineProps({
     default: () => []
   }
 })
+
+const emit = defineEmits(['addPath', 'removePath'])
 
 const roots = computed(() => props.paths)
 const expandedNodes = ref(new Map())
@@ -63,6 +76,25 @@ const isExpanded = (path) => expandedNodes.value.has(path)
 const getDirName = (path) => {
   const parts = path.split(/[/\\]/).filter(p => p !== '')
   return parts[parts.length - 1] || path
+}
+
+const onAddPath = async () => {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: 'Select Directory'
+    })
+    if (selected && !roots.value.includes(selected)) {
+      emit('addPath', selected)
+    }
+  } catch (error) {
+    console.error('Failed to add path:', error)
+  }
+}
+
+const onRemovePath = (path) => {
+  emit('removePath', path)
 }
 
 const toggleExpand = async (path) => {
@@ -179,11 +211,23 @@ onMounted(() => {
       text-transform: uppercase;
     }
 
-    .refresh-icon {
-      cursor: pointer;
-      color: var(--cs-text-color-secondary);
-      &:hover { color: var(--el-color-primary); }
-      &.rotating { animation: cs-rotate 1s linear infinite; }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .action-icon {
+        cursor: pointer;
+        color: var(--cs-text-color-secondary);
+
+        &:hover {
+          color: var(--el-color-primary);
+        }
+
+        &.rotating {
+          animation: cs-rotate 1s linear infinite;
+        }
+      }
     }
   }
 
@@ -206,12 +250,26 @@ onMounted(() => {
     .root-item {
       display: flex;
       align-items: center;
-      gap: 8px;
+      justify-content: space-between;
       padding: 6px 15px;
       cursor: pointer;
       transition: background 0.2s;
 
-      &:hover { background: var(--cs-hover-bg-color); }
+      &:hover {
+        background: var(--cs-hover-bg-color);
+
+        .root-actions {
+          opacity: 1;
+        }
+      }
+
+      .root-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+      }
 
       .root-name {
         font-weight: 600;
@@ -219,10 +277,46 @@ onMounted(() => {
         overflow: hidden;
         text-overflow: ellipsis;
       }
+
+      .root-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        opacity: 0;
+        transition: opacity 0.2s;
+
+        .action-btn {
+          cursor: pointer;
+          color: var(--cs-text-color-secondary);
+          padding: 4px;
+          border-radius: 4px;
+
+          &:hover {
+            background: var(--cs-bg-color-light);
+          }
+        }
+
+        .remove-btn:hover {
+          color: var(--el-color-danger);
+        }
+      }
     }
 
     .children {
-      padding-left: 15px;
+      position: relative;
+      padding-left: 0;
+      margin-left: 15px;
+
+      // Tree guide line (dashed)
+      &::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        border-left: 1px dashed var(--cs-border-color);
+      }
     }
   }
 }

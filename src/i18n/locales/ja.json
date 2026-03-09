@@ -44,7 +44,7 @@
     "inputMessagePlaceholder": "{at} を入力してスキルを呼び出す",
     "messageCopied": "メッセージをコピーしました",
     "messageNotFound": "メッセージが見つかりません、または削除されました",
-    "newConversaction": "新しい会話（Cmd/Ctrl + N）",
+    "newConversation": "新しい会話（Cmd/Ctrl + N）",
     "mindmapError": "マインドマップのレンダリングに失敗しました",
     "networkDisabled": "インターネット接続を無効にする",
     "networkEnabled": "インターネット接続を有効にする：接続中のコンテンツを自動的に取得するか、関連情報を検索します",
@@ -168,6 +168,7 @@
     "agent": {
       "actModel": "行動モデル",
       "add": "エージェントを追加",
+      "addPath": "パスを追加",
       "addSuccess": "エージェントが正常に追加されました！",
       "approvalLevel": "承認レベル",
       "approvalLevelDefault": "エージェント設定に従う",
@@ -687,7 +688,7 @@
         "namePlaceholder": "グループ名を入力してください",
         "promptInjection": "プロンプト注入",
         "promptInjectionPlaceholder": "プロンプト注入方法を選択してください",
-        "promptInjectionPosition": "注入位置",
+        "promptInjectionPosition": "注入箇所",
         "promptInjectionPositionPlaceholder": "systemロールまたは最後のuserメッセージへの注入を選択",
         "promptReplace": "プロンプトの置換",
         "promptReplaceTip": "システムプロンプト (System Prompt) 内の特定のテキストを新しいテキストに置換します。複数のKVペアをサポートします。",
@@ -793,7 +794,7 @@
     "newWorkflow": "新しいワークフロー",
     "retrying": "リクエストが多すぎます、再試行中（{attempt}/{total}回目）、{seconds}秒待ち...",
     "startFailed": "ワークフローの開始に失敗しました：{error}",
-    "thinking": "思考中...",
+    "thinking": "思考中…",
     "thinkingExpanded": "思考中（展開済み）",
     "thoughtCompleted": "思考完了",
     "workflowTitle": "ワークフロータイトル",
@@ -809,7 +810,7 @@
       "view": "TODO を表示",
       "statusCompleted": "完了",
       "statusInProgress": "進行中",
-      "statusPending": "待定"
+      "statusPending": "保留中"
     },
     "approval": {
       "action": "保留中のアクション",

@@ -6,7 +6,7 @@ command:
   fs:
     read_file_failed: "Lesen der Datei fehlgeschlagen: %{error}"
     image_preview_failed: "Bildvorschau konnte nicht generiert werden: %{error}"
-    unknown_filename: "UnbekannterDateiname.png"
+    unknown_filename: "Unbekannter Dateiname.png"
   window:
     failed_to_close: "Fenster konnte nicht geschlossen werden: %{error}"
 

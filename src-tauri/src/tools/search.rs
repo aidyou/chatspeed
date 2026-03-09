@@ -1,7 +1,6 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use async_trait::async_trait;
-use glob::glob;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::fs;
@@ -19,6 +18,7 @@ impl ToolDefinition for Glob {
         "- Fast file pattern matching tool that works with any codebase size\n\
         - Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n\
         - Returns matching file paths sorted by modification time\n\
+        - Automatically respects .gitignore and other ignore files\n\
         - Use this tool when you need to find files by name patterns\n\
         - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead\n\
         - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
@@ -52,16 +52,42 @@ impl ToolDefinition for Glob {
         let pattern = params["pattern"]
             .as_str()
             .ok_or(ToolError::InvalidParams("pattern required".to_string()))?;
-        let base_path = params["path"].as_str().unwrap_or(".");
+        let base_path_str = params["path"].as_str().unwrap_or(".");
+        let base_path = Path::new(base_path_str);
 
-        let full_pattern = format!("{}/{}", base_path, pattern);
+        // Prepare the glob matcher
+        let glob_matcher = globset::GlobBuilder::new(pattern)
+            .case_insensitive(true)
+            .literal_separator(true)
+            .build()
+            .map_err(|e| ToolError::InvalidParams(format!("Invalid glob pattern: {}", e)))?
+            .compile_matcher();
+
         let mut results = vec![];
         const MAX_RESULTS: usize = 1000;
-        for entry in glob(&full_pattern).map_err(|e| ToolError::ExecutionFailed(e.to_string()))? {
-            if let Ok(path) = entry {
-                results.push(path.to_string_lossy().to_string());
-                if results.len() >= MAX_RESULTS {
-                    break;
+
+        // Use ignore crate to respect .gitignore and filter common files
+        let walker = ignore::WalkBuilder::new(base_path)
+            .standard_filters(true)
+            .hidden(false)
+            .build();
+
+        for result in walker {
+            let entry = match result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let path = entry.path();
+            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                // Get relative path for matching
+                let rel_path = path.strip_prefix(base_path).unwrap_or(path);
+                
+                if glob_matcher.is_match(rel_path) {
+                    results.push(path.to_string_lossy().to_string());
+                    if results.len() >= MAX_RESULTS {
+                        break;
+                    }
                 }
             }
         }
@@ -140,8 +166,19 @@ impl ToolDefinition for Grep {
         if path.is_file() {
             Self::search_in_file(path, &re, output_mode, &mut matches, MAX_MATCHES)?;
         } else if path.is_dir() {
-            for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
-                if entry.path().is_file() {
+            // Use ignore crate to respect .gitignore
+            let walker = ignore::WalkBuilder::new(path)
+                .standard_filters(true)
+                .hidden(false)
+                .build();
+
+            for result in walker {
+                let entry = match result {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                     Self::search_in_file(
                         entry.path(),
                         &re,
@@ -289,7 +326,7 @@ mod tests {
 
         let result = tool.call(params).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ToolError::ExecutionFailed(_)));
+        assert!(matches!(result.unwrap_err(), ToolError::InvalidParams(_)));
     }
 
     #[tokio::test]

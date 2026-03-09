@@ -38,7 +38,8 @@ db:
   ai_model_not_found_by_id: "ID %{id} の AI モデルが見つかりません"
   ai_skill_not_found_by_id: "ID %{id} の AI スキルが見つかりません"
   already_exists: "データは既に存在します：%{error}"
-  conversation_not_found: "指定された会話が 존재しないか、削除されたか、データベースで例外が発生しました"
+  conversation_not_found: "指定された会話が存在しないか、削除されたか、データベースで例外が発生しました"
+
   database_error: "データベースエラー：%{error}"
   failed_to_initialize_database: "データベースの初期化に失敗しました：%{error}"
   failed_to_lock_main_store: "データベースのロックに失敗しました：%{error}"

@@ -98,20 +98,27 @@ impl WorkflowExecutor {
 
         Ok(None)
     }
-
     pub(crate) async fn handle_ask_user_intercept(
         &mut self,
+        args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        let question = args["question"].as_str().unwrap_or("Waiting for your response...");
+
+        // We no longer send a Confirm signal here to avoid redundant popups.
+        // The message is already displayed in the chat stream.
+        // We just pause the engine and wait for user input in the main text area.
         self.update_state(WorkflowState::Paused).await?;
+
         Ok(Some(ReinforcedResult {
-            content: "Waiting for user".into(),
-            title: "AskUser".to_string(),
-            summary: "Asked user".to_string(),
+            content: question.to_string(),
+            title: "Ask User".to_string(),
+            summary: "Waiting for user".to_string(),
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),
         }))
     }
+
 
     pub(crate) async fn handle_finish_task_intercept(
         &mut self,
@@ -197,7 +204,7 @@ impl WorkflowExecutor {
                 crate::tools::ShellDecision::Deny(reason) => {
                     return Ok(Some(ReinforcedResult {
                         content: format!(
-                            "Error: Command blocked by security policy. Reason: {}",
+                            "Command blocked by security policy: {}. You may try an alternative command, modify the approach, or ask the user to adjust the policy if this restriction is blocking a legitimate task.",
                             reason
                         ),
                         title: format!("Bash({})", command_str),
@@ -237,7 +244,7 @@ impl WorkflowExecutor {
         &self,
         name: &str,
         args: &serde_json::Value,
-    ) -> Result<(), WorkflowEngineError> {
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         if let Some(path_str) = args["file_path"].as_str().or_else(|| args["path"].as_str()) {
             let guard = self.path_guard.read().map_err(|e| {
                 WorkflowEngineError::General(format!("PathGuard lock poisoned: {}", e))
@@ -246,8 +253,19 @@ impl WorkflowExecutor {
             let is_write = [TOOL_WRITE_FILE, TOOL_EDIT_FILE].contains(&name);
             let is_planning = self.policy.phase == ExecutionPhase::Planning;
 
-            guard.validate(std::path::Path::new(path_str), is_planning, is_write, false)?;
+            if let Err(e) =
+                guard.validate(std::path::Path::new(path_str), is_planning, is_write, false)
+            {
+                return Ok(Some(ReinforcedResult {
+                    content: format!("Security Error: {}\n<SYSTEM_REMINDER>Access to this path is denied. If this path is essential, please ask the user to add it to the 'Authorized Paths' in settings. Otherwise, try to use a different path or approach.</SYSTEM_REMINDER>", e),
+                    title: format!("Security Check: {}", name),
+                    summary: "Access Denied".to_string(),
+                    is_error: true,
+                    error_type: Some("Security".to_string()),
+                    display_type: "text".to_string(),
+                }));
+            }
         }
-        Ok(())
+        Ok(None)
     }
 }

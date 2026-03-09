@@ -781,6 +781,7 @@ dependencies = [
  "futures-util",
  "glob",
  "global-hotkey",
+ "globset",
  "hex",
  "html-escape",
  "http",

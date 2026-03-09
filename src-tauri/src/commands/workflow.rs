@@ -115,21 +115,49 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
                 }
             } else if path.is_dir() {
                 let mut entries = Vec::new();
-                if let Ok(rd) = fs::read_dir(&path) {
-                    for entry in rd.flatten() {
-                        if let Ok(meta) = entry.metadata() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            let is_dir = meta.is_dir();
-                            let size = meta.len();
-                            let mtime = meta
-                                .modified()
-                                .map(|t| {
-                                    let dt: DateTime<Local> = t.into();
-                                    dt.format("%b %d %H:%M").to_string()
-                                })
-                                .unwrap_or_else(|_| "-".to_string());
-                            entries.push((is_dir, name, size, mtime));
-                        }
+
+                // Use ignore crate to respect .gitignore
+                let mut walker = ignore::WalkBuilder::new(&path);
+                walker
+                    .max_depth(Some(1))
+                    .standard_filters(true)
+                    .hidden(false);
+
+                for result in walker.build() {
+                    let entry = match result {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+
+                    if entry.depth() == 0 {
+                        continue;
+                    }
+
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let name_lower = name.to_lowercase();
+
+                    // Manual filters
+                    if name == "node_modules"
+                        || name == ".git"
+                        || name == "__pycache__"
+                        || name_lower.ends_with(".pyc")
+                        || name_lower == "thumbs.db"
+                        || name_lower == ".ds_store"
+                    {
+                        continue;
+                    }
+
+                    if let Ok(meta) = entry.metadata() {
+                        let is_dir = meta.is_dir();
+                        let size = meta.len();
+                        let mtime = meta
+                            .modified()
+                            .map(|t| {
+                                let dt: DateTime<Local> = t.into();
+                                dt.format("%b %d %H:%M").to_string()
+                            })
+                            .unwrap_or_else(|_| "-".to_string());
+                        entries.push((is_dir, name, size, mtime));
                     }
                 }
 
@@ -197,7 +225,9 @@ pub async fn create_workflow(
 
     // Generate and store session key for proxy authentication
     let session_key = format!("sk-{}", uuid::Uuid::new_v4());
-    chat_state.workflow_keys.insert(created.id.clone(), session_key);
+    chat_state
+        .workflow_keys
+        .insert(created.id.clone(), session_key);
 
     Ok(created.id)
 }
@@ -293,7 +323,7 @@ pub async fn workflow_start(
     let main_store_arc = main_store.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
-    let gateway = gateway.inner().clone();
+    let gateway_arc = gateway.inner().clone();
     let factory = factory.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
@@ -304,10 +334,21 @@ pub async fn workflow_start(
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
-        let paths: Vec<String> = wf
-            .allowed_paths
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .unwrap_or_default();
+        
+        let paths: Vec<String> = match wf.allowed_paths {
+            Some(v) => {
+                if v.is_array() {
+                    serde_json::from_value(v).unwrap_or_default()
+                } else if let Some(s) = v.as_str() {
+                    // Handle string-encoded JSON array
+                    serde_json::from_str(s).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        };
+
         let prompt = initial_prompt
             .clone()
             .unwrap_or_else(|| wf.user_query.clone());
@@ -327,29 +368,43 @@ pub async fn workflow_start(
     };
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
-    gateway
+    gateway_arc
         .register_session_tx(session_id.clone(), signal_tx)
         .await;
 
-    let global_tool_manager = chat_state_arc.tool_manager.clone();
-
-    let allowed_roots = {
+    let allowed_paths = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .allowed_paths
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .map(|paths| {
-                paths
-                    .into_iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<PathBuf>>()
-            })
-            .unwrap_or_default()
+        let wf = snapshot.workflow;
+        match wf.allowed_paths {
+            Some(v) => {
+                if v.is_array() {
+                    serde_json::from_value::<Vec<String>>(v).unwrap_or_default()
+                } else if let Some(s) = v.as_str() {
+                    serde_json::from_str(s).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
     };
+
+    let global_tool_manager = chat_state_arc.tool_manager.clone();
+
+    let allowed_roots: Vec<PathBuf> = allowed_paths
+        .into_iter()
+        .map(|p| {
+            let path = PathBuf::from(p);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            }
+        })
+        .collect();
 
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
@@ -359,7 +414,7 @@ pub async fn workflow_start(
                 session_id.clone(),
                 main_store_arc.clone(),
                 chat_state_arc,
-                gateway as Arc<dyn Gateway>,
+                gateway_arc.clone() as Arc<dyn Gateway>,
                 factory,
                 agent_config,
                 allowed_roots,
@@ -377,7 +432,7 @@ pub async fn workflow_start(
                 session_id.clone(),
                 main_store_arc.clone(),
                 chat_state_arc,
-                gateway as Arc<dyn Gateway>,
+                gateway_arc.clone() as Arc<dyn Gateway>,
                 factory,
                 agent_config,
                 allowed_roots,
@@ -417,6 +472,7 @@ pub async fn workflow_start(
     );
 
     let session_id_for_spawn = session_id.clone();
+    let gateway_for_spawn = gateway_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
@@ -425,6 +481,34 @@ pub async fn workflow_start(
                 session_id_for_spawn,
                 e
             );
+            // Notify UI about the fatal crash
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: crate::workflow::react::types::WorkflowState::Error,
+                    },
+                )
+                .await;
+
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::Message {
+                        role: "assistant".to_string(),
+                        content: format!(
+                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
+                            e
+                        ),
+                        reasoning: None,
+                        step_type: None,
+                        step_index: 0,
+                        is_error: true,
+                        error_type: Some("engine".to_string()),
+                        metadata: None,
+                    },
+                )
+                .await;
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
     });
@@ -492,25 +576,39 @@ pub async fn workflow_approve_plan(
         .register_session_tx(session_id.clone(), signal_tx)
         .await;
 
-    let global_tool_manager = chat_state_arc.tool_manager.clone();
-
-    let allowed_roots = {
+    let allowed_paths = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .allowed_paths
-            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-            .map(|paths| {
-                paths
-                    .into_iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<PathBuf>>()
-            })
-            .unwrap_or_default()
+        let wf = snapshot.workflow;
+        match wf.allowed_paths {
+            Some(v) => {
+                if v.is_array() {
+                    serde_json::from_value::<Vec<String>>(v).unwrap_or_default()
+                } else if let Some(s) = v.as_str() {
+                    serde_json::from_str(s).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
     };
+
+    let global_tool_manager = chat_state_arc.tool_manager.clone();
+
+    let allowed_roots: Vec<PathBuf> = allowed_paths
+        .into_iter()
+        .map(|p| {
+            let path = PathBuf::from(p);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            }
+        })
+        .collect();
 
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
@@ -561,6 +659,7 @@ pub async fn workflow_approve_plan(
     );
 
     let session_id_for_spawn = session_id.clone();
+    let gateway_for_spawn = gateway_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
@@ -569,6 +668,34 @@ pub async fn workflow_approve_plan(
                 session_id_for_spawn,
                 e
             );
+            // Notify UI about the fatal crash
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: crate::workflow::react::types::WorkflowState::Error,
+                    },
+                )
+                .await;
+
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::Message {
+                        role: "assistant".to_string(),
+                        content: format!(
+                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
+                            e
+                        ),
+                        reasoning: None,
+                        step_type: None,
+                        step_index: 0,
+                        is_error: true,
+                        error_type: Some("engine".to_string()),
+                        metadata: None,
+                    },
+                )
+                .await;
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
     });
@@ -681,6 +808,18 @@ pub async fn search_workspace_files(
                 .to_string_lossy()
                 .to_string();
             let name_lower = name.to_lowercase();
+
+            // Manual filters for common unwanted items
+            if name == "node_modules"
+                || name == ".git"
+                || name == "__pycache__"
+                || name_lower.ends_with(".pyc")
+                || name_lower == "thumbs.db"
+                || name_lower == ".ds_store"
+            {
+                continue;
+            }
+
             let mut score = 0;
             if !query_lower.is_empty() {
                 if name_lower == query_lower {
@@ -763,11 +902,17 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
 pub async fn update_workflow_allowed_paths(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     session_id: String,
-    allowed_paths: String,
+    allowed_paths: Value,
 ) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
+    // Ensure we store it as a proper JSON string in DB
+    let paths_json = if allowed_paths.is_string() {
+        allowed_paths.as_str().unwrap_or("[]").to_string()
+    } else {
+        serde_json::to_string(&allowed_paths).unwrap_or_else(|_| "[]".to_string())
+    };
     store
-        .update_workflow_allowed_paths(&session_id, &allowed_paths)
+        .update_workflow_allowed_paths(&session_id, &paths_json)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -1,8 +1,10 @@
 <template>
   <div class="tree-node">
     <div class="node-item" :class="{ 'is-dir': node.is_dir }" @click="handleClick">
-      <cs :name="node.is_dir ? (isExpanded ? 'folder-open' : 'folder') : getFileIcon(node.name)" size="14px"
-        :class="node.is_dir ? 'dir-icon' : 'file-icon'" />
+      <span class="node-icon">
+        <cs :name="node.is_dir ? (isExpanded ? 'ext-folder-open' : 'ext-folder') : getFileIcon(node.name)"
+          size="14px" />
+      </span>
       <span class="node-name">{{ node.name }}</span>
       <div v-if="gitCode" class="git-status" :class="gitStatusClass" :title="gitCode"></div>
     </div>
@@ -64,12 +66,54 @@ const handleClick = () => {
 
 const getFileIcon = (name) => {
   const ext = name.split('.').pop().toLowerCase()
-  if (['js', 'ts', 'jsx', 'tsx', 'vue'].includes(ext)) return 'file-code'
-  if (['md', 'txt', 'log'].includes(ext)) return 'file-text'
-  if (['json', 'yaml', 'yml', 'xml'].includes(ext)) return 'file-json'
-  if (['py', 'rs', 'go', 'c', 'cpp', 'java'].includes(ext)) return 'file-code'
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) return 'file-image'
-  return 'file'
+  // 压缩包
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'].includes(ext)) return 'ext-zip'
+  // 图片
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff', 'raw'].includes(ext)) return 'ext-pic'
+  // 文档
+  if (['doc', 'docx'].includes(ext)) return 'ext-docx'
+  if (['ppt', 'pptx'].includes(ext)) return 'ext-pptx'
+  if (['xls', 'xlsx'].includes(ext)) return 'ext-xlsx'
+  if (['pdf'].includes(ext)) return 'ext-pdf'
+  if (['csv'].includes(ext)) return 'ext-csv'
+  // 代码 - Web
+  if (['html', 'htm', 'xhtml'].includes(ext)) return 'ext-html'
+  if (['css', 'scss', 'sass', 'less', 'styl'].includes(ext)) return 'ext-css'
+  if (['js', 'mjs', 'cjs'].includes(ext)) return 'ext-js'
+  if (['ts', 'mts', 'cts'].includes(ext)) return 'ext-ts'
+  if (['jsx'].includes(ext)) return 'ext-jsx'
+  if (['tsx'].includes(ext)) return 'ext-tsx'
+  if (['vue'].includes(ext)) return 'ext-vue'
+  // 代码 - 后端/系统
+  if (['c', 'h', 'hpp'].includes(ext)) return 'ext-c'
+  if (['cpp', 'cc', 'cxx', 'hxx'].includes(ext)) return 'ext-cpp'
+  if (['java'].includes(ext)) return 'ext-java'
+  if (['rs'].includes(ext)) return 'ext-rs'
+  if (['go'].includes(ext)) return 'ext-go'
+  if (['swift'].includes(ext)) return 'ext-swift'
+  if (['kt', 'kts', 'jsp', 'scala'].includes(ext)) return 'ext-java'
+  if (['rb'].includes(ext)) return 'ext-rb'
+  if (['php', 'php4', 'php5'].includes(ext)) return 'ext-php'
+  // Python
+  if (['py', 'pyw', 'pyc', 'pyd', 'pyi'].includes(ext)) return 'ext-py'
+  // Shell/脚本
+  if (['sh', 'bash', 'zsh', 'fish', 'ps1', 'psm1', 'bat', 'cmd', 'fish'].includes(ext)) return 'ext-shell'
+  // 可执行文件
+  if (['exe', 'msi', 'dmg', 'app', 'bin', 'pkg', 'deb', 'rpm', 'apk'].includes(ext)) return 'ext-exe'
+  // 配置文件/数据
+  if (['yaml', 'yml'].includes(ext)) return 'ext-yaml'
+  if (['json'].includes(ext)) return 'ext-json'
+  if (['xml'].includes(ext)) return 'ext-xml'
+  if (['toml'].includes(ext)) return 'ext-toml'
+  if (['ini', 'conf', 'cfg', 'properties', 'env'].includes(ext)) return 'ext-setting'
+  // Git 相关
+  if (name === '.git' || name === '.gitignore' || name === '.gitattributes' || name === '.gitmodules') return 'ext-git'
+  // 文本/文档
+  if (['md', 'markdown'].includes(ext)) return 'ext-md'
+  if (['txt'].includes(ext)) return 'ext-txt'
+  if (['log'].includes(ext)) return 'ext-log'
+  // 默认
+  return 'ext-file'
 }
 
 watch(isExpanded, (newVal) => {
@@ -99,12 +143,20 @@ watch(isExpanded, (newVal) => {
       flex: 1;
     }
 
-    .dir-icon {
-      color: var(--el-color-primary);
+    .node-icon {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+
+      .cs {
+        color: var(--cs-text-color-secondary);
+      }
     }
 
-    .file-icon {
-      color: var(--cs-text-color-secondary);
+    &.is-dir .node-icon .cs {
+      color: var(--el-color-primary);
     }
 
     .git-status {
@@ -128,9 +180,36 @@ watch(isExpanded, (newVal) => {
   }
 
   .node-children {
-    padding-left: 12px;
-    border-left: 1px solid var(--cs-border-color-light);
+    position: relative;
+    padding-left: 0;
     margin-left: 21px;
+
+    // Tree guide line (dashed) - vertical line
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      border-left: 1px dashed var(--cs-border-color);
+    }
+
+    // Each tree node in children
+    >.tree-node {
+      position: relative;
+
+      // Horizontal connector line
+      &::before {
+        content: '';
+        position: absolute;
+        left: -21px;
+        top: 12px;
+        width: 12px;
+        height: 1px;
+        border-top: 1px dashed var(--cs-border-color);
+      }
+    }
   }
 }
 </style>

@@ -126,7 +126,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           userQuery,
           agentId,
           status: 'pending',
-          allowedPaths: JSON.stringify(allowedPaths),
+          allowedPaths: allowedPaths,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -208,7 +208,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       await invokeWrapper('update_workflow_allowed_paths', {
         sessionId: workflowId,
-        allowedPaths: JSON.stringify(allowedPaths)
+        allowedPaths: allowedPaths
       });
       const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
       if (workflowIndex !== -1) {

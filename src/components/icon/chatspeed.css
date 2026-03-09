@@ -11,6 +11,154 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-ext-rb:before {
+  content: "\e691";
+}
+
+.cs-ext-swift:before {
+  content: "\e69e";
+}
+
+.cs-ext-toml:before {
+  content: "\e75d";
+}
+
+.cs-zip:before {
+  content: "\e683";
+}
+
+.cs-ext-git:before {
+  content: "\f1b4";
+}
+
+.cs-ext-shell:before {
+  content: "\e6e5";
+}
+
+.cs-ext-setting:before {
+  content: "\e87e";
+}
+
+.cs-ext-exe:before {
+  content: "\e681";
+}
+
+.cs-ext-docx:before {
+  content: "\e666";
+}
+
+.cs-ext-pdf:before {
+  content: "\e66b";
+}
+
+.cs-ext-xlsx:before {
+  content: "\ea45";
+}
+
+.cs-ext-pptx:before {
+  content: "\e790";
+}
+
+.cs-ext-csv:before {
+  content: "\e848";
+}
+
+.cs-ext-file:before {
+  content: "\e662";
+}
+
+.cs-ext-pic:before {
+  content: "\e663";
+}
+
+.cs-ext-xml:before {
+  content: "\e945";
+}
+
+.cs-ext-rs:before {
+  content: "\e687";
+}
+
+.cs-ext-folder:before {
+  content: "\e7d1";
+}
+
+.cs-ext-folder-open:before {
+  content: "\e85e";
+}
+
+.cs-ext-svg:before {
+  content: "\e669";
+}
+
+.cs-ext-cpp:before {
+  content: "\e66a";
+}
+
+.cs-ext-java:before {
+  content: "\e66c";
+}
+
+.cs-ext-jsx:before {
+  content: "\e66d";
+}
+
+.cs-ext-ts:before {
+  content: "\e66f";
+}
+
+.cs-ext-tsx:before {
+  content: "\e670";
+}
+
+.cs-ext-c:before {
+  content: "\e69a";
+}
+
+.cs-ext-php:before {
+  content: "\e67e";
+}
+
+.cs-ext-js:before {
+  content: "\e688";
+}
+
+.cs-ext-vue:before {
+  content: "\e69d";
+}
+
+.cs-ext-md:before {
+  content: "\e671";
+}
+
+.cs-ext-css:before {
+  content: "\e676";
+}
+
+.cs-ext-txt:before {
+  content: "\e680";
+}
+
+.cs-ext-html:before {
+  content: "\e679";
+}
+
+.cs-ext-py:before {
+  content: "\e67a";
+}
+
+.cs-ext-yaml:before {
+  content: "\e690";
+}
+
+.cs-ext-json:before {
+  content: "\e67c";
+}
+
+.cs-ext-log:before {
+  content: "\e67f";
+}
+
 .cs-list:before {
   content: "\e661";
 }
@@ -431,7 +579,7 @@
   content: "\e660";
 }
 
-.cs-skill-code-go:before {
+.cs-ext-go:before {
   content: "\e62d";
 }
 
@@ -493,10 +641,6 @@
 
 .cs-skill-code-python1:before {
   content: "\e63a";
-}
-
-.cs-skill-code-rust:before {
-  content: "\ec1c";
 }
 
 .cs-skill-piechart2:before {

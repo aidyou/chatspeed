@@ -670,7 +670,7 @@ impl WorkflowExecutor {
                             self.session_id,
                             tool_name
                         );
-                        let observation = format!("Error: User rejected the execution of tool '{}'. Please try an alternative approach or ask for clarification.", tool_name);
+                        let observation = format!("The user doesn't want to proceed with this tool use. The tool '{}' was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", tool_name);
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
                             observation,
@@ -1186,7 +1186,7 @@ impl WorkflowExecutor {
         match name {
             TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
             TOOL_FINISH_TASK => return self.handle_finish_task_intercept(text_part).await,
-            TOOL_ASK_USER => return self.handle_ask_user_intercept().await,
+            TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
             _ => {}
         }
 
@@ -1237,7 +1237,9 @@ impl WorkflowExecutor {
         ]
         .contains(&name)
         {
-            self.handle_fs_path_guard_intercept(name, args)?;
+            if let Some(result) = self.handle_fs_path_guard_intercept(name, args)? {
+                return Ok(Some(result));
+            }
         }
 
         Ok(None)

@@ -56,14 +56,25 @@ impl PathGuard {
     }
 
     fn process_roots(paths: Vec<PathBuf>) -> Vec<(PathBuf, Option<Gitignore>)> {
-        let canonical_roots: Vec<PathBuf> = paths
-            .into_iter()
-            .filter_map(|p| p.canonicalize().ok())
-            .collect();
         let mut roots_with_ignore = Vec::new();
-        for root in canonical_roots {
+        for p in paths {
+            // Try to canonicalize, but fallback to original if it fails but exists
+            let root = match p.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) => {
+                    if p.exists() {
+                        p
+                    } else {
+                        log::warn!("[PathGuard] Path does not exist and was ignored: {:?}", p);
+                        continue;
+                    }
+                }
+            };
+
             let mut builder = GitignoreBuilder::new(&root);
+            // Scan for .gitignore up to 3 levels deep to avoid massive stalls
             for entry in walkdir::WalkDir::new(&root)
+                .max_depth(3)
                 .follow_links(false)
                 .into_iter()
                 .filter_entry(|e| {
@@ -177,7 +188,7 @@ impl PathGuard {
                 Some(root) => root.join(target),
                 None => {
                     return Err(WorkflowEngineError::Security(format!(
-                        "Relative Path Denied: {:?} - No primary workspace.",
+                        "Relative Path Denied: {:?} - No primary workspace is configured. You MUST provide an absolute path, or ask the user to add the directory to 'Authorized Paths' in settings.",
                         target
                     )))
                 }

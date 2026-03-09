@@ -21,7 +21,12 @@
     </titlebar>
 
     <div class="workflow-main">
-      <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed }" class="sidebar">
+      <el-aside
+        :width="sidebarWidth"
+        :class="{ collapsed: sidebarCollapsed, dragging: isDragging }"
+        class="sidebar"
+        :style="sidebarStyle"
+      >
         <div v-show="!sidebarCollapsed" class="sidebar-tabs-container">
           <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
             <el-tab-pane :label="$t('workflow.historyTab')" name="history">
@@ -56,12 +61,20 @@
                 </div>
               </div>
             </el-tab-pane>
-            <el-tab-pane :label="$t('workflow.filesTab')" name="files">
-              <FileTree :paths="currentPaths" />
+            <el-tab-pane :label="$t('settings.agent.authorizedPaths')" name="files">
+              <FileTree :paths="currentPaths" @add-path="onAddPathFromTree" @remove-path="onRemovePathFromTree" />
             </el-tab-pane>
           </el-tabs>
         </div>
       </el-aside>
+
+      <!-- Resize Handle -->
+      <div
+        v-if="!sidebarCollapsed"
+        class="sidebar-resize-handle"
+        :class="{ dragging: isDragging }"
+        @mousedown="onResizeStart"
+      />
 
       <!-- main container -->
       <el-container class="main-container">
@@ -215,6 +228,10 @@
           </div>
 
           <div class="input">
+            <div v-if="currentWorkflow?.status === 'paused'" class="input-status-hint">
+              <cs name="talk" size="12px" />
+              <span>AI is waiting for your response...</span>
+            </div>
             <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
               @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
@@ -228,41 +245,7 @@
                     " :disabled="!!currentWorkflowId" />
                 </div>
 
-                <!-- Authorized Paths -->
-                <div class="allowed-paths-wrap">
-                  <el-popover placement="top" :width="300" trigger="click" popper-class="paths-popover"
-                    :disabled="!canEditPaths">
-                    <template #reference>
-                      <div class="paths-summary upperLayer"
-                        :class="{ empty: currentPaths.length === 0, disabled: !canEditPaths }"
-                        @click="!canEditPaths && showPathsDisabledMessage()">
-                        <cs name="folder" size="14px" />
-                        <span class="path-text">{{ displayAllowedPath || $t('settings.agent.workingDirectory') }}</span>
-                        <span v-if="currentPaths && currentPaths.length > 1" class="path-count">+{{ currentPaths.length
-                          - 1 }}</span>
-                      </div>
-                    </template>
-                    <div class="paths-detail">
-                      <div class="paths-header">
-                        <span>{{ $t('settings.agent.authorizedPaths') }}</span>
-                        <el-button size="small" type="primary" link @click="onAddPath">
-                          <cs name="add" size="14px" />
-                        </el-button>
-                      </div>
-                      <div class="paths-list">
-                        <div v-for="(path, idx) in currentPaths" :key="idx" class="path-item">
-                          <span class="path-name" :title="path">{{ path }}</span>
-                          <div class="path-ops">
-                            <cs name="trash" size="12px" @click="onRemovePath(idx)" />
-                          </div>
-                        </div>
-                        <div v-if="currentPaths.length === 0" class="empty-paths">
-                          {{ $t('settings.agent.authorizedPathsTip') }}
-                        </div>
-                      </div>
-                    </div>
-                  </el-popover>
-                </div>
+                <!-- Authorized Paths removed - now only in sidebar tab -->
 
                 <div class="icons">
                   <el-tooltip :content="$t('workflow.planningModeTooltip')" placement="top">
@@ -405,7 +388,46 @@ const editWorkflowId = ref(null)
 const editWorkflowTitle = ref('')
 
 const sidebarCollapsed = ref(!windowStore.workflowSidebarShow)
-const sidebarWidth = computed(() => (sidebarCollapsed.value ? '0px' : '300px')) // Increased width for tabs
+const sidebarWidthValue = ref(300) // Default sidebar width
+const sidebarWidth = computed(() => sidebarCollapsed.value ? '0px' : `${sidebarWidthValue.value}px`)
+const sidebarStyle = computed(() => ({
+  '--sidebar-width': sidebarCollapsed.value ? '0px' : `${sidebarWidthValue.value}px`
+}))
+
+// Resize dragging state
+const isDragging = ref(false)
+const maxSidebarWidth = ref(window.innerWidth * 0.5)
+
+// Update max width on window resize
+const updateMaxWidth = () => {
+  maxSidebarWidth.value = window.innerWidth * 0.5
+}
+
+// Resize handlers
+const onResizeStart = (e) => {
+  if (sidebarCollapsed.value) return
+  isDragging.value = true
+  e.preventDefault()
+
+  const startX = e.clientX
+  const startWidth = sidebarWidthValue.value
+
+  const onMouseMove = (moveEvent) => {
+    const delta = moveEvent.clientX - startX
+    const newWidth = Math.max(200, Math.min(startWidth + delta, maxSidebarWidth.value))
+    sidebarWidthValue.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    isDragging.value = false
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+  }
+
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
 const activeSidebarTab = ref('history')
 const searchQuery = ref('')
 const inputMessage = ref('')
@@ -654,6 +676,50 @@ const onRemovePath = async (index) => {
   }
 }
 
+// Handle add path from FileTree component
+const onAddPathFromTree = async (selected) => {
+  if (!selected) return
+  if (currentWorkflowId.value) {
+    // Editing existing workflow
+    const newPaths = [...allowedPaths.value]
+    if (!newPaths.includes(selected)) {
+      newPaths.push(selected)
+      await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
+      // Immediately notify executor to update path_guard in memory
+      await invokeWrapper('workflow_signal', {
+        sessionId: currentWorkflowId.value,
+        signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+      })
+    }
+  } else {
+    // No workflow yet - cache in pendingPaths
+    if (!pendingPaths.value.includes(selected)) {
+      pendingPaths.value.push(selected)
+    }
+  }
+}
+
+// Handle remove path from FileTree component
+const onRemovePathFromTree = async (path) => {
+  if (!path) return
+  if (currentWorkflowId.value) {
+    // Editing existing workflow
+    const newPaths = allowedPaths.value.filter(p => p !== path)
+    await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
+    // Immediately notify executor
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+    })
+  } else {
+    // No workflow yet - remove from pendingPaths
+    const index = pendingPaths.value.indexOf(path)
+    if (index > -1) {
+      pendingPaths.value.splice(index, 1)
+    }
+  }
+}
+
 // Message expansion state
 const expandedMessages = ref(new Set())
 const toggleMessageExpand = (id) => {
@@ -665,6 +731,7 @@ const toggleMessageExpand = (id) => {
 }
 const isMessageExpanded = (message) => {
   if (message.toolDisplay?.displayType === 'diff') return true
+  if (message.toolDisplay?.action === 'Ask User') return true
   return expandedMessages.value.has(message.displayId)
 }
 
@@ -779,34 +846,31 @@ const formatToolTitle = (name, args) => {
 
     'glob': (args) => {
       const pattern = args.pattern || args.glob || ''
-      return { icon: 'search', toolType: 'tool-file', action: 'Glob', target: truncateText(pattern, 30) }
+      return { icon: 'search', toolType: 'tool-file', action: `Glob ${pattern}`, target: '' }
     },
 
     'grep': (args) => {
       const pattern = args.pattern || args.query || ''
       const path = args.path || ''
-      const target = path ? `"${truncateText(pattern, 15)}" in ${truncatePath(path, 15)}` : `"${truncateText(pattern, 25)}"`
-      return { icon: 'search', toolType: 'tool-file', action: 'Grep', target }
+      const action = path ? `Grep "${pattern}" in ${path}` : `Grep "${pattern}"`
+      return { icon: 'search', toolType: 'tool-file', action, target: '' }
     },
 
     'web_fetch': (args) => {
       const url = args.url || ''
-      return { icon: 'link', toolType: 'tool-network', action: 'Fetch', target: getDomain(url) }
+      return { icon: 'link', toolType: 'tool-network', action: `Fetch ${url}`, target: '' }
     },
 
     'web_search': (args) => {
       const query = args.query || ''
-      const target = `"${truncateText(query, 30)}"`
       const numResults = args.num_results
-      if (numResults !== undefined) {
-        return { icon: 'search', toolType: 'tool-network', action: 'Search', target: `${target} Number:${numResults}` }
-      }
-      return { icon: 'search', toolType: 'tool-network', action: 'Search', target }
+      const action = numResults !== undefined ? `Search "${query}" (Count: ${numResults})` : `Search "${query}"`
+      return { icon: 'search', toolType: 'tool-network', action, target: '' }
     },
 
     'bash': (args) => {
       const cmd = args.command || ''
-      return { icon: 'terminal', toolType: 'tool-system', action: 'Bash', target: truncateText(cmd, 30) }
+      return { icon: 'terminal', toolType: 'tool-system', action: `Bash ${cmd}`, target: '' }
     },
 
     'todo_create': (args) => {
@@ -1153,6 +1217,7 @@ onMounted(async () => {
 
   windowStore.initWorkflowWindowAlwaysOnTop()
   window.addEventListener('keydown', onGlobalKeyDown)
+  window.addEventListener('resize', updateMaxWidth)
 
   // Initial scroll
   nextTick(() => scrollToBottom(true))
@@ -1164,6 +1229,7 @@ onBeforeUnmount(() => {
   }
   unlistenFocusInput.value()
   window.removeEventListener('keydown', onGlobalKeyDown)
+  window.removeEventListener('resize', updateMaxWidth)
 })
 
 const onToggleSidebar = () => {
@@ -1304,7 +1370,7 @@ const startNewWorkflow = async (prompt) => {
         userQuery: prompt,
         agentId: selectedAgent.value.id,
         status: 'pending',
-        allowedPaths: JSON.stringify(workflowAllowedPaths),
+        allowedPaths: workflowAllowedPaths,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -1345,7 +1411,7 @@ const onApproveAction = async () => {
       approved: true,
       id: approvalRequestId.value,
       tool_name: approvalAction.value,
-      tool_args: {} // Should ideally be passed from backend if needed
+      tool_args: JSON.parse(approvalDetails.value || '{}')
     })
     await invokeWrapper('workflow_signal', {
       sessionId: currentWorkflowId.value,
@@ -1368,7 +1434,7 @@ const onApproveAllAction = async () => {
       approve_all: true,
       id: approvalRequestId.value,
       tool_name: approvalAction.value,
-      tool_args: {}
+      tool_args: JSON.parse(approvalDetails.value || '{}')
     })
     await invokeWrapper('workflow_signal', {
       sessionId: currentWorkflowId.value,
@@ -1723,7 +1789,7 @@ const onGlobalKeyDown = event => {
 
     :deep(.el-tabs__header) {
       margin: 0;
-      padding: 0 10px;
+      padding: 0 10px 0 15px;
       background: var(--cs-bg-color);
     }
 
@@ -1774,6 +1840,11 @@ const onGlobalKeyDown = event => {
       flex-direction: column;
       height: 100%;
       transition: width 0.3s ease;
+      min-width: 0;
+
+      &.dragging {
+        transition: none;
+      }
 
       .sidebar-tabs-container {
         height: 100%;
@@ -1938,6 +2009,31 @@ const onGlobalKeyDown = event => {
             }
           }
         }
+      }
+    }
+
+    .sidebar-resize-handle {
+      width: 4px;
+      height: 100%;
+      background-color: transparent;
+      cursor: col-resize;
+      position: relative;
+      z-index: 100;
+      flex-shrink: 0;
+
+      &:hover,
+      &.dragging {
+        background-color: var(--el-color-primary);
+        opacity: 0.5;
+      }
+
+      &::before {
+        content: '';
+        position: absolute;
+        left: -4px;
+        top: 0;
+        width: 12px;
+        height: 100%;
       }
     }
 
@@ -2564,6 +2660,18 @@ const onGlobalKeyDown = event => {
           border-radius: var(--cs-border-radius-lg);
           padding: var(--cs-space-sm) var(--cs-space) var(--cs-space-xs);
 
+          .input-status-hint {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--el-color-primary);
+            padding: 4px 8px;
+            background: var(--el-color-primary-light-9);
+            border-radius: var(--cs-border-radius-sm);
+            margin-bottom: 8px;
+          }
+
           .icons {
             display: flex;
             align-items: center;
@@ -2697,115 +2805,10 @@ const onGlobalKeyDown = event => {
                 }
               }
 
-              .allowed-paths-wrap {
-                margin-left: 8px;
-
-                .paths-summary {
-                  display: flex;
-                  align-items: center;
-                  gap: 4px;
-                  font-size: 12px;
-                  color: var(--cs-text-color-secondary);
-                  background-color: var(--cs-input-bg-color);
-                  border: 1px solid var(--cs-border-color);
-                  border-radius: var(--cs-border-radius-lg);
-                  padding: 4px 8px;
-                  cursor: pointer;
-                  transition: all 0.2s ease;
-                  min-width: 80px; // Ensure visibility
-
-                  &.empty {
-                    border-style: dashed;
-                    opacity: 0.8;
-                  }
-
-                  &.disabled {
-                    cursor: not-allowed;
-                    opacity: 0.5;
-                  }
-
-                  &:hover:not(.disabled) {
-                    border-color: var(--cs-color-primary);
-                    color: var(--cs-color-primary);
-                  }
-
-                  .path-text {
-                    max-width: 100px;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap;
-                  }
-
-                  .path-count {
-                    font-size: 10px;
-                    background-color: var(--cs-color-primary-light-8);
-                    color: var(--cs-color-primary);
-                    padding: 0 4px;
-                    border-radius: 4px;
-                  }
-                }
-              }
+              /* Authorized paths wrap removed - now only in sidebar tab */
             }
           }
         }
-      }
-    }
-  }
-}
-
-.paths-popover {
-  .paths-detail {
-    .paths-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-      font-weight: 600;
-      font-size: 13px;
-      color: var(--cs-text-color-primary);
-    }
-
-    .paths-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      max-height: 200px;
-      overflow-y: auto;
-
-      .path-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        background-color: var(--cs-bg-color-light);
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-
-        .path-name {
-          flex: 1;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          color: var(--cs-text-color-regular);
-        }
-
-        .path-ops {
-          color: var(--cs-text-color-secondary);
-          cursor: pointer;
-
-          &:hover {
-            color: var(--el-color-danger);
-          }
-        }
-      }
-
-      .empty-paths {
-        font-size: 12px;
-        color: var(--cs-text-color-placeholder);
-        font-style: italic;
-        text-align: center;
-        padding: 12px 0;
       }
     }
   }

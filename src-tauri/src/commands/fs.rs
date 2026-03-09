@@ -9,9 +9,9 @@ use std::fs;
 
 use crate::error::{AppError, Result};
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Command;
-use serde_json::Value;
 
 #[tauri::command]
 pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
@@ -37,7 +37,7 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
         }
         let status = line[..2].trim().to_string();
         let relative_path = line[3..].to_string();
-        
+
         // Convert to absolute path for easier matching in frontend
         let absolute_path = base_path.join(relative_path).to_string_lossy().to_string();
         status_map.insert(absolute_path, status);
@@ -48,25 +48,49 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
 
 #[tauri::command]
 pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
-    let entries = fs::read_dir(path).map_err(|e| AppError::General {
-        message: format!("Failed to read directory: {}", e),
-    })?;
-
     let mut list = Vec::new();
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let path_buf = entry.path();
-            let is_dir = path_buf.is_dir();
-            let name = entry.file_name().to_string_lossy().to_string();
-            
-            list.push(serde_json::json!({
-                "name": name,
-                "path": path_buf.to_string_lossy().to_string(),
-                "is_dir": is_dir,
-            }));
+
+    // Use ignore crate to respect .gitignore and filter common files
+    let mut walker = ignore::WalkBuilder::new(path);
+    walker
+        .max_depth(Some(1)) // Only current directory
+        .standard_filters(true) // Respect .gitignore, .ignore, etc.
+        .hidden(false); // We want to see hidden files unless they are ignored by git
+
+    for result in walker.build() {
+        let entry = match result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        // Skip the base path itself
+        if entry.depth() == 0 {
+            continue;
         }
+
+        let path_buf = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Additional manual filters for common unwanted items
+        let name_lower = name.to_lowercase();
+        if name == "node_modules"
+            || name == ".git"
+            || name == "__pycache__"
+            || name_lower.ends_with(".pyc")
+            || name_lower == "thumbs.db"
+            || name_lower == ".ds_store"
+        {
+            continue;
+        }
+
+        let is_dir = path_buf.is_dir();
+        list.push(serde_json::json!({
+            "name": name,
+            "path": path_buf.to_string_lossy().to_string(),
+            "is_dir": is_dir,
+        }));
     }
-    
+
     // Sort: directories first, then alphabetical
     list.sort_by(|a, b| {
         let a_is_dir = a["is_dir"].as_bool().unwrap_or(false);
@@ -74,7 +98,10 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
         if a_is_dir != b_is_dir {
             return b_is_dir.cmp(&a_is_dir);
         }
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
 
     Ok(list)
@@ -92,16 +119,18 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
 #[tauri::command]
 pub async fn read_text_file(file_path: &str) -> Result<String> {
     log::debug!("Reading text file from path: {}", file_path);
-    
-    let content = fs::read_to_string(file_path)
-        .map_err(|e| {
-            log::error!("Failed to read text file '{}': {}", file_path, e);
-            AppError::General {
-                message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
-            }
-        })?;
-    
-    log::debug!("Successfully read text file, content length: {}", content.len());
+
+    let content = fs::read_to_string(file_path).map_err(|e| {
+        log::error!("Failed to read text file '{}': {}", file_path, e);
+        AppError::General {
+            message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+        }
+    })?;
+
+    log::debug!(
+        "Successfully read text file, content length: {}",
+        content.len()
+    );
     Ok(content)
 }
 

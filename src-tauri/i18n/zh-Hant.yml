@@ -253,7 +253,7 @@ setting:
 
 tools:
   failed_to_get_model: "獲取 %{model_type} 模型失敗"
-  function_not_found: "工作流程中未找到工具函數：%{name}"
+  function_not_found: "工作流中未找到工具函數：%{name}"
   keyword_must_be_non_empty: "關鍵詞 (query) 參數必須是非空字串或非空陣列"
   max_retries_exceeded: "超過最大重試次數：%{item}"
   mcp_stop_failed_details: "停止 MCP 伺服器 '%{server_name}' 失敗：%{details}"

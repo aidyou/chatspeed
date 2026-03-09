@@ -133,7 +133,7 @@ const _transformToBackend = (frontendAgent) => {
     vision_model: stringifyModel(frontendAgent.visionModel),
     models: modelsJson,
     max_contexts: frontendAgent.maxContexts,
-    final_audit: frontendAgent.finalAudit ? 1 : 0,
+    final_audit: !!frontendAgent.finalAudit,
     approval_level: frontendAgent.approvalLevel || 'default'
   };
 };

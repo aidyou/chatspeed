@@ -414,7 +414,7 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
-                    :content="$t('chat.newConversaction')"
+                    :content="$t('chat.newConversation')"
                     :hide-after="0"
                     :enterable="false"
                     placement="top">

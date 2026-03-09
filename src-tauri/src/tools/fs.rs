@@ -294,17 +294,28 @@ impl ToolDefinition for ListDir {
             .ok_or(ToolError::InvalidParams("path is required".to_string()))?;
         let recursive = params["recursive"].as_bool().unwrap_or(false);
         let mut entries = vec![];
-        if recursive {
-            for entry in walkdir::WalkDir::new(path_str)
-                .max_depth(3)
-                .into_iter()
-                .flatten()
-            {
-                entries.push(entry.path().to_string_lossy().to_string());
+
+        // Use ignore crate to respect .gitignore
+        let mut builder = ignore::WalkBuilder::new(path_str);
+        builder.standard_filters(true).hidden(false);
+        if !recursive {
+            builder.max_depth(Some(1));
+        }
+
+        for result in builder.build() {
+            let entry = match result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            // Skip the root path itself
+            if entry.depth() == 0 {
+                continue;
             }
-        } else if let Ok(read_dir) = fs::read_dir(path_str) {
-            for entry in read_dir.flatten() {
-                entries.push(entry.path().to_string_lossy().to_string());
+
+            entries.push(entry.path().to_string_lossy().to_string());
+            if entries.len() >= 1000 {
+                break;
             }
         }
 
