@@ -540,6 +540,7 @@ impl WorkflowExecutor {
                                 .await
                         };
                         let tool_call_obj = serde_json::json!({
+                            "id": signal_json["id"],
                             "name": tool_name,
                             "arguments": tool_args
                         });
