@@ -6,13 +6,13 @@ pub mod config;
 pub mod error;
 pub mod main_store;
 // pub mod plugin;
+mod ccproxy;
 mod mcp;
 mod note;
 mod proxy_group;
 mod sql;
 mod types;
 mod workflow;
-mod ccproxy;
 
 pub use agent::Agent;
 pub use backup::{BackupConfig, DbBackup};

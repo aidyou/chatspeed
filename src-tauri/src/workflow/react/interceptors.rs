@@ -1,4 +1,5 @@
 use serde_json::json;
+
 use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -13,6 +14,17 @@ impl WorkflowExecutor {
         name: &str,
         args: &serde_json::Value,
     ) -> bool {
+        // Core workflow tools are internal and safe, never intercept them
+        if name.starts_with("todo_")
+            || name.starts_with("task_")
+            || name == crate::tools::TOOL_ASK_USER
+            || name == crate::tools::TOOL_TASK
+            || name == crate::tools::TOOL_SKILL
+            || name == crate::tools::TOOL_FINISH_TASK
+        {
+            return false;
+        }
+
         // Full mode never intercepts
         if self.policy.approval_level == ApprovalLevel::Full {
             return false;
@@ -30,17 +42,16 @@ impl WorkflowExecutor {
 
         // Smart mode: allow read-only tools, intercept mutations and risky bash
         if self.policy.approval_level == ApprovalLevel::Smart {
-            let is_read_only_tool = name.starts_with("read_")
+            let is_safe_tool = name.starts_with("read_")
                 || name.starts_with("list_")
                 || name.starts_with("get_")
-                || name.starts_with("todo_list")
-                || name.starts_with("todo_get")
+                || name.starts_with("todo_") // All todo operations are safe
                 || name.contains("search")
                 || name.contains("fetch")
                 || name == "glob"
                 || name == "grep";
 
-            if is_read_only_tool {
+            if is_safe_tool {
                 return false;
             }
 
@@ -103,7 +114,9 @@ impl WorkflowExecutor {
         &mut self,
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let question = args["question"].as_str().unwrap_or("Waiting for your response...");
+        let question = args["question"]
+            .as_str()
+            .unwrap_or("Waiting for your response...");
         let options = args["options"].as_array();
 
         // We no longer send a Confirm signal here to avoid redundant popups.
@@ -131,7 +144,6 @@ impl WorkflowExecutor {
             display_type: if options.is_some() { "choice" } else { "text" }.to_string(),
         }))
     }
-
 
     pub(crate) async fn handle_finish_task_intercept(
         &mut self,
@@ -194,6 +206,8 @@ impl WorkflowExecutor {
                 }));
             }
         }
+
+        self.update_state(WorkflowState::Completed).await?;
         Ok(None)
     }
 
@@ -238,7 +252,7 @@ impl WorkflowExecutor {
                             },
                         )
                         .await?;
-                    self.update_state(WorkflowState::Paused).await?;
+                    self.update_state(WorkflowState::AwaitingApproval).await?;
                     return Ok(Some(ReinforcedResult {
                         content: "WAITING_FOR_USER_APPROVAL".to_string(),
                         title: format!("Bash({})", command_str),
@@ -266,6 +280,7 @@ impl WorkflowExecutor {
             let is_write = [TOOL_WRITE_FILE, TOOL_EDIT_FILE].contains(&name);
             let is_planning = self.policy.phase == ExecutionPhase::Planning;
 
+            // 1. Validate security boundaries
             if let Err(e) =
                 guard.validate(std::path::Path::new(path_str), is_planning, is_write, false)
             {

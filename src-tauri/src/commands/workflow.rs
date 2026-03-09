@@ -3,6 +3,7 @@ use crate::db::{MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use crate::workflow::react::types::StepType;
 use chrono::{DateTime, Local};
 use glob::glob;
 use regex::Regex;
@@ -43,8 +44,8 @@ fn get_file_metadata_info(path: &Path) -> String {
     format!("Size: {}, Modified: {}", size_str, modified)
 }
 
-fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
-    let mut enhanced_prompt = prompt.to_string();
+fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
+    let mut attached_context = String::new();
     let re = Regex::new(r"@([^\s]+)").unwrap();
 
     let mut injections = Vec::new();
@@ -92,7 +93,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
 
                 if size > 500 * 1024 {
                     injections.push(format!(
-                        "\n<file_content path={}>\n[File too large to show full content]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Above are its basic attributes. If you need to analyze the file content, use 'read_file' or 'grep' tools to read specific parts as needed.</SYSTEM_REMINDER>",
+                        "\n<file_content path={:?}>\n[File too large to show full content]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Above are its basic attributes. If you need to analyze the file content, use 'read_file' or 'grep' tools to read specific parts as needed.</SYSTEM_REMINDER>",
                         rel_pattern, info, rel_pattern
                     ));
                 } else {
@@ -100,12 +101,12 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
                         Ok(bytes) => {
                             if let Ok(content) = String::from_utf8(bytes) {
                                 injections.push(format!(
-                                    "\n<file_content path={}>\n{}\n</file_content>\n<SYSTEM_REMINDER>The user referenced file {}. Above is its complete content. Please use this information to answer the user's request.</SYSTEM_REMINDER>",
-                                    rel_pattern, content, rel_pattern
+                                    "\n<file_content path={:?}>\n{}\n</file_content>\n",
+                                    rel_pattern, content
                                 ));
                             } else {
                                 injections.push(format!(
-                                    "\n<file_content path={}>\n[Binary File or Invalid Encoding]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a binary file {} that cannot be displayed as text directly.</SYSTEM_REMINDER>",
+                                    "\n<file_content path={:?}>\n[Binary File or Invalid Encoding]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a binary file {} that cannot be displayed as text directly.</SYSTEM_REMINDER>",
                                     rel_pattern, info, rel_pattern
                                 ));
                             }
@@ -148,16 +149,14 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
                     }
 
                     if let Ok(meta) = entry.metadata() {
-                        let is_dir = meta.is_dir();
-                        let size = meta.len();
                         let mtime = meta
                             .modified()
                             .map(|t| {
                                 let dt: DateTime<Local> = t.into();
                                 dt.format("%b %d %H:%M").to_string()
                             })
-                            .unwrap_or_else(|_| "-".to_string());
-                        entries.push((is_dir, name, size, mtime));
+                            .unwrap_or_else(|_| "-".into());
+                        entries.push((meta.is_dir(), name, meta.len(), mtime));
                     }
                 }
 
@@ -182,25 +181,26 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> String {
                 }
 
                 if entry_count > 50 {
-                    list_str.push_str(&format!("... and {} more items\n", entry_count - 50));
+                    list_str.push_str(&format!("\n... and {} more items.", entry_count - 50));
                 }
 
                 injections.push(format!(
-                    "\n<list_dir path={}>\n{}\n</list_dir>\n<SYSTEM_REMINDER>The user referenced directory {}. Above is the list of its sub-items (directories first, then sorted alphabetically, showing up to 50 items). Please refer to this structure when answering.</SYSTEM_REMINDER>",
-                    rel_pattern, list_str, rel_pattern
+                    "\n<list_dir path={:?}>\n{}\n</list_dir>\n",
+                    rel_pattern, list_str
                 ));
             }
         }
     }
 
     if !injections.is_empty() {
-        enhanced_prompt.push_str("\n\n--- Referenced Files/Directories ---");
+        attached_context.push_str("\n--- Attached Context ---\n");
         for inj in injections {
-            enhanced_prompt.push_str(&inj);
+            attached_context.push_str(&inj);
         }
+        attached_context.push_str("\n<SYSTEM_REMINDER>Above is the technical context for the files/directories referenced in your prompt. Please use this information to answer the request accurately.</SYSTEM_REMINDER>\n");
     }
 
-    enhanced_prompt
+    (prompt.to_string(), attached_context)
 }
 
 // ==========================================
@@ -309,8 +309,8 @@ pub async fn update_workflow_status(
 
 #[tauri::command]
 pub async fn workflow_start(
-    app: AppHandle,
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -320,7 +320,7 @@ pub async fn workflow_start(
     initial_prompt: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
-    let main_store_arc = main_store.inner().clone();
+    let main_store_arc = state.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
     let gateway_arc = gateway.inner().clone();
@@ -328,13 +328,13 @@ pub async fn workflow_start(
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
 
-    let (mut processed_prompt, allowed_paths) = {
+    let (clean_prompt, attached_context, allowed_paths) = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
-        
+
         let paths: Vec<String> = match wf.allowed_paths {
             Some(v) => {
                 if v.is_array() {
@@ -352,12 +352,15 @@ pub async fn workflow_start(
         let prompt = initial_prompt
             .clone()
             .unwrap_or_else(|| wf.user_query.clone());
-        (prompt, paths)
-    };
 
-    if initial_prompt.is_some() {
-        processed_prompt = inject_at_mentions(&processed_prompt, &allowed_paths);
-    }
+        let (p, att) = if initial_prompt.is_some() {
+            inject_at_mentions(&prompt, &paths)
+        } else {
+            (prompt, String::new())
+        };
+
+        (p, att, paths)
+    };
 
     let agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -371,26 +374,6 @@ pub async fn workflow_start(
     gateway_arc
         .register_session_tx(session_id.clone(), signal_tx)
         .await;
-
-    let allowed_paths = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        let wf = snapshot.workflow;
-        match wf.allowed_paths {
-            Some(v) => {
-                if v.is_array() {
-                    serde_json::from_value::<Vec<String>>(v).unwrap_or_default()
-                } else if let Some(s) = v.as_str() {
-                    serde_json::from_str(s).unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
-            }
-            None => Vec::new(),
-        }
-    };
 
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
@@ -451,10 +434,16 @@ pub async fn workflow_start(
         executor.init().await.map_err(|e| e.to_string())?;
 
         if initial_prompt.is_some() {
+            let att_opt = if attached_context.is_empty() {
+                None
+            } else {
+                Some(attached_context)
+            };
             executor
                 .add_message_and_notify(
                     "user".into(),
-                    processed_prompt,
+                    clean_prompt,
+                    att_opt,
                     None,
                     None,
                     false,
@@ -543,7 +532,7 @@ pub async fn workflow_approve_plan(
     );
 
     context
-        .prune_for_execution(plan)
+        .prune_for_execution(plan.clone())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -610,6 +599,7 @@ pub async fn workflow_approve_plan(
         })
         .collect();
 
+    // Transition to Execution/Implementation
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
     > = Arc::new(tokio::sync::Mutex::new(
@@ -634,7 +624,25 @@ pub async fn workflow_approve_plan(
         let mut executor = shared_executor.lock().await;
         executor.init().await.map_err(|e| e.to_string())?;
 
-        for msg in executor.messages() {
+        // Prune history and set the approved plan as anchor
+        let mut executor_guard = executor;
+        // The implementation runner handles pruning during its own internal initialization if needed,
+        // but here we force the transition context
+
+        // Use the plan
+        executor_guard.add_message_and_notify(
+            "user".into(),
+            format!("The plan has been approved. Please proceed with execution.\n\nApproved Plan:\n{}", plan),
+            None,
+            None,
+            Some(StepType::Observe),
+            false,
+            None,
+            None,
+        ).await.map_err(|e| e.to_string())?;
+
+        // Re-sync pruned history to the UI
+        for msg in executor_guard.messages() {
             let _ = gateway_arc
                 .send(
                     &session_id,
@@ -710,7 +718,7 @@ pub async fn workflow_signal(
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>,
+    factory: State<'_, Arc<dyn SubAgentFactory>>,
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
@@ -726,11 +734,13 @@ pub async fn workflow_signal(
                 if val["type"] == "user_input" {
                     if let Some(content) = val["content"].as_str() {
                         log::info!("[Workflow] No active channel for session {}, attempting to resume with new input", session_id);
-                        
+
                         // Find the agent ID for this session from DB
                         let agent_id = {
                             let store = state.read().map_err(|e| e.to_string())?;
-                            let snapshot = store.get_workflow_snapshot(&session_id).map_err(|e| e.to_string())?;
+                            let snapshot = store
+                                .get_workflow_snapshot(&session_id)
+                                .map_err(|e| e.to_string())?;
                             snapshot.workflow.agent_id
                         };
 
@@ -746,13 +756,17 @@ pub async fn workflow_signal(
                             agent_id,
                             Some(content.to_string()),
                             None,
-                        ).await?;
-                        
+                        )
+                        .await?;
+
                         return Ok("Workflow resumed with input".to_string());
                     }
                 }
             }
-            Err(format!("Failed to send signal: No active session for {}", session_id))
+            Err(format!(
+                "Failed to send signal: No active session for {}",
+                session_id
+            ))
         }
     }
 }
@@ -762,24 +776,22 @@ pub async fn workflow_stop(
     gateway: State<'_, Arc<TauriGateway>>,
     session_id: String,
 ) -> Result<(), String> {
-    let _ = gateway
+    let gateway_arc = gateway.inner().clone();
+    gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
-        .await;
-    Ok(())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn workflow_get_tasks() -> Result<Value, String> {
-    let mut tasks = Vec::new();
-    for entry in BACKGROUND_TASKS.iter() {
-        let (id, task) = entry.pair();
-        let task_type = match task {
-            BackgroundTask::SubAgent(_) => "Agent",
-            BackgroundTask::ShellCommand { .. } => "Shell",
-        };
-        tasks.push(json!({ "id": id, "type": task_type }));
-    }
-    Ok(json!(tasks))
+pub async fn workflow_get_tasks(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<Vec<Value>, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .get_todo_list_for_workflow(&session_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -791,8 +803,7 @@ pub async fn update_workflow_todo_list(
     let store = state.read().map_err(|e| e.to_string())?;
     store
         .update_workflow_todo_list(&session_id, &todo_list)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -809,46 +820,28 @@ pub async fn search_workspace_files(
     paths: Vec<String>,
     query: String,
 ) -> Result<Vec<WorkspaceFile>, String> {
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    }
+    let mut results = vec![];
     let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-    for base_path in paths {
-        let base = Path::new(&base_path);
+
+    for root_str in paths {
+        let base = PathBuf::from(&root_str);
         if !base.exists() {
             continue;
         }
-        let walker = ignore::WalkBuilder::new(base)
-            .hidden(true)
-            .git_ignore(true)
-            .ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
+
+        let walker = ignore::WalkBuilder::new(&base)
+            .standard_filters(true)
+            .hidden(false)
             .build();
-        for entry in walker {
-            let entry = match entry {
+
+        for result in walker {
+            let entry = match result {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            let path = entry.path();
-            if path == base {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_string();
-            if name.is_empty() {
-                continue;
-            }
-            let rel_path = path
-                .strip_prefix(base)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
+
+            let path = entry.path().to_path_buf();
+            let name = entry.file_name().to_string_lossy().to_string();
             let name_lower = name.to_lowercase();
 
             // Manual filters for common unwanted items
@@ -861,6 +854,12 @@ pub async fn search_workspace_files(
             {
                 continue;
             }
+
+            let rel_path = path
+                .strip_prefix(&base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
 
             let mut score = 0;
             if !query_lower.is_empty() {
@@ -878,11 +877,13 @@ pub async fn search_workspace_files(
             } else {
                 score = 1;
             }
+
             let depth = path
                 .components()
                 .count()
                 .saturating_sub(base.components().count());
             score -= (depth as i32) * 2;
+
             if let Some(ext) = path
                 .extension()
                 .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
@@ -907,18 +908,26 @@ pub async fn search_workspace_files(
                     _ => {}
                 }
             }
+
+            let is_dir = path.is_dir();
+            if is_dir {
+                score += 5;
+            }
+
             results.push(WorkspaceFile {
                 name,
                 relative_path: rel_path,
                 path: path.to_string_lossy().to_string(),
-                is_directory: path.is_dir(),
+                is_directory: is_dir,
                 score,
             });
+
             if results.len() > 1000 {
                 break;
             }
         }
     }
+
     results.sort_by(|a, b| {
         b.score
             .cmp(&a.score)

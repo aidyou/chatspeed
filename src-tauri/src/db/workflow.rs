@@ -34,6 +34,7 @@ pub struct WorkflowMessage {
     pub message: String,
     pub reasoning: Option<String>,
     pub metadata: Option<Value>,
+    pub attached_context: Option<String>,
     pub step_type: Option<String>,
     pub step_index: i32,
     #[serde(default)]
@@ -86,6 +87,7 @@ impl From<&Row<'_>> for WorkflowMessage {
             message: row.get("message").unwrap_or_default(),
             reasoning: row.get("reasoning").ok(),
             metadata,
+            attached_context: row.get("attached_context").ok(),
             step_type: row.get("step_type").ok(),
             step_index: row.get("step_index").unwrap_or_default(),
             is_error: row
@@ -196,14 +198,15 @@ impl MainStore {
             .map(|m| serde_json::to_string(m).unwrap_or_default());
 
         conn.execute(
-            "INSERT INTO workflow_messages (session_id, role, message, reasoning, metadata, step_type, step_index, is_error, error_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO workflow_messages (session_id, role, message, reasoning, metadata, attached_context, step_type, step_index, is_error, error_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 msg.session_id,
                 msg.role,
                 msg.message,
                 msg.reasoning,
                 metadata_json,
+                msg.attached_context,
                 msg.step_type,
                 msg.step_index,
                 if msg.is_error { 1 } else { 0 },

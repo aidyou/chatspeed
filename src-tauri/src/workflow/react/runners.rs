@@ -34,6 +34,7 @@ impl ReActExecutor for ExecutionExecutor {
         &mut self,
         role: String,
         content: String,
+        attached_context: Option<String>,
         reasoning: Option<String>,
         step_type: Option<StepType>,
         is_error: bool,
@@ -42,7 +43,14 @@ impl ReActExecutor for ExecutionExecutor {
     ) -> Result<bool, WorkflowEngineError> {
         self.executor
             .add_message_and_notify_internal(
-                role, content, reasoning, step_type, is_error, error_type, metadata,
+                role,
+                content,
+                attached_context,
+                reasoning,
+                step_type,
+                is_error,
+                error_type,
+                metadata,
             )
             .await
     }

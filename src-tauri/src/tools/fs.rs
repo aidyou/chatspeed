@@ -110,7 +110,7 @@ impl ToolDefinition for WriteFile {
         "Writes a file to the local filesystem.\n\n\
         Usage:\n\
         - This tool will overwrite the existing file if there is one at the provided path.\n\
-        - If this is an existing file, you MUST use the read_file tool first to read the file's contents. This tool will fail if you did not read the file first.\n\
+        - If this is an existing file, ensure you have viewed its full content (e.g., via `read_file` or user-provided context) before overwriting to avoid unintended data loss.\n\
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the user.\n\
         - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."
@@ -172,8 +172,8 @@ impl ToolDefinition for EditFile {
     fn description(&self) -> &str {
         "Performs exact string replacements in files.\n\n\
         Usage:\n\
-        - You must use your `read_file` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. \n\
-        - When editing text from read_file tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n\
+        - Ensure you have viewed the full content of the file (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing. \n\
+        - When editing, ensure you preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n\
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
         - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\

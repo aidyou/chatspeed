@@ -1,15 +1,17 @@
 use async_trait::async_trait;
-use dirs;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use tokio::time::{sleep, Duration};
 
 use crate::ai::chat::openai::OpenAIChat;
-use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::db::{Agent, MainStore};
+use crate::ai::interaction::chat_completion::AiChatEnum;
+use crate::ai::interaction::chat_completion::ChatState;
+use crate::ccproxy::ChatProtocol;
+use crate::db::{Agent, MainStore, WorkflowMessage};
 use crate::tools::{
-    ToolManager, TOOL_ASK_USER, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_GLOB, TOOL_GREP,
-    TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH, TOOL_WRITE_FILE,
+    ToolManager, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -37,6 +39,7 @@ pub trait ReActExecutor: Send + Sync {
         &mut self,
         role: String,
         content: String,
+        attached_context: Option<String>,
         reasoning: Option<String>,
         step_type: Option<StepType>,
         is_error: bool,
@@ -48,7 +51,7 @@ pub trait ReActExecutor: Send + Sync {
     fn session_id(&self) -> String;
     fn state(&self) -> WorkflowState;
     fn set_state(&mut self, state: WorkflowState);
-    fn messages(&self) -> Vec<crate::db::WorkflowMessage>;
+    fn messages(&self) -> Vec<WorkflowMessage>;
 }
 
 pub struct WorkflowExecutor {
@@ -78,7 +81,9 @@ pub struct WorkflowExecutor {
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Detects repetitive tool calls within a sliding window.
-    loop_detector: LoopDetector,
+    pub(crate) loop_detector: LoopDetector,
+    /// Memory cache for tools awaiting user approval.
+    pub(crate) pending_approvals: Arc<dashmap::DashMap<String, serde_json::Value>>,
 }
 
 #[async_trait]
@@ -95,6 +100,7 @@ impl ReActExecutor for WorkflowExecutor {
         &mut self,
         role: String,
         content: String,
+        attached_context: Option<String>,
         reasoning: Option<String>,
         step_type: Option<StepType>,
         is_error: bool,
@@ -102,7 +108,14 @@ impl ReActExecutor for WorkflowExecutor {
         metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
         self.add_message_and_notify_internal(
-            role, content, reasoning, step_type, is_error, error_type, metadata,
+            role,
+            content,
+            attached_context,
+            reasoning,
+            step_type,
+            is_error,
+            error_type,
+            metadata,
         )
         .await
     }
@@ -119,7 +132,7 @@ impl ReActExecutor for WorkflowExecutor {
         self.state = state;
     }
 
-    fn messages(&self) -> Vec<crate::db::WorkflowMessage> {
+    fn messages(&self) -> Vec<WorkflowMessage> {
         self.context.messages.clone()
     }
 }
@@ -140,182 +153,82 @@ impl WorkflowExecutor {
         global_tool_manager: Arc<ToolManager>,
         policy: ExecutionPolicy,
     ) -> Self {
-        let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
-            serde_json::from_str(m).unwrap_or_else(|e| {
-                log::error!("[Workflow Executor] Failed to parse agent models JSON for session {}: {}. Original string: {}", session_id, e, m);
-                serde_json::json!({})
-            })
-        } else {
-            serde_json::json!({
-                "plan": agent_config.plan_model.as_deref().and_then(|s| {
-                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
-                        log::error!("[Workflow Executor] Failed to parse plan_model JSON: {}", e);
-                        e
-                    }).ok()
-                }),
-                "act": agent_config.act_model.as_deref().and_then(|s| {
-                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
-                        log::error!("[Workflow Executor] Failed to parse act_model JSON: {}", e);
-                        e
-                    }).ok()
-                }),
-                "vision": agent_config.vision_model.as_deref().and_then(|s| {
-                    serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
-                        log::error!("[Workflow Executor] Failed to parse vision_model JSON: {}", e);
-                        e
-                    }).ok()
-                }),
-            })
-        };
+        let session_id_clone = session_id.clone();
+        let session_id_clone2 = session_id.clone();
+        let session_id_clone3 = session_id.clone();
+        let chat_state_clone = chat_state.clone();
+        let chat_state_clone2 = chat_state.clone();
+        let chat_state_clone3 = chat_state.clone();
 
-        let target_type = subagent_type
-            .clone()
-            .unwrap_or_else(|| "General".to_string());
-        let act_model = models_val.get("act").cloned().unwrap_or_default();
-        let plan_model = models_val.get("plan").cloned().unwrap_or_default();
-
-        let active_model = if policy.phase == ExecutionPhase::Planning || target_type == "Planning"
-        {
-            // Prioritize the plan model during planning phase
-            if !plan_model["model"].is_null() {
-                plan_model
-            } else {
-                act_model.clone()
-            }
-        } else {
-            match target_type.as_str() {
-                "Programming" => models_val
-                    .get("coding")
-                    .cloned()
-                    .filter(|m| !m["model"].is_null())
-                    .unwrap_or_else(|| act_model.clone()),
-                "Vision" => models_val
-                    .get("vision")
-                    .cloned()
-                    .filter(|m| !m["model"].is_null())
-                    .unwrap_or_else(|| act_model.clone()),
-                "Writing" => models_val
-                    .get("copywriting")
-                    .cloned()
-                    .filter(|m| !m["model"].is_null())
-                    .unwrap_or_else(|| act_model.clone()),
-                "Browsing" => models_val
-                    .get("browsing")
-                    .cloned()
-                    .filter(|m| !m["model"].is_null())
-                    .unwrap_or_else(|| act_model.clone()),
-                _ => act_model.clone(),
-            }
-        };
-
-        let provider_id = active_model["id"].as_i64().unwrap_or(0);
-        let model_name = active_model["model"].as_str().unwrap_or("").to_string();
-        let reasoning = active_model["reasoning"].as_bool().unwrap_or(false);
-
-        // Determine max_contexts with priority: Model Specific > Agent Config > Default
-        let max_contexts = if let Some(cs) = active_model["contextSize"].as_i64() {
-            if cs > 0 {
-                cs as usize
-            } else {
-                agent_config.max_contexts.unwrap_or(128000) as usize
-            }
-        } else {
-            agent_config.max_contexts.unwrap_or(128000) as usize
-        };
-
-        let context = ContextManager::new(
-            session_id.clone(),
-            main_store,
-            max_contexts,
-            tsid_generator.clone(),
-        );
-
-        let compressor =
-            ContextCompressor::new(chat_state.clone(), provider_id, model_name.clone());
+        // Create skill_scanner first to get skill_paths
         let skill_scanner = SkillScanner::new(app_data_dir.clone());
+        let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
-        // 1. Define Sandbox Roots (Strictly writable in Planning Mode)
-        let mut sandbox_paths = Vec::new();
-        let mut skill_paths = Vec::new();
-
-        // Planning dir in AppData (Session-isolated)
-        let planning_dir = app_data_dir.join("planning").join(&session_id);
-        let _ = std::fs::create_dir_all(&planning_dir);
-        sandbox_paths.push(planning_dir);
-
-        // Standard Skill Search Paths (Provided by SkillScanner)
-        for skill_path in skill_scanner.get_search_paths() {
-            // We ensure they are included in both sandbox (for write) and skill_roots (for identity)
-            sandbox_paths.push(skill_path.clone());
-            skill_paths.push(skill_path);
-        }
-
-        // System Temp
+        // Build sandbox_paths
+        let mut sandbox_paths = vec![app_data_dir.join("planning").join(&session_id)];
         sandbox_paths.push(std::env::temp_dir());
-
-        // Global ~/.chatspeed (used for general storage)
         if let Some(home) = dirs::home_dir() {
-            let chatspeed_home = home.join(".chatspeed");
-            sandbox_paths.push(chatspeed_home);
+            sandbox_paths.push(home.join(".chatspeed"));
         }
-
-        // 2. Workspace Roots
-
-        let workspace_paths = allowed_paths;
 
         let path_guard = Arc::new(RwLock::new(PathGuard::new(
-            workspace_paths,
+            allowed_paths,
             sandbox_paths,
             skill_paths,
         )));
-        let tool_manager = Arc::new(ToolManager::new());
+        let path_guard_clone = path_guard.clone();
 
-        let auto_approve: HashSet<String> = {
-            let json_str = agent_config.auto_approve.as_deref().unwrap_or("[]");
-            serde_json::from_str(json_str).unwrap_or_else(|e| {
-                log::error!("[Workflow Executor] Failed to parse auto_approve JSON for session {}: {}. Original: {}", session_id, e, json_str);
-                HashSet::new()
-            })
+        let max_contexts = agent_config.max_contexts.unwrap_or(128000);
+        let max_steps = if policy.phase == ExecutionPhase::Planning {
+            10
+        } else {
+            agent_config
+                .max_contexts
+                .map(|ctx| ((ctx as usize) / 2000).clamp(20, 200))
+                .unwrap_or(DEFAULT_MAX_STEPS)
         };
 
-        let llm_processor = LlmProcessor::new(
-            session_id.clone(),
-            agent_config.clone(),
-            HashMap::new(), // available_skills will be populated later
-            path_guard.clone(),
-            chat_state.clone(),
-            provider_id,
-            model_name.clone(),
-            reasoning,
-        );
-
-        let intelligence_manager = IntelligenceManager::new(
-            session_id.clone(),
-            chat_state.clone(),
-            provider_id,
-            model_name.clone(),
-        );
-
-        // Derive max_steps from agent config: use max_contexts as a hint (divide by 2000
-        // tokens/step heuristic), clamped between 20 and 200, defaulting to DEFAULT_MAX_STEPS.
-        let max_steps = agent_config
-            .max_contexts
-            .map(|ctx| ((ctx as usize) / 2000).clamp(20, 200))
-            .unwrap_or(DEFAULT_MAX_STEPS);
+        let mut auto_approve = HashSet::new();
+        if let Some(s) = &agent_config.auto_approve {
+            if let Ok(v) = serde_json::from_str::<Vec<String>>(s) {
+                for tool in v {
+                    auto_approve.insert(tool);
+                }
+            }
+        }
 
         Self {
             session_id,
-            context,
-            tool_manager,
+            context: ContextManager::new(
+                session_id_clone,
+                main_store,
+                max_contexts as usize,
+                tsid_generator.clone(),
+            ),
+            tool_manager: chat_state.tool_manager.clone(),
             global_tool_manager,
             chat_state,
             gateway,
             sub_agent_factory,
-            compressor,
+            compressor: ContextCompressor::new(chat_state_clone, 0, "".into()),
             path_guard,
             skill_scanner,
-            llm_processor,
-            intelligence_manager,
+            llm_processor: LlmProcessor::new(
+                session_id_clone2,
+                agent_config.clone(),
+                HashMap::new(),
+                path_guard_clone,
+                chat_state_clone2,
+                0,
+                "".into(),
+                false,
+            ),
+            intelligence_manager: IntelligenceManager::new(
+                session_id_clone3,
+                chat_state_clone3,
+                0,
+                "".into(),
+            ),
             available_skills: HashMap::new(),
             agent_config,
             state: WorkflowState::Pending,
@@ -328,6 +241,7 @@ impl WorkflowExecutor {
             subagent_type,
             policy,
             loop_detector: LoopDetector::new(),
+            pending_approvals: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -342,8 +256,27 @@ impl WorkflowExecutor {
 
         if let Some(last_msg) = self.context.messages.last() {
             self.current_step = last_msg.step_index as usize;
+            if self.state == WorkflowState::AwaitingApproval && last_msg.role == "tool" {
+                if let Some(metadata) = &last_msg.metadata {
+                    if let Some(tool_call) = metadata.get("tool_call") {
+                        let id = tool_call.get("id").and_then(|v| v.as_str());
+                        let args = tool_call
+                            .get("arguments")
+                            .or_else(|| tool_call.get("input"));
+                        if let (Some(id_str), Some(args_val)) = (id, args) {
+                            let parsed_args = if args_val.is_string() {
+                                serde_json::from_str(args_val.as_str().unwrap())
+                                    .unwrap_or(args_val.clone())
+                            } else {
+                                args_val.clone()
+                            };
+                            self.pending_approvals
+                                .insert(id_str.to_string(), parsed_args);
+                        }
+                    }
+                }
+            }
         } else {
-            // New workflow session: generate title from user query
             let user_query = self.context.get_initial_query();
             if !user_query.is_empty() {
                 let im = IntelligenceManager::new(
@@ -352,14 +285,16 @@ impl WorkflowExecutor {
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
                 );
-                // Fire and forget title generation to not block init
-                tokio::spawn(async move {
-                    let _ = im.generate_workflow_title(&user_query).await;
-                });
+                if let Ok(title) = im.generate_workflow_title(&user_query).await {
+                    let store = self
+                        .context
+                        .main_store
+                        .read()
+                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+                    let _ = store.update_workflow_title(&self.session_id, &title);
+                }
             }
         }
-
-        self.update_state(WorkflowState::Thinking).await?;
         Ok(())
     }
 
@@ -549,41 +484,19 @@ impl WorkflowExecutor {
             && self.state != WorkflowState::Cancelled
             && self.state != WorkflowState::AwaitingApproval
         {
-            // --- Check signal channel for "stop" commands ---
-            while let Ok(sig_str) = signal_rx.try_recv() {
-                let sig_json: serde_json::Value =
-                    serde_json::from_str(&sig_str).unwrap_or_default();
-                if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                    log::info!(
-                        "WorkflowExecutor {}: Received STOP signal in main loop",
-                        self.session_id
-                    );
-                    self.update_state(WorkflowState::Cancelled).await?;
-                    self.signal_rx = Some(signal_rx);
-                    return Ok(());
-                } else if sig_json["type"] == "user_input" {
-                    // Push user input to messages
-                    let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
-                    self.add_message_and_notify_internal(
-                        "user".to_string(),
-                        user_input,
-                        None,
-                        None,
-                        false,
-                        None,
-                        None,
-                    )
-                    .await?;
-                }
+            // Check stop signal at loop start
+            if self.check_stop_signal(&mut signal_rx).await? {
+                break;
             }
 
+            // Handle Paused state - wait for approval signal
             if self.state == WorkflowState::Paused {
                 let signal_str = signal_rx
                     .recv()
                     .await
-                    .ok_or_else(|| WorkflowEngineError::Gateway("Signal channel closed".into()))?;
+                    .ok_or_else(|| WorkflowEngineError::General("Signal channel closed".into()))?;
 
-                let signal_json: serde_json::Value = serde_json::from_str(&signal_str)
+                let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
                 if signal_json["type"] == "stop" {
@@ -652,6 +565,7 @@ impl WorkflowExecutor {
                             "tool".to_string(),
                             reinforced.content,
                             None,
+                            None,
                             Some(StepType::Observe),
                             reinforced.is_error,
                             reinforced.error_type.clone(),
@@ -675,6 +589,7 @@ impl WorkflowExecutor {
                             "tool".to_string(),
                             observation,
                             None,
+                            None,
                             Some(StepType::Observe),
                             true,
                             Some("UserRejected".to_string()),
@@ -686,6 +601,10 @@ impl WorkflowExecutor {
                         )
                         .await?;
                     }
+                    // Clean up the stashed approval entry
+                    if let Some(id) = signal_json["id"].as_str() {
+                        self.pending_approvals.remove(id);
+                    }
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 } else {
@@ -693,6 +612,7 @@ impl WorkflowExecutor {
                     self.add_message_and_notify_internal(
                         "user".to_string(),
                         user_input,
+                        None,
                         None,
                         None,
                         false,
@@ -704,6 +624,7 @@ impl WorkflowExecutor {
                     continue;
                 }
             }
+
             self.current_step += 1;
 
             // --- Max-step budget guard ---
@@ -723,6 +644,7 @@ impl WorkflowExecutor {
                             found so far, clearly noting any incomplete sections.</SYSTEM_REMINDER>",
                             self.current_step, self.max_steps
                         ),
+                        None,
                         None,
                         Some(StepType::Observe),
                         self.current_step as i32,
@@ -746,6 +668,7 @@ impl WorkflowExecutor {
                             self.max_steps - self.current_step
                         ),
                         None,
+                        None,
                         Some(StepType::Observe),
                         self.current_step as i32,
                         false,
@@ -756,23 +679,70 @@ impl WorkflowExecutor {
             }
 
             self.update_state(WorkflowState::Thinking).await?;
-            log::debug!(
-                "[Workflow Engine] Session {}: Step {} - Calling LLM",
-                self.session_id,
-                self.current_step
-            );
 
-            // Directly call the enhanced LLM processor with integrated retry and signal handling
-            let mut tools = self.tool_manager.get_tool_calling_spec(None, None).await?;
-            let global_tools = self
-                .global_tool_manager
-                .get_tool_calling_spec(None, None)
-                .await?;
-            tools.extend(global_tools);
+            let agent_config = self.agent_config.clone();
+            let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
+                serde_json::from_str(m).unwrap_or_else(|_| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+
+            let act_model = models_val.get("act").cloned().unwrap_or_else(|| {
+                serde_json::json!({
+                    "id": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["id"].as_i64()),
+                    "model": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
+                })
+            });
+
+            let plan_model = models_val.get("plan").cloned().unwrap_or_else(|| {
+                serde_json::json!({
+                    "id": agent_config.plan_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["id"].as_i64()),
+                    "model": agent_config.plan_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
+                })
+            });
+
+            let target_type = self
+                .subagent_type
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| "General".to_string());
+            let model_config = if self.policy.phase == ExecutionPhase::Planning {
+                if !plan_model["model"].is_null() {
+                    plan_model
+                } else {
+                    act_model.clone()
+                }
+            } else {
+                match target_type.as_str() {
+                    "Programming" => models_val
+                        .get("coding")
+                        .cloned()
+                        .filter(|m| !m["model"].is_null())
+                        .unwrap_or_else(|| act_model.clone()),
+                    "Vision" => models_val
+                        .get("vision")
+                        .cloned()
+                        .filter(|m| !m["model"].is_null())
+                        .unwrap_or_else(|| act_model.clone()),
+                    "Writing" => models_val
+                        .get("copywriting")
+                        .cloned()
+                        .filter(|m| !m["model"].is_null())
+                        .unwrap_or_else(|| act_model.clone()),
+                    "Browsing" => models_val
+                        .get("browsing")
+                        .cloned()
+                        .filter(|m| !m["model"].is_null())
+                        .unwrap_or_else(|| act_model.clone()),
+                    _ => act_model.clone(),
+                }
+            };
+
+            let _model_name = model_config["model"].as_str().unwrap_or("").to_string();
 
             let chat_interface = {
                 let mut chats_guard = self.chat_state.chats.lock().await;
-                let protocol = crate::ccproxy::ChatProtocol::OpenAI;
+                let protocol = ChatProtocol::OpenAI;
                 let chat_map = chats_guard
                     .entry(protocol)
                     .or_insert_with(std::collections::HashMap::new);
@@ -782,249 +752,106 @@ impl WorkflowExecutor {
                     .clone()
             };
 
-            let (text_part, json_part, response_reasoning, usage) = self
+            let available_tools = self
+                .tool_manager
+                .get_tool_calling_spec(None, None)
+                .await
+                .unwrap_or_default();
+
+            let (full_response, tool_calls_json, response_reasoning, usage) = self
                 .llm_processor
                 .call(
                     &mut self.context,
                     self.current_step,
                     chat_interface,
                     self.gateway.clone(),
-                    tools,
+                    available_tools,
                     self.max_steps,
                     &self.policy,
                     &mut signal_rx,
                 )
                 .await?;
 
-            // --- 3. Check for stop signal after LLM call ---
-            if self.check_stop_signal(&mut signal_rx).await? {
-                self.signal_rx = Some(signal_rx);
-                return Ok(());
+            if full_response.is_empty() && tool_calls_json.is_empty() {
+                sleep(Duration::from_secs(1)).await;
+                continue;
             }
 
-            log::debug!(
-                "[Workflow Engine] Session {}: LLM responded (text: {} chars, json: {} chars)",
-                self.session_id,
-                text_part.len(),
-                json_part.len()
-            );
-
-            // Construct full message for history (Text + JSON if present)
-            let full_response = if json_part.is_empty() {
-                text_part.clone()
-            } else {
-                format!("{}\n\n{}", text_part, json_part)
-            };
-
-            self.add_message_and_notify_internal(
-                "assistant".to_string(),
-                full_response,
-                Some(response_reasoning),
-                Some(StepType::Think),
-                false,
-                None,
-                usage, // Use the metadata directly
-            )
-            .await?;
+            let mut needs_compression = false;
+            let compressed_signal = self
+                .add_message_and_notify_internal(
+                    "assistant".to_string(),
+                    full_response.clone(),
+                    None,
+                    Some(response_reasoning),
+                    Some(StepType::Think),
+                    false,
+                    None,
+                    usage,
+                )
+                .await?;
+            if compressed_signal {
+                needs_compression = true;
+            }
 
             self.update_state(WorkflowState::Executing).await?;
-            log::debug!(
-                "[Workflow Engine] Session {}: Executing tools",
-                self.session_id
-            );
-            let (tool_results, has_todo_call) = self
-                .execute_tools(text_part, json_part, &mut signal_rx)
+            let (results, has_todo) = self
+                .execute_tools(full_response, tool_calls_json, &mut signal_rx)
                 .await?;
 
-            if tool_results.is_empty() {
+            if results.is_empty() {
                 self.consecutive_no_tool_calls += 1;
                 log::warn!(
-                    "WorkflowExecutor {}: No tool call detected (consecutive: {}). Forcing retry.",
+                    "WorkflowExecutor {}: No tool calls in response (consecutive: {})",
                     self.session_id,
                     self.consecutive_no_tool_calls
                 );
-
                 let error_msg = if self.consecutive_no_tool_calls >= 3 {
                     let remaining = self.max_steps.saturating_sub(self.current_step);
                     format!(
-                        "<SYSTEM_REMINDER>CRITICAL ERROR: You have failed to call a tool for {} consecutive turns. \
+                        "<SYSTEM_REMINDER>NO TOOL CALLS DETECTED: You have not called any tools for {} consecutive responses. \
                         This is wasting your limited step budget ({}/{} steps used, {} remaining). \
-                        To maintain execution state and avoid eventual task failure, your next response MUST conclude with a valid tool call. \
                         If you are truly finished, provide a summary and call 'finish_task'.</SYSTEM_REMINDER>",
                         self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining
                     )
                 } else {
                     "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
                 };
-
-                // Avoid appending multiple identical reminders if AI is stuck
-                let should_add = if let Some(last_msg) = self.context.get_messages_for_llm().last()
-                {
-                    !(last_msg.role == "user" && last_msg.message.contains("No tool call detected"))
-                } else {
-                    true
-                };
-
-                if should_add {
-                    self.context
-                        .add_message(
-                            "user".to_string(),
-                            error_msg,
-                            None,
-                            Some(StepType::Observe),
-                            self.current_step as i32,
-                            true,
-                            Some("NoToolCall".to_string()),
-                            Some(serde_json::json!({
-                                "summary": "No tool detected",
-                                "is_error": true,
-                                "error_type": "NoToolCall"
-                            })),
-                        )
-                        .await?;
-                }
-
-                // If AI is extremely stubborn, back off and wait or slightly reduce step count to allow recovery
-                continue;
-            }
-
-            // Reset counter on any successful tool call
-            self.consecutive_no_tool_calls = 0;
-
-            let mut needs_compression = false;
-            let mut final_completion_detected = false;
-
-            for (tool_call_id, reinforced, tool_call) in tool_results {
-                log::debug!(
-                    "[Workflow Engine] Session {}: Recording observation for {}",
-                    self.session_id,
-                    tool_call_id
-                );
-
-                // Track if finish_task was among the results AND was successful
-                let func = tool_call.get("function").unwrap_or(&tool_call);
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                if name == TOOL_FINISH_TASK && !reinforced.is_error {
-                    final_completion_detected = true;
-                }
-
-                // Use 'user' role for system-level summary errors to force compliance
-                let role = if reinforced.is_error
-                    && reinforced.error_type.as_deref() == Some("NoSummary")
-                {
-                    "user".to_string()
-                } else {
-                    "tool".to_string()
-                };
-
-                // protocol compliance: if the role is 'user', we MUST still provide a 'tool' response first
-                // to satisfy the OpenAI requirement that assistant tool_calls are followed by tool results.
-                if role == "user" {
-                    let _ = self
-                        .add_message_and_notify(
-                            "tool".to_string(),
-                            format!("Error: Execution of '{}' failed or was rejected.", name),
-                            None,
-                            Some(StepType::Observe),
-                            true,
-                            reinforced.error_type.clone(),
-                            Some(serde_json::json!({
-                                "tool_call_id": tool_call_id,
-                                "tool_call": tool_call,
-                                "title": "System Check",
-                                "summary": "Call rejected"
-                            })),
-                        )
-                        .await?;
-                }
-
-                let compressed_signal = self
-                    .add_message_and_notify(
-                        role.clone(),
-                        reinforced.content,
-                        None,
-                        Some(StepType::Observe),
-                        reinforced.is_error,
-                        reinforced.error_type.clone(),
-                        Some(serde_json::json!({
-                            "tool_call_id": if role == "tool" { Some(&tool_call_id) } else { None },
-                            "tool_call": tool_call,
-                            "title": reinforced.title,
-                            "summary": reinforced.summary,
-                            "is_error": reinforced.is_error,
-                            "error_type": reinforced.error_type,
-                            "display_type": reinforced.display_type
-                        })),
-                    )
-                    .await?;
-                if compressed_signal {
-                    needs_compression = true;
-                }
-
-                // If finish_task detected, don't process further tool results in this batch
-                if final_completion_detected {
-                    break;
-                }
-            }
-
-            // --- SYNC TODO LIST IF ANY TODO TOOL WAS CALLED ---
-            if has_todo_call {
-                let _ = self.sync_todo_list().await;
-            }
-
-            // --- CHECK FOR USER INTERRUPT OR INPUT ---
-            while let Ok(interrupt_str) = signal_rx.try_recv() {
-                let sig_json: serde_json::Value = serde_json::from_str(&interrupt_str).unwrap_or(
-                    serde_json::json!({ "type": "user_input", "content": interrupt_str }),
-                );
-
-                if sig_json["type"] == "stop" {
-                    log::info!(
-                        "WorkflowExecutor {}: STOP signal will be caught at next iteration start",
-                        self.session_id
-                    );
-                    continue;
-                }
-
-                let content = if sig_json["type"] == "user_input" {
-                    sig_json["content"]
-                        .as_str()
-                        .unwrap_or(&interrupt_str)
-                        .to_string()
-                } else {
-                    interrupt_str
-                };
-
-                self.add_message_and_notify_internal(
+                let _ = self.add_message_and_notify_internal(
                     "user".to_string(),
-                    content,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )
-                .await?;
+                    error_msg,
+                    None, None, Some(StepType::Observe), false, None, None
+                ).await?;
+                if self.consecutive_no_tool_calls >= 3 {
+                    self.consecutive_no_tool_calls = 0;
+                }
+            } else {
+                self.consecutive_no_tool_calls = 0;
+            }
+
+            if results
+                .iter()
+                .any(|r| r.1.title == "Finish Task" && !r.1.is_error)
+            {
+                self.update_state(WorkflowState::Completed).await?;
+                break;
+            }
+
+            if has_todo {
+                self.sync_todo_list().await?;
             }
 
             // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
             if needs_compression {
-                let summary = self.compressor.compress(&self.context.messages).await?;
-                self.context
-                    .add_summary(summary, self.current_step as i32)
-                    .await?;
+                if let Ok(summary) = self.compressor.compress(&self.context.messages).await {
+                    let _ = self
+                        .context
+                        .compress(summary, self.current_step as i32)
+                        .await;
+                }
             }
 
-            // --- IMMEDIATE EXIT IF FINISHED ---
-            if final_completion_detected {
-                log::info!(
-                    "WorkflowExecutor {}: Concluding session due to finish_task.",
-                    self.session_id
-                );
-                self.update_state(WorkflowState::Completed).await?;
-                // Break the main run_loop immediately
-                break;
-            }
+            sleep(Duration::from_millis(50)).await;
         }
 
         self.signal_rx = Some(signal_rx);
@@ -1210,6 +1037,7 @@ impl WorkflowExecutor {
                     "user".to_string(),
                     warning.clone(),
                     None,
+                    None,
                     Some(StepType::Observe),
                     self.current_step as i32,
                     true,
@@ -1220,7 +1048,7 @@ impl WorkflowExecutor {
         }
 
         // 3.2 Shell Auditing
-        if name == TOOL_BASH {
+        if name == crate::tools::TOOL_BASH {
             if let Some(result) = self.handle_bash_security_intercept(args).await? {
                 return Ok(Some(result));
             }
@@ -1228,12 +1056,12 @@ impl WorkflowExecutor {
 
         // 3.3 FS Path Guard
         if [
-            TOOL_READ_FILE,
-            TOOL_WRITE_FILE,
-            TOOL_LIST_DIR,
-            TOOL_EDIT_FILE,
-            TOOL_GLOB,
-            TOOL_GREP,
+            crate::tools::TOOL_READ_FILE,
+            crate::tools::TOOL_WRITE_FILE,
+            crate::tools::TOOL_LIST_DIR,
+            crate::tools::TOOL_EDIT_FILE,
+            crate::tools::TOOL_GLOB,
+            crate::tools::TOOL_GREP,
         ]
         .contains(&name)
         {
@@ -1245,37 +1073,25 @@ impl WorkflowExecutor {
         Ok(None)
     }
 
-    /// Helper to pause execution and request user approval for a tool.
-    async fn handle_approval_interception(
+    pub(crate) async fn handle_approval_interception(
         &mut self,
         name: &str,
-        args: &serde_json::Value,
+        args: &Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        log::info!(
-            "WorkflowExecutor {}: Intercepting tool '{}' for approval",
-            self.session_id,
-            name
-        );
-        self.update_state(WorkflowState::Paused).await?;
+        let id = crate::ccproxy::get_tool_id();
+        self.pending_approvals.insert(id.clone(), args.clone());
+        self.update_state(WorkflowState::AwaitingApproval).await?;
         self.gateway
             .send(
                 &self.session_id,
                 GatewayPayload::Confirm {
-                    id: crate::ccproxy::get_tool_id(),
+                    id,
                     action: name.to_string(),
-                    details: serde_json::to_string_pretty(args).unwrap_or_default(),
+                    details: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
                 },
             )
             .await?;
-
-        Ok(Some(ReinforcedResult {
-            content: format!("Paused: Waiting for user approval to execute '{}'.", name),
-            title: name.to_string(),
-            summary: "Awaiting approval".to_string(),
-            is_error: false,
-            error_type: None,
-            display_type: "text".to_string(),
-        }))
+        Ok(None)
     }
 
     /// Handles summarization, Todo context enhancement, and result reinforcement after a tool has run.
@@ -1356,8 +1172,6 @@ impl WorkflowExecutor {
         new_state: WorkflowState,
     ) -> Result<(), WorkflowEngineError> {
         self.state = new_state.clone();
-
-        // 1. Sync to Gateway (UI)
         self.gateway
             .send(
                 &self.session_id,
@@ -1366,98 +1180,43 @@ impl WorkflowExecutor {
                 },
             )
             .await?;
-
-        // 2. Sync to Database (Single Source of Truth)
-        let db_status = new_state.to_string();
-
-        let store = self.context.main_store.write().map_err(|e| {
-            WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-        })?;
-        store.update_workflow_status(&self.session_id, &db_status)?;
-
+        let store_res = self
+            .context
+            .main_store
+            .write()
+            .map_err(|e| WorkflowEngineError::General(e.to_string()));
+        if let Ok(store) = store_res {
+            let _ = store.update_workflow_status(&self.session_id, &new_state.to_string());
+        }
         Ok(())
     }
 
     pub(crate) async fn add_message_and_notify_internal(
         &mut self,
         role: String,
-        mut content: String,
+        content: String,
+        attached_context: Option<String>,
         reasoning: Option<String>,
         step_type: Option<StepType>,
         is_error: bool,
         error_type: Option<String>,
-        mut metadata: Option<serde_json::Value>,
+        metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
-        // --- 1. Content Normalization (Handle mixed Text + JSON responses) ---
-        if role == "assistant" {
-            let trimmed = content.trim();
-
-            // Try to find a JSON block if it doesn't start with {
-            let (text_part, json_val) = if trimmed.starts_with('{') {
-                (
-                    None,
-                    serde_json::from_str::<serde_json::Value>(trimmed).ok(),
-                )
-            } else {
-                // Look for the last { ... } block
-                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-                    if start < end {
-                        let text = trimmed[..start].trim().to_string();
-                        let json = trimmed[start..=end].trim();
-                        (
-                            Some(text),
-                            serde_json::from_str::<serde_json::Value>(json).ok(),
-                        )
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                }
-            };
-
-            if let Some(json_msg) = json_val {
-                // Case A: Extraction from JSON structure
-                if let Some(text) = json_msg.get("content").and_then(|v| v.as_str()) {
-                    content = text.to_string();
-                } else if let Some(text) = text_part {
-                    content = text;
-                }
-
-                // Merge tool calls into metadata (Support multiple formats)
-                let mut tool_calls_to_track = Vec::new();
-                if let Some(tool_calls) = json_msg.get("tool_calls").and_then(|v| v.as_array()) {
-                    tool_calls_to_track.extend(tool_calls.clone());
-                } else if let Some(tool) = json_msg.get("tool") {
-                    tool_calls_to_track.push(tool.clone());
-                } else if json_msg.get("name").is_some() {
-                    // Single tool object format
-                    tool_calls_to_track.push(json_msg.clone());
-                }
-
-                if !tool_calls_to_track.is_empty() {
-                    let mut meta_obj = metadata.unwrap_or(serde_json::json!({}));
-                    meta_obj["tool_calls"] = serde_json::json!(tool_calls_to_track);
-                    metadata = Some(meta_obj);
-                }
-            }
-        }
-
-        let needs_compression = self
+        let (msg, needs_compression) = self
             .context
             .add_message(
                 role.clone(),
                 content.clone(),
+                attached_context,
                 reasoning.clone(),
                 step_type.clone(),
                 self.current_step as i32,
                 is_error,
-                error_type.clone(),
+                error_type,
                 metadata.clone(),
             )
             .await?;
 
-        // Emit to gateway for UI real-time update
         self.gateway
             .send(
                 &self.session_id,
@@ -1468,24 +1227,27 @@ impl WorkflowExecutor {
                     step_type,
                     step_index: self.current_step as i32,
                     is_error,
-                    error_type,
+                    error_type: None,
                     metadata,
                 },
             )
             .await?;
 
-        Ok(needs_compression)
+        Ok(needs_compression
+            || msg
+                .metadata
+                .as_ref()
+                .map_or(false, |m| m["type"] == "summary"))
     }
 
     /// Checks if a stop signal is pending in the channel
     async fn check_stop_signal(
         &mut self,
-        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<bool, WorkflowEngineError> {
-        while let Ok(sig_str) = signal_rx.try_recv() {
-            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                log::info!("WorkflowExecutor {}: Received STOP signal", self.session_id);
+        while let Ok(s) = rx.try_recv() {
+            let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
+            if sig_json["type"] == "stop" || s.contains("stop") {
                 self.update_state(WorkflowState::Cancelled).await?;
                 return Ok(true);
             } else if sig_json["type"] == "user_input" {
@@ -1495,47 +1257,46 @@ impl WorkflowExecutor {
                     user_input,
                     None,
                     None,
+                    None,
                     false,
                     None,
                     None,
                 )
                 .await?;
             } else if sig_json["type"] == "update_allowed_paths" {
-                if let Some(paths_val) = sig_json.get("paths") {
-                    if let Some(paths_arr) = paths_val.as_array() {
-                        let mut unique_paths = HashSet::new();
-                        let paths: Vec<PathBuf> = paths_arr
-                            .iter()
-                            .filter_map(|v| v.as_str())
-                            .map(PathBuf::from)
-                            .filter_map(|p| {
-                                let abs_p = if p.is_absolute() {
-                                    p
-                                } else {
-                                    std::env::current_dir().unwrap_or_default().join(p)
-                                };
-                                // Validate that the path exists and is a directory
-                                if abs_p.exists() && abs_p.is_dir() {
-                                    abs_p.canonicalize().ok().or(Some(abs_p))
-                                } else {
-                                    log::warn!(
-                                        "WorkflowExecutor {}: Invalid path ignored: {:?}",
-                                        self.session_id,
-                                        abs_p
-                                    );
-                                    None
-                                }
-                            })
-                            .filter(|p| unique_paths.insert(p.clone()))
-                            .collect();
-                        log::info!(
-                            "WorkflowExecutor {}: Updating allowed paths to {:?}",
-                            self.session_id,
-                            paths
-                        );
-                        if let Ok(mut guard) = self.path_guard.write() {
-                            guard.update_allowed_roots(paths);
-                        }
+                if let Some(paths_arr) = sig_json.get("paths").and_then(|v| v.as_array()) {
+                    let mut unique_paths = HashSet::new();
+                    let paths: Vec<PathBuf> = paths_arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(PathBuf::from)
+                        .filter_map(|p| {
+                            let abs_p = if p.is_absolute() {
+                                p
+                            } else {
+                                std::env::current_dir().unwrap_or_default().join(p)
+                            };
+                            // Validate that the path exists and is a directory
+                            if abs_p.exists() && abs_p.is_dir() {
+                                abs_p.canonicalize().ok().or(Some(abs_p))
+                            } else {
+                                log::warn!(
+                                    "WorkflowExecutor {}: Invalid path ignored: {:?}",
+                                    self.session_id,
+                                    abs_p
+                                );
+                                None
+                            }
+                        })
+                        .filter(|p| unique_paths.insert(p.clone()))
+                        .collect();
+                    log::info!(
+                        "WorkflowExecutor {}: Updating allowed paths to {:?}",
+                        self.session_id,
+                        paths
+                    );
+                    if let Ok(mut guard) = self.path_guard.write() {
+                        guard.update_allowed_roots(paths);
                     }
                 }
             }
@@ -1544,27 +1305,21 @@ impl WorkflowExecutor {
     }
 
     async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {
-        let todo_list = {
+        let todos = {
             let store = self
                 .context
                 .main_store
                 .read()
                 .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            let snapshot = store
-                .get_workflow_snapshot(&self.session_id)
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            let todo_list_str = snapshot
-                .workflow
-                .todo_list
-                .unwrap_or_else(|| "[]".to_string());
-            serde_json::from_str::<serde_json::Value>(&todo_list_str).unwrap_or_else(|e| {
-                log::error!("[Workflow Executor] Failed to parse todo_list JSON for session {}: {}. Original: {}", self.session_id, e, todo_list_str);
-                serde_json::json!([])
-            })
+            store.get_todo_list_for_workflow(&self.session_id)?
         };
-
         self.gateway
-            .send(&self.session_id, GatewayPayload::SyncTodo { todo_list })
+            .send(
+                &self.session_id,
+                GatewayPayload::SyncTodo {
+                    todo_list: json!(todos),
+                },
+            )
             .await?;
         Ok(())
     }
