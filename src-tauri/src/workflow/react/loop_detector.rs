@@ -35,7 +35,29 @@ impl LoopDetector {
         // For Objects, we ensure keys are hashed in a stable order
         fn hash_stable<H: Hasher>(v: &serde_json::Value, state: &mut H) {
             match v {
+                serde_json::Value::Null => {
+                    0u8.hash(state);
+                }
+                serde_json::Value::Bool(b) => {
+                    1u8.hash(state);
+                    b.hash(state);
+                }
+                serde_json::Value::Number(n) => {
+                    2u8.hash(state);
+                    n.to_string().hash(state);
+                }
+                serde_json::Value::String(s) => {
+                    3u8.hash(state);
+                    s.hash(state);
+                }
+                serde_json::Value::Array(arr) => {
+                    4u8.hash(state);
+                    for item in arr {
+                        hash_stable(item, state);
+                    }
+                }
                 serde_json::Value::Object(map) => {
+                    5u8.hash(state);
                     let mut keys: Vec<_> = map.keys().collect();
                     keys.sort();
                     for k in keys {
@@ -43,12 +65,6 @@ impl LoopDetector {
                         hash_stable(&map[k], state);
                     }
                 }
-                serde_json::Value::Array(arr) => {
-                    for item in arr {
-                        hash_stable(item, state);
-                    }
-                }
-                _ => v.to_string().hash(state),
             }
         }
 

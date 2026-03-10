@@ -618,6 +618,7 @@ impl WorkflowExecutor {
                             reinforced.error_type.clone(),
                             Some(serde_json::json!({
                                 "tool_call_id": signal_json["id"],
+                                "tool_name": tool_name,
                                 "title": reinforced.title,
                                 "summary": reinforced.summary,
                                 "is_error": reinforced.is_error,
@@ -959,7 +960,14 @@ impl WorkflowExecutor {
                 .execute_tools(full_response, tool_calls_json, &mut signal_rx)
                 .await?;
 
-            for (id, reinforced, _) in &results {
+            for (id, reinforced, original_call) in &results {
+                // Extract tool name from the original call for the metadata
+                let tool_name = original_call
+                    .get("name")
+                    .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
                 let _ = self
                     .add_message_and_notify_internal(
                         "tool".to_string(),
@@ -971,6 +979,7 @@ impl WorkflowExecutor {
                         reinforced.error_type.clone(),
                         Some(serde_json::json!({
                             "tool_call_id": id,
+                            "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
                             "title": reinforced.title,
                             "summary": reinforced.summary,
                             "is_error": reinforced.is_error,
@@ -1096,16 +1105,14 @@ impl WorkflowExecutor {
         let mut result_map: HashMap<String, (ReinforcedResult, serde_json::Value)> = HashMap::new();
         let mut call_order: Vec<String> = Vec::new();
 
-        let mut parallel_batch = Vec::new();
-        let mut sequential_batch = Vec::new();
+        let mut parallel_execution_queue = Vec::new();
+        let mut sequential_execution_queue = Vec::new();
 
-        // --- 2. Phase 1: Pre-check and Partitioning ---
+        // --- 2. Stage 1: Audit & Partitioning (The 'Channel' Logic) ---
+        // We determine what can run NOW and what must WAIT BEFORE performing any actions.
         for (idx, call) in tool_calls.into_iter().enumerate() {
-            let id = call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}_{}", crate::ccproxy::get_tool_id(), idx));
+            // Always use a unique ID for each tool call
+            let id = crate::ccproxy::get_tool_id();
 
             let func = call.get("function").unwrap_or(&call);
             let name = func
@@ -1126,33 +1133,61 @@ impl WorkflowExecutor {
 
             call_order.push(id.clone());
 
-            // Pre-dispatch security/loop checks
-            match self.pre_dispatch_check(&name, &args, &text_part).await {
-                Ok(Some(early_result)) => {
-                    result_map.insert(id, (early_result, call));
-                    continue;
-                }
-                Err(e) => return Err(e),
-                _ => {}
+            // --- CAUSAL BLOCKING CHECK ---
+            // If a PREVIOUS tool in this TURN has already transitioned the engine to a blocking state
+            // (like AwaitingApproval or Paused), we MUST NOT run or even audit subsequent tools.
+            // They are simply postponed until the previous turn's block is resolved.
+            if self.state == WorkflowState::AwaitingApproval || self.state == WorkflowState::Paused
+            {
+                log::info!(
+                    "WorkflowExecutor {}: Postponing tool '{}' due to Turn-Level block (Causality)",
+                    self.session_id,
+                    name
+                );
+                result_map.insert(id, (ReinforcedResult {
+                    content: "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>".into(),
+                    title: format!("Postponed: {}", name),
+                    summary: "Turn blocked".to_string(),
+                    is_error: false,
+                    error_type: None,
+                    display_type: "text".to_string(),
+                }, call));
+                continue;
             }
 
-            if name.starts_with("todo_") {
-                has_todo_call = true;
-                sequential_batch.push((id, name, args, call));
-            } else {
-                parallel_batch.push((id, name, args, call));
+            // --- SEMANTIC AUDIT ---
+            match self.pre_dispatch_check(&name, &args, &text_part).await {
+                Ok(Some(early_result)) => {
+                    // Tool was intercepted (Approval needed, Loop detected, etc.)
+                    result_map.insert(id, (early_result, call));
+                    // Note: If pre_dispatch_check changed state to AwaitingApproval,
+                    // the next iterations will hit the 'CAUSAL BLOCKING CHECK' above.
+                }
+                Ok(None) => {
+                    // Safe to proceed to physical execution!
+                    if name.starts_with("todo_") {
+                        has_todo_call = true;
+                        sequential_execution_queue.push((id, name, args, call));
+                    } else {
+                        parallel_execution_queue.push((id, name, args, call));
+                    }
+                }
+                Err(e) => return Err(e),
             }
         }
 
-        // --- 3. Phase 2: Parallel Execution (I/O heavy tools) ---
-        if !parallel_batch.is_empty() {
+        // --- 3. Stage 2: Safe Physical Execution ---
+        // We now execute only the tools that cleared the audit phase.
+
+        // Phase A: Parallel Batch (I/O heavy tools like read_file, web_fetch)
+        if !parallel_execution_queue.is_empty() {
             use futures::stream::{FuturesOrdered, StreamExt};
             let mut tool_futures = FuturesOrdered::new();
             let tm = self.tool_manager.clone();
             let gtm = self.global_tool_manager.clone();
             let semaphore = self.context.semaphore.clone();
 
-            for (id, name, args, call) in parallel_batch {
+            for (id, name, args, call) in parallel_execution_queue {
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -1175,25 +1210,23 @@ impl WorkflowExecutor {
             }
         }
 
-        // --- 4. Phase 3: Sequential Dispatch (State sensitive tools) ---
-        for (id, name, args, call) in sequential_batch {
-            let tm = self.tool_manager.clone();
-            let gtm = self.global_tool_manager.clone();
-
-            let res = if let Ok(res) = tm.tool_call(&name, args.clone()).await {
+        // Phase B: Sequential Batch (State-sensitive tools like todo_*)
+        for (id, name, args, call) in sequential_execution_queue {
+            let res = if let Ok(res) = self.tool_manager.tool_call(&name, args.clone()).await {
                 Ok(res)
             } else {
-                gtm.tool_call(&name, args.clone()).await
+                self.global_tool_manager
+                    .tool_call(&name, args.clone())
+                    .await
             };
-
-            // Post-processing happens IMMEDIATELY to capture the state accurately after this specific action
             let reinforced = self
                 .post_process_tool_result(&name, &args, &call, res)
                 .await?;
             result_map.insert(id, (reinforced, call));
         }
 
-        // --- 5. Reassemble Results in Original AI Call Order ---
+        // --- 4. Stage 3: Protocol Finalization ---
+        // Reassemble all results (executed + postponed) in the order AI requested them.
         let final_results = call_order
             .into_iter()
             .filter_map(|id| {

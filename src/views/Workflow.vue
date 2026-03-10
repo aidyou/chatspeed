@@ -122,7 +122,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                        }}
+                          }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -291,7 +291,7 @@
                       @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" />
                       <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                        }}</span>
+                      }}</span>
                     </label>
                   </el-tooltip>
 

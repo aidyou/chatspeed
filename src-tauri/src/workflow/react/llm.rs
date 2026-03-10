@@ -399,15 +399,18 @@ impl LlmProcessor {
             if role == "tool" && m.is_error {
                 let meta = m.metadata.as_ref();
                 let tool_name = meta
-                    .and_then(|meta| {
-                        meta.get("tool_call").and_then(|tc| {
-                            tc.get("function")
-                                .and_then(|f| f.get("name").and_then(|n| n.as_str()))
+                    .and_then(|m| m.get("tool_name").and_then(|v| v.as_str())) // New priority
+                    .or_else(|| {
+                        meta.and_then(|m| {
+                            m.get("tool_call").and_then(|tc| {
+                                tc.get("function")
+                                    .and_then(|f| f.get("name").and_then(|n| n.as_str()))
+                            })
                         })
                     })
                     .or_else(|| {
-                        meta.and_then(|meta| {
-                            meta.get("tool_call")
+                        meta.and_then(|m| {
+                            m.get("tool_call")
                                 .and_then(|tc| tc.get("name").and_then(|n| n.as_str()))
                         })
                     })

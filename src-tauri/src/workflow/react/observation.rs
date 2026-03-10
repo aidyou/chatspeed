@@ -195,8 +195,10 @@ impl ObservationReinforcer {
                     ToolError::AuthError(_) => "AuthError",
                     _ => "Other",
                 };
-                let recovery = crate::workflow::react::llm::generate_error_reminder(error_type, tool_name, &err_msg);
-                let content = format!("Error: {}\n{}", err_msg, recovery);
+                
+                // Content only contains the raw error. 
+                // Recovery hints will be injected dynamically by LlmProcessor to avoid duplication.
+                let content = format!("Error: {}", err_msg);
 
                 ReinforcedResult {
                     content,

@@ -21,6 +21,7 @@
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@vue/shared": "^3.5.22",
     "ai": "^6.0.78",
+    "diff": "^8.0.3",
     "element-plus": "^2.8.10",
     "exceljs": "^4.4.0",
     "he": "^1.2.0",
