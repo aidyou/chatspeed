@@ -91,32 +91,49 @@
                 <!-- CLI Style Tool Call (Results) -->
                 <div v-if="message.role === 'tool'" class="cli-tool-call"
                   :class="[message.toolDisplay.toolType || 'tool-system', message.toolDisplay.isError ? 'status-error' : 'status-success']">
-                  <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.displayId)">
-                    <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
-                    <span class="tool-name">{{ message.toolDisplay.action }}</span>
-                    <span class="tool-target">{{ message.toolDisplay.target }}</span>
-                  </div>
-                  <div class="tool-line summary expandable" @click="toggleMessageExpand(message.displayId)">
-                    <span class="corner-icon">⎿</span>
-                    <span class="summary-text">{{ message.toolDisplay.summary }}</span>
-                    <span class="expand-hint" v-if="!isMessageExpanded(message)">(click to expand)</span>
-                  </div>
-                  <div v-if="isMessageExpanded(message)" class="tool-detail">
-                    <markdown v-if="message.toolDisplay.displayType === 'diff'"
-                      :content="getDiffMarkdown(removeSystemReminder(message.message))" />
-                    <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
-                      <div class="choice-question">{{ parseChoiceContent(removeSystemReminder(message.message)).question
-                      }}
-                      </div>
-                      <div class="choice-options">
-                        <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
-                          :key="opt" size="small" plain round :disabled="isRunning" @click="sendUserChoice(opt)">
-                          {{ opt }}
-                        </el-button>
-                      </div>
+
+                  <!-- finish_task special display -->
+                  <template
+                    v-if="message.toolDisplay?.action === t('workflow.finishTask') || message.toolDisplay?.action?.includes('Finish')">
+                    <div class="tool-line finish-task-display">
+                      <cs :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'" size="14px"
+                        class="tool-type-icon finish-icon" />
+                      <span class="finish-text">{{ t('workflow.finishTask') }}</span>
                     </div>
-                    <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
-                  </div>
+                  </template>
+
+                  <!-- Normal tool call display -->
+                  <template v-else>
+                    <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.displayId)">
+                      <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
+                      <span class="tool-name">{{ message.toolDisplay.action }}</span>
+                      <span class="tool-target">{{ message.toolDisplay.target }}</span>
+                    </div>
+                    <!-- Hide summary when expanded -->
+                    <div class="tool-line summary expandable" v-if="!isMessageExpanded(message)"
+                      @click="toggleMessageExpand(message.displayId)">
+                      <span class="corner-icon">⎿</span>
+                      <span class="summary-text">{{ message.toolDisplay.summary }}</span>
+                      <span class="expand-hint">(click to expand)</span>
+                    </div>
+                    <div v-if="isMessageExpanded(message)" class="tool-detail">
+                      <MarkdownSimple v-if="message.toolDisplay.displayType === 'diff'"
+                        :content="getDiffMarkdown(removeSystemReminder(message.message))" />
+                      <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
+                        <div class="choice-question">{{
+                          parseChoiceContent(removeSystemReminder(message.message)).question
+                          }}
+                        </div>
+                        <div class="choice-options">
+                          <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
+                            :key="opt" size="small" plain round :disabled="isRunning" @click="sendUserChoice(opt)">
+                            {{ opt }}
+                          </el-button>
+                        </div>
+                      </div>
+                      <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
+                    </div>
+                  </template>
                 </div>
 
                 <!-- Regular Assistant Content -->
@@ -146,7 +163,8 @@
                       {{ message.reasoning || message.message }}
                     </div>
                   </div>
-                  <markdown v-if="getParsedMessage(message).content" :content="getParsedMessage(message).content" />
+                  <MarkdownSimple v-if="getParsedMessage(message).content"
+                    :content="getParsedMessage(message).content" />
 
                   <!-- Tool Call Indicators SECOND (Only pending ones) -->
 
@@ -188,7 +206,7 @@
                     </span>
                   </div>
                 </div>
-                <markdown v-if="chatState.content" :content="chatState.content" />
+                <MarkdownSimple v-if="chatState.content" :content="chatState.content" />
 
                 <!-- Retry Countdown -->
                 <div v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0" class="retry-status-alert">
@@ -272,7 +290,7 @@
                     <div class="final-audit-toggle upperLayer" @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" :class="finalAuditMode" />
                       <span class="audit-label" v-if="finalAuditMode !== 'agent'">{{ finalAuditMode.toUpperCase()
-                        }}</span>
+                      }}</span>
                     </div>
                   </el-tooltip>
 
@@ -358,7 +376,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useWindowStore } from '@/stores/window'
 
 import Titlebar from '@/components/window/Titlebar.vue'
-import Markdown from '@/components/chat/Markdown.vue'
+import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
@@ -1158,17 +1176,17 @@ const getDiffMarkdown = (content) => {
     const oldStr = data.old_string || ''
     const newStr = data.new_string || data.content || ''
     const filePath = data.file_path || data.path || 'file'
-    
+
     // Line-based simple diff
     const oldLines = oldStr.split('\n')
     const newLines = newStr.split('\n')
     let diff = ''
-    
+
     if (oldStr) {
       oldLines.forEach(line => { if (line.trim()) diff += `- ${line}\n` })
     }
     newLines.forEach(line => { if (line.trim()) diff += `+ ${line}\n` })
-    
+
     return `\`\`\`diff\n--- Original\n+++ Modified\n${diff || ' (No changes)'}\n\`\`\``
   } catch (e) {
     return content
@@ -1275,7 +1293,7 @@ onMounted(async () => {
   // Load the last workflow if available
   if (workflowStore.workflows.length > 0) {
     await selectWorkflow(workflowStore.workflows[0].id)
-    
+
     // Check if we need to show approval dialog after loading
     nextTick(() => {
       const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
@@ -1358,9 +1376,10 @@ const setupWorkflowEvents = async sessionId => {
         metadata: payload.metadata
       })
 
-      // Message finalized, clear chatting buffer
+      // Message finalized, clear chatting buffer (including reasoning)
       chattingParser.reset()
       chatState.value.content = ''
+      chatState.value.reasoning = ''
       chatState.value.blocks = []
 
       // Force scroll for new full messages
@@ -1575,7 +1594,7 @@ const onSendMessage = async () => {
           type: 'user_input',
           content: message
         })
-        
+
         // Optimistic update to clear the "AI is waiting" hint immediately
         if (isPaused) {
           workflowStore.updateWorkflowStatus(currentWorkflowId.value, 'thinking')
@@ -2254,6 +2273,18 @@ const onGlobalKeyDown = event => {
 
                 &.status-error {
                   border-left-color: var(--el-color-danger);
+
+                  .finish-task-display {
+
+                    .finish-text,
+                    .cs {
+                      color: var(--el-color-danger);
+
+                    }
+                    .finish-text{
+                      text-decoration: line-through;
+                    }
+                  }
                 }
 
                 &.status-running {
@@ -2380,6 +2411,24 @@ const onGlobalKeyDown = event => {
                   .tool-name,
                   .tool-target {
                     color: var(--cs-text-color-placeholder);
+                  }
+                }
+
+                // finish_task special display
+                .finish-task-display {
+                  display: flex;
+                  align-items: center;
+                  gap: var(--cs-space-xs);
+                  padding: var(--cs-space-xs) 0;
+
+                  .finish-icon {
+                    color: var(--el-color-success);
+                  }
+
+                  .finish-text {
+                    color: var(--el-color-success);
+                    font-weight: 600;
+                    font-size: 14px;
                   }
                 }
 

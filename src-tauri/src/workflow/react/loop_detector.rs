@@ -69,7 +69,7 @@ impl LoopDetector {
 
         if repeat_count >= LOOP_REPEAT_THRESHOLD {
             Some(format!(
-                "<SYSTEM_REMINDER>LOOP DETECTED: You have called '{}' with identical arguments {} times \
+                "ERROR: LOOP DETECTED\n<SYSTEM_REMINDER>You have called '{}' with identical arguments {} times \
                 in the last {} steps. This is unproductive repetition. You MUST change your approach NOW:\n\
                 1. If searching the web: try completely different keywords or a different data source.\n\
                 2. If fetching a URL: the content may be unavailable — mark the task as 'data_missing' and continue.\n\

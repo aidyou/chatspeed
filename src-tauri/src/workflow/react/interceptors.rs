@@ -106,15 +106,27 @@ impl WorkflowExecutor {
             }));
         }
 
-        // In Full approval mode, do not set AwaitingApproval state.
-        // The engine loop will detect the SubmitPlan call and auto-transition to execution.
+        // In Full approval mode, set AwaitingAutoApproval state.
+        // This acts as a signal for the main loop to perform auto-transition.
         if self.policy.approval_level == ApprovalLevel::Full {
+            log::info!(
+                "WorkflowExecutor {}: Setting AwaitingAutoApproval for auto-transition in Full mode",
+                self.session_id
+            );
+            self.update_state(WorkflowState::AwaitingAutoApproval).await?;
             return Ok(None);
         }
 
         self.update_state(WorkflowState::AwaitingApproval).await?;
 
-        Ok(None)
+        Ok(Some(ReinforcedResult {
+            content: "WAITING_FOR_PLAN_APPROVAL".into(),
+            title: "Submit Plan".to_string(),
+            summary: "Awaiting approval".to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+        }))
     }
 
     pub(crate) async fn handle_ask_user_intercept(
@@ -215,7 +227,15 @@ impl WorkflowExecutor {
         }
 
         self.update_state(WorkflowState::Completed).await?;
-        Ok(None)
+        
+        Ok(Some(ReinforcedResult {
+            content: "Finished".into(),
+            title: "Finish Task".to_string(),
+            summary: rust_i18n::t!("workflow.task_finished").to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+        }))
     }
 
     pub(crate) async fn handle_bash_security_intercept(
@@ -279,6 +299,36 @@ impl WorkflowExecutor {
             }
         }
         Ok(None)
+    }
+
+    pub(crate) async fn handle_approval_interception(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        let id = crate::ccproxy::get_tool_id();
+        self.pending_approvals.insert(id.clone(), args.clone());
+        self.update_state(WorkflowState::AwaitingApproval).await?;
+        self.gateway
+            .send(
+                &self.session_id,
+                GatewayPayload::Confirm {
+                    id,
+                    action: name.to_string(),
+                    details: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
+                },
+            )
+            .await?;
+
+        // Return a waiting result to skip immediate execution in the current loop
+        Ok(Some(ReinforcedResult {
+            content: "WAITING_FOR_USER_APPROVAL".to_string(),
+            title: format!("Approval: {}", name),
+            summary: "Awaiting approval".to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+        }))
     }
 
     pub(crate) fn handle_fs_path_guard_intercept(

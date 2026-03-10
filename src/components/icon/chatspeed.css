@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-check-x:before {
+  content: "\ed1a";
+}
+
 .cs-ext-rb:before {
   content: "\e691";
 }

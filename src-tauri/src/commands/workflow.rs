@@ -600,25 +600,30 @@ pub async fn workflow_approve_plan(
         .collect();
 
     // Transition to Execution/Implementation
+    let executor_obj = crate::workflow::react::runners::ExecutionExecutor::new(
+        session_id.clone(),
+        main_store_arc.clone(),
+        chat_state_arc,
+        gateway_arc.clone() as Arc<dyn Gateway>,
+        factory_arc,
+        agent_config,
+        allowed_roots,
+        app_data_dir,
+        None,
+        Some(signal_rx),
+        tsid_generator_arc,
+        global_tool_manager,
+        crate::workflow::react::policy::ExecutionPolicy::implementation(),
+    );
+
+    // [Bug Fix] Correctly re-register tools for Implementation phase
+    {
+        // Tools are registered during executor.init() which is called below
+    }
+
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
-    > = Arc::new(tokio::sync::Mutex::new(
-        crate::workflow::react::runners::ExecutionExecutor::new(
-            session_id.clone(),
-            main_store_arc,
-            chat_state_arc,
-            gateway_arc.clone() as Arc<dyn Gateway>,
-            factory_arc,
-            agent_config,
-            allowed_roots,
-            app_data_dir,
-            None,
-            Some(signal_rx),
-            tsid_generator_arc,
-            global_tool_manager,
-            crate::workflow::react::policy::ExecutionPolicy::implementation(),
-        ),
-    ));
+    > = Arc::new(tokio::sync::Mutex::new(executor_obj));
 
     {
         let mut executor = shared_executor.lock().await;

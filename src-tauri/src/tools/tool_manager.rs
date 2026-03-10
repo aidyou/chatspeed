@@ -147,6 +147,14 @@ impl ToolManager {
         }
     }
 
+    pub async fn clear(&self, clear_mcp: bool) {
+        self.tools.write().await.clear();
+        if clear_mcp {
+            self.mcp_servers.write().await.clear();
+            self.mcp_tools.write().await.clear();
+        }
+    }
+
     /// Register tools for DAG Workflow
     ///
     /// # Arguments
@@ -200,93 +208,79 @@ impl ToolManager {
         // =================================================
         // System & Workflow tools
         // =================================================
-        let tsid = app_handle
-            .state::<Arc<crate::libs::tsid::TsidGenerator>>()
-            .inner()
-            .clone();
-        let path_guard = Arc::new(std::sync::RwLock::new(
-            crate::workflow::react::security::PathGuard::new(vec![], vec![], vec![]),
-        ));
-        self.register_tool(Arc::new(crate::tools::ShellExecute::new(
-            path_guard,
-            tsid.clone(),
-            vec![],
-            false,
-        )))
-        .await?;
+        // let tsid = app_handle
+        //     .state::<Arc<crate::libs::tsid::TsidGenerator>>()
+        //     .inner()
+        //     .clone();
+        // let path_guard = Arc::new(std::sync::RwLock::new(
+        //     crate::workflow::react::security::PathGuard::new(vec![], vec![], vec![]),
+        // ));
+        // self.register_tool(Arc::new(crate::tools::ShellExecute::new(
+        //     path_guard,
+        //     tsid.clone(),
+        //     vec![],
+        //     false,
+        // )))
+        // .await?;
 
-        self.register_tool(Arc::new(crate::tools::TodoCreateTool {
-            session_id: "".into(),
-            main_store: main_store.clone(),
-        }))
-        .await?;
-        self.register_tool(Arc::new(crate::tools::TodoListTool {
-            session_id: "".into(),
-            main_store: main_store.clone(),
-        }))
-        .await?;
-        self.register_tool(Arc::new(crate::tools::TodoUpdateTool {
-            session_id: "".into(),
-            main_store: main_store.clone(),
-        }))
-        .await?;
-        self.register_tool(Arc::new(crate::tools::TodoGetTool {
-            session_id: "".into(),
-            main_store: main_store.clone(),
-        }))
-        .await?;
+        // self.register_tool(Arc::new(crate::tools::TodoCreateTool {
+        //     session_id: "".into(),
+        //     main_store: main_store.clone(),
+        // }))
+        // .await?;
+        // self.register_tool(Arc::new(crate::tools::TodoListTool {
+        //     session_id: "".into(),
+        //     main_store: main_store.clone(),
+        // }))
+        // .await?;
+        // self.register_tool(Arc::new(crate::tools::TodoUpdateTool {
+        //     session_id: "".into(),
+        //     main_store: main_store.clone(),
+        // }))
+        // .await?;
+        // self.register_tool(Arc::new(crate::tools::TodoGetTool {
+        //     session_id: "".into(),
+        //     main_store: main_store.clone(),
+        // }))
+        // .await?;
 
-        let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
-        let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
-        let skills = scanner.scan().unwrap_or_default();
-        self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
-            .await?;
+        // let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
+        // let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
+        // let skills = scanner.scan().unwrap_or_default();
+        // self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
+        //     .await?;
 
-        let factory = app_handle
-            .state::<Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>()
-            .inner()
-            .clone();
-        self.register_tool(Arc::new(
-            crate::workflow::react::orchestrator::TaskTool::new(factory, tsid),
-        ))
-        .await?;
-        self.register_tool(Arc::new(
-            crate::workflow::react::orchestrator::TaskOutputTool,
-        ))
-        .await?;
-        self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
-            .await?;
+        // let factory = app_handle
+        //     .state::<Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>()
+        //     .inner()
+        //     .clone();
+        // self.register_tool(Arc::new(
+        //     crate::workflow::react::orchestrator::TaskTool::new(factory, tsid),
+        // ))
+        // .await?;
+        // self.register_tool(Arc::new(
+        //     crate::workflow::react::orchestrator::TaskOutputTool,
+        // ))
+        // .await?;
+        // self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
+        //     .await?;
 
-        // Interaction tools
-        self.register_tool(Arc::new(crate::tools::AskUser)).await?;
-        self.register_tool(Arc::new(crate::tools::FinishTask))
-            .await?;
-
-        // =================================================
-        // Chat completion
-        // =================================================
-        // register chat completion tool
-        // let chat_completion = ChatCompletion::new();
-        // // add reasoning and general models to chat completion tool
-        // let reasoning_model = Self::get_model(&main_store, ModelName::Reasoning.as_ref())?;
-        // chat_completion
-        //     .add_model(ModelName::Reasoning, reasoning_model)
-        //     .await;
-        // let general_model = Self::get_model(&main_store, ModelName::General.as_ref())?;
-        // chat_completion
-        //     .add_model(ModelName::General, general_model)
-        //     .await;
-        // self.register_tool(Arc::new(chat_completion)).await?;
-
-        // let chp_server = if let Ok(store) = &main_store.lock() {
-        //     store.get_config(CFG_CHP_SERVER, String::new())
-        // } else {
-        //     String::new()
-        // };
+        // // Interaction tools
+        // self.register_tool(Arc::new(crate::tools::AskUser)).await?;
+        // self.register_tool(Arc::new(crate::tools::FinishTask))
+        //     .await?;
 
         // =================================================
         // MCP Tools
         // =================================================
+        self.register_available_mcp_tools(main_store).await?;
+        Ok(())
+    }
+
+    pub async fn register_available_mcp_tools(
+        self: Arc<Self>, // Changed to take Arc<Self>
+        main_store: &Arc<std::sync::RwLock<MainStore>>,
+    ) -> Result<(), ToolError> {
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {
             let main_store_guard = main_store.read().map_err(|e| {
@@ -315,7 +309,6 @@ impl ToolManager {
                 );
             }
         }
-
         Ok(())
     }
 

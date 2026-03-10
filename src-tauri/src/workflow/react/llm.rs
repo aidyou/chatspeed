@@ -675,16 +675,22 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
         }
         "NetworkError" => {
             match tool_name {
-                "web_search" | "web_fetch" => {
-                    "<SYSTEM_REMINDER>Network error on web operation. Recovery steps:\n\
-                    1. Retry ONCE with the same URL/query. \n\
-                    2. If retry fails: try an alternative search query or a different data source URL.\n\
-                    3. If no alternatives exist: mark this task as 'data_missing' and proceed to the next task.\n\
-                    Do NOT retry more than once with identical parameters.</SYSTEM_REMINDER>"
+                "web_search" => {
+                    "<SYSTEM_REMINDER>Search failed due to network error. Recovery steps:\n\
+                    1. Retry ONCE if you suspect a transient issue.\n\
+                    2. If it fails again, try rephrasing your query with different keywords. \
+                    If the topic is China-related, try searching in Chinese.\n\
+                    3. If no results found, mark as 'data_missing'.</SYSTEM_REMINDER>"
+                        .to_string()
+                }
+                "web_fetch" => {
+                    "<SYSTEM_REMINDER>Failed to fetch this URL. Do NOT retry the same URL. \
+                    Instead: (1) try an alternative URL from your search results, or \
+                    (2) if no alternatives exist, mark the data as unavailable and proceed.</SYSTEM_REMINDER>"
                         .to_string()
                 }
                 _ => {
-                    "<SYSTEM_REMINDER>Network error occurred. Check your connection and retry. If the issue persists, the remote service may be unavailable.</SYSTEM_REMINDER>"
+                    "<SYSTEM_REMINDER>Network error occurred. Check connection and retry once. If the issue persists, the service may be unavailable.</SYSTEM_REMINDER>"
                         .to_string()
                 }
             }

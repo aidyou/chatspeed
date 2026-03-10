@@ -191,11 +191,11 @@ impl ObservationReinforcer {
                     ToolError::Security(_) => "Security",
                     ToolError::IoError(_) => "Io",
                     ToolError::InvalidParams(_) => "InvalidParams",
-                    ToolError::NetworkError(_) => "Network",
-                    ToolError::AuthError(_) => "Auth",
+                    ToolError::NetworkError(_) => "NetworkError",
+                    ToolError::AuthError(_) => "AuthError",
                     _ => "Other",
                 };
-                let recovery = Self::generate_recovery_hint(tool_name, error_type);
+                let recovery = crate::workflow::react::llm::generate_error_reminder(error_type, tool_name, &err_msg);
                 let content = format!("Error: {}\n{}", err_msg, recovery);
 
                 ReinforcedResult {
@@ -427,31 +427,6 @@ impl ObservationReinforcer {
                 }
             }
             _ => "Executed successfully".to_string(),
-        }
-    }
-
-    /// Generates actionable recovery hints based on the tool and error type.
-    fn generate_recovery_hint(tool_name: &str, error_type: &str) -> String {
-        match (tool_name, error_type) {
-            ("web_search", "Network") => {
-                "<SYSTEM_REMINDER>Search failed due to network error. Try once more with the same query. If it fails again, try a completely different search engine keyword or mark the sub-task as data_missing.</SYSTEM_REMINDER>".to_string()
-            }
-            ("web_fetch", "Network") | ("web_fetch", _) => {
-                "<SYSTEM_REMINDER>Failed to fetch this URL. Do NOT retry the same URL. Instead: (1) try an alternative URL from your search results, or (2) if no alternatives exist, mark the data as unavailable and move to the next task.</SYSTEM_REMINDER>".to_string()
-            }
-            ("web_search", _) => {
-                "<SYSTEM_REMINDER>Search failed. Try rephrasing your query with different keywords. If the topic is China-related, try searching in Chinese.</SYSTEM_REMINDER>".to_string()
-            }
-            (_, "Security") => {
-                "<SYSTEM_REMINDER>Path is outside your authorized workspace. Use list_dir to find valid paths or ask the user to grant access.</SYSTEM_REMINDER>".to_string()
-            }
-            (_, "InvalidParams") => {
-                "<SYSTEM_REMINDER>Check the tool's input schema. Ensure all required fields are provided with correct types.</SYSTEM_REMINDER>".to_string()
-            }
-            (_, "Io") => {
-                "<SYSTEM_REMINDER>File I/O error. Verify the path exists using list_dir before retrying.</SYSTEM_REMINDER>".to_string()
-            }
-            _ => String::new(),
         }
     }
 }

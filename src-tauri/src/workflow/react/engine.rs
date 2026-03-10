@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::loop_detector::LoopDetector;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::SubAgentFactory;
-use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase, ExecutionPolicy};
+use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
@@ -336,7 +337,8 @@ impl WorkflowExecutor {
 
     async fn register_foundation_tools(&self) -> Result<(), WorkflowEngineError> {
         use crate::tools::*;
-        let tm = &self.tool_manager;
+        let tm: &Arc<ToolManager> = &self.tool_manager;
+        let _ = tm.clear(true).await;
 
         // Use global tool manager to discover available tools and check scopes
         let all_meta = self
@@ -526,21 +528,20 @@ impl WorkflowExecutor {
         while self.state != WorkflowState::Completed
             && self.state != WorkflowState::Error
             && self.state != WorkflowState::Cancelled
-            && self.state != WorkflowState::AwaitingApproval
-            && self.state != WorkflowState::AwaitingAutoApproval
         {
             // Check stop signal at loop start
             if self.check_stop_signal(&mut signal_rx).await? {
                 break;
             }
 
-            // Handle Paused state - wait for approval signal
-            if self.state == WorkflowState::Paused {
+            // Handle Paused or AwaitingApproval state - wait for user signal
+            if self.state == WorkflowState::Paused || self.state == WorkflowState::AwaitingApproval
+            {
                 let signal_str = signal_rx
                     .recv()
                     .await
                     .ok_or_else(|| WorkflowEngineError::General("Signal channel closed".into()))?;
-
+                // ... (existing signal handling logic)
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
@@ -616,6 +617,7 @@ impl WorkflowExecutor {
                             reinforced.is_error,
                             reinforced.error_type.clone(),
                             Some(serde_json::json!({
+                                "tool_call_id": signal_json["id"],
                                 "title": reinforced.title,
                                 "summary": reinforced.summary,
                                 "is_error": reinforced.is_error,
@@ -666,6 +668,75 @@ impl WorkflowExecutor {
                         None,
                     )
                     .await?;
+                    self.update_state(WorkflowState::Thinking).await?;
+                    continue;
+                }
+            }
+
+            // Handle AwaitingAutoApproval state - trigger automatic transition
+            if self.state == WorkflowState::AwaitingAutoApproval {
+                log::info!(
+                    "WorkflowExecutor {}: Processing internal auto-approval signal...",
+                    self.session_id
+                );
+
+                // 1. Find the latest SubmitPlan call in history to extract the finalized plan
+                let plan_content = self.context.messages.iter().rev().find_map(|m| {
+                    if let Some(meta) = &m.metadata {
+                        if let Some(tc) = meta.get("tool_calls").and_then(|v| v.as_array()) {
+                            for call in tc {
+                                if call["name"] == "submit_plan"
+                                    || call["function"]["name"] == "submit_plan"
+                                {
+                                    let args = call.get("arguments").or_else(|| {
+                                        call.get("function").and_then(|f| f.get("arguments"))
+                                    });
+                                    if let Some(val) = args {
+                                        let parsed = if let Some(s) = val.as_str() {
+                                            serde_json::from_str::<Value>(s).unwrap_or(val.clone())
+                                        } else {
+                                            val.clone()
+                                        };
+                                        return parsed
+                                            .get("plan")
+                                            .and_then(|p| p.as_str())
+                                            .map(|s| s.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None
+                });
+
+                if let Some(plan) = plan_content {
+                    log::info!(
+                        "WorkflowExecutor {}: Plan found, executing atomic transition to Implementation phase",
+                        self.session_id
+                    );
+
+                    // A. Context Pruning: Keep only Initial Query + Final Plan + Todo List
+                    self.context.prune_for_execution(plan).await?;
+
+                    // B. Policy & State Reset
+                    let mut new_policy = ExecutionPolicy::implementation();
+                    new_policy.approval_level = self.policy.approval_level.clone();
+                    self.policy = new_policy;
+
+                    // Reset step count for the new phase to ensure clear history separation
+                    self.current_step = 0;
+                    self.consecutive_no_tool_calls = 0;
+
+                    // C. Toolset Refresh: CRITICAL for giving the AI the right tools for the new phase
+                    self.register_foundation_tools().await?;
+
+                    self.update_state(WorkflowState::Thinking).await?;
+                    continue;
+                } else {
+                    log::warn!(
+                        "WorkflowExecutor {}: AwaitingAutoApproval triggered but no plan found in history. Reverting to thinking.",
+                        self.session_id
+                    );
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
@@ -850,7 +921,8 @@ impl WorkflowExecutor {
                     // Extract strictly the array of tool calls to comply with OpenAI/Claude protocols.
                     let calls_array = if let Some(array) = tc_val.as_array() {
                         array.clone()
-                    } else if let Some(array) = tc_val.get("tool_calls").and_then(|v| v.as_array()) {
+                    } else if let Some(array) = tc_val.get("tool_calls").and_then(|v| v.as_array())
+                    {
                         array.clone()
                     } else if let Some(tool_obj) = tc_val.get("tool") {
                         vec![tool_obj.clone()]
@@ -957,43 +1029,6 @@ impl WorkflowExecutor {
                 break;
             }
 
-            // --- AUTO-TRANSITION FROM PLANNING TO IMPLEMENTATION IN FULL MODE ---
-            if self.policy.phase == ExecutionPhase::Planning
-                && self.policy.approval_level == ApprovalLevel::Full
-            {
-                let plan_result = results
-                    .iter()
-                    .find(|r| r.1.title == "Submit Plan" && !r.1.is_error);
-
-                if let Some((_, _, call)) = plan_result {
-                    let func = call.get("function").unwrap_or(call);
-                    let args_raw = func
-                        .get("arguments")
-                        .or_else(|| func.get("input"))
-                        .cloned()
-                        .unwrap_or_default();
-                    let args = if let serde_json::Value::String(ref s) = args_raw {
-                        serde_json::from_str(s).unwrap_or(args_raw)
-                    } else {
-                        args_raw
-                    };
-
-                    if let Some(p) = args.get("plan").and_then(|v| v.as_str()) {
-                        log::info!(
-                            "WorkflowExecutor {}: Auto-transitioning to Implementation phase",
-                            self.session_id
-                        );
-                        self.context.prune_for_execution(p.to_string()).await?;
-                        let mut new_policy = ExecutionPolicy::implementation();
-                        new_policy.approval_level = self.policy.approval_level.clone();
-                        self.policy = new_policy;
-                        self.current_step = 0;
-                        self.consecutive_no_tool_calls = 0;
-                        continue;
-                    }
-                }
-            }
-
             if has_todo {
                 self.sync_todo_list().await?;
             }
@@ -1019,7 +1054,7 @@ impl WorkflowExecutor {
         &mut self,
         text_part: String,
         json_part: String,
-        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        _signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
             Vec<(String, ReinforcedResult, serde_json::Value)>,
@@ -1029,7 +1064,7 @@ impl WorkflowExecutor {
     > {
         let mut tool_calls = vec![];
 
-        // --- 1. Try parsing from JSON part (Primary source) ---
+        // --- 1. Parse Tool Calls from JSON ---
         if !json_part.is_empty() {
             let cleaned_json = crate::libs::util::format_json_str(&json_part);
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&cleaned_json) {
@@ -1048,13 +1083,6 @@ impl WorkflowExecutor {
                 {
                     tool_calls.push(json_val.clone());
                 }
-            } else {
-                log::warn!(
-                    "WorkflowExecutor {}: Failed to parse JSON from AI response: {}. JSON: {}",
-                    self.session_id,
-                    "ParseError",
-                    json_part
-                );
             }
         }
 
@@ -1063,18 +1091,21 @@ impl WorkflowExecutor {
         }
 
         let mut has_todo_call = false;
-        let mut results = vec![];
 
-        use futures::stream::{FuturesOrdered, StreamExt};
+        // Use a map to collect results and a list to maintain original AI call order
+        let mut result_map: HashMap<String, (ReinforcedResult, serde_json::Value)> = HashMap::new();
+        let mut call_order: Vec<String> = Vec::new();
 
-        let mut tool_futures = FuturesOrdered::new();
+        let mut parallel_batch = Vec::new();
+        let mut sequential_batch = Vec::new();
 
-        for call in tool_calls {
+        // --- 2. Phase 1: Pre-check and Partitioning ---
+        for (idx, call) in tool_calls.into_iter().enumerate() {
             let id = call
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(crate::ccproxy::get_tool_id);
+                .unwrap_or_else(|| format!("{}_{}", crate::ccproxy::get_tool_id(), idx));
 
             let func = call.get("function").unwrap_or(&call);
             let name = func
@@ -1093,10 +1124,12 @@ impl WorkflowExecutor {
                 args_raw
             };
 
-            // --- 1. Sequential Pre-check (Loop detection, Security, etc.) ---
+            call_order.push(id.clone());
+
+            // Pre-dispatch security/loop checks
             match self.pre_dispatch_check(&name, &args, &text_part).await {
                 Ok(Some(early_result)) => {
-                    results.push((id, early_result, call));
+                    result_map.insert(id, (early_result, call));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -1105,149 +1138,74 @@ impl WorkflowExecutor {
 
             if name.starts_with("todo_") {
                 has_todo_call = true;
+                sequential_batch.push((id, name, args, call));
+            } else {
+                parallel_batch.push((id, name, args, call));
             }
+        }
 
-            // --- 2. Queue for Parallel Execution (Limit to 3 concurrent calls) ---
+        // --- 3. Phase 2: Parallel Execution (I/O heavy tools) ---
+        if !parallel_batch.is_empty() {
+            use futures::stream::{FuturesOrdered, StreamExt};
+            let mut tool_futures = FuturesOrdered::new();
             let tm = self.tool_manager.clone();
             let gtm = self.global_tool_manager.clone();
             let semaphore = self.context.semaphore.clone();
 
-            tool_futures.push_back(async move {
-                let _permit = semaphore.acquire().await.ok();
-                let call_name = name.clone();
-                let call_args = args.clone();
+            for (id, name, args, call) in parallel_batch {
+                let tm_clone = tm.clone();
+                let gtm_clone = gtm.clone();
+                let semaphore_clone = semaphore.clone();
+                tool_futures.push_back(async move {
+                    let _permit = semaphore_clone.acquire().await.ok();
+                    let res = if let Ok(res) = tm_clone.tool_call(&name, args.clone()).await {
+                        Ok(res)
+                    } else {
+                        gtm_clone.tool_call(&name, args.clone()).await
+                    };
+                    (id, name, args, call, res)
+                });
+            }
 
-                let res = if let Ok(res) = tm.tool_call(&call_name, call_args.clone()).await {
-                    Ok(res)
-                } else {
-                    gtm.tool_call(&call_name, call_args).await
-                };
-
-                (id, name, args, call, res)
-            });
-        }
-
-        // --- 3. Sequential Post-processing (Summarization, Todo Sync) ---
-        while !tool_futures.is_empty() {
-            tokio::select! {
-                result_opt = tool_futures.next() => {
-                    if let Some((id, name, args, call, res)) = result_opt {
-                        let reinforced = self
-                            .post_process_tool_result(&name, &args, &call, res)
-                            .await?;
-                        results.push((id, reinforced, call));
-                    }
-                }
-                msg = signal_rx.recv() => {
-                    if let Some(sig_str) = msg {
-                        let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-                        if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                            log::info!("WorkflowExecutor {}: Received STOP signal during tool execution", self.session_id);
-                            self.update_state(WorkflowState::Cancelled).await?;
-                            return Err(WorkflowEngineError::General("Execution stopped by user".into()));
-                        }
-                    }
-                }
+            while let Some((id, name, args, call, res)) = tool_futures.next().await {
+                let reinforced = self
+                    .post_process_tool_result(&name, &args, &call, res)
+                    .await?;
+                result_map.insert(id, (reinforced, call));
             }
         }
 
-        Ok((results, has_todo_call))
+        // --- 4. Phase 3: Sequential Dispatch (State sensitive tools) ---
+        for (id, name, args, call) in sequential_batch {
+            let tm = self.tool_manager.clone();
+            let gtm = self.global_tool_manager.clone();
+
+            let res = if let Ok(res) = tm.tool_call(&name, args.clone()).await {
+                Ok(res)
+            } else {
+                gtm.tool_call(&name, args.clone()).await
+            };
+
+            // Post-processing happens IMMEDIATELY to capture the state accurately after this specific action
+            let reinforced = self
+                .post_process_tool_result(&name, &args, &call, res)
+                .await?;
+            result_map.insert(id, (reinforced, call));
+        }
+
+        // --- 5. Reassemble Results in Original AI Call Order ---
+        let final_results = call_order
+            .into_iter()
+            .filter_map(|id| {
+                let (reinforced, call) = result_map.remove(&id)?;
+                Some((id, reinforced, call))
+            })
+            .collect();
+
+        Ok((final_results, has_todo_call))
     }
 
-    /// Performs safety and logic checks BEFORE a tool is executed.
-    /// Returns Some(ReinforcedResult) if the check fails or requires an early return (e.g. Paused for confirmation).
-    async fn pre_dispatch_check(
-        &mut self,
-        name: &str,
-        args: &serde_json::Value,
-        text_part: &str,
-    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
-        match name {
-            TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
-            TOOL_FINISH_TASK => return self.handle_finish_task_intercept(text_part).await,
-            TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
-            _ => {}
-        }
-
-        // --- 2. Approval Policy Enforcement ---
-        if self.should_intercept_for_approval(name, args) {
-            return self.handle_approval_interception(name, args).await;
-        }
-
-        // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
-        // 3.1 Loop Detection
-        let loop_warning = self.loop_detector.record_and_check(name, args);
-        if let Some(ref warning) = loop_warning {
-            log::warn!(
-                "WorkflowExecutor {}: Loop detected for tool '{}'",
-                self.session_id,
-                name
-            );
-            let _ = self
-                .context
-                .add_message(
-                    "user".to_string(),
-                    warning.clone(),
-                    None,
-                    None,
-                    Some(StepType::Observe),
-                    self.current_step as i32,
-                    true,
-                    Some("LoopDetected".to_string()),
-                    None,
-                )
-                .await;
-        }
-
-        // 3.2 Shell Auditing
-        if name == crate::tools::TOOL_BASH {
-            if let Some(result) = self.handle_bash_security_intercept(args).await? {
-                return Ok(Some(result));
-            }
-        }
-
-        // 3.3 FS Path Guard
-        if [
-            crate::tools::TOOL_READ_FILE,
-            crate::tools::TOOL_WRITE_FILE,
-            crate::tools::TOOL_LIST_DIR,
-            crate::tools::TOOL_EDIT_FILE,
-            crate::tools::TOOL_GLOB,
-            crate::tools::TOOL_GREP,
-        ]
-        .contains(&name)
-        {
-            if let Some(result) = self.handle_fs_path_guard_intercept(name, args)? {
-                return Ok(Some(result));
-            }
-        }
-
-        Ok(None)
-    }
-
-    pub(crate) async fn handle_approval_interception(
-        &mut self,
-        name: &str,
-        args: &Value,
-    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let id = crate::ccproxy::get_tool_id();
-        self.pending_approvals.insert(id.clone(), args.clone());
-        self.update_state(WorkflowState::AwaitingApproval).await?;
-        self.gateway
-            .send(
-                &self.session_id,
-                GatewayPayload::Confirm {
-                    id,
-                    action: name.to_string(),
-                    details: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
-                },
-            )
-            .await?;
-        Ok(None)
-    }
-
-    /// Handles summarization, Todo context enhancement, and result reinforcement after a tool has run.
+    /// Optimized version of post-processing that ensures reinforced results reflect the system state.
     async fn post_process_tool_result(
         &mut self,
         name: &str,
@@ -1259,8 +1217,8 @@ impl WorkflowExecutor {
         if name == TOOL_FINISH_TASK {
             return Ok(ReinforcedResult {
                 content: "Finished".into(),
-                title: "FinishTask".to_string(),
-                summary: "Task completed".to_string(),
+                title: "Finish Task".to_string(),
+                summary: t!("workflow.task_finished").to_string(),
                 is_error: false,
                 error_type: None,
                 display_type: "text".to_string(),
@@ -1301,7 +1259,7 @@ impl WorkflowExecutor {
             }
         }
 
-        // 3. Reinforce with Todo Context
+        // 3. Reinforce with Todo Context (Freshly fetched from DB)
         if name.starts_with("todo_") {
             let todos = if let Ok(store) = self.context.main_store.read() {
                 store
@@ -1318,6 +1276,71 @@ impl WorkflowExecutor {
         } else {
             Ok(ObservationReinforcer::reinforce(tool_call, &result))
         }
+    }
+
+    /// Performs safety and logic checks BEFORE a tool is executed.
+    /// Returns Some(ReinforcedResult) if the check fails or requires an early return (e.g. Paused for confirmation).
+    async fn pre_dispatch_check(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+        text_part: &str,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
+        match name {
+            TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
+            TOOL_FINISH_TASK => return self.handle_finish_task_intercept(text_part).await,
+            TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
+            _ => {}
+        }
+
+        // --- 2. Approval Policy Enforcement ---
+        if self.should_intercept_for_approval(name, args) {
+            return self.handle_approval_interception(name, args).await;
+        }
+
+        // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
+        // 3.1 Loop Detection
+        if let Some(warning) = self.loop_detector.record_and_check(name, args) {
+            log::warn!(
+                "WorkflowExecutor {}: Loop detected for tool '{}'. Intercepting...",
+                self.session_id,
+                name
+            );
+            return Ok(Some(ReinforcedResult {
+                content: warning,
+                title: format!("Loop Check: {}", name),
+                summary: "Loop detected".to_string(),
+                is_error: true,
+                error_type: Some("LoopDetected".to_string()),
+                display_type: "text".to_string(),
+            }));
+        }
+
+        // 3.2 Shell Auditing
+        if name == crate::tools::TOOL_BASH {
+            if let Some(result) = self.handle_bash_security_intercept(args).await? {
+                return Ok(Some(result));
+            }
+        }
+
+        // 3.3 FS Path Guard
+        if [
+            crate::tools::TOOL_READ_FILE,
+            crate::tools::TOOL_WRITE_FILE,
+            crate::tools::TOOL_LIST_DIR,
+            crate::tools::TOOL_EDIT_FILE,
+            crate::tools::TOOL_GLOB,
+            crate::tools::TOOL_GREP,
+        ]
+        .contains(&name)
+        {
+            if let Some(result) = self.handle_fs_path_guard_intercept(name, args)? {
+                return Ok(Some(result));
+            }
+        }
+
+        Ok(None)
     }
 
     pub(crate) async fn update_state(
@@ -1460,9 +1483,24 @@ impl WorkflowExecutor {
                 return Ok(true);
             } else if sig_json["type"] == "user_input" {
                 let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
+
+                // 1. Reset counters for the NEW sub-task
+                log::info!(
+                    "WorkflowExecutor {}: Resetting step budget for new user input",
+                    self.session_id
+                );
+                self.current_step = 0;
+                self.consecutive_no_tool_calls = 0;
+
+                // 2. Combine user input with the system reminder for a cleaner UI and consistent context
+                let combined_content = format!(
+                    "{}\n\n<SYSTEM_REMINDER>To ensure sufficient reasoning depth for your follow-up request, the task step budget has been reset. Current step: 0.</SYSTEM_REMINDER>",
+                    user_input
+                );
+
                 self.add_message_and_notify_internal(
                     "user".to_string(),
-                    user_input,
+                    combined_content,
                     None,
                     None,
                     None,
