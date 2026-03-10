@@ -122,7 +122,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                          }}
+                        }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -287,20 +287,21 @@
 
                   <!-- Final Audit Toggle -->
                   <el-tooltip :content="$t('workflow.finalAuditTooltip')" placement="top">
-                    <div class="final-audit-toggle upperLayer" @click="toggleFinalAuditMode">
-                      <cs name="check-circle" class="small" :class="finalAuditMode" />
-                      <span class="audit-label" v-if="finalAuditMode !== 'agent'">{{ finalAuditMode.toUpperCase()
-                      }}</span>
-                    </div>
+                    <label class="final-audit-toggle icon-btn upperLayer" :class="finalAuditMode"
+                      @click="toggleFinalAuditMode">
+                      <cs name="check-circle" class="small" />
+                      <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
+                        }}</span>
+                    </label>
                   </el-tooltip>
 
                   <!-- Approval Level Dropdown -->
                   <el-dropdown trigger="click" @command="val => approvalLevel = val">
-                    <div class="icon-btn upperLayer" :class="{ 'warning-mode': approvalLevel === 'full' }">
+                    <label class="icon-btn upperLayer" :class="{ 'warning-mode': approvalLevel === 'full' }">
                       <cs
-                        :name="approvalLevel === 'default' ? 'tool' : (approvalLevel === 'smart' ? 'brain' : 'warning')"
+                        :name="approvalLevel === 'default' ? 'setting' : (approvalLevel === 'smart' ? 'brain' : 'warning')"
                         class="small" />
-                    </div>
+                    </label>
                     <template #dropdown>
                       <el-dropdown-menu>
                         <el-dropdown-item command="default" :class="{ active: approvalLevel === 'default' }">
@@ -463,7 +464,7 @@ const searchQuery = ref('')
 const inputMessage = ref('')
 const selectedAgent = ref(null)
 const approvalLevel = ref('default') // 'default', 'smart', 'full'
-const finalAuditMode = ref('agent') // 'agent', 'on', 'off'
+const finalAuditMode = ref('on') // 'agent', 'on', 'off'
 const planningMode = ref(false)
 const composing = ref(false)
 const compositionJustEnded = ref(false)
@@ -1871,6 +1872,10 @@ const onGlobalKeyDown = event => {
     }
   }
 }
+
+const toggleFinalAuditMode = () => {
+  finalAuditMode.value = finalAuditMode.value === 'on' ? 'off' : 'on'
+}
 </script>
 
 <style lang="scss">
@@ -2199,15 +2204,11 @@ const onGlobalKeyDown = event => {
               }
 
               .simple-text {
-                background-color: var(--el-color-primary-light-9);
-                color: var(--cs-text-color-primary);
-                padding: 10px 16px;
+                padding: var(--cs-space);
                 border-radius: 18px 2px 18px 18px;
                 max-width: 100%;
-                border: 1px solid var(--el-color-primary-light-7);
+                border: 1px solid var(--cs-border-color);
                 margin: 0;
-                font-family: inherit;
-                line-height: 1.6;
                 white-space: pre-wrap;
               }
 
@@ -2281,7 +2282,8 @@ const onGlobalKeyDown = event => {
                       color: var(--el-color-danger);
 
                     }
-                    .finish-text{
+
+                    .finish-text {
                       text-decoration: line-through;
                     }
                   }
@@ -2931,29 +2933,23 @@ const onGlobalKeyDown = event => {
                 align-items: center;
                 gap: 4px;
                 cursor: pointer;
-                padding: 4px 8px;
-                border-radius: var(--cs-border-radius-sm);
                 transition: all 0.2s;
 
                 &:hover {
                   background: var(--cs-hover-bg-color);
                 }
 
+                &.on {
+                  color: var(--el-color-success);
+                  border: 1px solid var(--el-color-success);
+                }
+
+                &.off {
+                  opacity: 0.6;
+                }
+
                 .cs {
                   font-size: 14px;
-
-                  &.agent {
-                    color: var(--cs-text-color-placeholder);
-                  }
-
-                  &.on {
-                    color: var(--el-color-success);
-                  }
-
-                  &.off {
-                    color: var(--el-color-danger);
-                    opacity: 0.6;
-                  }
                 }
 
                 .audit-label {
