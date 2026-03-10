@@ -9,7 +9,7 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
-use crate::db::{Agent, MainStore, WorkflowMessage};
+use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     ToolManager, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
@@ -22,7 +22,7 @@ use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::loop_detector::LoopDetector;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::SubAgentFactory;
-use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
+use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
@@ -197,7 +197,23 @@ impl WorkflowExecutor {
             }
         }
 
-        Self {
+        let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
+            serde_json::from_str(m).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        let act_model = models_val.get("act").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "id": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).and_then(|v| v["id"].as_i64()),
+                "model": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
+            })
+        });
+
+        let initial_provider_id = act_model["id"].as_i64().unwrap_or(0);
+        let initial_model_name = act_model["model"].as_str().unwrap_or_default().to_string();
+
+        let mut executor = Self {
             session_id,
             context: ContextManager::new(
                 session_id_clone,
@@ -210,7 +226,11 @@ impl WorkflowExecutor {
             chat_state,
             gateway,
             sub_agent_factory,
-            compressor: ContextCompressor::new(chat_state_clone, 0, "".into()),
+            compressor: ContextCompressor::new(
+                chat_state_clone,
+                initial_provider_id,
+                initial_model_name.clone(),
+            ),
             path_guard,
             skill_scanner,
             llm_processor: LlmProcessor::new(
@@ -219,15 +239,15 @@ impl WorkflowExecutor {
                 HashMap::new(),
                 path_guard_clone,
                 chat_state_clone2,
-                0,
-                "".into(),
-                false,
+                initial_provider_id,
+                initial_model_name.clone(),
+                false, // Temporary, will be updated below
             ),
             intelligence_manager: IntelligenceManager::new(
                 session_id_clone3,
                 chat_state_clone3,
-                0,
-                "".into(),
+                initial_provider_id,
+                initial_model_name.clone(),
             ),
             available_skills: HashMap::new(),
             agent_config,
@@ -242,7 +262,23 @@ impl WorkflowExecutor {
             policy,
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
+        };
+
+        // Initialize reasoning flag by piercing proxy if necessary
+        let actual_config =
+            executor.resolve_actual_model_config(initial_provider_id, &initial_model_name);
+        if let Some(crate::db::ModelConfig {
+            reasoning: Some(true),
+            ..
+        }) = actual_config
+        {
+            executor.llm_processor.reasoning = true;
+        } else {
+            executor.llm_processor.reasoning =
+                crate::ai::util::is_reasoning_supported(&initial_model_name.to_lowercase());
         }
+
+        executor
     }
 
     pub(crate) async fn init_internal(&mut self) -> Result<(), WorkflowEngineError> {
@@ -421,10 +457,14 @@ impl WorkflowExecutor {
         {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
-            tm.register_tool(Arc::new(SkillListReferences::new(self.available_skills.clone())))
-                .await?;
-            tm.register_tool(Arc::new(SkillLoadReference::new(self.available_skills.clone())))
-                .await?;
+            tm.register_tool(Arc::new(SkillListReferences::new(
+                self.available_skills.clone(),
+            )))
+            .await?;
+            tm.register_tool(Arc::new(SkillLoadReference::new(
+                self.available_skills.clone(),
+            )))
+            .await?;
 
             // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
             // if the current executor is NOT itself a sub-agent.
@@ -745,6 +785,31 @@ impl WorkflowExecutor {
             };
 
             let _model_name = model_config["model"].as_str().unwrap_or("").to_string();
+            let provider_id = model_config["id"].as_i64().unwrap_or(0);
+
+            // Pierce proxy to get actual model capabilities if needed
+            let actual_config = self.resolve_actual_model_config(provider_id, &_model_name);
+
+            self.llm_processor.active_provider_id = provider_id;
+            self.llm_processor.active_model_name = _model_name.clone();
+
+            // Priority: Model Config (reasoning field) > Auto-detection
+            if let Some(crate::db::ModelConfig {
+                reasoning: Some(true),
+                ..
+            }) = actual_config
+            {
+                self.llm_processor.reasoning = true;
+            } else {
+                self.llm_processor.reasoning =
+                    crate::ai::util::is_reasoning_supported(&_model_name.to_lowercase());
+            }
+
+            self.intelligence_manager.active_provider_id = self.llm_processor.active_provider_id;
+            self.intelligence_manager.active_model_name =
+                self.llm_processor.active_model_name.clone();
+            self.compressor.provider_id = self.llm_processor.active_provider_id;
+            self.compressor.model = self.llm_processor.active_model_name.clone();
 
             let chat_interface = {
                 let mut chats_guard = self.chat_state.chats.lock().await;
@@ -778,12 +843,29 @@ impl WorkflowExecutor {
                 )
                 .await?;
 
-            if full_response.is_empty() && tool_calls_json.is_empty() {
-                sleep(Duration::from_secs(1)).await;
-                continue;
+            let mut needs_compression = false;
+            let mut assistant_metadata = usage.unwrap_or_else(|| serde_json::json!({}));
+            if !tool_calls_json.is_empty() {
+                if let Ok(tc_val) = serde_json::from_str::<serde_json::Value>(&tool_calls_json) {
+                    // Extract strictly the array of tool calls to comply with OpenAI/Claude protocols.
+                    let calls_array = if let Some(array) = tc_val.as_array() {
+                        array.clone()
+                    } else if let Some(array) = tc_val.get("tool_calls").and_then(|v| v.as_array()) {
+                        array.clone()
+                    } else if let Some(tool_obj) = tc_val.get("tool") {
+                        vec![tool_obj.clone()]
+                    } else if tc_val.is_object() && tc_val.get("name").is_some() {
+                        vec![tc_val]
+                    } else {
+                        vec![]
+                    };
+
+                    if !calls_array.is_empty() {
+                        assistant_metadata["tool_calls"] = serde_json::json!(calls_array);
+                    }
+                }
             }
 
-            let mut needs_compression = false;
             let compressed_signal = self
                 .add_message_and_notify_internal(
                     "assistant".to_string(),
@@ -793,7 +875,7 @@ impl WorkflowExecutor {
                     Some(StepType::Think),
                     false,
                     None,
-                    usage,
+                    Some(assistant_metadata),
                 )
                 .await?;
             if compressed_signal {
@@ -804,6 +886,28 @@ impl WorkflowExecutor {
             let (results, has_todo) = self
                 .execute_tools(full_response, tool_calls_json, &mut signal_rx)
                 .await?;
+
+            for (id, reinforced, _) in &results {
+                let _ = self
+                    .add_message_and_notify_internal(
+                        "tool".to_string(),
+                        reinforced.content.clone(),
+                        None,
+                        None,
+                        Some(StepType::Observe),
+                        reinforced.is_error,
+                        reinforced.error_type.clone(),
+                        Some(serde_json::json!({
+                            "tool_call_id": id,
+                            "title": reinforced.title,
+                            "summary": reinforced.summary,
+                            "is_error": reinforced.is_error,
+                            "error_type": reinforced.error_type,
+                            "display_type": reinforced.display_type
+                        })),
+                    )
+                    .await?;
+            }
 
             if results.is_empty() {
                 self.consecutive_no_tool_calls += 1;
@@ -823,14 +927,24 @@ impl WorkflowExecutor {
                 } else {
                     "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
                 };
-                let _ = self.add_message_and_notify_internal(
-                    "user".to_string(),
-                    error_msg,
-                    None, None, Some(StepType::Observe), false, None, None
-                ).await?;
+                let _ = self
+                    .add_message_and_notify_internal(
+                        "user".to_string(),
+                        error_msg,
+                        None,
+                        None,
+                        Some(StepType::Observe),
+                        false,
+                        None,
+                        None,
+                    )
+                    .await?;
                 if self.consecutive_no_tool_calls >= 3 {
                     self.consecutive_no_tool_calls = 0;
                 }
+                // Skip further processing since there are no tool results
+                sleep(Duration::from_millis(100)).await;
+                continue;
             } else {
                 self.consecutive_no_tool_calls = 0;
             }
@@ -841,6 +955,43 @@ impl WorkflowExecutor {
             {
                 self.update_state(WorkflowState::Completed).await?;
                 break;
+            }
+
+            // --- AUTO-TRANSITION FROM PLANNING TO IMPLEMENTATION IN FULL MODE ---
+            if self.policy.phase == ExecutionPhase::Planning
+                && self.policy.approval_level == ApprovalLevel::Full
+            {
+                let plan_result = results
+                    .iter()
+                    .find(|r| r.1.title == "Submit Plan" && !r.1.is_error);
+
+                if let Some((_, _, call)) = plan_result {
+                    let func = call.get("function").unwrap_or(call);
+                    let args_raw = func
+                        .get("arguments")
+                        .or_else(|| func.get("input"))
+                        .cloned()
+                        .unwrap_or_default();
+                    let args = if let serde_json::Value::String(ref s) = args_raw {
+                        serde_json::from_str(s).unwrap_or(args_raw)
+                    } else {
+                        args_raw
+                    };
+
+                    if let Some(p) = args.get("plan").and_then(|v| v.as_str()) {
+                        log::info!(
+                            "WorkflowExecutor {}: Auto-transitioning to Implementation phase",
+                            self.session_id
+                        );
+                        self.context.prune_for_execution(p.to_string()).await?;
+                        let mut new_policy = ExecutionPolicy::implementation();
+                        new_policy.approval_level = self.policy.approval_level.clone();
+                        self.policy = new_policy;
+                        self.current_step = 0;
+                        self.consecutive_no_tool_calls = 0;
+                        continue;
+                    }
+                }
             }
 
             if has_todo {
@@ -876,39 +1027,35 @@ impl WorkflowExecutor {
         ),
         WorkflowEngineError,
     > {
-        // If json_part is empty, there are no tool calls.
-        if json_part.is_empty() {
-            return Ok((Vec::new(), false));
-        }
+        let mut tool_calls = vec![];
 
-        let cleaned_json = crate::libs::util::format_json_str(&json_part);
-        let json_val: serde_json::Value = match serde_json::from_str(&cleaned_json) {
-            Ok(v) => v,
-            Err(e) => {
+        // --- 1. Try parsing from JSON part (Primary source) ---
+        if !json_part.is_empty() {
+            let cleaned_json = crate::libs::util::format_json_str(&json_part);
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&cleaned_json) {
+                if let Some(tool_obj) = json_val.get("tool") {
+                    tool_calls.push(tool_obj.clone());
+                } else if let Some(calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
+                    tool_calls.extend(calls.iter().cloned());
+                } else if let Some(calls) = json_val.as_array() {
+                    tool_calls.extend(calls.iter().cloned());
+                } else if json_val.get("name").is_some()
+                    || (json_val.get("function").is_some()
+                        && json_val
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .is_some())
+                {
+                    tool_calls.push(json_val.clone());
+                }
+            } else {
                 log::warn!(
                     "WorkflowExecutor {}: Failed to parse JSON from AI response: {}. JSON: {}",
                     self.session_id,
-                    e,
+                    "ParseError",
                     json_part
                 );
-                return Ok((Vec::new(), false));
             }
-        };
-        let mut tool_calls = vec![];
-        if let Some(tool_obj) = json_val.get("tool") {
-            tool_calls.push(tool_obj.clone());
-        } else if let Some(calls) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
-            tool_calls.extend(calls.iter().cloned());
-        } else if let Some(calls) = json_val.as_array() {
-            tool_calls.extend(calls.iter().cloned());
-        } else if json_val.get("name").is_some()
-            || (json_val.get("function").is_some()
-                && json_val
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .is_some())
-        {
-            tool_calls.push(json_val.clone());
         }
 
         if tool_calls.is_empty() {
@@ -1200,14 +1347,69 @@ impl WorkflowExecutor {
     pub(crate) async fn add_message_and_notify_internal(
         &mut self,
         role: String,
-        content: String,
+        mut content: String,
         attached_context: Option<String>,
         reasoning: Option<String>,
         step_type: Option<StepType>,
         is_error: bool,
         error_type: Option<String>,
-        metadata: Option<serde_json::Value>,
+        mut metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
+        // --- 1. Content Normalization (Handle mixed Text + JSON responses) ---
+        if role == "assistant" {
+            let trimmed = content.trim();
+
+            // Try to find a JSON block if it doesn't start with {
+            let (text_part, json_val) = if trimmed.starts_with('{') {
+                (
+                    None,
+                    serde_json::from_str::<serde_json::Value>(trimmed).ok(),
+                )
+            } else {
+                // Look for the last { ... } block
+                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                    if start < end {
+                        let text = trimmed[..start].trim().to_string();
+                        let json = trimmed[start..=end].trim();
+                        (
+                            Some(text),
+                            serde_json::from_str::<serde_json::Value>(json).ok(),
+                        )
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            };
+
+            if let Some(json_msg) = json_val {
+                // Case A: Extraction from JSON structure
+                if let Some(text) = json_msg.get("content").and_then(|v| v.as_str()) {
+                    content = text.to_string();
+                } else if let Some(text) = text_part {
+                    content = text;
+                }
+
+                // Merge tool calls into metadata (Support multiple formats)
+                let mut tool_calls_to_track = Vec::new();
+                if let Some(tool_calls) = json_msg.get("tool_calls").and_then(|v| v.as_array()) {
+                    tool_calls_to_track.extend(tool_calls.clone());
+                } else if let Some(tool) = json_msg.get("tool") {
+                    tool_calls_to_track.push(tool.clone());
+                } else if json_msg.get("name").is_some() {
+                    // Single tool object format
+                    tool_calls_to_track.push(json_msg.clone());
+                }
+
+                if !tool_calls_to_track.is_empty() {
+                    let mut meta_obj = metadata.unwrap_or(serde_json::json!({}));
+                    meta_obj["tool_calls"] = serde_json::json!(tool_calls_to_track);
+                    metadata = Some(meta_obj);
+                }
+            }
+        }
+
         let (msg, needs_compression) = self
             .context
             .add_message(
@@ -1328,5 +1530,36 @@ impl WorkflowExecutor {
             )
             .await?;
         Ok(())
+    }
+
+    /// Resolves the actual ModelConfig by piercing through proxy aliases if necessary.
+    /// Returns the ModelConfig of the first target in a proxy group, or the direct model config.
+    fn resolve_actual_model_config(
+        &self,
+        provider_id: i64,
+        model_name: &str,
+    ) -> Option<ModelConfig> {
+        let store = self.context.main_store.read().ok()?;
+
+        if provider_id == 0 {
+            // Proxy mode: parse "group@alias"
+            let (group, alias) = if let Some(pos) = model_name.find('@') {
+                (&model_name[..pos], &model_name[pos + 1..])
+            } else {
+                ("default", model_name)
+            };
+
+            let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
+                store.get_config(crate::constants::CFG_CHAT_COMPLETION_PROXY, HashMap::new());
+
+            let target = proxy_config.get(group)?.get(alias)?.first()?;
+
+            // Recurse once to get the actual model config from the first target
+            self.resolve_actual_model_config(target.id, &target.model)
+        } else {
+            // Provider mode: get model by provider_id
+            let ai_model = store.config.get_ai_model_by_id(provider_id).ok()?;
+            ai_model.models.into_iter().find(|m| m.id == model_name)
+        }
     }
 }

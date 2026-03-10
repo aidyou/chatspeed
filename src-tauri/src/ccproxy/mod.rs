@@ -17,4 +17,4 @@ pub use handler::{
 };
 pub use helper::{get_tool_id, StreamProcessor};
 pub use router::routes;
-pub use types::{claude, gemini, openai, ChatProtocol, StreamFormat};
+pub use types::{claude, gemini, openai, ChatCompletionProxyConfig, ChatProtocol, StreamFormat};

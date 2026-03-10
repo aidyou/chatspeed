@@ -106,10 +106,17 @@ impl WorkflowExecutor {
             }));
         }
 
+        // In Full approval mode, do not set AwaitingApproval state.
+        // The engine loop will detect the SubmitPlan call and auto-transition to execution.
+        if self.policy.approval_level == ApprovalLevel::Full {
+            return Ok(None);
+        }
+
         self.update_state(WorkflowState::AwaitingApproval).await?;
 
         Ok(None)
     }
+
     pub(crate) async fn handle_ask_user_intercept(
         &mut self,
         args: &serde_json::Value,
@@ -242,25 +249,32 @@ impl WorkflowExecutor {
                     }));
                 }
                 crate::tools::ShellDecision::Review(reason) => {
-                    self.gateway
-                        .send(
-                            &self.session_id,
-                            GatewayPayload::Confirm {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                action: TOOL_BASH.to_string(),
-                                details: format!("{} (Policy: {})", command_str, reason),
-                            },
-                        )
-                        .await?;
-                    self.update_state(WorkflowState::AwaitingApproval).await?;
-                    return Ok(Some(ReinforcedResult {
-                        content: "WAITING_FOR_USER_APPROVAL".to_string(),
-                        title: format!("Bash({})", command_str),
-                        summary: "Waiting for approval".to_string(),
-                        is_error: false,
-                        error_type: None,
-                        display_type: "text".to_string(),
-                    }));
+                    if self.policy.approval_level == ApprovalLevel::Full {
+                        log::info!(
+                            "WorkflowExecutor {}: Auto-approving risky bash command in Full mode (Policy: {})",
+                            self.session_id, reason
+                        );
+                    } else {
+                        self.gateway
+                            .send(
+                                &self.session_id,
+                                GatewayPayload::Confirm {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    action: TOOL_BASH.to_string(),
+                                    details: format!("{} (Policy: {})", command_str, reason),
+                                },
+                            )
+                            .await?;
+                        self.update_state(WorkflowState::AwaitingApproval).await?;
+                        return Ok(Some(ReinforcedResult {
+                            content: "WAITING_FOR_USER_APPROVAL".to_string(),
+                            title: format!("Bash({})", command_str),
+                            summary: "Waiting for approval".to_string(),
+                            is_error: false,
+                            error_type: None,
+                            display_type: "text".to_string(),
+                        }));
+                    }
                 }
             }
         }

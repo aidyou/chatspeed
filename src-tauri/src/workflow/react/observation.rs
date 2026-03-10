@@ -1,7 +1,7 @@
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_GLOB, TOOL_GREP, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE,
-    TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST,
+    TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 
 use rust_i18n::t;
@@ -366,7 +366,8 @@ impl ObservationReinforcer {
             }
             TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
             TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
-            TOOL_FINISH_TASK => t!("workflow.task_finished").to_string(),
+            TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
+            TOOL_FINISH_TASK => "Finish Task".to_string(),
             _ => {
                 let name = tool_name.replace('_', " ");
                 name.split_whitespace()
@@ -385,6 +386,8 @@ impl ObservationReinforcer {
 
     fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
         match tool_name {
+            TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
+            TOOL_FINISH_TASK => t!("workflow.task_finished").to_string(),
             TOOL_READ_FILE => {
                 let lines = content.lines().count();
                 format!("Read {} lines", lines)

@@ -635,7 +635,7 @@ impl LlmProcessor {
         };
 
         format!(
-            "<SYSTEM_REMINDER>\n{}{}\n\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
+            "{}{}\n\n<SYSTEM_REMINDER>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
             env_info, progress_info, today
         )
     }
