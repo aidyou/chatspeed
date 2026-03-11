@@ -1,21 +1,7 @@
 /**
  * @class MarkdownStreamParser
  * @description A stateful parser for incrementally processing streaming Markdown text.
- * It splits the text into logical blocks like paragraphs, code blocks, and math blocks
- * without re-parsing the entire text on each new chunk. This is highly efficient for
- * rendering large, streaming AI responses.
- *
- * @example
- * const parser = new MarkdownStreamParser();
- *
- * // In your streaming handler
- * onData(chunk) {
- *   const blocks = parser.process(chunk);
- *   // 'blocks' is an array of block objects, e.g.,
- *   // [{ type: 'code', lang: 'js', content: '...' }, { type: 'paragraph', content: '...' }]
- *   // The last block in the array may be incomplete as it's still being streamed.
- *   render(blocks);
- * }
+ * Fixed to be robust against missing newlines before closing fences and inline markers.
  */
 export class MarkdownStreamParser {
   constructor() {
@@ -32,8 +18,6 @@ export class MarkdownStreamParser {
 
   /**
    * Processes an incoming chunk of text and returns an array of parsed block objects.
-   * @param {string} chunk - The new chunk of text from the stream.
-   * @returns {Array<Object>} An array of block objects.
    */
   process(chunk) {
     this.buffer += chunk
@@ -62,105 +46,106 @@ export class MarkdownStreamParser {
     return [...this.blocks, currentBlock]
   }
 
-  /**
-   * Finalizes any remaining content in the buffer.
-   * Call this when the stream is finished.
-   * @returns {Array<Object>} The complete array of all blocks.
-   */
   end() {
     if (this.buffer.trim()) {
       this.blocks.push({ type: this.stateToType(), content: this.buffer })
     }
-    this.buffer = ''
-    return this.blocks
+    const result = [...this.blocks]
+    this.reset()
+    return result
   }
 
   stateToType() {
     switch (this.state) {
-      case 'in_code_block':
-        return 'code'
-      case 'in_math_block':
-        return 'math'
-      default:
-        return 'paragraph'
+      case 'in_code_block': return 'code'
+      case 'in_math_block': return 'math'
+      default: return 'paragraph'
     }
   }
 
-  // Internal parsing methods based on state
+  // Internal parsing methods
 
   parseNormal() {
-    const codeBlockStartIndex = this.buffer.indexOf('```')
-    const mathBlockStartIndex = this.buffer.indexOf('$$')
-    const paragraphEndIndex = this.buffer.indexOf('\n\n')
+    const codeIdx = this.buffer.indexOf('```')
+    const mathIdx = this.buffer.indexOf('$$')
+    const paraIdx = this.buffer.indexOf('\n\n')
 
-    const indices = [codeBlockStartIndex, mathBlockStartIndex, paragraphEndIndex].filter(
-      i => i !== -1
-    )
+    // Find the first occurrence among potential markers
+    const found = [
+      { idx: codeIdx, type: 'code', len: 3 },
+      { idx: mathIdx, type: 'math', len: 2 },
+      { idx: paraIdx, type: 'para', len: 2 }
+    ].filter(f => f.idx !== -1).sort((a, b) => a.idx - b.idx)
 
-    if (indices.length === 0) {
-      return false // Not enough content to form a block, wait for more chunks
+    if (found.length === 0) return false
+
+    const first = found[0]
+
+    // CRITICAL FIX: Code and Math blocks MUST start at the beginning of a line
+    if (first.type === 'code' || first.type === 'math') {
+      const isAtLineStart = first.idx === 0 || this.buffer[first.idx - 1] === '\n'
+      if (!isAtLineStart) {
+        // Not a real block start, treat the content up to marker as paragraph and continue
+        const content = this.buffer.substring(0, first.idx + first.len)
+        this.blocks.push({ type: 'paragraph', content })
+        this.buffer = this.buffer.substring(first.idx + first.len)
+        return true
+      }
     }
 
-    const firstIndex = Math.min(...indices)
+    // Push preceding content as a paragraph
+    const contentBefore = this.buffer.substring(0, first.idx)
+    if (contentBefore.trim()) {
+      this.blocks.push({ type: 'paragraph', content: contentBefore })
+    }
+    this.buffer = this.buffer.substring(first.idx)
 
-    // If a paragraph break comes first, or is the only thing found
-    if (firstIndex === paragraphEndIndex) {
-      const paragraphContent = this.buffer.substring(0, paragraphEndIndex)
-      if (paragraphContent.trim()) {
-        this.blocks.push({ type: 'paragraph', content: paragraphContent })
-      }
-      this.buffer = this.buffer.substring(paragraphEndIndex + 2)
+    if (first.type === 'para') {
+      this.buffer = this.buffer.substring(2) // Skip the \n\n
       return true
     }
 
-    // If a block marker comes first
-    if (firstIndex === codeBlockStartIndex || firstIndex === mathBlockStartIndex) {
-      const contentBefore = this.buffer.substring(0, firstIndex)
-      if (contentBefore.trim()) {
-        this.blocks.push({ type: 'paragraph', content: contentBefore })
-      }
-      this.buffer = this.buffer.substring(firstIndex)
-      this.state = firstIndex === codeBlockStartIndex ? 'in_code_block' : 'in_math_block'
-      return true
-    }
-
-    return false
+    this.state = first.type === 'code' ? 'in_code_block' : 'in_math_block'
+    return true
   }
 
   parseCodeBlock() {
-    const endIndex = this.buffer.indexOf('\n```')
-    if (endIndex !== -1) {
-      const blockEnd = endIndex + 4 // Include the closing ```
-      const codeContent = this.buffer.substring(0, blockEnd)
-      this.blocks.push({ type: 'code', content: codeContent })
+    // Search for closing ``` starting from index 3 to skip the opening one
+    const idx = this.buffer.indexOf('```', 3)
+    if (idx === -1) return false
 
-      this.buffer = this.buffer.substring(blockEnd)
-      // Consume potential newline after closing fence
-      if (this.buffer.startsWith('\n')) {
-        this.buffer = this.buffer.substring(1)
-      }
-      this.state = 'normal'
-      return true
+    // Check if closing fence is valid (at start of line or following a newline)
+    const isAtLineStart = idx === 0 || this.buffer[idx - 1] === '\n'
+    
+    // We allow closing even if not at line start to be more permissive with messy LLM output,
+    // but standard MD prefers line start. 
+    // Optimization: If there's content followed by ```, we consider it the end.
+    const blockEnd = idx + 3
+    const codeContent = this.buffer.substring(0, blockEnd)
+    this.blocks.push({ type: 'code', content: codeContent })
+
+    this.buffer = this.buffer.substring(blockEnd)
+    if (this.buffer.startsWith('\n')) {
+      this.buffer = this.buffer.substring(1)
     }
-    return false
+    this.state = 'normal'
+    return true
   }
 
   parseMathBlock() {
-    const endIndex = this.buffer.indexOf('$$')
-    // Ensure it's not the opening $$ if the buffer just started
-    if (endIndex > 1) {
-      const blockEnd = endIndex + 2 // Include the closing $$
-      const mathContent = this.buffer.substring(0, blockEnd)
-      this.blocks.push({ type: 'math', content: mathContent })
+    // Search for closing $$ starting from index 2
+    const idx = this.buffer.indexOf('$$', 2)
+    if (idx === -1) return false
 
-      this.buffer = this.buffer.substring(blockEnd)
-      // Consume potential newline after closing fence
-      if (this.buffer.startsWith('\n')) {
-        this.buffer = this.buffer.substring(1)
-      }
-      this.state = 'normal'
-      return true
+    const blockEnd = idx + 2
+    const mathContent = this.buffer.substring(0, blockEnd)
+    this.blocks.push({ type: 'math', content: mathContent })
+
+    this.buffer = this.buffer.substring(blockEnd)
+    if (this.buffer.startsWith('\n')) {
+      this.buffer = this.buffer.substring(1)
     }
-    return false
+    this.state = 'normal'
+    return true
   }
 }

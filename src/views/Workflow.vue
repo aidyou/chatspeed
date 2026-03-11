@@ -208,9 +208,13 @@
                     </span>
                   </div>
                 </div>
-                <MarkdownSimple v-if="chatState.content" :content="chatState.content" />
+                <!-- Streaming Blocks (Optimized rendering) -->
+                <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
+                  <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
+                  <MarkdownSimple :content="block.content" />
+                </div>
 
-                <!-- Retry Countdown -->
+                <!-- Retry Countdown... -->
                 <div v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0" class="retry-status-alert">
                   <el-alert type="warning" :closable="false" show-icon>
                     <template #title>
@@ -1060,91 +1064,82 @@ const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 
 // Enhanced messages with pre-calculated display info
 const enhancedMessages = computed(() => {
-  if (!workflowStore.messages) return [];
-  const msgs = [...workflowStore.messages];
-
-  // 1. Map tool IDs to their final resolution status and capture result info
-  const toolStates = new Map(); // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool, resultMsg: string }
-  msgs.forEach(m => {
-    if (m.role === 'tool' && m.metadata) {
-      const meta = typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata;
-      const toolCallId = meta.tool_call_id;
-      if (toolCallId) {
-        const summary = (meta.summary || '').toLowerCase();
-        const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
+  if (!workflowStore.messages || workflowStore.messages.length === 0) return [];
+  
+  const rawMsgs = workflowStore.messages;
+  const toolStates = new Map(); // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool }
+  const toolHasWaitingMsg = new Set(); // tool_call_id that has an 'Awaiting' message
+  
+  // --- PASS 1: Single scan to collect all states (O(N)) ---
+  const processedMsgs = rawMsgs.map(m => {
+    let meta = m.metadata;
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta); } catch (e) { meta = {}; }
+    }
+    
+    if (m.role === 'tool' && meta?.tool_call_id) {
+      const id = meta.tool_call_id;
+      const summary = (meta.summary || '').toLowerCase();
+      const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
+      
+      if (isWaiting) {
+        toolHasWaitingMsg.add(id);
+      } else {
         const isRejected = summary.includes('rejected') || m.message.includes('rejected') || m.message.includes('拒绝');
         const isError = m.isError || m.is_error || meta.is_error || false;
-        
-        if (!isWaiting) {
-          toolStates.set(toolCallId, { isFinal: true, isRejected, hasError: isError, resultMsg: m.message });
-        } else if (!toolStates.has(toolCallId)) {
-          toolStates.set(toolCallId, { isFinal: false, isRejected: false, hasError: false });
-        }
+        toolStates.set(id, { isFinal: true, isRejected, hasError: isError });
       }
     }
+    return { ...m, metadata: meta }; // Cache parsed meta for Pass 2
   });
 
-  return msgs.filter(m => {
-    if (m.role === 'tool' && m.metadata) {
-      const meta = typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata;
-      const toolCallId = meta.tool_call_id;
-      if (toolCallId) {
-        const summary = (meta.summary || '').toLowerCase();
+  // --- PASS 2: Filter and Transform (O(N)) ---
+  return processedMsgs.filter(m => {
+    // Hide redundancy
+    if (m.role === 'tool' && m.metadata?.tool_call_id) {
+      const id = m.metadata.tool_call_id;
+      const state = toolStates.get(id);
+      
+      if (state?.isFinal && !state.hasError) {
+        const summary = (m.metadata.summary || '').toLowerCase();
         const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
-        const state = toolStates.get(toolCallId);
-
-        // Logic Change:
-        // - If this is a "Final Result" message AND there was a "Waiting" message for it
-        // - AND the result is a success (not an error)
-        // - THEN hide it to show the "Waiting" message instead.
-        if (!isWaiting && state?.isFinal && !state.hasError) {
-          // Check if there's a corresponding waiting message in the original list
-          const hasWaitingMsg = msgs.some(other => {
-            const otherMeta = typeof other.metadata === 'string' ? JSON.parse(other.metadata) : other.metadata;
-            return other.role === 'tool' && 
-                   otherMeta?.tool_call_id === toolCallId && 
-                   (otherMeta?.summary || '').toLowerCase().match(/awaiting|待审批/);
-          });
-          if (hasWaitingMsg) return false; 
-        }
+        
+        // If result is success, hide the result message and keep the waiting one
+        if (!isWaiting && toolHasWaitingMsg.has(id)) return false;
+        // If we are looking at the waiting message but it's already resolved, we KEEP it (for info)
       }
     }
     return !(m.role === 'user' && m.stepType === 'observe');
   }).map((message, idx) => {
-    const toolDisplay = getToolDisplayInfo(message)
-    const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
+    const toolDisplay = getToolDisplayInfo(message);
+    const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`;
 
-    // 3. Attach resolution state to the message
     let isRejected = false;
     let isApproved = false;
-    if (message.role === 'tool' && message.metadata) {
-      const meta = typeof message.metadata === 'string' ? JSON.parse(message.metadata) : message.metadata;
-      const state = toolStates.get(meta.tool_call_id);
+    if (message.role === 'tool' && message.metadata?.tool_call_id) {
+      const state = toolStates.get(message.metadata.tool_call_id);
       if (state?.isFinal) {
         if (state.isRejected) isRejected = true;
         else isApproved = true;
       }
     }
 
-    // Pre-calculate pending tool calls...
-    let pendingToolCalls = []
-    const toolCalls = message.metadata?.tool_calls || []
+    // Pre-calculate pending tool calls
+    let pendingToolCalls = [];
+    const toolCalls = message.metadata?.tool_calls || [];
     if (Array.isArray(toolCalls) && toolCalls.length > 0) {
       pendingToolCalls = toolCalls
         .map(call => {
-          const name = call.function?.name || call.name || ''
-          const rawArgs = call.function?.arguments || call.arguments || {}
-          let args = rawArgs
+          const name = call.function?.name || call.name || '';
+          const rawArgs = call.function?.arguments || call.arguments || {};
+          let args = rawArgs;
           if (typeof rawArgs === 'string') {
             try { args = JSON.parse(rawArgs); } catch (e) { args = {}; }
           }
-          const { icon, toolType, action, target } = formatToolTitle(name, args)
-          return { id: call.id, icon, toolType, action, target }
+          const { icon, toolType, action, target } = formatToolTitle(name, args);
+          return { id: call.id, icon, toolType, action, target };
         })
-        .filter(call => {
-          const state = toolStates.get(call.id);
-          return !state || !state.isFinal;
-        })
+        .filter(call => !toolStates.has(call.id) || !toolStates.get(call.id).isFinal);
     }
 
     return {
@@ -1154,28 +1149,24 @@ const enhancedMessages = computed(() => {
       pendingToolCalls,
       isRejected,
       isApproved
-    }
+    };
   }).filter(m => {
-    // Standard visibility filters...
+    // Standard visibility logic
     if (m.role === 'tool') {
-      const meta = m.metadata || {}
-      const toolCall = meta.tool_call || {}
-      const name = toolCall.name || (toolCall.function && toolCall.function.name) || ''
-      if (name === 'answer_user' || name === 'finish_task') return false
-      return true
+      const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || '';
+      if (name === 'answer_user' || name === 'finish_task') return false;
+      return true;
     }
     if (m.role === 'assistant') {
-      const parsed = getParsedMessage(m)
-      const hasTextContent = (m.message && m.message.trim()) ||
-        (parsed.content && parsed.content.trim()) ||
-        (m.reasoning && m.reasoning.trim())
-      if (hasTextContent) return true
-      if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true
-      return false
+      const hasTextContent = (m.message && m.message.trim()) || 
+                            (m.reasoning && m.reasoning.trim());
+      if (hasTextContent) return true;
+      if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true;
+      return false;
     }
-    return true
-  })
-})
+    return true;
+  });
+});
 
 // Get todo list from the store
 const todoList = computed(() => workflowStore.todoList)
@@ -1652,6 +1643,13 @@ const onSendMessage = async () => {
   const message = inputMessage.value
   inputMessage.value = ''
   console.log('Sending message to workflow:', message)
+
+  // CRITICAL: Reset the stream parser and UI buffer BEFORE sending the new request.
+  // This ensures no residual data from the previous turn pollutes the next response.
+  chattingParser.reset()
+  chatState.value.content = ''
+  chatState.value.reasoning = ''
+  chatState.value.blocks = []
 
   if (!currentWorkflowId.value) {
     // Start brand new workflow
