@@ -104,10 +104,12 @@
 
                   <!-- Normal tool call display -->
                   <template v-else>
-                    <div class="tool-line title-wrap expandable" @click="toggleMessageExpand(message.displayId)">
+                    <div class="tool-line title-wrap expandable" :class="{ 'tool-rejected': message.isRejected }"
+                      @click="toggleMessageExpand(message.displayId)">
                       <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
                       <span class="tool-name">{{ message.toolDisplay.action }}</span>
                       <span class="tool-target">{{ message.toolDisplay.target }}</span>
+                      <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
                     </div>
                     <!-- Hide summary when expanded -->
                     <div class="tool-line summary expandable" v-if="!isMessageExpanded(message)"
@@ -779,7 +781,8 @@ const toggleMessageExpand = (id) => {
   }
 }
 const isMessageExpanded = (message) => {
-  if (message.toolDisplay?.displayType === 'diff') return true
+  // Only force expansion for 'Ask User' to ensure visibility of interaction points.
+  // Everything else (especially heavy Diffs) should be collapsed by default.
   if (message.toolDisplay?.action === 'Ask User') return true
   return expandedMessages.value.has(message.displayId)
 }
@@ -985,13 +988,12 @@ const getToolDisplayInfo = (message) => {
   const meta = message.metadata || {}
   const isError = message.isError || message.is_error || meta.is_error || false
 
-  // Reconstruct from tool_call metadata if available, or fallback to top-level fields
+  // 1. Try to extract tool call info
   const toolCall = meta.tool_call || {}
   const func = toolCall.function || toolCall
   const name = func.name || ''
   const rawArgs = func.arguments || func.input || {}
 
-  // CRITICAL: OpenAI tool calls provide arguments as a JSON string. We must parse it for formatToolTitle.
   let args = rawArgs
   if (typeof rawArgs === 'string') {
     try {
@@ -1001,31 +1003,37 @@ const getToolDisplayInfo = (message) => {
     }
   }
 
-  const { icon, toolType, action, target } = formatToolTitle(name, args)
+  // 2. Format using standard rules
+  const formatted = formatToolTitle(name, args)
 
-  // Filter out internal system reminders from ALL user-facing strings
-  let cleanSummary = removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...'))
-  const cleanTarget = removeSystemReminder(target)
+  // 3. Robust Priority: 
+  // If backend provided a title explicitly, use it as the main action.
+  // This is crucial for results (observations) where original tool_call might be obscured.
+  let finalAction = formatted.action
+  let finalTarget = formatted.target
+  let finalIcon = formatted.icon
+  let finalToolType = formatted.toolType
 
-  // UI Preference: Use backend-generated descriptive titles as the main 'action' if available
-  let displayAction = action
-  let displayTarget = cleanTarget
+  if (meta.title && meta.title.trim()) {
+    finalAction = removeSystemReminder(meta.title)
+    finalTarget = '' // Target is usually embedded in the title
+  }
 
-  if (meta.title && meta.title.includes(' ')) {
-    // If backend provided a descriptive title (like "Update xxx to done"), use it as the action
-    displayAction = meta.title
-    displayTarget = '' // Target is already in the title
+  // Fallback for missing action (prevents empty titles)
+  if (!finalAction && !name) {
+    // If it's a tool result but we lost the name, use a generic "Result"
+    finalAction = t('workflow.toolResult') || 'Result'
   }
 
   return {
-    title: removeSystemReminder(meta.title || (target ? `${action} ${target}` : action)),
-    summary: cleanSummary,
+    title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
+    summary: removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...')),
     isError: isError,
     displayType: meta.display_type || 'text',
-    icon,
-    toolType,
-    action: displayAction,
-    target: displayTarget
+    icon: finalIcon,
+    toolType: finalToolType,
+    action: finalAction,
+    target: finalTarget
   }
 }
 
@@ -1052,86 +1060,121 @@ const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 
 // Enhanced messages with pre-calculated display info
 const enhancedMessages = computed(() => {
-  const msgs = messages.value
+  if (!workflowStore.messages) return [];
+  const msgs = [...workflowStore.messages];
 
-  // Calculate completed tool IDs once for the entire list
-  const completedIds = new Set(
-    msgs
-      .filter(m => m.role === 'tool' && m.metadata?.tool_call_id)
-      .map(m => m.metadata.tool_call_id)
-  )
+  // 1. Map tool IDs to their final resolution status and capture result info
+  const toolStates = new Map(); // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool, resultMsg: string }
+  msgs.forEach(m => {
+    if (m.role === 'tool' && m.metadata) {
+      const meta = typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata;
+      const toolCallId = meta.tool_call_id;
+      if (toolCallId) {
+        const summary = (meta.summary || '').toLowerCase();
+        const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
+        const isRejected = summary.includes('rejected') || m.message.includes('rejected') || m.message.includes('拒绝');
+        const isError = m.isError || m.is_error || meta.is_error || false;
+        
+        if (!isWaiting) {
+          toolStates.set(toolCallId, { isFinal: true, isRejected, hasError: isError, resultMsg: m.message });
+        } else if (!toolStates.has(toolCallId)) {
+          toolStates.set(toolCallId, { isFinal: false, isRejected: false, hasError: false });
+        }
+      }
+    }
+  });
 
-  return msgs.filter(m => !(m.role === 'user' && m.stepType === 'observe')).map((message, idx) => {
+  return msgs.filter(m => {
+    if (m.role === 'tool' && m.metadata) {
+      const meta = typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata;
+      const toolCallId = meta.tool_call_id;
+      if (toolCallId) {
+        const summary = (meta.summary || '').toLowerCase();
+        const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
+        const state = toolStates.get(toolCallId);
+
+        // Logic Change:
+        // - If this is a "Final Result" message AND there was a "Waiting" message for it
+        // - AND the result is a success (not an error)
+        // - THEN hide it to show the "Waiting" message instead.
+        if (!isWaiting && state?.isFinal && !state.hasError) {
+          // Check if there's a corresponding waiting message in the original list
+          const hasWaitingMsg = msgs.some(other => {
+            const otherMeta = typeof other.metadata === 'string' ? JSON.parse(other.metadata) : other.metadata;
+            return other.role === 'tool' && 
+                   otherMeta?.tool_call_id === toolCallId && 
+                   (otherMeta?.summary || '').toLowerCase().match(/awaiting|待审批/);
+          });
+          if (hasWaitingMsg) return false; 
+        }
+      }
+    }
+    return !(m.role === 'user' && m.stepType === 'observe');
+  }).map((message, idx) => {
     const toolDisplay = getToolDisplayInfo(message)
-    // Use a robust unique ID for UI state (expansion, etc.)
     const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
 
-    // Pre-calculate pending tool calls
+    // 3. Attach resolution state to the message
+    let isRejected = false;
+    let isApproved = false;
+    if (message.role === 'tool' && message.metadata) {
+      const meta = typeof message.metadata === 'string' ? JSON.parse(message.metadata) : message.metadata;
+      const state = toolStates.get(meta.tool_call_id);
+      if (state?.isFinal) {
+        if (state.isRejected) isRejected = true;
+        else isApproved = true;
+      }
+    }
+
+    // Pre-calculate pending tool calls...
     let pendingToolCalls = []
     const toolCalls = message.metadata?.tool_calls || []
-    if (toolCalls.length > 0) {
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
       pendingToolCalls = toolCalls
         .map(call => {
           const name = call.function?.name || call.name || ''
           const rawArgs = call.function?.arguments || call.arguments || {}
-
-          // CRITICAL: Parse JSON string arguments if necessary
           let args = rawArgs
           if (typeof rawArgs === 'string') {
-            try {
-              args = JSON.parse(rawArgs)
-            } catch (e) {
-              args = {}
-            }
+            try { args = JSON.parse(rawArgs); } catch (e) { args = {}; }
           }
-
           const { icon, toolType, action, target } = formatToolTitle(name, args)
-          return {
-            id: call.id,
-            icon,
-            toolType,
-            action,
-            target
-          }
+          return { id: call.id, icon, toolType, action, target }
         })
-        .filter(call => !completedIds.has(call.id))
+        .filter(call => {
+          const state = toolStates.get(call.id);
+          return !state || !state.isFinal;
+        })
     }
 
     return {
       ...message,
       displayId,
       toolDisplay,
-      pendingToolCalls
+      pendingToolCalls,
+      isRejected,
+      isApproved
     }
   }).filter(m => {
-    // 1. Visibility logic for tool results (Observations)
+    // Standard visibility filters...
     if (m.role === 'tool') {
       const meta = m.metadata || {}
       const toolCall = meta.tool_call || {}
       const name = toolCall.name || (toolCall.function && toolCall.function.name) || ''
-
-      // Hide internal orchestration tools
       if (name === 'answer_user' || name === 'finish_task') return false
-
-      // Keep everything else
       return true
     }
-
-    // 2. Visibility logic for Assistant messages
     if (m.role === 'assistant') {
       const parsed = getParsedMessage(m)
       const hasTextContent = (m.message && m.message.trim()) ||
         (parsed.content && parsed.content.trim()) ||
         (m.reasoning && m.reasoning.trim())
-
       if (hasTextContent) return true
       if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true
       return false
     }
-
     return true
   })
-
 })
 
 // Get todo list from the store
@@ -2436,6 +2479,18 @@ const toggleFinalAuditMode = () => {
                   &.title-wrap {
                     user-select: none;
                     margin-bottom: var(--cs-space-xxs);
+                    cursor: pointer;
+
+                    &.tool-rejected {
+                      text-decoration: line-through;
+                      opacity: 0.6;
+                    }
+
+                    .approved-icon {
+                      color: var(--el-color-success);
+                      margin-left: 4px;
+                      flex-shrink: 0;
+                    }
 
                     .tool-type-icon {
                       flex-shrink: 0;

@@ -24,6 +24,7 @@
             <span class="root-name" :title="root">{{ getDirName(root) }}</span>
           </div>
           <div class="root-actions">
+            <cs name="refresh" size="12px" class="action-btn refresh-btn" @click.stop="refreshRoot(root)" />
             <cs name="trash" size="12px" class="action-btn remove-btn" @click.stop="onRemovePath(root)" />
           </div>
         </div>
@@ -119,12 +120,18 @@ const getChildren = (path) => childrenMap.value.get(path) || []
 const refreshAll = async () => {
   loading.value = true
   const expanded = Array.from(expandedNodes.value.keys())
-  
+
   for (const path of expanded) {
     await loadDir(path)
   }
-  
+
   loading.value = false
+}
+
+const refreshRoot = async (path) => {
+  if (expandedNodes.value.has(path)) {
+    await loadDir(path)
+  }
 }
 
 const previewFile = async (path) => {
@@ -265,6 +272,10 @@ onMounted(() => {
           &:hover {
             background: var(--cs-bg-color-light);
           }
+        }
+
+        .refresh-btn:hover {
+          color: var(--el-color-primary);
         }
 
         .remove-btn:hover {

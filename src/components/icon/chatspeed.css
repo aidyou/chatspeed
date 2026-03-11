@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-refresh:before {
+  content: "\e71e";
+}
+
 .cs-warning:before {
   content: "\e68b";
 }
