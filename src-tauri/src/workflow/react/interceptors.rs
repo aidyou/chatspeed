@@ -3,7 +3,7 @@ use serde_json::json;
 use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
-use crate::workflow::react::observation::ReinforcedResult;
+use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, WorkflowState};
 
@@ -113,14 +113,17 @@ impl WorkflowExecutor {
                 "WorkflowExecutor {}: Setting AwaitingAutoApproval for auto-transition in Full mode",
                 self.session_id
             );
-            self.update_state(WorkflowState::AwaitingAutoApproval).await?;
+            self.update_state(WorkflowState::AwaitingAutoApproval)
+                .await?;
             return Ok(None);
         }
 
         self.update_state(WorkflowState::AwaitingApproval).await?;
 
+        let plan_str = text_part.to_string();
+
         Ok(Some(ReinforcedResult {
-            content: "WAITING_FOR_PLAN_APPROVAL".into(),
+            content: format!("Proposed Plan:\n\n{}", plan_str),
             title: "Submit Plan".to_string(),
             summary: "Awaiting approval".to_string(),
             is_error: false,
@@ -227,7 +230,7 @@ impl WorkflowExecutor {
         }
 
         self.update_state(WorkflowState::Completed).await?;
-        
+
         Ok(Some(ReinforcedResult {
             content: "Finished".into(),
             title: "Finish Task".to_string(),
@@ -275,25 +278,17 @@ impl WorkflowExecutor {
                             self.session_id, reason
                         );
                     } else {
-                        self.gateway
-                            .send(
-                                &self.session_id,
-                                GatewayPayload::Confirm {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    action: TOOL_BASH.to_string(),
-                                    details: format!("{} (Policy: {})", command_str, reason),
-                                },
-                            )
-                            .await?;
-                        self.update_state(WorkflowState::AwaitingApproval).await?;
-                        return Ok(Some(ReinforcedResult {
-                            content: "WAITING_FOR_USER_APPROVAL".to_string(),
-                            title: format!("Bash({})", command_str),
-                            summary: "Waiting for approval".to_string(),
-                            is_error: false,
-                            error_type: None,
-                            display_type: "text".to_string(),
-                        }));
+                        log::info!(
+                            "WorkflowExecutor {}: Intercepting bash command for review: {}",
+                            self.session_id,
+                            reason
+                        );
+                        // Delegate to unified approval handler with descriptive command preview
+                        let display_content =
+                            format!("Command: {}\nReason: {}", command_str, reason);
+                        return self
+                            .handle_approval_interception(TOOL_BASH, args, Some(display_content))
+                            .await;
                     }
                 }
             }
@@ -305,29 +300,91 @@ impl WorkflowExecutor {
         &mut self,
         name: &str,
         args: &serde_json::Value,
+        display_content: Option<String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let id = crate::ccproxy::get_tool_id();
-        self.pending_approvals.insert(id.clone(), args.clone());
+
+        // 1. Stash the full tool name and arguments in the server-side map.
+        // This ensures the frontend doesn't need to pass complex JSON back to us.
+        let stash_obj = json!({
+            "name": name,
+            "arguments": args
+        });
+        self.pending_approvals.insert(id.clone(), stash_obj);
+
         self.update_state(WorkflowState::AwaitingApproval).await?;
+
+        // 2. Determine what to show the user in the UI (Generate Diffs for File Ops)
+        let mut display_type = "text".to_string();
+        let content = if let Some(custom) = display_content {
+            custom
+        } else {
+            match name {
+                TOOL_EDIT_FILE => {
+                    display_type = "diff".to_string();
+                    let path = args["file_path"].as_str().unwrap_or("unknown");
+                    let old = args["old_string"].as_str().unwrap_or("");
+                    let new = args["new_string"].as_str().unwrap_or("");
+                    format!("--- {}\n+++ {}\n- {}\n+ {}", path, path, old, new)
+                }
+                TOOL_WRITE_FILE => {
+                    display_type = "diff".to_string();
+                    let path = args["file_path"].as_str().unwrap_or("unknown");
+                    let new_content = args["content"].as_str().unwrap_or("");
+                    
+                    // Cap preview size to ensure UI snappiness
+                    let preview_limit = 2000;
+                    let new_preview: String = new_content.chars().take(preview_limit).collect();
+                    let suffix = if new_content.chars().count() > preview_limit { "... (truncated)" } else { "" };
+
+                    match std::fs::metadata(path) {
+                        Ok(meta) => {
+                            let size_kb = meta.len() / 1024;
+                            format!(
+                                "--- {}\n+++ {}\n(Full overwrite, size: {} KB)\n- [Existing content...]\n+ {}{}",
+                                path, path, size_kb, new_preview, suffix
+                            )
+                        }
+                        Err(_) => {
+                            // Represent new file as: --- path \n +++ path \n - \n + content
+                            format!(
+                                "--- {}\n+++ {}\n-\n+ {}{}",
+                                path, path, new_preview, suffix
+                            )
+                        }
+                    }
+                }
+                _ => format!(
+                    "Tool: {}\nArguments: {}",
+                    name,
+                    serde_json::to_string_pretty(args).unwrap_or_default()
+                ),
+            }
+        };
+
+        // 3. Notify frontend to show the confirmation prompt
         self.gateway
             .send(
                 &self.session_id,
                 GatewayPayload::Confirm {
-                    id,
+                    id: id.clone(),
                     action: name.to_string(),
-                    details: serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()),
+                    details: content.clone(),
                 },
             )
             .await?;
 
-        // Return a waiting result to skip immediate execution in the current loop
+        // 4. Return a 'waiting' result to the engine loop.
+        // Use standard title generation to match the UI screenshot provided.
+        let pretty_title = ObservationReinforcer::generate_title(name, args, None);
+
         Ok(Some(ReinforcedResult {
-            content: "WAITING_FOR_USER_APPROVAL".to_string(),
-            title: format!("Approval: {}", name),
-            summary: "Awaiting approval".to_string(),
+            content,
+            title: pretty_title,
+            summary: rust_i18n::t!("workflow.state.awaiting_approval").to_string(),
             is_error: false,
             error_type: None,
-            display_type: "text".to_string(),
+            display_type,
         }))
     }
 

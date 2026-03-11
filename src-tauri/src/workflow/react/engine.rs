@@ -293,22 +293,70 @@ impl WorkflowExecutor {
 
         if let Some(last_msg) = self.context.messages.last() {
             self.current_step = last_msg.step_index as usize;
-            if self.state == WorkflowState::AwaitingApproval && last_msg.role == "tool" {
-                if let Some(metadata) = &last_msg.metadata {
-                    if let Some(tool_call) = metadata.get("tool_call") {
-                        let id = tool_call.get("id").and_then(|v| v.as_str());
-                        let args = tool_call
-                            .get("arguments")
-                            .or_else(|| tool_call.get("input"));
-                        if let (Some(id_str), Some(args_val)) = (id, args) {
-                            let parsed_args = if args_val.is_string() {
-                                serde_json::from_str(args_val.as_str().unwrap())
-                                    .unwrap_or(args_val.clone())
-                            } else {
-                                args_val.clone()
-                            };
-                            self.pending_approvals
-                                .insert(id_str.to_string(), parsed_args);
+
+            // Restore AwaitingApproval state: Rebuild pending_approvals and re-trigger UI signals
+            if self.state == WorkflowState::AwaitingApproval {
+                log::info!(
+                    "WorkflowExecutor {}: Re-broadcasting pending approvals to UI",
+                    self.session_id
+                );
+
+                // 1. Find all 'tool' messages that are currently in an awaiting approval state
+                for msg in &self.context.messages {
+                    if msg.role == "tool" {
+                        if let Some(meta) = &msg.metadata {
+                            let summary =
+                                meta.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                            // Match both localized and raw versions of the awaiting status
+                            let is_waiting = summary == "Awaiting approval"
+                                || summary == rust_i18n::t!("workflow.state.awaiting_approval");
+
+                            if is_waiting {
+                                if let Some(id) = meta.get("tool_call_id").and_then(|v| v.as_str())
+                                {
+                                    // 2. Find the corresponding assistant message to restore original arguments
+                                    let tool_info = self.context.messages.iter().rev().find_map(|m| {
+                                        if m.role == "assistant" {
+                                            if let Some(m_meta) = &m.metadata {
+                                                if let Some(calls) = m_meta.get("tool_calls").and_then(|v| v.as_array()) {
+                                                    for call in calls {
+                                                        let call_id = call.get("id").and_then(|v| v.as_str());
+                                                        if call_id == Some(id) {
+                                                            let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
+                                                            let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
+                                                            if let (Some(n), Some(a)) = (name, args) {
+                                                                return Some(json!({ "name": n, "arguments": a }));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        None
+                                    });
+
+                                    if let Some(info) = tool_info {
+                                        log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
+                                        self.pending_approvals.insert(id.to_string(), info.clone());
+
+                                        // 3. Re-trigger the Gateway signal so the UI automatically displays the confirmation block
+                                        let _ = self
+                                            .gateway
+                                            .send(
+                                                &self.session_id,
+                                                GatewayPayload::Confirm {
+                                                    id: id.to_string(),
+                                                    action: info["name"]
+                                                        .as_str()
+                                                        .unwrap_or("unknown")
+                                                        .to_string(),
+                                                    details: msg.message.clone(), // Use preserved preview content (Diff/Summary)
+                                                },
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -558,55 +606,64 @@ impl WorkflowExecutor {
                 if signal_json["type"] == "approval" {
                     let approved = signal_json["approved"].as_bool().unwrap_or(false);
                     let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
-                    let tool_name = signal_json["tool_name"].as_str().unwrap_or("unknown");
-                    let tool_args = signal_json["tool_args"].clone();
+                    let signal_id = signal_json["id"].as_str().unwrap_or("unknown");
 
                     if approved {
+                        // 1. Retrieve the stashed tool details from the server-side map
+                        let (tool_name, tool_args) = if let Some(stashed) =
+                            self.pending_approvals.get(signal_id)
+                        {
+                            let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
+                            let args = stashed["arguments"].clone();
+                            (name, args)
+                        } else {
+                            log::warn!(
+                                "WorkflowExecutor {}: Approval received for unknown ID: {}",
+                                self.session_id,
+                                signal_id
+                            );
+                            // Fallback to signal payload if map lookup fails (legacy/edge case)
+                            let name = signal_json["tool_name"]
+                                .as_str()
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let args = signal_json["tool_args"].clone();
+                            (name, args)
+                        };
+
                         log::info!(
-                            "WorkflowExecutor {}: User APPROVED tool '{}'{}",
+                            "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
                             self.session_id,
                             tool_name,
-                            if approve_all { " (Approve All)" } else { "" }
+                            if approve_all { " (Approve All)" } else { "" },
+                            signal_id
                         );
 
                         if approve_all {
                             self.auto_approve.insert(tool_name.to_string());
                         }
 
-                        // Execution: Try local then global
+                        // 2. Execution: Try local then global
                         let result = if let Ok(res) = self
                             .tool_manager
-                            .tool_call(tool_name, tool_args.clone())
+                            .tool_call(&tool_name, tool_args.clone())
                             .await
                         {
                             Ok(res)
                         } else {
                             self.global_tool_manager
-                                .tool_call(tool_name, tool_args.clone())
+                                .tool_call(&tool_name, tool_args.clone())
                                 .await
                         };
+
                         let tool_call_obj = serde_json::json!({
-                            "id": signal_json["id"],
+                            "id": signal_id,
                             "name": tool_name,
                             "arguments": tool_args
                         });
 
-                        let reinforced = if tool_name.starts_with("todo_") {
-                            let todos = if let Ok(store) = self.context.main_store.read() {
-                                store
-                                    .get_todo_list_for_workflow(&self.session_id)
-                                    .unwrap_or_default()
-                            } else {
-                                vec![]
-                            };
-                            ObservationReinforcer::reinforce_with_context(
-                                &tool_call_obj,
-                                &result,
-                                Some(serde_json::json!(todos)),
-                            )
-                        } else {
-                            ObservationReinforcer::reinforce(&tool_call_obj, &result)
-                        };
+                        // 3. Post-processing and Notification
+                        let reinforced = self.post_process_tool_result(&tool_name, &tool_args, &tool_call_obj, result).await?;
 
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
@@ -617,7 +674,7 @@ impl WorkflowExecutor {
                             reinforced.is_error,
                             reinforced.error_type.clone(),
                             Some(serde_json::json!({
-                                "tool_call_id": signal_json["id"],
+                                "tool_call_id": signal_id,
                                 "tool_name": tool_name,
                                 "title": reinforced.title,
                                 "summary": reinforced.summary,
@@ -628,12 +685,34 @@ impl WorkflowExecutor {
                         )
                         .await?;
                     } else {
+                        // Handle Rejection
+                        let (tool_name, tool_args) = if let Some(stashed) =
+                            self.pending_approvals.get(signal_id)
+                        {
+                            let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
+                            let args = stashed["arguments"].clone();
+                            (name, args)
+                        } else {
+                            (
+                                signal_json["tool_name"]
+                                    .as_str()
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                signal_json["tool_args"].clone(),
+                            )
+                        };
+
                         log::info!(
-                            "WorkflowExecutor {}: User REJECTED tool '{}'",
+                            "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
                             self.session_id,
-                            tool_name
+                            tool_name,
+                            signal_id
                         );
+
+                        let pretty_title =
+                            ObservationReinforcer::generate_title(&tool_name, &tool_args, None);
                         let observation = format!("The user doesn't want to proceed with this tool use. The tool '{}' was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", tool_name);
+
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
                             observation,
@@ -643,6 +722,9 @@ impl WorkflowExecutor {
                             true,
                             Some("UserRejected".to_string()),
                             Some(serde_json::json!({
+                                "tool_call_id": signal_id,
+                                "tool_name": tool_name,
+                                "title": pretty_title, // Restored the missing title
                                 "summary": "User rejected",
                                 "is_error": true,
                                 "error_type": "UserRejected"
@@ -650,10 +732,10 @@ impl WorkflowExecutor {
                         )
                         .await?;
                     }
-                    // Clean up the stashed approval entry
-                    if let Some(id) = signal_json["id"].as_str() {
-                        self.pending_approvals.remove(id);
-                    }
+
+                    // 4. Clean up the stashed approval entry
+                    self.pending_approvals.remove(signal_id);
+
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 } else {
@@ -1044,7 +1126,31 @@ impl WorkflowExecutor {
 
             // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
             if needs_compression {
-                if let Ok(summary) = self.compressor.compress(&self.context.messages).await {
+                // Notify frontend: compression starting
+                self.gateway
+                    .send(
+                        &self.session_id,
+                        GatewayPayload::CompressionStatus {
+                            is_compressing: true,
+                            message: t!("workflow.compression_in_progress").to_string(),
+                        },
+                    )
+                    .await?;
+
+                let compression_result = self.compressor.compress(&self.context.messages).await;
+
+                // Notify frontend: compression ended
+                self.gateway
+                    .send(
+                        &self.session_id,
+                        GatewayPayload::CompressionStatus {
+                            is_compressing: false,
+                            message: String::new(),
+                        },
+                    )
+                    .await?;
+
+                if let Ok(summary) = compression_result {
                     let _ = self
                         .context
                         .compress(summary, self.current_step as i32)
@@ -1110,7 +1216,7 @@ impl WorkflowExecutor {
 
         // --- 2. Stage 1: Audit & Partitioning (The 'Channel' Logic) ---
         // We determine what can run NOW and what must WAIT BEFORE performing any actions.
-        for (idx, call) in tool_calls.into_iter().enumerate() {
+        for (_idx, call) in tool_calls.into_iter().enumerate() {
             // Always use a unique ID for each tool call
             let id = crate::ccproxy::get_tool_id();
 
@@ -1329,7 +1435,7 @@ impl WorkflowExecutor {
 
         // --- 2. Approval Policy Enforcement ---
         if self.should_intercept_for_approval(name, args) {
-            return self.handle_approval_interception(name, args).await;
+            return self.handle_approval_interception(name, args, None).await;
         }
 
         // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
@@ -1381,6 +1487,15 @@ impl WorkflowExecutor {
         new_state: WorkflowState,
     ) -> Result<(), WorkflowEngineError> {
         self.state = new_state.clone();
+
+        // Cleanup pending approvals when transitioning away from approval-waiting states
+        if matches!(
+            new_state,
+            WorkflowState::Thinking | WorkflowState::Executing | WorkflowState::Completed
+        ) {
+            self.pending_approvals.clear();
+        }
+
         self.gateway
             .send(
                 &self.session_id,

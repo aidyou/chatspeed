@@ -318,6 +318,7 @@ workflow:
   cancelled: "Operation wurde vom Benutzer abgebrochen"
   cannot_access_path: "Zugriff auf Pfad %{path} nicht möglich, da Wert kein Objekt/Array ist"
   circular_dependency: "Zirkuläre Abhängigkeit zwischen Knoten: %{nodes}"
+  compression_in_progress: "Kontext wird komprimiert..."
   dependency_not_found: "Von Knoten '%{node_id}' abhängiger Knoten '%{id}' nicht vorhanden"
   duplicate_node_id: "Doppelte Knoten-ID: %{id}"
   edge_reference_missing: "Kantenreferenz nicht vorhanden: %{from} -> %{to}"

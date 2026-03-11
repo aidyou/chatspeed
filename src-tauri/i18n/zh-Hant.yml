@@ -318,6 +318,7 @@ workflow:
   cancelled: "操作已被使用者取消"
   cannot_access_path: "無法存取路徑：%{path}，因為值不是物件/陣列"
   circular_dependency: "節點之間存在循環相依：%{nodes}"
+  compression_in_progress: "上下文壓縮中，請稍後..."
   dependency_not_found: "節點 '%{node_id}' 相依的節點 '%{id}' 不存在"
   duplicate_node_id: "重複的節點 ID: %{id}"
   edge_reference_missing: "邊參考不存在：%{from} -> %{to}"

@@ -195,8 +195,8 @@ impl ObservationReinforcer {
                     ToolError::AuthError(_) => "AuthError",
                     _ => "Other",
                 };
-                
-                // Content only contains the raw error. 
+
+                // Content only contains the raw error.
                 // Recovery hints will be injected dynamically by LlmProcessor to avoid duplication.
                 let content = format!("Error: {}", err_msg);
 
@@ -212,7 +212,11 @@ impl ObservationReinforcer {
         }
     }
 
-    fn generate_title(tool_name: &str, args: &Value, extra_context: Option<&Value>) -> String {
+    pub(crate) fn generate_title(
+        tool_name: &str,
+        args: &Value,
+        extra_context: Option<&Value>,
+    ) -> String {
         let truncate = |s: &str, len: usize| -> String {
             let chars: Vec<char> = s.chars().collect();
             if chars.len() <= len {

@@ -318,6 +318,7 @@ workflow:
   cancelled: "Operação cancelada pelo usuário"
   cannot_access_path: "Não é possível acessar o caminho: %{path}, porque o valor não é um objeto/array"
   circular_dependency: "Existe uma dependência circular entre os nós: %{nodes}"
+  compression_in_progress: "Comprimindo contexto..."
   dependency_not_found: "O nó '%{node_id}' depende do nó '%{id}' que não existe"
   duplicate_node_id: "ID de nó duplicado: %{id}"
   edge_reference_missing: "A referência de aresta não existe: %{from} -> %{to}"

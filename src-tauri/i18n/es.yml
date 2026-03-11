@@ -318,6 +318,7 @@ workflow:
   cancelled: "Operación cancelada por el usuario"
   cannot_access_path: "No se puede acceder a la ruta: %{path}, porque el valor no es un objeto/matriz"
   circular_dependency: "Existe una dependencia circular entre los nodos: %{nodes}"
+  compression_in_progress: "Comprimiendo contexto..."
   dependency_not_found: "El nodo '%{node_id}' depende del nodo '%{id}', que no existe"
   duplicate_node_id: "ID de nodo duplicado: %{id}"
   edge_reference_missing: "No existe la referencia de borde: %{from} -> %{to}"

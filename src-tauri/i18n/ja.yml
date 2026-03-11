@@ -319,6 +319,7 @@ workflow:
   cancelled: "操作はユーザーによってキャンセルされました"
   cannot_access_path: "パスにアクセスできません：%{path}, 値がオブジェクト/配列ではありません"
   circular_dependency: "ノード間に循環依存があります：%{nodes}"
+  compression_in_progress: "コンテキストを圧縮しています..."
   dependency_not_found: "ノード '%{node_id}' が依存するノード '%{id}' が存在しません"
   duplicate_node_id: "重複するノード ID: %{id}"
   edge_reference_missing: "エッジ参照が存在しません：%{from} -> %{to}"

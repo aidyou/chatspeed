@@ -318,6 +318,7 @@ workflow:
   cancelled: "操作已被用户取消"
   cannot_access_path: "无法访问路径: %{path}，因为值不是对象/数组"
   circular_dependency: "节点之间存在循环依赖: %{nodes}"
+  compression_in_progress: "上下文压缩中，请稍后..."
   dependency_not_found: "节点 '%{node_id}' 依赖的节点 '%{id}' 不存在"
   duplicate_node_id: "重复的节点ID: %{id}"
   edge_reference_missing: "边引用不存在: %{from} -> %{to}"

@@ -318,6 +318,7 @@ workflow:
   cancelled: "Operation was cancelled by user"
   cannot_access_path: "Cannot access path: %{path}, because value is not object/array"
   circular_dependency: "Circular dependency exists between nodes: %{nodes}"
+  compression_in_progress: "Compressing context..."
   dependency_not_found: "Node '%{node_id}' depends on node '%{id}' which does not exist"
   duplicate_node_id: "Duplicate node ID: %{id}"
   edge_reference_missing: "Edge reference does not exist: %{from} -> %{to}"

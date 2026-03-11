@@ -318,6 +318,7 @@ workflow:
   cancelled: "Операция отменена пользователем"
   cannot_access_path: "Не удается получить доступ к пути: %{path}, так как значение не является объектом/массивом"
   circular_dependency: "Обнаружена циклическая зависимость между узлами: %{nodes}"
+  compression_in_progress: "Сжатие контекста..."
   dependency_not_found: "Узел '%{node_id}' зависит от узла '%{id}', который не существует"
   duplicate_node_id: "Дублирующийся ID узла: %{id}"
   edge_reference_missing: "Отсутствует ссылка на ребро: %{from} -> %{to}"

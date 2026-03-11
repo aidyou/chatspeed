@@ -65,6 +65,11 @@ pub enum GatewayPayload {
         total_attempts: u32,
         next_retry_in_seconds: u32,
     },
+    /// Context compression status notification
+    CompressionStatus {
+        is_compressing: bool,
+        message: String,
+    },
     Error {
         message: String,
     },

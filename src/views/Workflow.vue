@@ -223,6 +223,14 @@
               </div>
             </div>
           </div>
+
+          <!-- Context Compression Status -->
+          <div v-if="isCompressing" class="compression-status">
+            <div class="compression-indicator">
+              <cs name="loading" size="14px" class="rotating" />
+              <span class="compression-text">{{ compressionMessage }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- Status Panel (Floating) -->
@@ -412,6 +420,10 @@ const chatState = ref({
   reasoning: '',
   blocks: []
 })
+
+// Context compression state
+const isCompressing = ref(false)
+const compressionMessage = ref('')
 
 // edit workflow dialog
 const editWorkflowDialogVisible = ref(false)
@@ -1409,6 +1421,13 @@ const setupWorkflowEvents = async sessionId => {
       }, 1000)
     } else if (payload.type === 'sync_todo') {
       workflowStore.setTodoList(payload.todo_list)
+    } else if (payload.type === 'compression_status') {
+      // Handle context compression status
+      isCompressing.value = payload.is_compressing
+      compressionMessage.value = payload.message
+      if (payload.is_compressing) {
+        scrollToBottom(true)
+      }
     }
   })
 }
@@ -1916,6 +1935,32 @@ const toggleFinalAuditMode = () => {
     border-radius: var(--cs-border-radius-lg);
     border: 1px solid var(--el-color-warning-light-5);
     background-color: var(--el-color-warning-light-9);
+  }
+}
+
+// Context compression status
+.compression-status {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+
+  .compression-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background-color: var(--cs-bg-color-light);
+    border-radius: var(--cs-border-radius-xxl);
+    border: 1px solid var(--cs-border-color);
+
+    .cs {
+      color: var(--el-color-primary);
+    }
+
+    .compression-text {
+      font-size: 13px;
+      color: var(--cs-text-color-secondary);
+    }
   }
 }
 

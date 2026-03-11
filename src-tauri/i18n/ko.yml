@@ -318,6 +318,7 @@ workflow:
   cancelled: "사용자가 작업을 취소했습니다."
   cannot_access_path: "경로에 액세스할 수 없습니다: %{path}, 값이 객체/배열이 아닙니다."
   circular_dependency: "노드 간 순환 종속성 존재: %{nodes}"
+  compression_in_progress: "컨텍스트 압축 중..."
   dependency_not_found: "노드 '%{node_id}'가 종속된 노드 '%{id}'가 존재하지 않습니다."
   duplicate_node_id: "중복된 노드 ID: %{id}"
   edge_reference_missing: "에지 참조가 없습니다: %{from} -> %{to}"

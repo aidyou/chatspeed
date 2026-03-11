@@ -318,6 +318,7 @@ workflow:
   cancelled: "Opération annulée par l'utilisateur"
   cannot_access_path: "Impossible d'accéder au chemin : %{path}, car la valeur n'est pas un objet/tableau"
   circular_dependency: "Une dépendance circulaire existe entre les nœuds : %{nodes}"
+  compression_in_progress: "Compression du contexte en cours..."
   dependency_not_found: "Le nœud '%{node_id}' dépend du nœud '%{id}' qui n'existe pas"
   duplicate_node_id: "ID de nœud en double : %{id}"
   edge_reference_missing: "La référence d'arête n'existe pas : %{from} -> %{to}"
