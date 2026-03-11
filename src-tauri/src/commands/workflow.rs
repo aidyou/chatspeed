@@ -209,11 +209,15 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 
 #[tauri::command]
 pub async fn create_workflow(
+    tsid_generator: State<'_, Arc<TsidGenerator>>,
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     workflow: Workflow,
 ) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
+
+    // Always use TSID for new workflow sessions
+    let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
 
     // Get agent's final_audit config to inherit
     let final_audit = store
@@ -222,9 +226,9 @@ pub async fn create_workflow(
         .and_then(|agent| agent.final_audit)
         .unwrap_or(false);
 
-    let created = store
+    store
         .create_workflow(
-            &workflow.id,
+            &session_id,
             &workflow.user_query,
             &workflow.agent_id,
             workflow.allowed_paths,
@@ -236,9 +240,9 @@ pub async fn create_workflow(
     let session_key = format!("sk-{}", uuid::Uuid::new_v4());
     chat_state
         .workflow_keys
-        .insert(created.id.clone(), session_key);
+        .insert(session_id.clone(), session_key);
 
-    Ok(created.id)
+    Ok(session_id)
 }
 
 #[tauri::command]

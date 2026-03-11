@@ -349,11 +349,11 @@ impl WorkflowExecutor {
                     let path = args["file_path"].as_str().unwrap_or("unknown");
                     let new_content = args["content"].as_str().unwrap_or("");
 
-                    // Cap preview size to ensure UI snappiness
-                    let preview_limit = 2000;
+                    // Significantly higher limit for approval review
+                    let preview_limit = 100000;
                     let new_preview: String = new_content.chars().take(preview_limit).collect();
                     let suffix = if new_content.chars().count() > preview_limit {
-                        "... (truncated)"
+                        "\n... (remaining content truncated for preview)"
                     } else {
                         ""
                     };

@@ -37,7 +37,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             is_error INTEGER DEFAULT 0,        -- 0 for false, 1 for true
             error_type TEXT,                   -- Enum: 'Security', 'Io', 'InvalidParams', 'Network', 'Auth', 'Other'
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES workflows(id) ON DELETE CASCADE
+            FOREIGN KEY (session_id) REFERENCES workflows(id)
         )"
     ),
     (

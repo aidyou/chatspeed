@@ -14,16 +14,21 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Workflow {
-    pub id: String,
+    pub id: Option<String>,
     pub title: Option<String>,
     pub user_query: String,
     pub todo_list: Option<String>,
+    #[serde(default = "default_workflow_status")]
     pub status: String,
     pub agent_id: String,
     pub allowed_paths: Option<Value>,
     pub final_audit: Option<bool>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+fn default_workflow_status() -> String {
+    "pending".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +68,7 @@ impl From<&Row<'_>> for Workflow {
             .and_then(|s| serde_json::from_str(&s).ok());
 
         Self {
-            id: row.get("id").unwrap_or_default(),
+            id: row.get("id").ok(),
             title: row.get("title").ok(),
             user_query: row.get("user_query").unwrap_or_default(),
             todo_list: row.get("todo_list").ok(),
@@ -71,8 +76,8 @@ impl From<&Row<'_>> for Workflow {
             agent_id: row.get("agent_id").unwrap_or_default(),
             allowed_paths,
             final_audit: row.get("final_audit").ok(),
-            created_at: row.get("created_at").unwrap_or_default(),
-            updated_at: row.get("updated_at").unwrap_or_default(),
+            created_at: row.get("created_at").ok(),
+            updated_at: row.get("updated_at").ok(),
         }
     }
 }
@@ -151,15 +156,23 @@ impl MainStore {
     }
 
     pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
+
+        let tx = conn.transaction()?;
+
+        // 1. Delete associated messages first
+        tx.execute(
             "DELETE FROM workflow_messages WHERE session_id = ?1",
             params![id],
         )?;
-        conn.execute("DELETE FROM workflows WHERE id = ?1", params![id])?;
+
+        // 2. Delete the workflow record
+        tx.execute("DELETE FROM workflows WHERE id = ?1", params![id])?;
+
+        tx.commit()?;
         Ok(())
     }
 

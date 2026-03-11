@@ -59,7 +59,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
-      
+
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
         if (m.metadata && typeof m.metadata === 'string') {
@@ -71,7 +71,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
         return m;
       });
-      
+
       messages.value = parsedMessages;
 
       // Initialize todo list from workflow snapshot
@@ -94,8 +94,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
         let paths = [];
         if (snapshot.workflow.allowedPaths) {
           try {
-            paths = typeof snapshot.workflow.allowedPaths === 'string' 
-              ? JSON.parse(snapshot.workflow.allowedPaths) 
+            paths = typeof snapshot.workflow.allowedPaths === 'string'
+              ? JSON.parse(snapshot.workflow.allowedPaths)
               : snapshot.workflow.allowedPaths;
           } catch (e) {
             console.error('Failed to parse allowedPaths from snapshot:', e);
@@ -119,29 +119,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const createWorkflow = async (userQuery, agentId, allowedPaths = []) => {
     error.value = null;
     try {
-      const id = `session_${Date.now()}`;
-      const newWorkflow = await invokeWrapper('create_workflow', {
+      // No ID passed here, backend will generate TSID
+      const newWorkflowId = await invokeWrapper('create_workflow', {
         workflow: {
-          id,
           userQuery,
           agentId,
-          status: 'pending',
-          allowedPaths: allowedPaths,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          allowedPaths: allowedPaths
         }
       });
-      // Backend returns the ID string, we should fetch or construct the object
-      const workflowObj = {
-        id: typeof newWorkflow === 'string' ? newWorkflow : id,
-        userQuery,
-        agentId,
-        status: 'pending',
-        allowedPaths
-      };
-      workflows.value.unshift(workflowObj);
-      await selectWorkflow(workflowObj.id);
-      return workflowObj;
+
+      // Reload workflows to get the fully populated object from DB
+      await loadWorkflows();
+
+      // Select the new workflow using the TSID returned by backend
+      await selectWorkflow(newWorkflowId);
+
+      return newWorkflowId;
     } catch (err) {
       await _handleError(err);
     }

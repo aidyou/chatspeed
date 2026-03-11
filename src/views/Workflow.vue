@@ -122,7 +122,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                        }}
+                          }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -299,7 +299,7 @@
                       @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" />
                       <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                        }}</span>
+                      }}</span>
                     </label>
                   </el-tooltip>
 
@@ -1493,7 +1493,6 @@ const startNewWorkflow = async (prompt) => {
     // 1. Create workflow in DB first to get a session_id
     const res = await invokeWrapper('create_workflow', {
       workflow: {
-        id: `session_${Date.now()}`,
         userQuery: prompt,
         agentId: selectedAgent.value.id,
         status: 'pending',
@@ -1537,8 +1536,6 @@ const onApproveAction = async () => {
       type: 'approval',
       approved: true,
       id: approvalRequestId.value,
-      tool_name: approvalAction.value,
-      tool_args: JSON.parse(approvalDetails.value || '{}')
     })
     await invokeWrapper('workflow_signal', {
       sessionId: currentWorkflowId.value,
@@ -1560,8 +1557,6 @@ const onApproveAllAction = async () => {
       approved: true,
       approve_all: true,
       id: approvalRequestId.value,
-      tool_name: approvalAction.value,
-      tool_args: JSON.parse(approvalDetails.value || '{}')
     })
     await invokeWrapper('workflow_signal', {
       sessionId: currentWorkflowId.value,
@@ -1582,7 +1577,6 @@ const onRejectAction = async () => {
       type: 'approval',
       approved: false,
       id: approvalRequestId.value,
-      tool_name: approvalAction.value
     })
     await invokeWrapper('workflow_signal', {
       sessionId: currentWorkflowId.value,
