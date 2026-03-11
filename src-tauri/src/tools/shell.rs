@@ -566,4 +566,205 @@ mod tests {
         let cmd_file = format!("rm {}", root_path.join("file.txt").display());
         assert!(matches!(engine.check(&cmd_file, false), ShellDecision::Review(_)));
     }
+
+    #[test]
+    fn test_policy_engine_git_diff_multiple_paths() {
+        // Test case for git diff with multiple file path arguments
+        // This simulates: git diff broadcast/src/common/account_manager.rs broadcast/src/main.rs broadcast/src/server.rs
+        // with base directory /Volumes/dev/personal/dev/rust/rsctp
+
+        // Use the actual authorized directory
+        let authorized_root = std::path::PathBuf::from("/Volumes/dev/personal/dev/rust/rsctp");
+        let current_dir = std::env::current_dir().unwrap();
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![authorized_root.clone(), current_dir.clone()],
+            vec![],
+            vec![]
+        )));
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // Test git diff command with multiple RELATIVE paths (as the user would use it)
+        let cmd_relative = "git diff broadcast/src/common/account_manager.rs broadcast/src/main.rs broadcast/src/server.rs";
+        let result_relative = engine.check(cmd_relative, false);
+
+        println!("Git diff relative command: {}", cmd_relative);
+        println!("Authorized root: {:?}", authorized_root);
+        println!("Current working dir: {:?}", current_dir);
+        println!("Result: {:?}", result_relative);
+
+        // Should NOT be Deny - git diff with relative paths should be allowed or reviewed
+        assert!(!matches!(result_relative, ShellDecision::Deny(_)));
+
+        // Test with absolute paths pointing to the authorized directory
+        let file1 = authorized_root.join("broadcast/src/common/account_manager.rs");
+        let file2 = authorized_root.join("broadcast/src/main.rs");
+        let file3 = authorized_root.join("broadcast/src/server.rs");
+
+        let cmd_absolute = format!(
+            "git diff {} {} {}",
+            file1.display(),
+            file2.display(),
+            file3.display()
+        );
+        let result_absolute = engine.check(&cmd_absolute, false);
+
+        println!("Git diff absolute command: {}", cmd_absolute);
+        println!("Result: {:?}", result_absolute);
+
+        // Should NOT be Deny
+        assert!(!matches!(result_absolute, ShellDecision::Deny(_)));
+    }
+
+    #[test]
+    fn test_policy_engine_relative_path_with_different_cwd() {
+        // This test simulates the actual issue:
+        // - Authorized root: /Volumes/dev/personal/dev/rust/rsctp
+        // - Shell CWD (process working directory): /Volumes/dev/personal/dev/rust/rsctp
+        // - AI passes relative paths like "broadcast/src/common/account_manager.rs"
+        // - PathGuard should validate these paths correctly
+
+        // Create a temporary directory to simulate the rsctp project
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+
+        // Create the directory structure
+        let broadcast_dir = project_root.join("broadcast/src/common");
+        std::fs::create_dir_all(&broadcast_dir).unwrap();
+        let file1 = broadcast_dir.join("account_manager.rs");
+        let file2 = project_root.join("broadcast/src/main.rs");
+        let file3 = project_root.join("broadcast/src/server.rs");
+        std::fs::create_dir_all(file2.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(file3.parent().unwrap()).unwrap();
+        std::fs::write(&file1, "// test").unwrap();
+        std::fs::write(&file2, "// test").unwrap();
+        std::fs::write(&file3, "// test").unwrap();
+
+        // Set up PathGuard with the project root as primary
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![]
+        )));
+
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // Simulate the command AI would send - relative paths
+        let cmd = "git diff broadcast/src/common/account_manager.rs broadcast/src/main.rs broadcast/src/server.rs";
+        let result = engine.check(cmd, false);
+
+        println!("\n=== Relative Path Test ===");
+        println!("Project root: {:?}", project_root);
+        println!("Command: {}", cmd);
+        println!("Result: {:?}", result);
+
+        // The paths are relative and look like paths, so PathGuard should validate them
+        // against the primary root. They should NOT be denied.
+        match &result {
+            ShellDecision::Deny(reason) => {
+                panic!("Relative path was DENIED unexpectedly: {}", reason);
+            }
+            ShellDecision::Review(reason) => {
+                println!("Review required (expected for git): {}", reason);
+            }
+            ShellDecision::Allow => {
+                println!("Allowed");
+            }
+        }
+
+        // Test with ls command on relative paths
+        let cmd_ls = "ls broadcast/src/common broadcast/src";
+        let result_ls = engine.check(cmd_ls, false);
+        println!("\nls command: {}", cmd_ls);
+        println!("Result: {:?}", result_ls);
+        assert!(!matches!(result_ls, ShellDecision::Deny(_)));
+    }
+
+    #[test]
+    fn test_policy_engine_relative_path_nonexistent_files() {
+        // Test case: git diff with files that don't exist yet
+        // This is common when reviewing changes before files are created
+
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+
+        // DON'T create the files - they don't exist yet
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![]
+        )));
+
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // git diff on non-existent files (common scenario)
+        let cmd = "git diff new_file.rs another_new_file.rs";
+        let result = engine.check(cmd, false);
+
+        println!("\n=== Non-existent Files Test ===");
+        println!("Project root: {:?}", project_root);
+        println!("Command: {}", cmd);
+        println!("Result: {:?}", result);
+
+        // Should NOT deny - these are valid relative paths within the workspace
+        match &result {
+            ShellDecision::Deny(reason) => {
+                // This might be the actual issue!
+                println!("ERROR: Command was DENIED: {}", reason);
+            }
+            ShellDecision::Review(reason) => {
+                println!("Review required: {}", reason);
+            }
+            ShellDecision::Allow => {
+                println!("Allowed");
+            }
+        }
+
+        // Test git status (common command, should always work)
+        let cmd_status = "git status";
+        let result_status = engine.check(cmd_status, false);
+        println!("\ngit status result: {:?}", result_status);
+        assert!(!matches!(result_status, ShellDecision::Deny(_)));
+    }
+
+    #[test]
+    fn test_policy_engine_path_token_validation() {
+        // Test to understand how validate_path_token works with relative paths
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+
+        // Create a subdirectory
+        let subdir = project_root.join("broadcast/src/common");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![]
+        )));
+
+        let engine = ShellPolicyEngine::new(guard.clone(), vec![]);
+
+        // Test different path formats
+        let test_cases = vec![
+            ("broadcast/src/common/account_manager.rs", "relative path"),
+            ("./broadcast/src/common/account_manager.rs", "relative with ./"),
+            ("file.txt", "simple filename"),
+            ("./file.txt", "simple filename with ./"),
+            ("src/../file.txt", "path with parent dir"),
+        ];
+
+        println!("\n=== Path Token Validation Test ===");
+        println!("Project root: {:?}", project_root);
+
+        for (path, desc) in test_cases {
+            let decision = engine.validate_path_token(path, false, false);
+            println!("\nPath: {} ({})", path, desc);
+            println!("Decision: {:?}", decision);
+
+            // All should be Allow or Review (for skill paths), never Deny
+            if matches!(decision, ShellDecision::Deny(_)) {
+                panic!("Path '{}' ({}) was unexpectedly denied: {:?}", path, desc, decision);
+            }
+        }
+    }
 }
