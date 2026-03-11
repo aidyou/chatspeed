@@ -101,12 +101,6 @@ impl WorkflowExecutor {
         &mut self,
         text_part: &str,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        if self.policy.phase != ExecutionPhase::Planning {
-            return Err(WorkflowEngineError::Security(
-                "Tool 'submit_plan' is only allowed in Planning phase.".into(),
-            ));
-        }
-
         if text_part.trim().is_empty() {
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Error: You called 'submit_plan' but your plain text response was empty. You MUST provide a summary of your findings and why this plan is recommended in plain text BEFORE the tool call block.</SYSTEM_REMINDER>".into(),
@@ -407,7 +401,7 @@ impl WorkflowExecutor {
         Ok(Some(ReinforcedResult {
             content,
             title: pretty_title,
-            summary: rust_i18n::t!("workflow.state.awaiting_approval").to_string(),
+            summary: rust_i18n::t!("workflow.awaiting_approval").to_string(),
             is_error: false,
             error_type: None,
             display_type,

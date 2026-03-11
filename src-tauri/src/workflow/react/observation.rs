@@ -401,6 +401,29 @@ impl ObservationReinforcer {
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
             TOOL_FINISH_TASK => "Finish Task".to_string(),
             _ => {
+                // Special handling for MCP tools (format: server__MCP__tool)
+                if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                    let parts: Vec<&str> = tool_name
+                        .split(crate::tools::MCP_TOOL_NAME_SPLIT)
+                        .collect();
+                    if parts.len() == 2 {
+                        let server = parts[0];
+                        let tool = parts[1].replace(['_', '-'], " ");
+                        let tool_capitalized = tool
+                            .split_whitespace()
+                            .map(|w| {
+                                let mut c = w.chars();
+                                match c.next() {
+                                    None => String::new(),
+                                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        return format!("{} ({})", tool_capitalized, server);
+                    }
+                }
+
                 let name = tool_name.replace('_', " ");
                 name.split_whitespace()
                     .map(|w| {
@@ -458,7 +481,13 @@ impl ObservationReinforcer {
                     None => last_line.to_string(),
                 }
             }
-            _ => "Executed successfully".to_string(),
+            _ => {
+                if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                    "Operation completed".to_string()
+                } else {
+                    "Executed successfully".to_string()
+                }
+            }
         }
     }
 }

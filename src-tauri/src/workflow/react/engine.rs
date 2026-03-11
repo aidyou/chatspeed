@@ -12,7 +12,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolManager, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
+    ToolCategory, ToolManager, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -309,7 +309,7 @@ impl WorkflowExecutor {
                                 meta.get("summary").and_then(|v| v.as_str()).unwrap_or("");
                             // Match both localized and raw versions of the awaiting status
                             let is_waiting = summary == "Awaiting approval"
-                                || summary == rust_i18n::t!("workflow.state.awaiting_approval");
+                                || summary == rust_i18n::t!("workflow.awaiting_approval");
 
                             if is_waiting {
                                 if let Some(id) = meta.get("tool_call_id").and_then(|v| v.as_str())
@@ -361,9 +361,29 @@ impl WorkflowExecutor {
                     }
                 }
             }
-        } else {
+        }
+
+        // Generate title if current workflow has no title set
+        let should_generate_title = {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            store
+                .get_workflow_snapshot(&self.session_id)
+                .ok()
+                .and_then(|snapshot| snapshot.workflow.title)
+                .map_or(true, |t| t.trim().is_empty())
+        };
+
+        if should_generate_title {
             let user_query = self.context.get_initial_query();
             if !user_query.is_empty() {
+                log::info!(
+                    "WorkflowExecutor {}: Generating title for workflow with empty title",
+                    self.session_id
+                );
                 let im = IntelligenceManager::new(
                     self.session_id.clone(),
                     self.chat_state.clone(),
@@ -480,23 +500,20 @@ impl WorkflowExecutor {
         }
 
         // 3. Interaction Tools
-        if is_allowed(TOOL_ASK_USER)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::Interaction)
+        if self
+            .policy
+            .allowed_categories
+            .contains(&ToolCategory::Interaction)
         {
-            tm.register_tool(Arc::new(AskUser)).await?;
-        }
-        if self.policy.phase == ExecutionPhase::Planning {
-            tm.register_tool(Arc::new(SubmitPlan)).await?;
-        } else if is_allowed(TOOL_FINISH_TASK)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::Interaction)
-        {
-            tm.register_tool(Arc::new(FinishTask)).await?;
+            if is_allowed(TOOL_ASK_USER) {
+                tm.register_tool(Arc::new(AskUser)).await?;
+            }
+            if is_allowed(TOOL_SUBMIT_PLAN) {
+                tm.register_tool(Arc::new(SubmitPlan)).await?;
+            }
+            if self.policy.phase != ExecutionPhase::Planning && is_allowed(TOOL_FINISH_TASK) {
+                tm.register_tool(Arc::new(FinishTask)).await?;
+            }
         }
 
         // 4. Multi-Agent & Skill Tools
@@ -717,8 +734,18 @@ impl WorkflowExecutor {
                         );
 
                         let pretty_title = {
-                            let primary_root = self.path_guard.read().unwrap().get_primary_root().map(|p| p.to_path_buf());
-                            ObservationReinforcer::generate_title(&tool_name, &tool_args, None, primary_root.as_deref())
+                            let primary_root = self
+                                .path_guard
+                                .read()
+                                .unwrap()
+                                .get_primary_root()
+                                .map(|p| p.to_path_buf());
+                            ObservationReinforcer::generate_title(
+                                &tool_name,
+                                &tool_args,
+                                None,
+                                primary_root.as_deref(),
+                            )
                         };
                         let observation = format!("The user doesn't want to proceed with this tool use. The tool '{}' was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", tool_name);
 
@@ -986,11 +1013,27 @@ impl WorkflowExecutor {
                     .clone()
             };
 
-            let available_tools = self
+            let mut available_tools = self
                 .tool_manager
                 .get_tool_calling_spec(None, None)
                 .await
                 .unwrap_or_default();
+
+            // 5. Include MCP tools from global manager if allowed by policy
+            if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
+                if let Ok(global_specs) = self
+                    .global_tool_manager
+                    .get_tool_calling_spec(None, None)
+                    .await
+                {
+                    for spec in global_specs {
+                        // Only add if it's an MCP tool (identified by name pattern)
+                        if spec.name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                            available_tools.push(spec);
+                        }
+                    }
+                }
+            }
 
             let (full_response, tool_calls_json, response_reasoning, usage) = self
                 .llm_processor
@@ -1312,12 +1355,15 @@ impl WorkflowExecutor {
                 let semaphore_clone = semaphore.clone();
                 tool_futures.push_back(async move {
                     let _permit = semaphore_clone.acquire().await.ok();
-                    let res = if let Ok(res) = tm_clone.tool_call(&name, args.clone()).await {
-                        Ok(res)
-                    } else {
+
+                    let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                        // MCP tools are managed globally
                         gtm_clone.tool_call(&name, args.clone()).await
+                    } else {
+                        // Native tools are managed session-locally. No fallback.
+                        tm_clone.tool_call(&name, args.clone()).await
                     };
-                    (id, name, args, call, res)
+                    (id, name, args, call, final_res)
                 });
             }
 
@@ -1331,15 +1377,16 @@ impl WorkflowExecutor {
 
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         for (id, name, args, call) in sequential_execution_queue {
-            let res = if let Ok(res) = self.tool_manager.tool_call(&name, args.clone()).await {
-                Ok(res)
-            } else {
+            let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                 self.global_tool_manager
                     .tool_call(&name, args.clone())
                     .await
+            } else {
+                self.tool_manager.tool_call(&name, args.clone()).await
             };
+
             let reinforced = self
-                .post_process_tool_result(&name, &args, &call, res)
+                .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;
             result_map.insert(id, (reinforced, call));
         }
@@ -1412,7 +1459,12 @@ impl WorkflowExecutor {
         }
 
         // 3. Reinforce with Todo Context (Freshly fetched from DB)
-        let primary_root = self.path_guard.read().unwrap().get_primary_root().map(|p| p.to_path_buf());
+        let primary_root = self
+            .path_guard
+            .read()
+            .unwrap()
+            .get_primary_root()
+            .map(|p| p.to_path_buf());
         if name.starts_with("todo_") {
             let todos = if let Ok(store) = self.context.main_store.read() {
                 store
@@ -1456,7 +1508,9 @@ impl WorkflowExecutor {
 
         // --- 2. Approval Policy Enforcement ---
         if self.should_intercept_for_approval(name, args) {
-            return self.handle_approval_interception(id, name, args, None).await;
+            return self
+                .handle_approval_interception(id, name, args, None)
+                .await;
         }
 
         // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---

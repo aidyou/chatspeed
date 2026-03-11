@@ -1010,7 +1010,7 @@ const getToolDisplayInfo = (message) => {
   // 2. Format using standard rules
   const formatted = formatToolTitle(name, args)
 
-  // 3. Robust Priority: 
+  // 3. Robust Priority:
   // If backend provided a title explicitly, use it as the main action.
   // This is crucial for results (observations) where original tool_call might be obscured.
   let finalAction = formatted.action
@@ -1026,7 +1026,7 @@ const getToolDisplayInfo = (message) => {
   // Fallback for missing action (prevents empty titles)
   if (!finalAction && !name) {
     // If it's a tool result but we lost the name, use a generic "Result"
-    finalAction = t('workflow.toolResult') || 'Result'
+    finalAction = t('chat.toolResult') || 'Result'
   }
 
   return {
@@ -1065,23 +1065,23 @@ const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 // Enhanced messages with pre-calculated display info
 const enhancedMessages = computed(() => {
   if (!workflowStore.messages || workflowStore.messages.length === 0) return [];
-  
+
   const rawMsgs = workflowStore.messages;
   const toolStates = new Map(); // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool }
   const toolHasWaitingMsg = new Set(); // tool_call_id that has an 'Awaiting' message
-  
+
   // --- PASS 1: Single scan to collect all states (O(N)) ---
   const processedMsgs = rawMsgs.map(m => {
     let meta = m.metadata;
     if (typeof meta === 'string') {
       try { meta = JSON.parse(meta); } catch (e) { meta = {}; }
     }
-    
+
     if (m.role === 'tool' && meta?.tool_call_id) {
       const id = meta.tool_call_id;
       const summary = (meta.summary || '').toLowerCase();
       const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
-      
+
       if (isWaiting) {
         toolHasWaitingMsg.add(id);
       } else {
@@ -1099,11 +1099,11 @@ const enhancedMessages = computed(() => {
     if (m.role === 'tool' && m.metadata?.tool_call_id) {
       const id = m.metadata.tool_call_id;
       const state = toolStates.get(id);
-      
+
       if (state?.isFinal && !state.hasError) {
         const summary = (m.metadata.summary || '').toLowerCase();
         const isWaiting = summary.includes('awaiting') || summary.includes('待审批');
-        
+
         // If result is success, hide the result message and keep the waiting one
         if (!isWaiting && toolHasWaitingMsg.has(id)) return false;
         // If we are looking at the waiting message but it's already resolved, we KEEP it (for info)
@@ -1158,8 +1158,8 @@ const enhancedMessages = computed(() => {
       return true;
     }
     if (m.role === 'assistant') {
-      const hasTextContent = (m.message && m.message.trim()) || 
-                            (m.reasoning && m.reasoning.trim());
+      const hasTextContent = (m.message && m.message.trim()) ||
+        (m.reasoning && m.reasoning.trim());
       if (hasTextContent) return true;
       if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true;
       return false;
