@@ -163,14 +163,16 @@ impl ShellPolicyEngine {
         // 6. Graded Audit Context
         let mut next_is_binary = true;
         let separators = [";", "&&", "||", "|", "&", "-exec"];
-        let redirection_ops = [">", ">>", "1>", "2>", "<"];
+        let redirection_ops = [">", ">>", "1>", "2>", "&>", "<"];
 
         let hard_deny = [
             "mkfs", "dd", "format", "fdisk", "parted", "sudo", "su", "ssh", "scp",
         ];
         let needs_review = [
             "rm", "mv", "chmod", "chown", "ln", "kill", "pkill", "crontab", "alias", "eval",
-            "python", "perl", "ruby", "node", "php", "sh", "bash", "zsh",
+            "python", "perl", "ruby", "node", "php", "sh", "bash", "zsh", "source",
+            "nc", "netcat", "nmap", "curl", "wget", "apt", "apt-get", "yum", "dnf", "brew",
+            "docker", "podman", "systemctl", "service",
         ];
 
         let destructive_commands = ["rm", "mv", "chmod", "chown"];

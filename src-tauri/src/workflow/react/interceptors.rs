@@ -1,6 +1,9 @@
 use serde_json::json;
 
-use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE};
+use crate::tools::{
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE, TOOL_GLOB,
+    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
@@ -17,6 +20,7 @@ impl WorkflowExecutor {
         // Core workflow tools are internal and safe, never intercept them
         if name.starts_with("todo_")
             || name.starts_with("task_")
+            || name.starts_with("skill_")
             || name == crate::tools::TOOL_ASK_USER
             || name == crate::tools::TOOL_TASK
             || name == crate::tools::TOOL_SKILL
@@ -40,42 +44,44 @@ impl WorkflowExecutor {
             return true;
         }
 
-        // Smart mode: allow read-only tools, intercept mutations and risky bash
+        // Smart mode: allow read/write tools, intercept risky bash or unknown mutations
         if self.policy.approval_level == ApprovalLevel::Smart {
-            let is_safe_tool = name.starts_with("read_")
-                || name.starts_with("list_")
-                || name.starts_with("get_")
-                || name.starts_with("todo_") // All todo operations are safe
-                || name.contains("search")
-                || name.contains("fetch")
-                || name == "glob"
-                || name == "grep";
+            let is_safe_tool = name.starts_with(TOOL_READ_FILE)
+                || name == TOOL_EDIT_FILE
+                || name == TOOL_WRITE_FILE
+                || name == TOOL_LIST_DIR
+                || name == TOOL_GLOB
+                || name == TOOL_GREP
+                || name == TOOL_WEB_SEARCH
+                || name == TOOL_WEB_FETCH;
 
             if is_safe_tool {
                 return false;
             }
 
             // Special handling for bash in Smart mode:
-            // Auto-approve common read-only commands
+            // Auto-approve common read-only commands ONLY IF they don't contain operators
             if name == TOOL_BASH {
                 let command_str = args["command"].as_str().unwrap_or("").trim().to_lowercase();
-                let read_only_bash_cmds = [
-                    "ls",
-                    "pwd",
-                    "date",
-                    "git status",
-                    "git log",
-                    "git diff",
-                    "cat ",
-                    "grep ",
-                    "find ",
-                    "file ",
-                    "stat ",
-                ];
-                let is_read_only_bash = read_only_bash_cmds
+
+                // Security Guard: Any redirection, piping, or background execution MUST be reviewed
+                // to prevent attacks like 'cat secret.txt > malicious.sh'
+                let has_operators = command_str.chars().any(|c| matches!(c, '>' | '<' | '|' | '&' | ';'));
+                if has_operators {
+                    log::info!("WorkflowExecutor {}: Intercepting bash due to shell operators: {}", self.session_id, command_str);
+                    return true;
+                }
+
+                // Check exact match first (O(1) with perfect hash)
+                if READ_ONLY_BASH_CMDS_EXACT.contains(command_str.as_str()) {
+                    return false; // Don't intercept - it's read-only
+                }
+
+                // Check prefix match for commands with arguments (O(n) but small n)
+                let is_read_only_bash = READ_ONLY_BASH_PREFIXES
                     .iter()
                     .any(|&p| command_str.starts_with(p));
-                return !is_read_only_bash; // Intercept if NOT read-only
+                return !is_read_only_bash; // Intercept if NOT explicitly in the read-only whitelist
             }
 
             // All other tools (write_file, edit_file, delete_*, etc.) should be intercepted
@@ -331,11 +337,15 @@ impl WorkflowExecutor {
                     display_type = "diff".to_string();
                     let path = args["file_path"].as_str().unwrap_or("unknown");
                     let new_content = args["content"].as_str().unwrap_or("");
-                    
+
                     // Cap preview size to ensure UI snappiness
                     let preview_limit = 2000;
                     let new_preview: String = new_content.chars().take(preview_limit).collect();
-                    let suffix = if new_content.chars().count() > preview_limit { "... (truncated)" } else { "" };
+                    let suffix = if new_content.chars().count() > preview_limit {
+                        "... (truncated)"
+                    } else {
+                        ""
+                    };
 
                     match std::fs::metadata(path) {
                         Ok(meta) => {
@@ -347,10 +357,7 @@ impl WorkflowExecutor {
                         }
                         Err(_) => {
                             // Represent new file as: --- path \n +++ path \n - \n + content
-                            format!(
-                                "--- {}\n+++ {}\n-\n+ {}{}",
-                                path, path, new_preview, suffix
-                            )
+                            format!("--- {}\n+++ {}\n-\n+ {}{}", path, path, new_preview, suffix)
                         }
                     }
                 }

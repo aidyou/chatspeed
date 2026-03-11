@@ -311,16 +311,22 @@
                         class="small" />
                     </label>
                     <template #dropdown>
-                      <el-dropdown-menu>
+                      <el-dropdown-menu class="approval-level-dropdown">
                         <el-dropdown-item command="default" :class="{ active: approvalLevel === 'default' }">
-                          {{ $t('settings.agent.approvalLevelDefault') }}
+                          <cs name="setting" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-text">{{ $t('settings.agent.approvalLevelDefault') }}</span>
+                          <cs v-if="approvalLevel === 'default'" name="check" size="14px" class="dropdown-check" />
                         </el-dropdown-item>
                         <el-dropdown-item command="smart" :class="{ active: approvalLevel === 'smart' }">
-                          {{ $t('settings.agent.approvalLevelSmart') }}
+                          <cs name="brain" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-text">{{ $t('settings.agent.approvalLevelSmart') }}</span>
+                          <cs v-if="approvalLevel === 'smart'" name="check" size="14px" class="dropdown-check" />
                         </el-dropdown-item>
                         <el-dropdown-item command="full" class="danger-option"
                           :class="{ active: approvalLevel === 'full' }">
-                          {{ $t('settings.agent.approvalLevelFull') }}
+                          <cs name="warning" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-text">{{ $t('settings.agent.approvalLevelFull') }}</span>
+                          <cs v-if="approvalLevel === 'full'" name="check" size="14px" class="dropdown-check" />
                         </el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -1967,6 +1973,45 @@ const toggleFinalAuditMode = () => {
 .danger-option {
   color: var(--el-color-danger) !important;
   font-weight: bold;
+}
+
+// Approval Level Dropdown Styles
+.el-dropdown-menu.approval-level-dropdown .el-dropdown-menu__item {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+
+  .dropdown-icon {
+    flex-shrink: 0;
+    color: var(--cs-text-color-secondary);
+  }
+
+  .dropdown-text {
+    flex: 1;
+    text-align: left;
+  }
+
+  .dropdown-check {
+    flex-shrink: 0;
+    color: var(--el-color-primary);
+  }
+
+  &.active {
+    .dropdown-icon {
+      color: var(--el-color-primary);
+    }
+  }
+
+  &.danger-option {
+    .dropdown-icon {
+      color: var(--el-color-danger);
+    }
+
+    &.active .dropdown-check {
+      color: var(--el-color-danger);
+    }
+  }
 }
 
 .workflow-layout {

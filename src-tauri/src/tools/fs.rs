@@ -1,6 +1,7 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use async_trait::async_trait;
+use chrono;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -150,13 +151,35 @@ impl ToolDefinition for WriteFile {
             .as_str()
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
         let path = Path::new(path_str);
+        
+        let mut message = "File written successfully.".to_string();
+        
         if path.exists() {
-            let bak = path.with_extension("bak");
-            fs::copy(path, bak).ok();
+            // Safety: Create a timestamped backup before overwriting.
+            let old_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+            let mut bak_name = path.file_name().unwrap_or_default().to_os_string();
+            bak_name.push(".");
+            bak_name.push(timestamp);
+            bak_name.push(".bak");
+            let bak = path.with_file_name(bak_name);
+            
+            if let Ok(_) = fs::copy(path, &bak) {
+                message = format!("File overwritten successfully. Previous version ({} bytes) was backed up to {}.", 
+                    old_size, bak.display());
+            }
+        } else {
+            // Ensure parent directories exist for new files
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            message = "New file created successfully.".to_string();
         }
+        
         fs::write(path, content).map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
+        
         Ok(ToolCallResult::success(
-            Some("File written successfully.".into()),
+            Some(message),
             None,
         ))
     }
@@ -222,30 +245,45 @@ impl ToolDefinition for EditFile {
             .ok_or(ToolError::InvalidParams(
                 "new_string is required".to_string(),
             ))?;
+        
+        if old_str == new_str {
+            return Err(ToolError::InvalidParams("old_string and new_string are identical. No changes performed.".into()));
+        }
+
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
         let content = fs::read_to_string(path_str)
-            .map_err(|e| ToolError::IoError(format!("Read failed: {}", e)))?;
+            .map_err(|e| ToolError::IoError(format!("Read failed: {}. Ensure the file exists and is readable.", e)))?;
+        
         let matches: Vec<_> = content.match_indices(old_str).collect();
         if matches.is_empty() {
+            // Provide more diagnostic info to AI
+            let lines_count = content.lines().count();
             return Err(ToolError::ExecutionFailed(format!(
-                "String '{}' not found.",
-                old_str
+                "The old_string was not found in the file (checked {} lines). \
+                Please ensure you copied the text EXACTLY, including all whitespace and indentation. \
+                Do NOT include line numbers in your old_string.",
+                lines_count
             )));
         }
+        
         if !replace_all && matches.len() > 1 {
             return Err(ToolError::ExecutionFailed(format!(
-                "String '{}' is not unique (found {} matches).",
-                old_str,
+                "The old_string is not unique (found {} matches). \
+                Please provide more surrounding context in your old_string to uniquely identify the location, \
+                or use 'replace_all: true' if you want to replace all occurrences.",
                 matches.len()
             )));
         }
+        
         let new_content = if replace_all {
             content.replace(old_str, new_str)
         } else {
             content.replacen(old_str, new_str, 1)
         };
+        
         fs::write(path_str, new_content)
-            .map_err(|e| ToolError::IoError(format!("Edit write failed: {}", e)))?;
+            .map_err(|e| ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e)))?;
+            
         Ok(ToolCallResult::success(
             Some("File edited successfully.".into()),
             None,
