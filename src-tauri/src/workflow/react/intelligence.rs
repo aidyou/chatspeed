@@ -398,14 +398,12 @@ impl IntelligenceManager {
                 .main_store
                 .read()
                 .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            let gen_model_config: String =
-                store.get_config("conversation_title_gen_model", "".to_string());
+            let gen_model_config: serde_json::Value =
+                store.get_config("conversation_title_gen_model", serde_json::json!({}));
 
-            if !gen_model_config.is_empty() {
-                let config: serde_json::Value =
-                    serde_json::from_str(&gen_model_config).unwrap_or_default();
-                let p_id = config["id"].as_i64().unwrap_or(self.active_provider_id);
-                let m_name = config["model"]
+            if gen_model_config.is_object() {
+                let p_id = gen_model_config["id"].as_i64().unwrap_or(self.active_provider_id);
+                let m_name = gen_model_config["model"]
                     .as_str()
                     .unwrap_or(&self.active_model_name)
                     .to_string();
@@ -416,7 +414,8 @@ impl IntelligenceManager {
         };
 
         let system_prompt = "You are a helpful assistant that generates extremely concise, descriptive titles for chat conversations. \
-                             Your title must be under 10 words, preferably 3-5 words. Do not use quotes or special formatting.";
+                             Your title must be under 10 words, preferably 3-5 words. Do not use quotes or special formatting. \
+                             IMPORTANT: Generate the title in the same language as the user's input (Chinese for Chinese input, English for English input, etc.).";
         let user_prompt = format!(
             "Generate a title for a workflow with the following initial request:\n\n\"{}\"",
             user_query
