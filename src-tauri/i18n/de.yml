@@ -311,6 +311,7 @@ updater:
     version_parse: "Fehler beim Verarbeiten der Version: erwartete Version '%{version}', Fehler: %{error}"
 
 workflow:
+  awaiting_approval: "Wartet auf Genehmigung"
   array_index_out_of_bounds: "Array-Index außerhalb der Grenzen: %{index}"
   bool_not_supported: "Boolescher Typ unterstützt diese Operation nicht: %{operator}"
   bracket_not_match: "Klammern stimmen nicht überein: %{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "Validierungsfehler: %{msg}"
   task_finished: "Aufgabe abgeschlossen"
   summary:
+    submit_plan: "Plan einreichen"
     todo_create: "Aufgabe erstellen"
     todo_update: "Aufgabe '%{subject}' auf %{status} aktualisieren"
     todo_list: "Todo-Liste abrufen"

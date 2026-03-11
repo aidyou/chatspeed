@@ -312,6 +312,7 @@ updater:
     version_parse: "バージョン解析エラー：期待バージョン '%{version}', エラー：%{error}"
 
 workflow:
+  awaiting_approval: "ユーザーの承認待ち"
   array_index_out_of_bounds: "配列インデックスが範囲外です：%{index}"
   bool_not_supported: "ブール型はこの操作をサポートしていません：%{operator}"
   bracket_not_match: "括弧が一致しません：%{condition}"
@@ -351,6 +352,7 @@ workflow:
   validation: "検証エラー：%{msg}"
   task_finished: "タスク完了"
   summary:
+    submit_plan: "計画を送信"
     todo_create: "タスク作成"
     todo_update: "タスク '%{subject}' を %{status} に更新"
     todo_list: "Todo リスト取得"

@@ -782,6 +782,7 @@
     }
   },
   "workflow": {
+    "awaiting_approval": "等待用户审批",
     "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
     "approvePlan": "批准计划",
     "thinkingExpanded": "思考过程",
@@ -798,7 +799,6 @@
     "editWorkflowTitle": "编辑工作流标题",
     "finalAuditTooltip": "终审模式：任务结束前由 AI 自动进行质量审核",
     "historyTab": "会话",
-    "filesTab": "文件",
     "newWorkflow": "新建工作流",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "startFailed": "启动工作流失败: {error}",
@@ -824,6 +824,7 @@
       "statusInProgress": "进行中",
       "statusPending": "待处理"
     },
+    "submit_plan": "提交计划",
     "finishTask": "完成任务",
     "workflowTitle": "工作流标题",
     "selectAgentFirst": "请先选择一个智能体"

@@ -311,6 +311,7 @@ updater:
     version_parse: "Ошибка разбора версии: ожидаемая версия '%{version}', ошибка: %{error}"
 
 workflow:
+  awaiting_approval: "Ожидает подтверждения"
   array_index_out_of_bounds: "Индекс массива вне допустимого диапазона: %{index}"
   bool_not_supported: "Логический тип не поддерживает эту операцию: %{operator}"
   bracket_not_match: "Несоответствие скобок: %{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "Ошибка проверки: %{msg}"
   task_finished: "Задача выполнена"
   summary:
+    submit_plan: "Отправить план"
     todo_create: "Создать задачу"
     todo_update: "Обновить задачу '%{subject}' до %{status}"
     todo_list: "Получить список дел"

@@ -782,6 +782,7 @@
     }
   },
   "workflow": {
+    "awaiting_approval": "ユーザーの承認待ち",
     "todoList": {
       "title": "TODOリスト",
       "next": "次へ"
@@ -798,7 +799,6 @@
     "thinkingExpanded": "思考中（展開済み）",
     "thoughtCompleted": "思考完了",
     "workflowTitle": "ワークフロータイトル",
-    "filesTab": "ファイル",
     "finishTask": "タスクを完了",
     "finalAuditTooltip": "最終監査モード：タスク完了前に AI が自動的に品質レビューを実行します",
     "historyTab": "会話",
@@ -812,6 +812,7 @@
       "statusInProgress": "進行中",
       "statusPending": "保留中"
     },
+    "submit_plan": "計画を提出",
     "approval": {
       "action": "保留中のアクション",
       "details": "アクションの詳細",

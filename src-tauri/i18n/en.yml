@@ -311,6 +311,7 @@ updater:
     version_parse: "Version parsing error: expected version '%{version}', error: %{error}"
 
 workflow:
+  awaiting_approval: "Awaiting approval"
   array_index_out_of_bounds: "Array index out of bounds: %{index}"
   bool_not_supported: "Boolean type does not support this operation: %{operator}"
   bracket_not_match: "Brackets do not match: %{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "Validation error: %{details}"
   task_finished: "Task completed"
   summary:
+    submit_plan: "Submit plan"
     todo_create: "Create task"
     todo_update: "Update task '%{subject}' to %{status}"
     todo_list: "Get todo list"

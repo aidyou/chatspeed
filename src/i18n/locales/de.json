@@ -784,6 +784,8 @@
   "workflow": {
     "planningModeTooltip": "Planungsmodus: KI-Recherche und Strategien vor der Ausführung",
     "approvePlan": "Plan genehmigen",
+    "awaiting_approval": "Warte auf Genehmigung",
+    "submit_plan": "Plan einreichen",
     "thinking": "Denke nach...",
     "thinkingExpanded": "Denkprozess",
     "thoughtCompleted": "Gedanke abgeschlossen",
@@ -798,7 +800,6 @@
     "editWorkflowTitle": "Workflow-Titel bearbeiten",
     "finalAuditTooltip": "Abschlussprüfungsmodus: Qualitätsprüfung durch KI vor Aufgabenabschluss",
     "historyTab": "Sitzung",
-    "filesTab": "Dateien",
     "newWorkflow": "Neuer Workflow",
     "retrying": "Anfrage zu häufig, wird wiederholt (Versuch {attempt}/{total}), warte {seconds} Sekunden...",
     "startFailed": "Start fehlgeschlagen: {error}",

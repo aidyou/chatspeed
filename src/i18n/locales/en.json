@@ -782,6 +782,7 @@
     }
   },
   "workflow": {
+    "awaiting_approval": "Awaiting approval",
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "approvePlan": "Approve Plan",
     "approval": {
@@ -814,7 +815,7 @@
       "statusInProgress": "in progress",
       "statusPending": "pending"
     },
-    "filesTab": "Files",
+    "submit_plan": "Submit plan",
     "finishTask": "Finish task",
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
     "historyTab": "Conversation",

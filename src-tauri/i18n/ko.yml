@@ -311,6 +311,7 @@ updater:
     version_parse: "버전 구문 분석 오류: 예상 버전 '%{version}', 오류: %{error}"
 
 workflow:
+  awaiting_approval: "사용자 승인 대기 중"
   array_index_out_of_bounds: "배열 인덱스 범위를 벗어났습니다: %{index}"
   bool_not_supported: "부울 유형은 이 작업을 지원하지 않습니다: %{operator}"
   bracket_not_match: "괄호가 일치하지 않습니다: %{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "유효성 검사 오류: %{msg}"
   task_finished: "작업 완료"
   summary:
+    submit_plan: "계획 제출"
     todo_create: "작업 생성"
     todo_update: "작업 '%{subject}' 을 (를) %{status} (으) 로 업데이트"
     todo_list: "할 일 목록 가져오기"

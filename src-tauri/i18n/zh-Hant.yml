@@ -311,6 +311,7 @@ updater:
     version_parse: "版本解析錯誤：期望版本 '%{version}', 錯誤：%{error}"
 
 workflow:
+  awaiting_approval: "等待使用者審批"
   array_index_out_of_bounds: "陣列索引越界：%{index}"
   bool_not_supported: "布林類型不支援此操作：%{operator}"
   bracket_not_match: "括號不匹配：%{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "驗證錯誤：%{msg}"
   task_finished: "任務已完成"
   summary:
+    submit_plan: "提交計劃"
     todo_create: "建立任務"
     todo_update: "更新任務 '%{subject}' 為 %{status}"
     todo_list: "獲取待辦清單"

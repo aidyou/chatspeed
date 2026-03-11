@@ -782,6 +782,7 @@
     }
   },
   "workflow": {
+    "awaiting_approval": "等待使用者審批",
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
     "approvePlan": "批准計劃",
     "thinkingExpanded": "思考中（已展開）",
@@ -798,7 +799,6 @@
     "editWorkflowTitle": "編輯工作流程標題",
     "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
     "historyTab": "對話",
-    "filesTab": "檔案",
     "newWorkflow": "新增工作流程",
     "retrying": "請求頻率過快，正在重試 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "startFailed": "啟動工作流失敗：{error}",
@@ -824,6 +824,7 @@
       "statusInProgress": "進行中",
       "statusPending": "待處理"
     },
+    "submit_plan": "提交計劃",
     "finishTask": "完成任務",
     "workflowTitle": "工作流程標題",
     "selectAgentFirst": "請先選擇一個智能體"

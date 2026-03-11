@@ -311,6 +311,7 @@ updater:
     version_parse: "Erreur d'analyse de version : version attendue '%{version}', erreur : %{error}"
 
 workflow:
+  awaiting_approval: "En attente d'approbation"
   array_index_out_of_bounds: "Indice de tableau hors limites : %{index}"
   bool_not_supported: "Le type booléen ne prend pas en charge cette opération : %{operator}"
   bracket_not_match: "Les parenthèses ne correspondent pas : %{condition}"
@@ -350,6 +351,7 @@ workflow:
   validation: "Erreur de validation : %{msg}"
   task_finished: "Tâche terminée"
   summary:
+    submit_plan: "Soumettre le plan"
     todo_create: "Créer une tâche"
     todo_update: "Mettre à jour la tâche '%{subject}' à %{status}"
     todo_list: "Obtenir la liste des tâches"
