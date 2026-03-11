@@ -214,12 +214,21 @@ pub async fn create_workflow(
     workflow: Workflow,
 ) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
+
+    // Get agent's final_audit config to inherit
+    let final_audit = store
+        .get_agent(&workflow.agent_id)
+        .map_err(|e| e.to_string())?
+        .and_then(|agent| agent.final_audit)
+        .unwrap_or(false);
+
     let created = store
         .create_workflow(
             &workflow.id,
             &workflow.user_query,
             &workflow.agent_id,
             workflow.allowed_paths,
+            Some(final_audit),
         )
         .map_err(|e| e.to_string())?;
 
@@ -983,4 +992,17 @@ pub async fn get_workflow_session_key(
         .get(&workflow_id)
         .map(|v| v.clone())
         .ok_or_else(|| format!("Session key for workflow {} not found", workflow_id))
+}
+
+#[tauri::command]
+pub async fn update_workflow_final_audit(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    final_audit: bool,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_final_audit(&session_id, final_audit)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

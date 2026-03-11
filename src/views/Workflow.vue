@@ -122,7 +122,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                          }}
+                        }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -299,7 +299,7 @@
                       @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" />
                       <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                      }}</span>
+                        }}</span>
                     </label>
                   </el-tooltip>
 
@@ -1454,6 +1454,15 @@ const selectWorkflow = async id => {
       // Setup event listeners for the existing session
       await setupWorkflowEvents(id)
     }
+
+    // Initialize finalAuditMode: use workflow value first, then fallback to agent config
+    if (workflowStore.currentWorkflow.finalAudit !== undefined && workflowStore.currentWorkflow.finalAudit !== null) {
+      finalAuditMode.value = workflowStore.currentWorkflow.finalAudit ? 'on' : 'off'
+    } else if (selectedAgent.value?.finalAudit) {
+      finalAuditMode.value = 'on'
+    } else {
+      finalAuditMode.value = 'off'
+    }
   }
 }
 
@@ -1899,7 +1908,12 @@ const onGlobalKeyDown = event => {
 }
 
 const toggleFinalAuditMode = () => {
-  finalAuditMode.value = finalAuditMode.value === 'on' ? 'off' : 'on'
+  const newValue = finalAuditMode.value === 'on' ? 'off' : 'on'
+  finalAuditMode.value = newValue
+  // Persist to database
+  if (currentWorkflowId.value) {
+    workflowStore.updateWorkflowFinalAudit(currentWorkflowId.value, newValue === 'on')
+  }
 }
 </script>
 

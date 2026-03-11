@@ -405,7 +405,7 @@ mod tests {
             );
             store_guard.add_agent(&agent).unwrap();
             store_guard
-                .create_workflow(&session_id, "Test prompt", &agent_id, None)
+                .create_workflow(&session_id, "Test prompt", &agent_id, None, Some(false))
                 .unwrap();
         }
 

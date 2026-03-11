@@ -21,6 +21,7 @@ pub struct Workflow {
     pub status: String,
     pub agent_id: String,
     pub allowed_paths: Option<Value>,
+    pub final_audit: Option<bool>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -69,6 +70,7 @@ impl From<&Row<'_>> for Workflow {
             status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
             agent_id: row.get("agent_id").unwrap_or_default(),
             allowed_paths,
+            final_audit: row.get("final_audit").ok(),
             created_at: row.get("created_at").unwrap_or_default(),
             updated_at: row.get("updated_at").unwrap_or_default(),
         }
@@ -111,6 +113,7 @@ impl MainStore {
         user_query: &str,
         agent_id: &str,
         allowed_paths: Option<Value>,
+        final_audit: Option<bool>,
     ) -> Result<Workflow, StoreError> {
         let conn = self
             .conn
@@ -120,8 +123,8 @@ impl MainStore {
             allowed_paths.map(|v| serde_json::to_string(&v).unwrap_or_default());
 
         conn.execute(
-            "INSERT INTO workflows (id, user_query, agent_id, allowed_paths, status) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, user_query, agent_id, allowed_paths_json, "pending"],
+            "INSERT INTO workflows (id, user_query, agent_id, allowed_paths, final_audit, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, user_query, agent_id, allowed_paths_json, final_audit.unwrap_or(false), "pending"],
         )?;
 
         let workflow: Workflow = conn.query_row(
@@ -268,6 +271,22 @@ impl MainStore {
         conn.execute(
             "UPDATE workflows SET allowed_paths = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
             params![paths_json, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_workflow_final_audit(
+        &self,
+        id: &str,
+        final_audit: bool,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        conn.execute(
+            "UPDATE workflows SET final_audit = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![final_audit, id],
         )?;
         Ok(())
     }

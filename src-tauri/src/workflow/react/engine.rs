@@ -663,7 +663,14 @@ impl WorkflowExecutor {
                         });
 
                         // 3. Post-processing and Notification
-                        let reinforced = self.post_process_tool_result(&tool_name, &tool_args, &tool_call_obj, result).await?;
+                        let reinforced = self
+                            .post_process_tool_result(
+                                &tool_name,
+                                &tool_args,
+                                &tool_call_obj,
+                                result,
+                            )
+                            .await?;
 
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
@@ -709,8 +716,10 @@ impl WorkflowExecutor {
                             signal_id
                         );
 
-                        let pretty_title =
-                            ObservationReinforcer::generate_title(&tool_name, &tool_args, None);
+                        let pretty_title = {
+                            let primary_root = self.path_guard.read().unwrap().get_primary_root().map(|p| p.to_path_buf());
+                            ObservationReinforcer::generate_title(&tool_name, &tool_args, None, primary_root.as_deref())
+                        };
                         let observation = format!("The user doesn't want to proceed with this tool use. The tool '{}' was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", tool_name);
 
                         self.add_message_and_notify_internal(
@@ -1217,8 +1226,12 @@ impl WorkflowExecutor {
         // --- 2. Stage 1: Audit & Partitioning (The 'Channel' Logic) ---
         // We determine what can run NOW and what must WAIT BEFORE performing any actions.
         for (_idx, call) in tool_calls.into_iter().enumerate() {
-            // Always use a unique ID for each tool call
-            let id = crate::ccproxy::get_tool_id();
+            // Use the ID already provided in the call if available, otherwise generate one
+            let id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| crate::ccproxy::get_tool_id());
 
             let func = call.get("function").unwrap_or(&call);
             let name = func
@@ -1262,7 +1275,7 @@ impl WorkflowExecutor {
             }
 
             // --- SEMANTIC AUDIT ---
-            match self.pre_dispatch_check(&name, &args, &text_part).await {
+            match self.pre_dispatch_check(&id, &name, &args, &text_part).await {
                 Ok(Some(early_result)) => {
                     // Tool was intercepted (Approval needed, Loop detected, etc.)
                     result_map.insert(id, (early_result, call));
@@ -1399,6 +1412,7 @@ impl WorkflowExecutor {
         }
 
         // 3. Reinforce with Todo Context (Freshly fetched from DB)
+        let primary_root = self.path_guard.read().unwrap().get_primary_root().map(|p| p.to_path_buf());
         if name.starts_with("todo_") {
             let todos = if let Ok(store) = self.context.main_store.read() {
                 store
@@ -1411,9 +1425,15 @@ impl WorkflowExecutor {
                 tool_call,
                 &result,
                 Some(serde_json::json!(todos)),
+                primary_root.as_deref(),
             ))
         } else {
-            Ok(ObservationReinforcer::reinforce(tool_call, &result))
+            Ok(ObservationReinforcer::reinforce_with_context(
+                tool_call,
+                &result,
+                None,
+                primary_root.as_deref(),
+            ))
         }
     }
 
@@ -1421,6 +1441,7 @@ impl WorkflowExecutor {
     /// Returns Some(ReinforcedResult) if the check fails or requires an early return (e.g. Paused for confirmation).
     async fn pre_dispatch_check(
         &mut self,
+        id: &str,
         name: &str,
         args: &serde_json::Value,
         text_part: &str,
@@ -1435,7 +1456,7 @@ impl WorkflowExecutor {
 
         // --- 2. Approval Policy Enforcement ---
         if self.should_intercept_for_approval(name, args) {
-            return self.handle_approval_interception(name, args, None).await;
+            return self.handle_approval_interception(id, name, args, None).await;
         }
 
         // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
@@ -1458,7 +1479,7 @@ impl WorkflowExecutor {
 
         // 3.2 Shell Auditing
         if name == crate::tools::TOOL_BASH {
-            if let Some(result) = self.handle_bash_security_intercept(args).await? {
+            if let Some(result) = self.handle_bash_security_intercept(id, args).await? {
                 return Ok(Some(result));
             }
         }

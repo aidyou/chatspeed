@@ -24,10 +24,10 @@
         <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
-          }}</el-button>
+        }}</el-button>
         <el-button type="success" @click="onApproveAll" :loading="loading" round>{{
           $t('common.approveAll')
-          }}</el-button>
+        }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -50,7 +50,7 @@ const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject'
 
 const { t } = useI18n()
 
-const isEditAction = computed(() => props.action === 'edit_file')
+const isEditAction = computed(() => props.action === 'edit_file' || props.action === 'write_file')
 
 const filePath = computed(() => {
   if (!isEditAction.value) return ''

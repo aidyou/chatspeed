@@ -19,16 +19,12 @@ pub struct ReinforcedResult {
 }
 
 impl ObservationReinforcer {
-    /// Reinforces the tool result with heuristic hints to better guide the AI
-    pub fn reinforce(tool_call: &Value, result: &Result<Value, ToolError>) -> ReinforcedResult {
-        Self::reinforce_with_context(tool_call, result, None)
-    }
-
     /// Reinforces with extra context (like full todo list)
     pub fn reinforce_with_context(
         tool_call: &Value,
         result: &Result<Value, ToolError>,
         extra_context: Option<Value>,
+        primary_root: Option<&std::path::Path>,
     ) -> ReinforcedResult {
         // Extract tool name and arguments from the standard tool_call metadata structure
         let (tool_name, args) = if let Some(func) = tool_call.get("function") {
@@ -68,7 +64,7 @@ impl ObservationReinforcer {
                         serde_json::to_string(val).unwrap_or_default()
                     };
 
-                let title = Self::generate_title(tool_name, &args, extra_context.as_ref());
+                let title = Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
                 let summary = Self::generate_summary(tool_name, &raw_res_for_summary, &args);
 
                 let mut raw_res = raw_res_for_summary;
@@ -186,7 +182,7 @@ impl ObservationReinforcer {
             }
             Err(err) => {
                 let err_msg = err.to_string();
-                let title = Self::generate_title(tool_name, &args, extra_context.as_ref());
+                let title = Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
                 let error_type = match err {
                     ToolError::Security(_) => "Security",
                     ToolError::IoError(_) => "Io",
@@ -216,6 +212,7 @@ impl ObservationReinforcer {
         tool_name: &str,
         args: &Value,
         extra_context: Option<&Value>,
+        primary_root: Option<&std::path::Path>,
     ) -> String {
         let truncate = |s: &str, len: usize| -> String {
             let chars: Vec<char> = s.chars().collect();
@@ -235,12 +232,37 @@ impl ObservationReinforcer {
             }
         };
 
+        let get_relative_path = |path_str: &str| -> String {
+            if path_str.is_empty() {
+                return path_str.to_string();
+            }
+
+            let path = std::path::Path::new(path_str);
+
+            // Try to make path relative to primary_root
+            if let Some(root) = primary_root {
+                if let Ok(relative) = path.strip_prefix(root) {
+                    // Return relative path, use "." if it's the root itself
+                    let rel_str = relative.to_string_lossy();
+                    return if rel_str.is_empty() {
+                        ".".to_string()
+                    } else {
+                        rel_str.to_string()
+                    };
+                }
+            }
+
+            // Return original path if we can't make it relative
+            path_str.to_string()
+        };
+
         match tool_name {
             TOOL_READ_FILE => {
                 let path = args["file_path"]
                     .as_str()
                     .or(args["path"].as_str())
                     .unwrap_or("");
+                let display_path = get_relative_path(path);
                 let limit = args["limit"].as_i64();
                 let offset = args["offset"].as_i64();
                 let mut suffix = String::new();
@@ -251,28 +273,31 @@ impl ObservationReinforcer {
                 } else if let Some(o) = offset {
                     suffix = format!(" @{}", o);
                 }
-                format!("Read {}{}", path, suffix)
+                format!("Read {}{}", display_path, suffix)
             }
             TOOL_WRITE_FILE => {
                 let path = args["file_path"]
                     .as_str()
                     .or(args["path"].as_str())
                     .unwrap_or("");
-                format!("Write {}", path)
+                let display_path = get_relative_path(path);
+                format!("Write {}", display_path)
             }
             TOOL_EDIT_FILE => {
                 let path = args["file_path"]
                     .as_str()
                     .or(args["path"].as_str())
                     .unwrap_or("");
-                format!("Edit {}", path)
+                let display_path = get_relative_path(path);
+                format!("Edit {}", display_path)
             }
             TOOL_LIST_DIR => {
                 let path = args["path"]
                     .as_str()
                     .or(args["dir"].as_str())
                     .unwrap_or(".");
-                format!("List {}", path)
+                let display_path = get_relative_path(path);
+                format!("List {}", display_path)
             }
             TOOL_GLOB => {
                 let pattern = args["pattern"]
@@ -288,10 +313,11 @@ impl ObservationReinforcer {
                     .unwrap_or("");
                 let path = args["path"].as_str().unwrap_or("");
                 if !path.is_empty() {
+                    let display_path = get_relative_path(path);
                     format!(
                         "Grep \"{}\" in {}",
                         truncate(pattern, 15),
-                        truncate(path, 15)
+                        truncate(&display_path, 15)
                     )
                 } else {
                     format!("Grep \"{}\"", truncate(pattern, 25))

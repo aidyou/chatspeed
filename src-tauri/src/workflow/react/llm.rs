@@ -144,27 +144,37 @@ impl LlmProcessor {
                                 if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
                                     for tool_call in tool_calls_array {
                                         if let Some(tool_call_obj) = tool_call.as_object_mut() {
-                                            tool_call_obj.insert(
+                                            // Only overwrite if ID is missing or not our own generated ID
+                                            let existing_id = tool_call_obj.get("id").and_then(|v| v.as_str());
+                                            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                                                tool_call_obj.insert(
+                                                    "id".to_string(),
+                                                    serde_json::json!(crate::ccproxy::get_tool_id()),
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
+                                    if let Some(tool_obj) = tool_wrapper.as_object_mut() {
+                                        let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+                                        if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                                            tool_obj.insert(
                                                 "id".to_string(),
                                                 serde_json::json!(crate::ccproxy::get_tool_id()),
                                             );
                                         }
                                     }
-                                } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
-                                    if let Some(tool_obj) = tool_wrapper.as_object_mut() {
-                                        tool_obj.insert(
-                                            "id".to_string(),
-                                            serde_json::json!(crate::ccproxy::get_tool_id()),
-                                        );
-                                    }
                                 } else if tool_calls_val.is_object()
                                     && tool_calls_val.get("name").is_some()
                                 {
                                     if let Some(tool_obj) = tool_calls_val.as_object_mut() {
-                                        tool_obj.insert(
-                                            "id".to_string(),
-                                            serde_json::json!(crate::ccproxy::get_tool_id()),
-                                        );
+                                        let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+                                        if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                                            tool_obj.insert(
+                                                "id".to_string(),
+                                                serde_json::json!(crate::ccproxy::get_tool_id()),
+                                            );
+                                        }
                                     }
                                 }
                                 tool_calls_json = serde_json::to_string(&tool_calls_val)

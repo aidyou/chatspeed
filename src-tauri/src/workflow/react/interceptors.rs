@@ -66,9 +66,15 @@ impl WorkflowExecutor {
 
                 // Security Guard: Any redirection, piping, or background execution MUST be reviewed
                 // to prevent attacks like 'cat secret.txt > malicious.sh'
-                let has_operators = command_str.chars().any(|c| matches!(c, '>' | '<' | '|' | '&' | ';'));
+                let has_operators = command_str
+                    .chars()
+                    .any(|c| matches!(c, '>' | '<' | '|' | '&' | ';'));
                 if has_operators {
-                    log::info!("WorkflowExecutor {}: Intercepting bash due to shell operators: {}", self.session_id, command_str);
+                    log::info!(
+                        "WorkflowExecutor {}: Intercepting bash due to shell operators: {}",
+                        self.session_id,
+                        command_str
+                    );
                     return true;
                 }
 
@@ -249,6 +255,7 @@ impl WorkflowExecutor {
 
     pub(crate) async fn handle_bash_security_intercept(
         &mut self,
+        id: &str,
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let command_str = args["command"].as_str().unwrap_or("");
@@ -293,7 +300,12 @@ impl WorkflowExecutor {
                         let display_content =
                             format!("Command: {}\nReason: {}", command_str, reason);
                         return self
-                            .handle_approval_interception(TOOL_BASH, args, Some(display_content))
+                            .handle_approval_interception(
+                                id,
+                                TOOL_BASH,
+                                args,
+                                Some(display_content),
+                            )
                             .await;
                     }
                 }
@@ -304,19 +316,18 @@ impl WorkflowExecutor {
 
     pub(crate) async fn handle_approval_interception(
         &mut self,
+        id: &str,
         name: &str,
         args: &serde_json::Value,
         display_content: Option<String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let id = crate::ccproxy::get_tool_id();
-
         // 1. Stash the full tool name and arguments in the server-side map.
         // This ensures the frontend doesn't need to pass complex JSON back to us.
         let stash_obj = json!({
             "name": name,
             "arguments": args
         });
-        self.pending_approvals.insert(id.clone(), stash_obj);
+        self.pending_approvals.insert(id.to_string(), stash_obj);
 
         self.update_state(WorkflowState::AwaitingApproval).await?;
 
@@ -374,7 +385,7 @@ impl WorkflowExecutor {
             .send(
                 &self.session_id,
                 GatewayPayload::Confirm {
-                    id: id.clone(),
+                    id: id.to_string(),
                     action: name.to_string(),
                     details: content.clone(),
                 },
@@ -383,7 +394,15 @@ impl WorkflowExecutor {
 
         // 4. Return a 'waiting' result to the engine loop.
         // Use standard title generation to match the UI screenshot provided.
-        let pretty_title = ObservationReinforcer::generate_title(name, args, None);
+        let pretty_title = {
+            let primary_root = self
+                .path_guard
+                .read()
+                .unwrap()
+                .get_primary_root()
+                .map(|p| p.to_path_buf());
+            ObservationReinforcer::generate_title(name, args, None, primary_root.as_deref())
+        };
 
         Ok(Some(ReinforcedResult {
             content,

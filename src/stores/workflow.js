@@ -219,6 +219,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const updateWorkflowFinalAudit = async (workflowId, finalAudit) => {
+    error.value = null;
+    try {
+      await invokeWrapper('update_workflow_final_audit', {
+        sessionId: workflowId,
+        finalAudit: finalAudit
+      });
+      const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+      if (workflowIndex !== -1) {
+        workflows.value[workflowIndex].finalAudit = finalAudit;
+      }
+    } catch (err) {
+      await _handleError(err);
+    }
+  };
+
   const loadMessages = async (workflowId) => {
     console.log('workflowStore: loading messages for', workflowId);
     error.value = null;
@@ -267,6 +283,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setRunning,
     updateWorkflowStatus,
     updateWorkflowAllowedPaths,
+    updateWorkflowFinalAudit,
     loadMessages,
     deleteMessage,
     clearCurrentWorkflow,

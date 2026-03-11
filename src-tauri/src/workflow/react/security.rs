@@ -104,6 +104,10 @@ impl PathGuard {
         all
     }
 
+    pub fn get_primary_root(&self) -> Option<&std::path::Path> {
+        self.primary_root.as_deref()
+    }
+
     fn is_sensitive_path(path: &Path) -> bool {
         if path == Path::new("/") {
             return true;

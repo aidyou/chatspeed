@@ -261,6 +261,7 @@ pub async fn run() -> crate::error::Result<()> {
             list_workflows,
             search_workspace_files,
             update_workflow_allowed_paths,
+            update_workflow_final_audit,
             update_workflow_status,
             update_workflow_title,
             update_workflow_todo_list,
