@@ -151,9 +151,9 @@ impl ToolDefinition for WriteFile {
             .as_str()
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
         let path = Path::new(path_str);
-        
+
         let mut message = "File written successfully.".to_string();
-        
+
         if path.exists() {
             // Safety: Create a timestamped backup before overwriting.
             let old_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -163,9 +163,9 @@ impl ToolDefinition for WriteFile {
             bak_name.push(timestamp);
             bak_name.push(".bak");
             let bak = path.with_file_name(bak_name);
-            
+
             if let Ok(_) = fs::copy(path, &bak) {
-                message = format!("File overwritten successfully. Previous version ({} bytes) was backed up to {}.", 
+                message = format!("File overwritten successfully. Previous version ({} bytes) was backed up to {}.",
                     old_size, bak.display());
             }
         } else {
@@ -175,13 +175,10 @@ impl ToolDefinition for WriteFile {
             }
             message = "New file created successfully.".to_string();
         }
-        
+
         fs::write(path, content).map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
-        
-        Ok(ToolCallResult::success(
-            Some(message),
-            None,
-        ))
+
+        Ok(ToolCallResult::success(Some(message), None))
     }
 }
 
@@ -235,55 +232,123 @@ impl ToolDefinition for EditFile {
             .ok_or(ToolError::InvalidParams(
                 "file_path is required".to_string(),
             ))?;
-        let old_str = params["old_string"]
+        let old_str_unix = params["old_string"]
             .as_str()
             .ok_or(ToolError::InvalidParams(
                 "old_string is required".to_string(),
             ))?;
-        let new_str = params["new_string"]
+        let new_str_unix = params["new_string"]
             .as_str()
             .ok_or(ToolError::InvalidParams(
                 "new_string is required".to_string(),
             ))?;
-        
-        if old_str == new_str {
-            return Err(ToolError::InvalidParams("old_string and new_string are identical. No changes performed.".into()));
+
+        if old_str_unix == new_str_unix {
+            return Err(ToolError::InvalidParams(
+                "old_string and new_string are identical. No changes performed.".into(),
+            ));
         }
 
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
-        let content = fs::read_to_string(path_str)
-            .map_err(|e| ToolError::IoError(format!("Read failed: {}. Ensure the file exists and is readable.", e)))?;
-        
-        let matches: Vec<_> = content.match_indices(old_str).collect();
-        if matches.is_empty() {
-            // Provide more diagnostic info to AI
-            let lines_count = content.lines().count();
+        let raw_content = fs::read_to_string(path_str).map_err(|e| {
+            ToolError::IoError(format!(
+                "Read failed: {}. Ensure the file exists and is readable.",
+                e
+            ))
+        })?;
+
+        // 1. Try exact match with original line endings
+        let mut final_content = String::new();
+        let mut match_found = false;
+
+        // Create the Windows variant of the search/replace strings
+        let old_str_win = old_str_unix.replace("\n", "\r\n");
+        let new_str_win = new_str_unix.replace("\n", "\r\n");
+
+        // Strategy: 
+        // A. If the Windows variant matches, use it (preserves \r\n)
+        // B. If the Unix variant matches, use it (preserves \n)
+        // C. If neither matches, try normalization as a fallback
+        if raw_content.contains(&old_str_win) {
+            if !replace_all {
+                let count = raw_content.match_indices(&old_str_win).count();
+                if count > 1 {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "The old_string is not unique (found {} matches with Windows line endings). \
+                        Please provide more surrounding context to uniquely identify the location.",
+                        count
+                    )));
+                }
+            }
+            final_content = if replace_all {
+                raw_content.replace(&old_str_win, &new_str_win)
+            } else {
+                raw_content.replacen(&old_str_win, &new_str_win, 1)
+            };
+            match_found = true;
+        } else if raw_content.contains(old_str_unix) {
+            if !replace_all {
+                let count = raw_content.match_indices(old_str_unix).count();
+                if count > 1 {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "The old_string is not unique (found {} matches with Unix line endings). \
+                        Please provide more surrounding context to uniquely identify the location.",
+                        count
+                    )));
+                }
+            }
+            final_content = if replace_all {
+                raw_content.replace(old_str_unix, new_str_unix)
+            } else {
+                raw_content.replacen(old_str_unix, new_str_unix, 1)
+            };
+            match_found = true;
+        }
+
+        if !match_found {
+            // D. Extreme Fallback: Normalization (Handles mixed endings within the matched block)
+            let normalized_file = raw_content.replace("\r\n", "\n");
+            if normalized_file.contains(old_str_unix) {
+                if !replace_all {
+                    let count = normalized_file.match_indices(old_str_unix).count();
+                    if count > 1 {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "The old_string is not unique (found {} matches after normalization). \
+                            Please provide more surrounding context.",
+                            count
+                        )));
+                    }
+                }
+                
+                let replaced_normalized = if replace_all {
+                    normalized_file.replace(old_str_unix, new_str_unix)
+                } else {
+                    normalized_file.replacen(old_str_unix, new_str_unix, 1)
+                };
+                
+                // Restore style based on majority
+                let use_win = raw_content.contains("\r\n");
+                final_content = if use_win { replaced_normalized.replace("\n", "\r\n") } else { replaced_normalized };
+                match_found = true;
+            }
+        }
+
+        if !match_found {
+            let lines_count = raw_content.lines().count();
             return Err(ToolError::ExecutionFailed(format!(
                 "The old_string was not found in the file (checked {} lines). \
-                Please ensure you copied the text EXACTLY, including all whitespace and indentation. \
-                Do NOT include line numbers in your old_string.",
+                Please ensure you copied the text EXACTLY, including all whitespace and indentation.",
                 lines_count
             )));
         }
-        
-        if !replace_all && matches.len() > 1 {
-            return Err(ToolError::ExecutionFailed(format!(
-                "The old_string is not unique (found {} matches). \
-                Please provide more surrounding context in your old_string to uniquely identify the location, \
-                or use 'replace_all: true' if you want to replace all occurrences.",
-                matches.len()
-            )));
-        }
-        
-        let new_content = if replace_all {
-            content.replace(old_str, new_str)
-        } else {
-            content.replacen(old_str, new_str, 1)
-        };
-        
-        fs::write(path_str, new_content)
-            .map_err(|e| ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e)))?;
-            
+
+        fs::write(path_str, final_content).map_err(|e| {
+            ToolError::IoError(format!(
+                "Edit write failed: {}. Check file permissions.",
+                e
+            ))
+        })?;
+
         Ok(ToolCallResult::success(
             Some("File edited successfully.".into()),
             None,
@@ -495,7 +560,7 @@ mod tests {
         });
 
         let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "File written successfully.");
+        assert_eq!(result.content.unwrap(), "New file created successfully.");
 
         // Verify file was written
         let actual_content = fs::read_to_string(&path).unwrap();
@@ -519,13 +584,22 @@ mod tests {
         });
 
         let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "File written successfully.");
+        assert!(result.content.unwrap().contains("File overwritten successfully"));
 
-        // Verify backup was created
-        let backup_path = Path::new(&path).with_extension("bak");
-        assert!(backup_path.exists());
-        let backup_content = fs::read_to_string(backup_path).unwrap();
-        assert_eq!(backup_content, "original content");
+        // Verify backup was created (look for .bak extension with timestamp)
+        let dir = Path::new(&path).parent().unwrap();
+        let file_name = Path::new(&path).file_name().unwrap().to_str().unwrap();
+        let mut found_bak = false;
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            if name.starts_with(file_name) && name.ends_with(".bak") {
+                found_bak = true;
+                let backup_content = fs::read_to_string(entry.path()).unwrap();
+                assert_eq!(backup_content, "original content");
+            }
+        }
+        assert!(found_bak);
 
         // Verify new content
         let actual_content = fs::read_to_string(&path).unwrap();
@@ -624,6 +698,162 @@ mod tests {
             ToolError::ExecutionFailed(msg) => assert!(msg.contains("not found")),
             _ => panic!("Expected ExecutionFailed error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_complex_indentation() {
+        let tool = EditFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        // Mix of spaces and tabs
+        let initial = "class MyClass:\n    def method(self):\n\t\tprint('hello')  \n    # end";
+        fs::write(&path, initial).unwrap();
+
+        // 1. Test trailing space matching
+        let params = json!({
+            "file_path": path,
+            "old_string": "print('hello')  ", // Matches exact trailing spaces
+            "new_string": "print('world')"
+        });
+        tool.call(params).await.unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("print('world')"));
+        assert!(!content.contains("print('hello')"));
+
+        // 2. Test Tab matching
+        let params = json!({
+            "file_path": path,
+            "old_string": "\t\tprint('world')",
+            "new_string": "        print('fixed')"
+        });
+        tool.call(params).await.unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("        print('fixed')"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_multiline_block() {
+        let tool = EditFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        let initial = "line1\nline2\nline3\nline4\nline5";
+        fs::write(&path, initial).unwrap();
+
+        let params = json!({
+            "file_path": path,
+            "old_string": "line2\nline3\nline4",
+            "new_string": "inserted_block"
+        });
+
+        tool.call(params).await.unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line1\ninserted_block\nline5");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_boundary_conditions() {
+        let tool = EditFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        let initial = "START_LINE\nmiddle\nEND_LINE";
+        fs::write(&path, initial).unwrap();
+
+        // Replace first line
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "START_LINE",
+            "new_string": "NEW_START"
+        }))
+        .await
+        .unwrap();
+
+        // Replace last line
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "END_LINE",
+            "new_string": "NEW_END"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "NEW_START\nmiddle\nNEW_END");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_special_and_unicode() {
+        let tool = EditFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        let initial = "path = \"C:\\\\Users\\\\Test\"\n# 注释: 这是一个表情 🚀";
+        fs::write(&path, initial).unwrap();
+
+        // 1. Test slashes and quotes
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "path = \"C:\\\\Users\\\\Test\"",
+            "new_string": "path = '/tmp/test'"
+        }))
+        .await
+        .unwrap();
+
+        // 2. Test Unicode and Emoji
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "# 注释: 这是一个表情 🚀",
+            "new_string": "# Update: 🛠️"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("path = '/tmp/test'"));
+        assert!(content.contains("# Update: 🛠️"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_real_project_snippet() {
+        let tool = EditFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        // 1. Initial content with EXACT indentation (8 spaces)
+        let initial = r#"    fn description(&self) -> &str {
+        "Performs exact string replacements in files.\n\n\
+        Usage:\n\
+        - Ensure you have viewed the full content of the file (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing. \n\
+        - When editing, ensure you preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n\
+        - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
+        - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
+        - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\
+        - Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance."
+    }"#;
+
+        fs::write(&path, initial).unwrap();
+
+        // 2. Search pattern must ALSO have EXACTLY 8 spaces to match
+        let old_string = r#"        - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
+        - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\"#;
+
+        let new_string = r#"        - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\"#;
+
+        let params = json!({
+            "file_path": path,
+            "old_string": old_string,
+            "new_string": new_string
+        });
+
+        tool.call(params)
+            .await
+            .expect("This must pass now because indentation matches exactly");
+
+        let final_content = fs::read_to_string(&path).unwrap();
+        assert!(final_content.contains(new_string));
+        assert!(!final_content.contains(old_string));
     }
 
     #[tokio::test]
