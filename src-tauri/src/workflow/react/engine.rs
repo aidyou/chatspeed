@@ -12,7 +12,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolCategory, ToolManager, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
+    ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
+    TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -21,6 +22,8 @@ use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::llm::LlmProcessor;
 use crate::workflow::react::loop_detector::LoopDetector;
+use crate::workflow::react::memory::{MemoryManager, MemoryScope};
+use crate::workflow::react::memory_analyzer::MemoryAnalyzer;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::SubAgentFactory;
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
@@ -81,6 +84,8 @@ pub struct WorkflowExecutor {
     pub subagent_type: Option<String>,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
+    /// Memory manager for reading/writing memory files
+    pub memory_manager: Arc<MemoryManager>,
     /// Detects repetitive tool calls within a sliding window.
     pub(crate) loop_detector: LoopDetector,
     /// Memory cache for tools awaiting user approval.
@@ -173,7 +178,7 @@ impl WorkflowExecutor {
         }
 
         let path_guard = Arc::new(RwLock::new(PathGuard::new(
-            allowed_paths,
+            allowed_paths.clone(),
             sandbox_paths,
             skill_paths,
         )));
@@ -243,6 +248,13 @@ impl WorkflowExecutor {
                 initial_provider_id,
                 initial_model_name.clone(),
                 false, // Temporary, will be updated below
+                vec![], // MCP tool summaries will be set in init_internal
+                // Memory manager and project root
+                {
+                    let project_root = allowed_paths.first().cloned();
+                    Arc::new(MemoryManager::new(project_root))
+                },
+                allowed_paths.first().cloned(),
             ),
             intelligence_manager: IntelligenceManager::new(
                 session_id_clone3,
@@ -261,6 +273,10 @@ impl WorkflowExecutor {
             tsid_generator,
             subagent_type,
             policy,
+            memory_manager: {
+                let project_root = allowed_paths.first().cloned();
+                Arc::new(MemoryManager::new(project_root))
+            },
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
         };
@@ -286,6 +302,21 @@ impl WorkflowExecutor {
         self.context.load_history().await?;
         self.available_skills = self.skill_scanner.scan()?;
         self.llm_processor.available_skills = self.available_skills.clone();
+
+        // Get MCP tool summaries for workflow
+        self.llm_processor.mcp_tool_summaries = self
+            .global_tool_manager
+            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
+            .map(|mut t| {
+                t.input_schema = serde_json::json!({});
+                t
+            })
+            .collect();
+
         self.register_foundation_tools().await?;
 
         // Sync TODO list on initialization
@@ -579,6 +610,24 @@ impl WorkflowExecutor {
                 main_store: self.context.main_store.clone(),
             }))
             .await?;
+        }
+
+        // 7. MCP Tool Loader (if MCP tools are available)
+        if self.policy.allowed_categories.contains(&ToolCategory::System) {
+            // Check if there are any MCP tools
+            let has_mcp_tools = self
+                .global_tool_manager
+                .get_tool_calling_spec(None, None)
+                .await
+                .map(|specs| specs.iter().any(|s| s.name.contains(MCP_TOOL_NAME_SPLIT)))
+                .unwrap_or(false);
+
+            if has_mcp_tools {
+                tm.register_tool(Arc::new(McpToolLoad {
+                    tool_manager: self.global_tool_manager.clone(),
+                }))
+                .await?;
+            }
         }
 
         Ok(())
@@ -1233,7 +1282,79 @@ impl WorkflowExecutor {
             sleep(Duration::from_millis(50)).await;
         }
 
+        // === Memory Analysis After Workflow Completion ===
+        // Analyze user inputs and update memories if needed
+        if let Err(e) = self.analyze_and_update_memories().await {
+            log::warn!("Memory analysis failed: {}", e);
+            // Don't fail the workflow if memory analysis fails
+        }
+
         self.signal_rx = Some(signal_rx);
+        Ok(())
+    }
+
+    /// Analyzes user inputs and updates memory files.
+    async fn analyze_and_update_memories(&self) -> Result<(), WorkflowEngineError> {
+        // 1. Collect user inputs (filter out observe type)
+        let user_inputs: Vec<String> = self
+            .context
+            .messages
+            .iter()
+            .filter(|m| {
+                m.role == "user"
+                    && m.step_type
+                        .as_ref()
+                        .map_or(true, |st| st != "observe")
+            })
+            .map(|m| m.message.clone())
+            .collect();
+
+        // Skip if no user inputs
+        if user_inputs.is_empty() {
+            log::debug!("No user inputs to analyze for memory");
+            return Ok(());
+        }
+
+        // 2. Read current memories (using Arc directly, no lock needed)
+        let current_global = self.memory_manager.read(MemoryScope::Global).ok().flatten();
+        let current_project = self.memory_manager.read(MemoryScope::Project).ok().flatten();
+
+        // 3. Call memory analyzer
+        let analysis = MemoryAnalyzer::analyze(
+            user_inputs,
+            current_global.clone(),
+            current_project.clone(),
+            self.chat_state.clone(),
+            &self.session_id,
+            self.llm_processor.active_provider_id,
+            &self.llm_processor.active_model_name,
+        )
+        .await
+        .map_err(|e| WorkflowEngineError::General(format!("Memory analysis failed: {}", e)))?;
+
+        // 4. Update memories if changed
+        if let Some(new_global) = analysis.global_memory {
+            let old_global = current_global.unwrap_or_default();
+            if new_global.trim() != old_global.trim() {
+                self.memory_manager.write(MemoryScope::Global, &new_global).map_err(|e| {
+                    WorkflowEngineError::General(format!("Failed to write global memory: {}", e))
+                })?;
+                log::info!("Global memory updated");
+            }
+        }
+
+        if let Some(new_project) = analysis.project_memory {
+            let old_project = current_project.unwrap_or_default();
+            if new_project.trim() != old_project.trim() {
+                if self.memory_manager.has_project_memory() {
+                    self.memory_manager.write(MemoryScope::Project, &new_project).map_err(|e| {
+                        WorkflowEngineError::General(format!("Failed to write project memory: {}", e))
+                    })?;
+                    log::info!("Project memory updated");
+                }
+            }
+        }
+
         Ok(())
     }
 

@@ -9,8 +9,11 @@ use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
+use crate::workflow::react::agents_md::AgentsMdScanner;
+use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
@@ -27,6 +30,10 @@ pub struct LlmProcessor {
     pub active_provider_id: i64,
     pub active_model_name: String,
     pub reasoning: bool,
+    pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
+    // New fields for memory and AGENTS.md support
+    pub memory_manager: Arc<MemoryManager>,
+    pub project_root: Option<PathBuf>,
 }
 
 impl LlmProcessor {
@@ -39,6 +46,10 @@ impl LlmProcessor {
         active_provider_id: i64,
         active_model_name: String,
         reasoning: bool,
+        mcp_tool_summaries: Vec<MCPToolDeclaration>,
+        // New parameters
+        memory_manager: Arc<MemoryManager>,
+        project_root: Option<PathBuf>,
     ) -> Self {
         Self {
             session_id,
@@ -48,6 +59,9 @@ impl LlmProcessor {
             active_provider_id,
             active_model_name,
             reasoning,
+            mcp_tool_summaries,
+            memory_manager,
+            project_root,
         }
     }
 
@@ -500,8 +514,11 @@ impl LlmProcessor {
         policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
         let mut system_parts = Vec::new();
+
+        // 1. Core System Prompt
         system_parts.push(CORE_SYSTEM_PROMPT.to_string());
 
+        // 2. Agent Specific Instructions
         if !self.agent_config.system_prompt.is_empty() {
             system_parts.push(format!(
                 "<AGENT_SPECIFIC_INSTRUCTIONS>\n{}\n</AGENT_SPECIFIC_INSTRUCTIONS>",
@@ -509,22 +526,90 @@ impl LlmProcessor {
             ));
         }
 
+        // 3. Drafting for non-reasoning models
         if !self.reasoning {
             system_parts.push(DRAFTING_PROMPT.to_string());
         }
 
+        // 4. Environment Context
         let reminders = self.build_reminders(current_step, max_steps);
         system_parts.push(format!(
             "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
             reminders
         ));
 
+        // 5. State Snapshot
         if let Some(snapshot) = state_snapshot {
             system_parts.push(format!(
                 "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
                 snapshot
             ));
         }
+
+        // === NEW: AGENTS.md and Memory ===
+
+        // Get memory and AGENTS.md content
+        let (global_agents, project_agents) = AgentsMdScanner::scan(self.project_root.clone());
+
+        // Use blocking read for memory (in non-async context)
+        let global_memory = self.memory_manager.read(MemoryScope::Global).ok().flatten();
+
+        let project_memory = self.memory_manager.read(MemoryScope::Project).ok().flatten();
+
+        // 6. Global Instructions (AGENTS.md)
+        if let Some(content) = global_agents {
+            system_parts.push(format!(
+                "<GLOBAL_INSTRUCTIONS>\n{}\n\
+                <SYSTEM_REMINDER>\n\
+                This provides global guidance that may or may not relate to the current project. \
+                Please evaluate carefully and apply when relevant.\n\
+                </SYSTEM_REMINDER>\n\
+                </GLOBAL_INSTRUCTIONS>",
+                content
+            ));
+        }
+
+        // 7. Project Instructions (AGENTS.md)
+        if let Some(content) = project_agents {
+            system_parts.push(format!(
+                "<PROJECT_INSTRUCTIONS>\n{}\n\
+                <SYSTEM_REMINDER>\n\
+                This provides project-specific guidance for the current codebase.\n\
+                </SYSTEM_REMINDER>\n\
+                </PROJECT_INSTRUCTIONS>",
+                content
+            ));
+        }
+
+        // 8. Global Memory
+        if let Some(content) = global_memory {
+            system_parts.push(format!(
+                "<GLOBAL_MEMORY>\n{}\n\
+                <SYSTEM_REMINDER>\n\
+                These memories may or may not relate to the current project. \
+                Please evaluate them carefully. For those relevant to the context, \
+                adhere to the user's documented preferences.\n\
+                </SYSTEM_REMINDER>\n\
+                </GLOBAL_MEMORY>",
+                content
+            ));
+        }
+
+        // 9. Project Memory
+        if let Some(content) = project_memory {
+            system_parts.push(format!(
+                "<PROJECT_MEMORY>\n{}\n\
+                <SYSTEM_REMINDER>\n\
+                These memories are specific to the current project. \
+                If a conflict exists between project-level memory and global memory, \
+                project-level instructions MUST take precedence.\n\
+                </SYSTEM_REMINDER>\n\
+                </PROJECT_MEMORY>",
+                content
+            ));
+        }
+
+        // === END NEW ===
 
         let combined_system_prompt = system_parts.join("\n\n---\n\n");
 
@@ -537,6 +622,7 @@ impl LlmProcessor {
             );
         }
 
+        // 10. Phase Instructions (injected into user's first message)
         let phase_instruction = match policy.phase {
             ExecutionPhase::Planning => self
                 .agent_config
@@ -563,6 +649,19 @@ impl LlmProcessor {
 
     fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
         let mut reminders = String::new();
+
+        // MCP tools (before skills)
+        if !self.mcp_tool_summaries.is_empty() {
+            reminders.push_str("## AVAILABLE MCP TOOLS:\n");
+            reminders.push_str("The following MCP tools are available. ");
+            reminders.push_str("Use the `mcp_tool_load` tool to get detailed parameter information.\n\n");
+            for tool in &self.mcp_tool_summaries {
+                reminders.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+            }
+            reminders.push_str("\n<SYSTEM_REMINDER>Use `mcp_tool_load` to get detailed parameter schemas before calling MCP tools.</SYSTEM_REMINDER>\n\n");
+        }
+
+        // Skills
         if !self.available_skills.is_empty() {
             reminders.push_str("## AVAILABLE SKILLS:\n");
             for skill in self.available_skills.values() {

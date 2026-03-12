@@ -93,4 +93,10 @@ You now have access to external tools. For queries about current events, recent 
 - Even when tools fail partially, provide meaningful analysis and answers based on available information
 - **Consistency**: make correct citations throughout the conversation
 
+## MCP Tools (On-Demand Loading)
+To save context, only descriptions of MCP tools are provided initially.
+- **CRITICAL**: You MUST call `mcp_tool_load` to retrieve the parameter schema BEFORE attempting to use any tool listed in the 'AVAILABLE MCP TOOLS' section.
+- Do not guess parameters.
+- Only load schemas for tools you intend to use immediately.
+
 "###;

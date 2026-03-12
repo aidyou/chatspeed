@@ -108,12 +108,27 @@ Home Directory: {}
 }
 
 /// Prepares messages with system prompts and environment information
-fn prepare_messages_with_system_context(mut messages: Vec<Value>, has_tools: bool) -> Vec<Value> {
+fn prepare_messages_with_system_context(
+    mut messages: Vec<Value>,
+    has_tools: bool,
+    mcp_summaries: Vec<crate::ai::traits::chat::MCPToolDeclaration>,
+) -> Vec<Value> {
     let mut system_content = SYSTEM_PROMPT.to_string();
 
     // Add tool usage guidance if tools are available
     if has_tools {
         system_content.push_str(TOOL_USAGE_GUIDANCE);
+    }
+
+    // Add MCP tool summaries (descriptions only)
+    if !mcp_summaries.is_empty() {
+        system_content.push_str("\n\n## AVAILABLE MCP TOOLS\n");
+        system_content.push_str("The following MCP tools are installed. ");
+        system_content
+            .push_str("Use the `mcp_tool_load` tool to get detailed parameter information.\n\n");
+        for tool in mcp_summaries {
+            system_content.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+        }
     }
 
     // Find existing system message from user
@@ -411,6 +426,16 @@ pub async fn chat_completion(
 
     let tools_enabled_in_metadata = final_metadata.tools_enabled.unwrap_or(true);
 
+    // Register MCP loader tool if MCP is enabled
+    if mcp_enabled.unwrap_or(false) {
+        chat_state
+            .tool_manager
+            .register_tool(Arc::new(crate::tools::McpToolLoad {
+                tool_manager: chat_state.tool_manager.clone(),
+            }))
+            .await?;
+    }
+
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
         let mut available_tools = chat_state
             .tool_manager
@@ -421,6 +446,14 @@ pub async fn chat_completion(
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
             });
         }
+        // When MCP is enabled, filter out MCP tools (they will be loaded via mcp_tool_load)
+        // But keep the mcp_tool_load tool itself
+        if mcp_enabled.unwrap_or(false) {
+            available_tools.retain(|tool| {
+                !tool.name.contains(MCP_TOOL_NAME_SPLIT) || tool.name == "mcp_tool_load"
+            });
+        }
+        // When MCP is disabled, remove all MCP tools
         if !mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| !tool.name.contains(MCP_TOOL_NAME_SPLIT));
         }
@@ -429,9 +462,27 @@ pub async fn chat_completion(
         None
     };
 
+    // Get MCP tool summaries for system prompt (descriptions only)
+    let mcp_summaries = if mcp_enabled.unwrap_or(false) {
+        chat_state
+            .tool_manager
+            .get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None)
+            .await?
+            .into_iter()
+            .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
+            .map(|mut t| {
+                // Clear input_schema, only keep name and description
+                t.input_schema = serde_json::json!({});
+                t
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
     // Prepare messages with system context
     let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
-    let prepared_messages = prepare_messages_with_system_context(filtered_messages, has_tools);
+    let prepared_messages = prepare_messages_with_system_context(filtered_messages, has_tools, mcp_summaries);
 
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", prepared_messages.len());

@@ -430,83 +430,32 @@ impl ToolManager {
         Ok(specs)
     }
 
-    /// Get an AI model by its type
-    ///
-    /// Retrieves an AI model by its type from the configuration store.
+    /// Get the complete tool declaration for a specific MCP tool.
+    /// Returns the full MCPToolDeclaration including input_schema and output_schema.
     ///
     /// # Arguments
-    /// * `main_store` - The main store containing the configuration
-    /// * `model_type` - The type of the AI model to retrieve
+    /// * `tool_name` - The combined name of the MCP tool (format: {server_name}__MCP__{tool_name})
     ///
     /// # Returns
-    /// * `Result<AiModel, ToolError>` - The AI model or an error
-    // pub fn get_model(
-    //     main_store: Arc<std::sync::RwLock<MainStore>>,
-    //     model_type: &str,
-    // ) -> Result<AiModel, ToolError> {
-    //     let model_name = format!("workflow_{}_model", model_type);
-    //     // Get the model configured for the workflow
-    //     let reasoning_model = main_store
-    //         .read()
-    //         .map_err(|e| {
-    //             ToolError::Store(
-    //                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-    //             )
-    //         })?
-    //         .get_config(&model_name, Value::Null);
-    //     if reasoning_model.is_null() {
-    //         return Err(ToolError::Config(
-    //             t!("tools.failed_to_get_model", model_type = model_type).to_string(),
-    //         ));
-    //     }
+    /// The complete MCPToolDeclaration for the specified tool.
+    pub async fn get_mcp_tool_declaration(
+        &self,
+        tool_name: &str,
+    ) -> Result<MCPToolDeclaration, ToolError> {
+        let tools = self.tools.read().await;
+        let tool = tools
+            .get(tool_name)
+            .ok_or_else(|| ToolError::FunctionNotFound(tool_name.to_string()))?;
 
-    //     let model_id = reasoning_model["id"].as_i64().unwrap_or_default();
-    //     if model_id < 1 {
-    //         return Err(ToolError::Config(
-    //             t!(
-    //                 "tools.model_type_not_found",
-    //                 model_type = model_type,
-    //                 id = model_id,
-    //                 error = ""
-    //             )
-    //             .to_string(),
-    //         ));
-    //     }
+        // Verify it's an MCP tool
+        if !tool_name.contains(MCP_TOOL_NAME_SPLIT) {
+            return Err(ToolError::InvalidParams(
+                "Not an MCP tool".to_string(),
+            ));
+        }
 
-    //     // Get model detail by id
-    //     let mut ai_model = main_store
-    //         .read()
-    //         .map_err(|e| {
-    //             ToolError::Store(
-    //                 t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-    //             )
-    //         })?
-    //         .config
-    //         .get_ai_model_by_id(model_id)
-    //         .map_err(|e| {
-    //             ToolError::Config(
-    //                 t!(
-    //                     "tools.model_type_not_found",
-    //                     model_type = model_type,
-    //                     id = model_id,
-    //                     error = e
-    //                 )
-    //                 .to_string(),
-    //             )
-    //         })
-    //         .map(|mut m| {
-    //             match reasoning_model["model"].as_str() {
-    //                 Some(md) => m.default_model = md.to_string(),
-    //                 None => {}
-    //             };
-    //             m
-    //         })?;
-
-    //     setup_chat_proxy(main_store.clone(), &mut ai_model.metadata)
-    //         .map_err(|e| ToolError::Initialization(e.to_string()))?;
-
-    //     Ok(ai_model)
-    // }
+        Ok(tool.tool_calling_spec())
+    }
 
     // =================================================
     // MCP tools
