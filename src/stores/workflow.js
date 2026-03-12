@@ -252,18 +252,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
-  const deleteMessage = async (workflowId, messageId) => {
-    error.value = null;
-    try {
-      await invokeWrapper('delete_message', { id: messageId });
-      // The backend uses 'delete_message' command which takes 'id'
-      // After deletion, we could either filter locally or reload
-      messages.value = messages.value.filter(m => m.id !== messageId);
-    } catch (err) {
-      await _handleError(err);
-    }
-  };
-
   const clearCurrentWorkflow = () => {
     currentWorkflowId.value = null;
     messages.value = [];
@@ -293,7 +281,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,
     loadMessages,
-    deleteMessage,
     clearCurrentWorkflow,
   };
 });

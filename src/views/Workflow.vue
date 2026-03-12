@@ -70,7 +70,6 @@
 
       <!-- main container -->
       <el-container class="main-container">
-        <StatusNotifier />
         <div class="messages" ref="messagesRef">
           <div v-for="(message, index) in enhancedMessages" :key="message.displayId" class="message"
             :class="[message.role, message.stepType?.toLowerCase()]">
@@ -79,13 +78,6 @@
             </div>
             <div class="content-container">
               <div class="content" v-if="message.role === 'user'">
-                <div class="msg-ops" v-if="index > 0">
-                  <el-tooltip :content="$t('common.delete')" placement="top">
-                    <span class="op-icon" @click="onDeleteMessage(message.id)">
-                      <cs name="trash" size="12px" />
-                    </span>
-                  </el-tooltip>
-                </div>
                 <pre class="simple-text">{{ message.message }}</pre>
               </div>
               <div v-else class="ai-content chat">
@@ -170,7 +162,6 @@
                     :content="getParsedMessage(message).content" />
 
                   <!-- Tool Call Indicators SECOND (Only pending ones) -->
-
                   <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
                     <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending"
                       :class="[call.toolType || 'tool-system', 'status-running']">
@@ -180,17 +171,6 @@
                         <span class="tool-target">{{ call.target }}</span>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                <!-- Original Ops -->
-                <div class="msg-ops-container">
-                  <div class="msg-ops floating" v-if="index > 0">
-                    <el-tooltip :content="$t('common.delete')" placement="top">
-                      <span class="op-icon" @click="onDeleteMessage(message.id)">
-                        <cs name="trash" size="12px" />
-                      </span>
-                    </el-tooltip>
                   </div>
                 </div>
               </div>
@@ -277,6 +257,7 @@
                 </el-button>
               </div>
             </div>
+            <StatusNotifier />
             <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
               @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
@@ -1628,19 +1609,6 @@ const onRejectAction = async () => {
   }
 }
 
-const onDeleteMessage = async (messageId) => {
-  if (!currentWorkflowId.value || !messageId) return
-
-  try {
-    // 1. Remove from local store
-    await workflowStore.deleteMessage(currentWorkflowId.value, messageId)
-    // 2. Refresh UI list
-    await workflowStore.loadMessages(currentWorkflowId.value)
-  } catch (error) {
-    console.error('Failed to delete message:', error)
-  }
-}
-
 const onSendMessage = async () => {
   if (!canSendMessage.value) return
 
@@ -2342,12 +2310,6 @@ const toggleFinalAuditMode = () => {
               align-items: flex-start;
               gap: 8px;
 
-              &:hover {
-                .msg-ops {
-                  opacity: 1;
-                }
-              }
-
               .simple-text {
                 padding: var(--cs-space);
                 border-radius: 18px 2px 18px 18px;
@@ -2356,41 +2318,12 @@ const toggleFinalAuditMode = () => {
                 margin: 0;
                 white-space: pre-wrap;
               }
-
-              .msg-ops {
-                opacity: 0;
-                transition: opacity 0.2s ease;
-                display: flex;
-                align-items: center;
-                margin-top: 8px;
-
-                .op-icon {
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  width: 24px;
-                  height: 24px;
-                  border-radius: 50%;
-                  cursor: pointer;
-                  color: var(--cs-text-color-secondary);
-
-                  &:hover {
-                    color: var(--el-color-danger);
-                  }
-                }
-              }
             }
           }
 
           &.assistant,
           &.tool {
             position: relative;
-
-            &:hover {
-              .msg-ops.floating {
-                opacity: 1;
-              }
-            }
 
             .ai-content {
               .content {
@@ -2739,40 +2672,6 @@ const toggleFinalAuditMode = () => {
                   text-transform: uppercase;
                   margin-bottom: 4px;
                   opacity: 0.6;
-                }
-              }
-
-              .msg-ops-container {
-                position: relative;
-                height: 0;
-                width: 100%;
-              }
-
-              .msg-ops.floating {
-                position: absolute;
-                right: 0;
-                top: -20px;
-                opacity: 0;
-                transition: opacity 0.2s ease;
-                display: flex;
-                gap: 4px;
-                z-index: 10;
-
-                .op-icon {
-                  background: var(--cs-bg-color);
-                  border: 1px solid var(--cs-border-color);
-                  border-radius: 50%;
-                  width: 24px;
-                  height: 24px;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  cursor: pointer;
-                  color: var(--cs-text-color-secondary);
-
-                  &:hover {
-                    color: var(--el-color-danger);
-                  }
                 }
               }
             }
