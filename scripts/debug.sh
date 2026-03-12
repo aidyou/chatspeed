@@ -39,7 +39,7 @@ kill_port() {
 # Function to start frontend dev server
 start_frontend() {
     echo -e "${GREEN}Starting frontend dev server...${NC}"
-    yarn dev &
+    pnpm dev &
     FRONTEND_PID=$!
 
     echo -e "${YELLOW}Waiting for frontend server to start...${NC}"
@@ -138,7 +138,7 @@ case $choice in
         echo -e "${BLUE}🔧 Backend Only Debug Mode${NC}"
         echo -e "${YELLOW}Make sure frontend dev server is running separately!${NC}"
         echo -e "${GREEN}Now start Zed debugger with 'Debug Rust Backend Only' configuration${NC}"
-        echo -e "${BLUE}To start frontend separately, run: yarn dev${NC}"
+        echo -e "${BLUE}To start frontend separately, run: pnpm dev${NC}"
         ;;
 
     3)

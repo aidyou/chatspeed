@@ -99,10 +99,10 @@ function Stop-ProcessOnPort {
 function Start-FrontendServer {
     Write-ColorOutput "Starting frontend dev server..." $Colors.Green
 
-    # Start yarn dev in a new PowerShell window
+    # Start pnpm dev in a new PowerShell window
     $job = Start-Job -ScriptBlock {
         Set-Location $using:PWD
-        yarn dev
+        pnpm dev
     }
 
     Write-ColorOutput "Waiting for frontend server to start..." $Colors.Yellow
@@ -144,8 +144,8 @@ function Test-Dependencies {
 
     # Check Yarn
     try {
-        $yarnVersion = yarn --version 2>$null
-        Write-ColorOutput "✅ Yarn: $yarnVersion" $Colors.Green
+        $pnpmVersion = pnpm --version 2>$null
+        Write-ColorOutput "✅ Yarn: $pnpmVersion" $Colors.Green
     }
     catch {
         $missing += "Yarn"
@@ -179,7 +179,7 @@ function Test-Dependencies {
         Write-ColorOutput "" $Colors.NC
         Write-ColorOutput "Installation commands:" $Colors.Blue
         Write-ColorOutput "- Node.js: winget install OpenJS.NodeJS" $Colors.NC
-        Write-ColorOutput "- Yarn: npm install -g yarn" $Colors.NC
+        Write-ColorOutput "- Yarn: npm install -g pnpm" $Colors.NC
         Write-ColorOutput "- Rust: winget install Rustlang.Rust" $Colors.NC
         return $false
     }
@@ -237,7 +237,7 @@ function Invoke-BackendDebug {
     Write-ColorOutput "🔧 Backend Only Debug Mode" $Colors.Blue
     Write-ColorOutput "Make sure frontend dev server is running separately!" $Colors.Yellow
     Write-ColorOutput "Now start VS Code debugger with 'Windows MSVC Backend' configuration" $Colors.Green
-    Write-ColorOutput "To start frontend separately, run: yarn dev" $Colors.Blue
+    Write-ColorOutput "To start frontend separately, run: pnpm dev" $Colors.Blue
 }
 
 function Invoke-FrontendDebug {
@@ -279,10 +279,10 @@ function Invoke-CleanPorts {
     Write-ColorOutput "🧹 Cleaning up ports" $Colors.Blue
     Stop-ProcessOnPort -Port 1420
 
-    # Also try to kill any yarn or node processes
+    # Also try to kill any pnpm or node processes
     try {
         Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force
-        Get-Process -Name "yarn" -ErrorAction SilentlyContinue | Stop-Process -Force
+        Get-Process -Name "pnpm" -ErrorAction SilentlyContinue | Stop-Process -Force
         Write-ColorOutput "✅ Ports and processes cleaned" $Colors.Green
     }
     catch {
@@ -329,11 +329,11 @@ function Show-EnvironmentInfo {
     # Check Tauri info
     try {
         Write-ColorOutput "" $Colors.NC
-        Write-ColorOutput "Running yarn tauri info..." $Colors.Blue
-        yarn tauri info
+        Write-ColorOutput "Running pnpm tauri info..." $Colors.Blue
+        pnpm tauri info
     }
     catch {
-        Write-ColorOutput "Could not run 'yarn tauri info'" $Colors.Red
+        Write-ColorOutput "Could not run 'pnpm tauri info'" $Colors.Red
     }
 }
 

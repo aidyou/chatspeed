@@ -28,14 +28,14 @@ ChatSpeed is an open-source AI assistant desktop application built with Rust (Ta
 ```bash
 # Development (requires Rust toolchain + Node.js)
 make dev                    # Standard dev entry (copies lang files + starts Vite dev server)
-yarn tauri dev              # Full Tauri dev (frontend + backend)
-yarn dev                    # Vite dev server only (frontend only)
+pnpm tauri dev              # Full Tauri dev (frontend + backend)
+pnpm dev                    # Vite dev server only (frontend only)
 
 # Building
 make build-mac              # macOS universal binary
 make build-win              # Windows (requires vcpkg - see below)
 make build-linux            # Linux
-yarn tauri build            # General build for current platform
+pnpm tauri build            # General build for current platform
 
 # Testing
 cargo test --manifest-path src-tauri/Cargo.toml   # Run Rust tests

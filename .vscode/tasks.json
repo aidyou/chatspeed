@@ -4,7 +4,7 @@
     {
       "label": "start-frontend-dev-server",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["dev"],
       "group": "build",
       "isBackground": true,
@@ -35,7 +35,7 @@
     {
       "label": "build-frontend-production",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["build"],
       "group": "build",
       "presentation": {
@@ -207,7 +207,7 @@
     {
       "label": "tauri-dev",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["tauri", "dev"],
       "group": "build",
       "isBackground": true,
@@ -236,7 +236,7 @@
     {
       "label": "tauri-build",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["tauri", "build"],
       "group": "build",
       "presentation": {
@@ -254,7 +254,7 @@
     {
       "label": "tauri-info",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["tauri", "info"],
       "group": "build",
       "presentation": {
@@ -288,7 +288,7 @@
     {
       "label": "install-dependencies",
       "type": "shell",
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["install"],
       "group": "build",
       "presentation": {

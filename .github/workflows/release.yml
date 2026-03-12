@@ -103,10 +103,6 @@ jobs:
       - name: Setup vcpkg env
         shell: pwsh
         run: |
-          # Set vcpkg root directory
-          # $VCPKG_ROOT = "$env:VCPKG_INSTALLATION_ROOT"
-          # echo "VCPKG_ROOT=$VCPKG_ROOT" >> $env:GITHUB_ENV
-
           # Set target architecture variables
           if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc") {
             echo "VCPKG_DEFAULT_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
@@ -142,9 +138,6 @@ jobs:
 
           echo "SQLITE3_LIB_DIR=$SQLITE3_LIB_DIR" >> $env:GITHUB_ENV
           echo "SQLITE3_INCLUDE_DIR=$SQLITE3_INCLUDE_DIR" >> $env:GITHUB_ENV
-          # echo "VCPKG_INSTALLED_DIR=$PWD/vcpkg_installed" >> $env:GITHUB_ENV
-
-          # Verification is now handled by the build.rs script, which will panic if paths are not found.
 
       - name: Setup Rust env
         shell: pwsh
@@ -153,24 +146,23 @@ jobs:
           echo "RUSTFLAGS=-Ctarget-feature=+crt-static" >> $env:GITHUB_ENV
           echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
 
-          # Set vcpkg integration environment variables
-          # echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
-          # echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
 
-      - name: Install Node and Cache Yarn Dependencies
+      - name: Install Node and Cache pnpm Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: 'yarn'
+          cache: 'pnpm'
 
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Yarn install
-        run: yarn install --immutable
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build Frontend
-        run: yarn build
+        run: pnpm build
 
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0.5.22
@@ -237,20 +229,23 @@ jobs:
           echo "CPPFLAGS=-I$(brew --prefix sqlite3)/include -I$BZIP2_PREFIX/include" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$BZIP2_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
-      - name: Install Node and Cache Yarn Dependencies
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install Node and Cache pnpm Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: 'yarn'
+          cache: 'pnpm'
 
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Yarn install
-        run: yarn install --immutable
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build Frontend
-        run: yarn build
+        run: pnpm build
 
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0.5.22
@@ -258,11 +253,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple signing - commented out until we have developer certificates
-          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --target ${{ matrix.target }}
@@ -320,20 +310,23 @@ jobs:
             libsqlite3-dev \
             rpm
 
-      - name: Install Node and Cache Yarn Dependencies
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install Node and Cache pnpm Dependencies
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: 'yarn'
+          cache: 'pnpm'
 
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Yarn install
-        run: yarn install --immutable
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build Frontend
-        run: yarn build
+        run: pnpm build
 
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0.5.22

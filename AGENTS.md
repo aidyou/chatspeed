@@ -86,12 +86,12 @@ chatspeed/
 
 ```bash
 # Development
-yarn dev                    # Vite dev server only
-yarn tauri dev              # Full Tauri dev (frontend + backend)
+pnpm dev                    # Vite dev server only
+pnpm tauri dev              # Full Tauri dev (frontend + backend)
 make dev                    # Standardized dev entry
 
 # Build
-yarn tauri build            # General build
+pnpm tauri build            # General build
 make build-mac              # macOS universal binary
 make build-win              # Windows (requires vcpkg)
 make build-linux            # Linux

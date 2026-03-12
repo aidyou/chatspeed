@@ -29,12 +29,12 @@ ChatSpeed is an open-source, high-performance AI assistant and smart desktop hub
 ### Key Commands
 
 - **Development**:
-  - `yarn dev`: Starts the Vite development server for the frontend.
-  - `yarn tauri dev`: Starts the Tauri development environment (frontend + backend).
-  - `scripts/win_dev.bat`: (Windows) Automatically configures the environment and starts `yarn tauri dev`.
+  - `pnpm dev`: Starts the Vite development server for the frontend.
+  - `pnpm tauri dev`: Starts the Tauri development environment (frontend + backend).
+  - `scripts/win_dev.bat`: (Windows) Automatically configures the environment and starts `pnpm tauri dev`.
   - `make dev`: Standardized development entry via Makefile.
 - **Building**:
-  - `yarn tauri build`: General build command.
+  - `pnpm tauri build`: General build command.
   - `make build-win`: Build for Windows (requires environment setup).
   - `make build-mac`: Build for macOS (Universal binary).
   - `make build-linux`: Build for Linux.
