@@ -1,4 +1,5 @@
-use rand::{distr::Alphanumeric, Rng};
+use rand::distr::Alphanumeric;
+use rand::RngExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use uuid::Uuid;
