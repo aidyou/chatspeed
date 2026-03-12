@@ -96,6 +96,10 @@ impl TauriGateway {
                             last_emit = Instant::now();
                         }
                     }
+                    GatewayPayload::Notification { .. } => {
+                        // Notifications should be sent immediately
+                        let _ = app_handle.emit(&event_name, &payload);
+                    }
                     // Non-chunk messages (State, Confirm, Full Messages) should flush buffers and be sent immediately
                     _ => {
                         // Flush text buffer

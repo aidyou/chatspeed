@@ -70,6 +70,7 @@
 
       <!-- main container -->
       <el-container class="main-container">
+        <StatusNotifier />
         <div class="messages" ref="messagesRef">
           <div v-for="(message, index) in enhancedMessages" :key="message.displayId" class="message"
             :class="[message.role, message.stepType?.toLowerCase()]">
@@ -400,6 +401,7 @@ import Titlebar from '@/components/window/Titlebar.vue'
 import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
+import StatusNotifier from '@/components/workflow/StatusNotifier.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 import FileTree from '@/components/workflow/FileTree.vue'
 
@@ -1468,6 +1470,8 @@ const setupWorkflowEvents = async sessionId => {
       if (payload.is_compressing) {
         scrollToBottom(true)
       }
+    } else if (payload.type === 'notification') {
+      workflowStore.setNotification(payload.message, payload.category)
     }
   })
 }
@@ -1834,11 +1838,13 @@ const onApprovePlan = async () => {
 
 const onStop = async () => {
   if (currentWorkflowId.value) {
+    // Optimistic update: Immediately set running to false to toggle the UI button.
+    // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
+    workflowStore.setRunning(false)
     try {
       await invokeWrapper('workflow_stop', {
         sessionId: currentWorkflowId.value
       })
-      workflowStore.setRunning(false)
     } catch (error) {
       console.error('Failed to stop workflow:', error)
     }

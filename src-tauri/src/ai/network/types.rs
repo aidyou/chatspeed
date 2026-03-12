@@ -76,16 +76,18 @@ pub struct ApiResponse {
     pub content: String,
     /// Indicates if this is an error message
     pub is_error: bool,
+    /// The HTTP status code if available
+    pub status_code: u16,
     /// Raw response for stream processing
     pub raw_response: Option<Response>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResponseError {
-    status_code: Option<u16>,
+    pub status_code: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error_type: Option<String>,
-    message: String,
+    pub error_type: Option<String>,
+    pub message: String,
 }
 
 impl ResponseError {
@@ -104,24 +106,29 @@ impl ApiResponse {
         Self {
             content,
             is_error: false,
+            status_code: 200,
             raw_response: None,
         }
     }
 
     /// Creates a new successful stream response
     pub fn success_stream(response: Response) -> Self {
+        let status_code = response.status().as_u16();
         Self {
             content: String::new(),
             is_error: false,
+            status_code,
             raw_response: Some(response),
         }
     }
 
     /// Creates a new error response
     pub fn error(error: ResponseError) -> Self {
+        let status_code = error.status_code.unwrap_or(500);
         Self {
             content: json!(error).to_string(),
             is_error: true,
+            status_code,
             raw_response: None,
         }
     }

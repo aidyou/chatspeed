@@ -154,8 +154,22 @@ impl OpenAIChat {
 
                         if let Some(content) = chunk.content {
                             if !content.is_empty() {
+                                let msg_type = chunk.msg_type.clone().unwrap_or(MessageType::Text);
+                                if msg_type == MessageType::Error {
+                                    callback(ChatResponse::new_with_arc(
+                                        chat_id.clone(),
+                                        content.clone(),
+                                        MessageType::Error,
+                                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                                        Some(FinishReason::Error),
+                                    ));
+                                    return Err(AiError::StreamProcessingFailed {
+                                        provider: provider_name.clone(),
+                                        details: content,
+                                    });
+                                }
+
                                 full_response.push_str(&content);
-                                let msg_type = chunk.msg_type.unwrap_or(MessageType::Text);
                                 callback(ChatResponse::new_with_arc(
                                     chat_id.clone(),
                                     content,
@@ -773,16 +787,20 @@ impl AiChatTrait for OpenAIChat {
             })?;
 
         if response.is_error {
-            let status_code = response
-                .raw_response
-                .as_ref()
-                .map(|r| r.status().as_u16())
-                .unwrap_or(500);
+            let status_code = response.status_code;
+
+            let details = if let Ok(error_payload) =
+                serde_json::from_str::<crate::ai::network::ResponseError>(&response.content)
+            {
+                error_payload.message
+            } else {
+                response.content.clone()
+            };
 
             let err = AiError::ApiRequestFailed {
                 status_code,
                 provider: model_detail.name.clone(),
-                details: response.content.clone(),
+                details,
             };
 
             let error_payload = JsonErrorPayload {

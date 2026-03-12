@@ -1,3 +1,4 @@
+use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType};
 use crate::db::{Agent, WorkflowMessage};
@@ -105,94 +106,96 @@ impl LlmProcessor {
             let gateway_for_rx = gateway.clone();
 
             // Task to process streaming chunks
-            let rx_processor =
-                tokio::spawn(async move {
-                    let mut plain_text = String::new();
-                    let mut tool_calls_json = String::new();
-                    let mut full_reasoning = String::new();
-                    let mut final_metadata = None;
+            let rx_processor = tokio::spawn(async move {
+                let mut plain_text = String::new();
+                let mut tool_calls_json = String::new();
+                let mut full_reasoning = String::new();
+                let mut final_metadata = None;
 
-                    while let Some(chunk) = rx.recv().await {
-                        match chunk.r#type {
-                            MessageType::Text => {
-                                gateway_for_rx
-                                    .send(
-                                        &session_id_for_rx,
-                                        GatewayPayload::Chunk {
-                                            content: chunk.chunk.clone(),
-                                        },
-                                    )
-                                    .await?;
-                                plain_text.push_str(&chunk.chunk);
-                            }
-                            MessageType::Reasoning => {
-                                gateway_for_rx
-                                    .send(
-                                        &session_id_for_rx,
-                                        GatewayPayload::ReasoningChunk {
-                                            content: chunk.chunk.clone(),
-                                        },
-                                    )
-                                    .await?;
-                                full_reasoning.push_str(&chunk.chunk);
-                            }
-                            MessageType::ToolCalls => {
-                                let mut tool_calls_val: serde_json::Value =
-                                    serde_json::from_str(&chunk.chunk)
-                                        .unwrap_or(serde_json::json!([]));
+                while let Some(chunk) = rx.recv().await {
+                    match chunk.r#type {
+                        MessageType::Text => {
+                            gateway_for_rx
+                                .send(
+                                    &session_id_for_rx,
+                                    GatewayPayload::Chunk {
+                                        content: chunk.chunk.clone(),
+                                    },
+                                )
+                                .await?;
+                            plain_text.push_str(&chunk.chunk);
+                        }
+                        MessageType::Reasoning => {
+                            gateway_for_rx
+                                .send(
+                                    &session_id_for_rx,
+                                    GatewayPayload::ReasoningChunk {
+                                        content: chunk.chunk.clone(),
+                                    },
+                                )
+                                .await?;
+                            full_reasoning.push_str(&chunk.chunk);
+                        }
+                        MessageType::ToolCalls => {
+                            let mut tool_calls_val: serde_json::Value =
+                                serde_json::from_str(&chunk.chunk).unwrap_or(serde_json::json!([]));
 
-                                if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
-                                    for tool_call in tool_calls_array {
-                                        if let Some(tool_call_obj) = tool_call.as_object_mut() {
-                                            // Only overwrite if ID is missing or not our own generated ID
-                                            let existing_id = tool_call_obj.get("id").and_then(|v| v.as_str());
-                                            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                                tool_call_obj.insert(
-                                                    "id".to_string(),
-                                                    serde_json::json!(crate::ccproxy::get_tool_id()),
-                                                );
-                                            }
-                                        }
-                                    }
-                                } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
-                                    if let Some(tool_obj) = tool_wrapper.as_object_mut() {
-                                        let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+                            if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
+                                for tool_call in tool_calls_array {
+                                    if let Some(tool_call_obj) = tool_call.as_object_mut() {
+                                        // Only overwrite if ID is missing or not our own generated ID
+                                        let existing_id =
+                                            tool_call_obj.get("id").and_then(|v| v.as_str());
                                         if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                            tool_obj.insert(
-                                                "id".to_string(),
-                                                serde_json::json!(crate::ccproxy::get_tool_id()),
-                                            );
-                                        }
-                                    }
-                                } else if tool_calls_val.is_object()
-                                    && tool_calls_val.get("name").is_some()
-                                {
-                                    if let Some(tool_obj) = tool_calls_val.as_object_mut() {
-                                        let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
-                                        if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                            tool_obj.insert(
+                                            tool_call_obj.insert(
                                                 "id".to_string(),
                                                 serde_json::json!(crate::ccproxy::get_tool_id()),
                                             );
                                         }
                                     }
                                 }
-                                tool_calls_json = serde_json::to_string(&tool_calls_val)
-                                    .unwrap_or(chunk.chunk.clone());
+                            } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
+                                if let Some(tool_obj) = tool_wrapper.as_object_mut() {
+                                    let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+                                    if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                                        tool_obj.insert(
+                                            "id".to_string(),
+                                            serde_json::json!(crate::ccproxy::get_tool_id()),
+                                        );
+                                    }
+                                }
+                            } else if tool_calls_val.is_object()
+                                && tool_calls_val.get("name").is_some()
+                            {
+                                if let Some(tool_obj) = tool_calls_val.as_object_mut() {
+                                    let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+                                    if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                                        tool_obj.insert(
+                                            "id".to_string(),
+                                            serde_json::json!(crate::ccproxy::get_tool_id()),
+                                        );
+                                    }
+                                }
                             }
-                            MessageType::Finished => {
-                                final_metadata = chunk.metadata.clone();
-                            }
-                            MessageType::Error => {
-                                return Err(WorkflowEngineError::General(chunk.chunk.clone()));
-                            }
-                            _ => {}
+                            tool_calls_json = serde_json::to_string(&tool_calls_val)
+                                .unwrap_or(chunk.chunk.clone());
                         }
+                        MessageType::Finished => {
+                            final_metadata = chunk.metadata.clone();
+                        }
+                        MessageType::Error => {
+                            return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                        }
+                        _ => {}
                     }
-                    Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>(
-                        (plain_text, tool_calls_json, full_reasoning, final_metadata),
-                    )
-                });
+                }
+                Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>((
+                    plain_text,
+                    tool_calls_json,
+                    full_reasoning,
+                    final_metadata,
+                ))
+            });
 
             let tx_for_chat = tx.clone();
 
@@ -331,14 +334,23 @@ impl LlmProcessor {
                     return Ok((plain_text, tool_calls_json, full_reasoning, final_metadata));
                 }
                 Err(e) => {
-                    let is_rate_limit = e.to_string().contains("429");
-                    if is_rate_limit && retry_count < max_retries {
+                    let should_retry = match &e {
+                        AiError::ApiRequestFailed { status_code, .. } => {
+                            // Do NOT retry on auth errors or permanent client errors
+                            !matches!(*status_code, 400 | 401 | 403 | 404)
+                        }
+                        // Retry on stream errors, network timeouts, etc.
+                        _ => true,
+                    };
+
+                    if should_retry && retry_count < max_retries {
                         retry_count += 1;
                         let wait_secs = 2u32.pow(retry_count - 1);
 
-                        log::warn!("WorkflowExecutor {}: LLM rate limited (429). Retrying in {}s (attempt {}/{})",
-                            self.session_id, wait_secs, retry_count, max_retries);
+                        log::warn!("WorkflowExecutor {}: LLM error encountered. Retrying in {}s (attempt {}/{}) - Error: {}",
+                            self.session_id, wait_secs, retry_count, max_retries, e);
 
+                        // Send standard retry status for timer logic
                         gateway
                             .send(
                                 &self.session_id,
@@ -346,6 +358,20 @@ impl LlmProcessor {
                                     attempt: retry_count,
                                     total_attempts: max_retries,
                                     next_retry_in_seconds: wait_secs,
+                                },
+                            )
+                            .await?;
+
+                        // Also send a user-friendly notification
+                        gateway
+                            .send(
+                                &self.session_id,
+                                GatewayPayload::Notification {
+                                    message: format!(
+                                        "AI server error. Retrying in {}s (Attempt {}/{})",
+                                        wait_secs, retry_count, max_retries
+                                    ),
+                                    category: Some("warning".to_string()),
                                 },
                             )
                             .await?;

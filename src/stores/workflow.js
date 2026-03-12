@@ -10,10 +10,23 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const messageQueue = ref([]);
   const isRunning = ref(false);
   const error = ref(null);
+  const notification = ref({
+    message: '',
+    category: 'info',
+    timestamp: 0
+  });
 
   const currentWorkflow = computed(() => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
+
+  const setNotification = (message, category = 'info') => {
+    notification.value = {
+      message,
+      category,
+      timestamp: Date.now()
+    };
+  };
 
   const setTodoList = (todos) => {
     todoList.value = todos;
@@ -266,7 +279,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageQueue,
     isRunning,
     error,
+    notification,
     currentWorkflow,
+    setNotification,
     setTodoList,
     loadWorkflows,
     selectWorkflow,

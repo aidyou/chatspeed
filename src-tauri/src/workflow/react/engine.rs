@@ -1189,6 +1189,16 @@ impl WorkflowExecutor {
                     )
                     .await?;
 
+                self.gateway
+                    .send(
+                        &self.session_id,
+                        GatewayPayload::Notification {
+                            message: t!("workflow.compression_in_progress").to_string(),
+                            category: Some("info".to_string()),
+                        },
+                    )
+                    .await?;
+
                 let compression_result = self.compressor.compress(&self.context.messages).await;
 
                 // Notify frontend: compression ended
@@ -1198,6 +1208,16 @@ impl WorkflowExecutor {
                         GatewayPayload::CompressionStatus {
                             is_compressing: false,
                             message: String::new(),
+                        },
+                    )
+                    .await?;
+
+                self.gateway
+                    .send(
+                        &self.session_id,
+                        GatewayPayload::Notification {
+                            message: String::new(),
+                            category: Some("info".to_string()),
                         },
                     )
                     .await?;
@@ -1221,7 +1241,7 @@ impl WorkflowExecutor {
         &mut self,
         text_part: String,
         json_part: String,
-        _signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
             Vec<(String, ReinforcedResult, serde_json::Value)>,
@@ -1255,6 +1275,13 @@ impl WorkflowExecutor {
 
         if tool_calls.is_empty() {
             return Ok((Vec::new(), false));
+        }
+
+        // Quick stop check before audit
+        if self.check_stop_signal(signal_rx).await? {
+            return Err(WorkflowEngineError::Cancelled(
+                t!("workflow.cancelled").to_string(),
+            ));
         }
 
         let mut has_todo_call = false;
@@ -1339,6 +1366,13 @@ impl WorkflowExecutor {
         }
 
         // --- 3. Stage 2: Safe Physical Execution ---
+        // Final stop check before starting physical tool execution
+        if self.check_stop_signal(signal_rx).await? {
+            return Err(WorkflowEngineError::Cancelled(
+                t!("workflow.cancelled").to_string(),
+            ));
+        }
+
         // We now execute only the tools that cleared the audit phase.
 
         // Phase A: Parallel Batch (I/O heavy tools like read_file, web_fetch)
@@ -1506,15 +1540,11 @@ impl WorkflowExecutor {
             _ => {}
         }
 
-        // --- 2. Approval Policy Enforcement ---
-        if self.should_intercept_for_approval(name, args) {
-            return self
-                .handle_approval_interception(id, name, args, None)
-                .await;
-        }
+        // --- 2. Security & Runtime Checks (Bash, FS, Loops) ---
+        // CRITICAL: These must happen BEFORE approval checks to ensure hard security boundaries
+        // are never bypassed by user approval (especially in sensitive phases like Planning).
 
-        // --- 3. Security & Runtime Checks (Bash, FS, Loops) ---
-        // 3.1 Loop Detection
+        // 2.1 Loop Detection
         if let Some(warning) = self.loop_detector.record_and_check(name, args) {
             log::warn!(
                 "WorkflowExecutor {}: Loop detected for tool '{}'. Intercepting...",
@@ -1531,14 +1561,14 @@ impl WorkflowExecutor {
             }));
         }
 
-        // 3.2 Shell Auditing
+        // 2.2 Shell Auditing
         if name == crate::tools::TOOL_BASH {
             if let Some(result) = self.handle_bash_security_intercept(id, args).await? {
                 return Ok(Some(result));
             }
         }
 
-        // 3.3 FS Path Guard
+        // 2.3 FS Path Guard
         if [
             crate::tools::TOOL_READ_FILE,
             crate::tools::TOOL_WRITE_FILE,
@@ -1552,6 +1582,14 @@ impl WorkflowExecutor {
             if let Some(result) = self.handle_fs_path_guard_intercept(name, args)? {
                 return Ok(Some(result));
             }
+        }
+
+        // --- 3. Approval Policy Enforcement ---
+        // Only if security checks pass do we consider asking the user for permission.
+        if self.should_intercept_for_approval(name, args) {
+            return self
+                .handle_approval_interception(id, name, args, None)
+                .await;
         }
 
         Ok(None)

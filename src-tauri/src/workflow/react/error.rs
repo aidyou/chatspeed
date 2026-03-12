@@ -8,6 +8,9 @@ use thiserror::Error;
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "type", content = "details")]
 pub enum WorkflowEngineError {
+    #[error("{0}")]
+    Cancelled(String),
+
     #[error("Database error: {0}")]
     Db(#[from] StoreError),
 

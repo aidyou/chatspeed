@@ -70,6 +70,12 @@ pub enum GatewayPayload {
         is_compressing: bool,
         message: String,
     },
+    /// Generic notification message for the UI status bar
+    Notification {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        category: Option<String>, // e.g., "info", "warning", "error", "fun"
+    },
     Error {
         message: String,
     },
