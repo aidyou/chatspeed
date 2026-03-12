@@ -27,25 +27,25 @@ importers:
         specifier: ^2.3.2
         version: 2.3.2(vue@3.5.30(typescript@5.9.3))
       '@tauri-apps/api':
-        specifier: ^2.9.0
+        specifier: ^2.10.1
         version: 2.10.1
       '@tauri-apps/plugin-autostart':
-        specifier: ^2.5.0
+        specifier: ^2.5.1
         version: 2.5.1
       '@tauri-apps/plugin-dialog':
-        specifier: ^2.4.0
+        specifier: ^2.6.0
         version: 2.6.0
       '@tauri-apps/plugin-fs':
-        specifier: ^2.4.2
+        specifier: ^2.4.5
         version: 2.4.5
       '@tauri-apps/plugin-opener':
-        specifier: ^2.5.0
+        specifier: ^2.5.3
         version: 2.5.3
       '@tauri-apps/plugin-process':
-        specifier: ^2.3.0
+        specifier: ^2.3.1
         version: 2.3.1
       '@tauri-apps/plugin-shell':
-        specifier: ^2.3.1
+        specifier: ^2.3.4
         version: 2.3.5
       '@vue/shared':
         specifier: ^3.5.22
@@ -121,7 +121,7 @@ importers:
         version: 4.3.6
     devDependencies:
       '@tauri-apps/cli':
-        specifier: ^2.9.6
+        specifier: ^2.10.1
         version: 2.10.1
       '@vitejs/plugin-vue':
         specifier: ^6.0.1
