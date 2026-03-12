@@ -61,7 +61,6 @@
 //! These routes are integrated into this router for unified access but handled by separate modules:
 //! - **MCP (Model Context Protocol)**:
 //!   - `POST /mcp/http`: Streamable HTTP entry (Recommended).
-//!   - `GET /mcp/sse`: SSE entry (Legacy).
 //!
 //! # Internal Architecture
 //!
@@ -866,15 +865,9 @@ pub async fn routes(
         );
 
     let new_mcp_router = {
-        let sse_router =
-            crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
         let http_service = crate::mcp::server::create_http_service(shared_state.chat_state.clone());
-        Router::new()
-            .nest_service("/sse", sse_router)
-            .nest_service("/http", http_service)
+        Router::new().nest_service("/http", http_service)
     };
-    let legacy_sse_router =
-        crate::mcp::server::create_sse_router(shared_state.chat_state.clone(), None);
 
     log_registered_routes();
 
@@ -884,7 +877,6 @@ pub async fn routes(
         .merge(unauthenticated_router)
         .merge(ollama_api_routes().layer(ollama_auth_middleware.clone()))
         .nest("/mcp", new_mcp_router)
-        .nest_service("/sse", legacy_sse_router)
         // B. Non-prefixed Protocol Routes (Handles /v1, /api, /v1beta directly)
         .merge(normal_routes.layer(auth_middleware.clone()))
         .merge(ollama_normal_chat.layer(ollama_auth_middleware.clone()))
@@ -992,8 +984,6 @@ fn log_registered_routes() {
     log::info!("  - Switch + Compat:   /switch/compat/{{path}} or /switch/compat_mode/{{path}}");
     log::info!("-------------------------------------");
     log::info!("[MCP]");
-    log::warn!("  - MCP SSE Proxy: /sse <- deprecated");
-    log::warn!("  - MCP SSE Proxy: /mcp/sse <- deprecated");
     log::info!("  - MCP Http Streamable Proxy: /mcp/http");
     log::info!("-------------------------------------");
 }

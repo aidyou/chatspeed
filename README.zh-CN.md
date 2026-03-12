@@ -17,7 +17,6 @@
 - **🚀 MCP Hub**：Chatspeed 的 MCP 代理可以将自身的`WebSearch`和`WebFetch`工具连同您安装的 `MCP` 工具通过更稳定的 `Streamable HTTP` 协议提供给外部其他客户端使用，了解如何[集中管理 MCP](https://docs.chatspeed.aidyou.ai/zh/mcp/)
 
 > [!CAUTION]
-> **⚠️ 弃用公告**：`/mcp/sse` 入口已正式弃用，并计划于 **v1.3.0** 版本彻底删除。由于 SSE 协议存在难以修复的稳定性问题（如 410 错误）且上游依赖库已停止支持，请尽快迁移至 `/mcp/http` (Streamable HTTP) 协议。
 
 ## 🚀 核心引擎: `CCProxy`
 

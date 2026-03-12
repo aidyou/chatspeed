@@ -103,6 +103,6 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust tests
 ## NOTES
 
 - **Database**: SQLite with WAL mode + busy_timeout (5s). Single connection per process.
-- **Deprecation**: `/mcp/sse` deprecated in v1.3.0 → migrate to `/mcp/http`
+- **Deprecation**: `/mcp/sse` removed in v2.0.0 → use `/mcp/http`
 - **Cross-protocol safety**: Use `i32` for index fields (some providers return `-1`)
 - **Gemini naming**: All fields use `camelCase` (`#[serde(rename_all = "camelCase")]`)
