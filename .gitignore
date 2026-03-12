@@ -67,4 +67,3 @@ src-tauri/src/plugins
 .gemini-clipboard/*
 
 test/
-work/

@@ -76,6 +76,37 @@ impl MemoryManager {
             })
     }
 
+    /// Reads the last N non-empty lines of memory content from the specified scope.
+    /// Each line is trimmed and empty lines are removed to maximize context efficiency.
+    pub fn read_last_n_lines(
+        &self,
+        scope: MemoryScope,
+        n: usize,
+    ) -> Result<Option<String>, WorkflowEngineError> {
+        let content = self.read(scope)?;
+        match content {
+            Some(s) => {
+                let lines: Vec<String> = s
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+
+                if lines.is_empty() {
+                    return Ok(None);
+                }
+
+                if lines.len() <= n {
+                    Ok(Some(lines.join("\n")))
+                } else {
+                    let start = lines.len() - n;
+                    Ok(Some(lines[start..].join("\n")))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Writes memory content to the specified scope (overwrites existing content).
     ///
     /// # Arguments

@@ -551,10 +551,18 @@ impl LlmProcessor {
         // Get memory and AGENTS.md content
         let (global_agents, project_agents) = AgentsMdScanner::scan(self.project_root.clone());
 
-        // Use blocking read for memory (in non-async context)
-        let global_memory = self.memory_manager.read(MemoryScope::Global).ok().flatten();
+        // Use restricted read (last 300 non-empty lines) to stay within context limits
+        let global_memory = self
+            .memory_manager
+            .read_last_n_lines(MemoryScope::Global, 300)
+            .ok()
+            .flatten();
 
-        let project_memory = self.memory_manager.read(MemoryScope::Project).ok().flatten();
+        let project_memory = self
+            .memory_manager
+            .read_last_n_lines(MemoryScope::Project, 300)
+            .ok()
+            .flatten();
 
         // 6. Global Instructions (AGENTS.md)
         if let Some(content) = global_agents {
