@@ -258,7 +258,14 @@
               </div>
             </div>
             <StatusNotifier />
+            <div class="input-header" v-if="!currentWorkflowId">
+              <div class="model-selector-trigger" @click="openModelSelector">
+                <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
+                <cs name="arrow-down" size="12px" />
+              </div>
+            </div>
             <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
+
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
               @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
 
@@ -361,6 +368,8 @@
 
     <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails"
       :loading="approvalLoading" @approve="onApproveAction" @approveAll="onApproveAllAction" @reject="onRejectAction" />
+
+    <ModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent" @save="onModelConfigSave" />
   </div>
 </template>
 
@@ -385,6 +394,7 @@ import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import StatusNotifier from '@/components/workflow/StatusNotifier.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 import FileTree from '@/components/workflow/FileTree.vue'
+import ModelSelector from '@/components/workflow/ModelSelector.vue'
 
 // Import types
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser'
@@ -473,6 +483,72 @@ const selectedAgent = ref(null)
 const approvalLevel = ref('default') // 'default', 'smart', 'full'
 const finalAuditMode = ref('on') // 'agent', 'on', 'off'
 const planningMode = ref(false)
+
+const activeModelName = computed(() => {
+  // 1. Try to get from current configs (reflected in settings/workflow)
+  const tab = planningMode.value ? 'plan' : 'act'
+  const workflow = workflowStore.currentWorkflow || (workflowStore.workflows.length > 0 ? workflowStore.workflows[0] : null)
+  
+  let providerId = null
+  let modelId = null
+  
+  if (workflow) {
+    const model = planningMode.value ? workflow.reasoningModel : workflow.generalModel
+    if (model) {
+      providerId = model.id
+      modelId = model.model
+    }
+  }
+
+  if (providerId && modelId) {
+    const provider = modelStore.getModelProviderById(providerId)
+    if (provider) {
+      const model = provider.models.find(m => m.id === modelId)
+      if (model) return model.name
+    }
+    return modelId
+  }
+
+  if (selectedAgent.value) return selectedAgent.value.name
+  return 'Select Model'
+})
+
+const onModelConfigSave = async (configs) => {
+  console.log('Saving model config:', configs)
+  try {
+    // 1. Save to current agent if selected
+    if (selectedAgent.value) {
+      const updatedAgent = { ...selectedAgent.value }
+      const modelsObj = {
+        plan: configs.plan,
+        act: configs.act
+      }
+      updatedAgent.models = JSON.stringify(modelsObj)
+      
+      // Update local store and persist to DB
+      await agentStore.saveAgent(updatedAgent)
+      // Refetch to sync state
+      await agentStore.fetchAgents()
+      // Re-select current to trigger reactivity
+      selectedAgent.value = agentStore.agents.find(a => a.id === updatedAgent.id) || updatedAgent
+    }
+
+    // 2. If we have an active workflow session, signal the engine
+    if (currentWorkflowId.value) {
+      await invokeWrapper('workflow_signal', {
+        sessionId: currentWorkflowId.value,
+        signal: JSON.stringify({
+          type: 'update_model_config',
+          configs: configs
+        })
+      })
+    }
+    showMessage(t('common.saveSuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to save model config:', error)
+    showMessage(t('common.saveFailed'), 'error')
+  }
+}
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const messagesRef = ref(null)
@@ -494,17 +570,40 @@ onUnmounted(() => {
 
 // System Skills (from ~/.chatspeed/skills etc) slash command logic
 const systemSkills = ref([])
+const builtinCommands = [
+  { name: 'settings', description: 'Open settings window' },
+  { name: 'models', description: 'Open model selection window' },
+  { name: 'mcp', description: 'Open MCP settings' },
+  { name: 'proxy', description: 'Open proxy settings' },
+  { name: 'agent', description: 'Open agent settings' },
+  { name: 'about', description: 'Open about page' }
+]
 const showSkillSuggestions = ref(false)
 const selectedSkillIndex = ref(0)
 const filteredSystemSkills = computed(() => {
   // Only search if starts with /
   if (!inputMessage.value.startsWith('/')) return []
   const query = inputMessage.value.substring(1).toLowerCase()
-  return systemSkills.value.filter(skill =>
-    skill.name.toLowerCase().includes(query) ||
-    (skill.description && skill.description.toLowerCase().includes(query))
-  )
+  
+  const skills = systemSkills.value.map(s => ({ name: s.name, description: s.description, type: 'skill' }))
+  const commands = builtinCommands.map(c => ({ name: c.name, description: c.description, type: 'command' }))
+  
+  return [...commands, ...skills]
+    .filter(item =>
+      item.name.toLowerCase().includes(query) ||
+      (item.description && item.description.toLowerCase().includes(query))
+    )
+    .sort((a, b) => a.name.localeCompare(b.name))
 })
+
+const modelSelectorVisible = ref(false)
+const modelSelectorTab = ref('act') // 'plan' or 'act'
+
+const openModelSelector = () => {
+  modelSelectorTab.value = planningMode.value ? 'plan' : 'act'
+  modelSelectorVisible.value = true
+}
+const modelSelectorMode = ref('provider') // 'provider' or 'proxy'
 
 // File At-mention logic
 const showFileSuggestions = ref(false)
@@ -568,14 +667,21 @@ const fetchSystemSkills = async () => {
 }
 const onSkillSelect = (skill) => {
   // Replace the slash command with the full skill command
-  inputMessage.value = '/' + skill.name + ' '
+  inputMessage.value = '/' + skill.name + (skill.type === 'command' ? '' : ' ')
   showSkillSuggestions.value = false
   selectedSkillIndex.value = 0
-  nextTick(() => {
-    if (inputRef.value) {
-      inputRef.value.focus()
-    }
-  })
+
+  // If it's a builtin command (UI action), we execute it immediately
+  if (skill.type === 'command') {
+    onSendMessage()
+  } else {
+    // For skills (AI logic), we focus and let user add more details (e.g., commit message)
+    nextTick(() => {
+      if (inputRef.value) {
+        inputRef.value.focus()
+      }
+    })
+  }
 }
 watch(inputMessage, (newVal) => {
   // TRIGGERS ONLY if '/' is the very first character of the whole input
@@ -1608,10 +1714,49 @@ const onRejectAction = async () => {
   }
 }
 
+const handleBuiltinCommand = async (command) => {
+  const cmd = command.trim().toLowerCase()
+
+  if (cmd === '/settings') {
+    await invokeWrapper('open_setting_window', { settingType: 'general' })
+    return true
+  }
+  if (cmd === '/mcp') {
+    await invokeWrapper('open_setting_window', { settingType: 'mcp' })
+    return true
+  }
+  if (cmd === '/proxy') {
+    await invokeWrapper('open_setting_window', { settingType: 'proxy' })
+    return true
+  }
+  if (cmd === '/agent') {
+    await invokeWrapper('open_setting_window', { settingType: 'agent' })
+    return true
+  }
+  if (cmd === '/about') {
+    await invokeWrapper('open_setting_window', { settingType: 'about' })
+    return true
+  }
+  if (cmd === '/models') {
+    openModelSelector()
+    return true
+  }
+  return false
+}
+
 const onSendMessage = async () => {
   if (!canSendMessage.value) return
 
   const message = inputMessage.value
+
+  // Handle Builtin UI Commands (Exact match after trim)
+  if (message.trim().startsWith('/')) {
+    if (await handleBuiltinCommand(message)) {
+      inputMessage.value = ''
+      return
+    }
+  }
+
   inputMessage.value = ''
   console.log('Sending message to workflow:', message)
 
@@ -2720,6 +2865,40 @@ const toggleFinalAuditMode = () => {
         height: unset;
         z-index: 1;
         position: relative;
+
+        .input-header {
+          display: flex;
+          justify-content: flex-start;
+          margin-bottom: 8px;
+          padding-left: 10px;
+
+          .model-selector-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--cs-bg-color-light);
+            border: 1px solid var(--cs-border-color);
+            border-radius: var(--cs-border-radius-lg);
+            cursor: pointer;
+            font-size: 11px;
+            color: var(--cs-text-color-secondary);
+            transition: all 0.2s;
+            backdrop-filter: blur(10px);
+            opacity: 0.8;
+
+            &:hover {
+              opacity: 1;
+              background: var(--cs-bg-color-hover);
+              color: var(--cs-text-color-primary);
+              border-color: var(--el-color-primary-light-5);
+            }
+
+            .model-name {
+              font-weight: 500;
+            }
+          }
+        }
 
         .slash-command-panel {
           position: absolute;

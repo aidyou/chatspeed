@@ -128,14 +128,12 @@
         </div>
         <div class="value" style="width: 300px">
           <el-select v-model="settings.conversationTitleGenModel.id" class="auto-width-select" placement="bottom"
-            clearable
-            @change="onConversationTitleGenModelIdChange">
+            clearable @change="onConversationTitleGenModelIdChange">
             <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
           <el-select v-model="settings.conversationTitleGenModel.model" class="auto-width-select" placement="bottom"
-            clearable
-            @change="onConversationTitleGenModelModelChange">
+            clearable @change="onConversationTitleGenModelModelChange">
             <el-option v-for="model in conversationTitleGenModelList" :key="model.id" :label="model.name || model.id"
               :value="model.id">
             </el-option>
@@ -150,14 +148,12 @@
           </div>
         </div>
         <div class="value" style="width: 300px">
-          <el-select v-model="settings.visionModel.id" class="auto-width-select" placement="bottom"
-            clearable
+          <el-select v-model="settings.visionModel.id" class="auto-width-select" placement="bottom" clearable
             @change="onVisionModelIdChange">
             <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
-          <el-select v-model="settings.visionModel.model" class="auto-width-select" placement="bottom"
-            clearable
+          <el-select v-model="settings.visionModel.model" class="auto-width-select" placement="bottom" clearable
             @change="onVisionModelModelChange">
             <el-option v-for="model in visionModelList" :key="model.id" :label="model.name || model.id"
               :value="model.id">
@@ -313,81 +309,6 @@
       </div>
     </div>
   </div>
-
-  <!-- workflow settings -->
-  <!-- <div class="card">
-    <div class="title">{{ $t('settings.general.workflowSettings') }}</div>
-    <div class="list">
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.workflow.reasoning') }}
-            <small class="tooltip">{{ $t('settings.general.workflow.reasoningTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value" style="width: 300px">
-          <el-select
-            v-model="settings.workflowReasoningModel.id"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onWorkflowReasoningModelIdChange">
-            <el-option
-              v-for="model in modelStore.providers"
-              :key="model.id"
-              :label="model.name"
-              :value="model.id">
-            </el-option>
-          </el-select>
-          <el-select
-            v-model="settings.workflowReasoningModel.model"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onWorkflowReasoningModelModelChange">
-            <el-option
-              v-for="model in workflowReasoningModelList"
-              :key="model.id"
-              :label="model.name || model.id"
-              :value="model.id">
-            </el-option>
-          </el-select>
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.workflow.general') }}
-            <small class="tooltip">{{ $t('settings.general.workflow.generalTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value" style="width: 300px">
-          <el-select
-            v-model="settings.workflowGeneralModel.id"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onWorkflowGeneralModelIdChange">
-            <el-option
-              v-for="model in modelStore.providers"
-              :key="model.id"
-              :label="model.name"
-              :value="model.id">
-            </el-option>
-          </el-select>
-          <el-select
-            v-model="settings.workflowGeneralModel.model"
-            class="auto-width-select"
-            placement="bottom"
-            @change="onWorkflowGeneralModelModelChange">
-            <el-option
-              v-for="model in workflowGeneralModelList"
-              :key="model.id"
-              :label="model.name || model.id"
-              :value="model.id">
-            </el-option>
-          </el-select>
-        </div>
-      </div>
-    </div>
-  </div> -->
 
   <!-- network settings -->
   <div class="card">
@@ -1131,48 +1052,6 @@ const onSerperApiKeyChange = value => {
 
 const onTavilyApiKeyChange = value => {
   setSetting('tavilyApiKey', value ? value.trim() : '' || '')
-}
-
-// =================================================
-// workflow settings
-// =================================================
-
-const onWorkflowReasoningModelIdChange = value => {
-  settingStore.settings.workflowReasoningModel = { id: value || '', model: '' }
-  setSetting('workflowReasoningModel', settingStore.settings.workflowReasoningModel)
-}
-
-const workflowReasoningModelList = computed(() => {
-  if (settingStore.settings.workflowReasoningModel.id) {
-    return (
-      modelStore.getModelProviderById(settingStore.settings.workflowReasoningModel.id)?.models || []
-    )
-  }
-  return []
-})
-
-const onWorkflowReasoningModelModelChange = value => {
-  settingStore.settings.workflowReasoningModel.model = value || ''
-  setSetting('workflowReasoningModel', settingStore.settings.workflowReasoningModel)
-}
-
-const onWorkflowGeneralModelIdChange = value => {
-  settingStore.settings.workflowGeneralModel = { id: value || '', model: '' }
-  setSetting('workflowGeneralModel', settingStore.settings.workflowGeneralModel)
-}
-
-const workflowGeneralModelList = computed(() => {
-  if (settingStore.settings.workflowGeneralModel.id) {
-    return (
-      modelStore.getModelProviderById(settingStore.settings.workflowGeneralModel.id)?.models || []
-    )
-  }
-  return []
-})
-
-const onWorkflowGeneralModelModelChange = value => {
-  settingStore.settings.workflowGeneralModel.model = value || ''
-  setSetting('workflowGeneralModel', settingStore.settings.workflowGeneralModel)
 }
 
 // =================================================

@@ -960,7 +960,8 @@ use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 #[tauri::command]
 pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, String> {
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let scanner = SkillScanner::new(app_data_dir);
+    let resource_path = app.path().resource_dir().unwrap_or_default();
+    let scanner = SkillScanner::new(app_data_dir, Some(resource_path));
     let skills_map = scanner.scan().map_err(|e| e.to_string())?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));

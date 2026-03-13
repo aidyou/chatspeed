@@ -41,7 +41,7 @@ pub struct SkillScanner {
 }
 
 impl SkillScanner {
-    pub fn new(app_data_dir: PathBuf) -> Self {
+    pub fn new(app_data_dir: PathBuf, resource_path: Option<PathBuf>) -> Self {
         let mut search_paths = vec![];
 
         // 1. ~/.chatspeed/skills (Priority 1)
@@ -56,6 +56,11 @@ impl SkillScanner {
 
         // 3. software data dir (Priority 3)
         search_paths.push(app_data_dir.join("skills"));
+
+        // 4. builtin skills from tauri assets (Priority 4)
+        if let Some(res_path) = resource_path {
+            search_paths.push(res_path.join("skills"));
+        }
 
         Self { search_paths }
     }
@@ -255,7 +260,7 @@ mod tests {
             "# Workflows\n\nWorkflow examples..."
         ).unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new());
+        let scanner = SkillScanner::new(PathBuf::new(), None);
         let references = scanner.scan_references(skill_dir);
 
         assert_eq!(references.len(), 2);
@@ -268,7 +273,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let skill_dir = temp_dir.path();
 
-        let scanner = SkillScanner::new(PathBuf::new());
+        let scanner = SkillScanner::new(PathBuf::new(), None);
         let references = scanner.scan_references(skill_dir);
 
         assert!(references.is_empty());
@@ -281,7 +286,7 @@ mod tests {
 
         fs::write(&file_path, "# Test Reference\n\nContent here...").unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new());
+        let scanner = SkillScanner::new(PathBuf::new(), None);
         let ref_info = scanner.extract_reference_info(&file_path).unwrap();
 
         assert_eq!(ref_info.filename, "test.md");
@@ -319,7 +324,7 @@ mod tests {
             "---\nname: test-skill\ndescription: Test\n---\n\nInstructions..."
         ).unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new());
+        let scanner = SkillScanner::new(PathBuf::new(), None);
         let manifest = scanner.try_load_skill(skill_dir).unwrap();
 
         assert!(manifest.references.is_empty());
@@ -345,7 +350,7 @@ mod tests {
             "# Guide\n\nDetailed guide..."
         ).unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new());
+        let scanner = SkillScanner::new(PathBuf::new(), None);
         let manifest = scanner.try_load_skill(skill_dir).unwrap();
 
         assert_eq!(manifest.name, "test-skill");
