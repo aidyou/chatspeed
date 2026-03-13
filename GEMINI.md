@@ -22,7 +22,7 @@ ChatSpeed is an open-source, high-performance AI assistant and smart desktop hub
 ### Prerequisites
 
 - **Node.js**: v22+ recommended.
-- **Yarn**: Used for frontend package management.
+- **pnpm**: Used for frontend package management.
 - **Rust**: Stable toolchain.
 - **vcpkg**: Required on Windows for native dependencies (`sqlite3`, `bzip2`).
 
@@ -89,7 +89,7 @@ This section outlines the coding standards, architectural patterns, and workflow
 - **Framework**: Vue 3 with the **Composition API** and `<script setup>` syntax.
 - **UI Library**: Use **Element Plus** components and utility classes.
 - **Styling**: Write CSS using **SCSS nested syntax**.
-- **Package Manager**: Use **Yarn** for all package management tasks.
+- **Package Manager**: Use **pnpm** for all package management tasks.
 - **TypeScript Specifics**:
   - Use `unknown` instead of `any` for variables with unknown types.
   - Declarations inside a `switch` case must be enclosed in curly braces `{}` to prevent scope issues.

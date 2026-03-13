@@ -629,11 +629,13 @@ pub async fn run() -> crate::error::Result<()> {
             app.manage(gateway.clone());
 
             // State 8: SubAgentFactory
+            let resource_path = app.path().resource_dir().unwrap_or_default();
             let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
                 main_store: main_store.clone(),
                 chat_state: chat_state.clone(),
                 gateway: gateway.clone(),
                 app_data_dir: app.path().app_data_dir().unwrap_or_default(),
+                resource_path: Some(resource_path.clone()),
                 tsid_generator: tsid_generator.clone(),
             });
             app.manage(factory);

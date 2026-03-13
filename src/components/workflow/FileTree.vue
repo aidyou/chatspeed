@@ -39,7 +39,7 @@
     <el-dialog v-model="previewVisible" :title="previewTitle" width="80%" top="5vh" class="file-preview-dialog"
       append-to-body destroy-on-close>
       <div class="preview-content">
-        <markdown :content="previewContent" />
+        <markdown-simple :content="previewContent" />
       </div>
     </el-dialog>
   </div>
@@ -49,7 +49,7 @@
 import { ref, watch, onMounted, computed } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
-import Markdown from '@/components/chat/Markdown.vue'
+import MarkdownSimple from './MarkdownSimple.vue'
 import TreeNode from './TreeNode.vue'
 
 const props = defineProps({
@@ -317,7 +317,12 @@ onMounted(() => {
 }
 
 @keyframes cs-rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

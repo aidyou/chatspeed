@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 ChatSpeed is an open-source AI assistant desktop application built with Rust (Tauri v2) backend and Vue 3 frontend. Its core engine is CCProxy, a multi-protocol AI proxy that enables tool compatibility mode for models without native tool-calling support.
@@ -14,14 +10,14 @@ ChatSpeed is an open-source AI assistant desktop application built with Rust (Ta
 
 ### Key Components
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| CCProxy | `src-tauri/src/ccproxy/` | AI proxy engine (OpenAI/Claude/Gemini/Ollama protocol conversion) |
-| Workflow Engine | `src-tauri/src/workflow/react/` | ReAct-based autonomous agent system |
-| MCP Hub | `src-tauri/src/mcp/` | MCP client/server implementation |
-| Database | `src-tauri/src/db/` | SQLite + Sled storage layer |
-| Commands | `src-tauri/src/commands/` | Tauri IPC command handlers |
-| Frontend Stores | `src/stores/` | Pinia state management |
+| Component       | Location                        | Purpose                                                           |
+| --------------- | ------------------------------- | ----------------------------------------------------------------- |
+| CCProxy         | `src-tauri/src/ccproxy/`        | AI proxy engine (OpenAI/Claude/Gemini/Ollama protocol conversion) |
+| Workflow Engine | `src-tauri/src/workflow/react/` | ReAct-based autonomous agent system                               |
+| MCP Hub         | `src-tauri/src/mcp/`            | MCP client/server implementation                                  |
+| Database        | `src-tauri/src/db/`             | SQLite + Sled storage layer                                       |
+| Commands        | `src-tauri/src/commands/`       | Tauri IPC command handlers                                        |
+| Frontend Stores | `src/stores/`                   | Pinia state management                                            |
 
 ## Development Commands
 
@@ -136,15 +132,15 @@ export const useChatStore = defineStore('chat', () => {
 
 ## Critical Anti-Patterns (DO NOT DO)
 
-| Pattern | Location | Reason |
-|---------|----------|--------|
-| Route order modification | `ccproxy/router.rs` | Causes route shadowing, breaks API clients |
-| `unwrap()`/`expect()` | Production code | Use `?` or `unwrap_or_default()` |
-| Hardcoded i18n strings | Rust code | Must use `t!` macro |
-| Double database open | `db/` | Causes lock conflicts; use single connection |
-| Direct window creation from IPC | `commands/window.rs` | Deadlock risk on Windows; emit events instead |
-| SSE endpoint usage | MCP integration | Deprecated v1.3.0; use `/mcp/http` (Streamable HTTP) |
-| State registration after listeners | `lib.rs` | Event handlers panic when accessing unmanaged state |
+| Pattern                            | Location             | Reason                                               |
+| ---------------------------------- | -------------------- | ---------------------------------------------------- |
+| Route order modification           | `ccproxy/router.rs`  | Causes route shadowing, breaks API clients           |
+| `unwrap()`/`expect()`              | Production code      | Use `?` or `unwrap_or_default()`                     |
+| Hardcoded i18n strings             | Rust code            | Must use `t!` macro                                  |
+| Double database open               | `db/`                | Causes lock conflicts; use single connection         |
+| Direct window creation from IPC    | `commands/window.rs` | Deadlock risk on Windows; emit events instead        |
+| SSE endpoint usage                 | MCP integration      | Deprecated v1.3.0; use `/mcp/http` (Streamable HTTP) |
+| State registration after listeners | `lib.rs`             | Event handlers panic when accessing unmanaged state  |
 
 ## Platform-Specific Build Notes
 
@@ -181,10 +177,10 @@ sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2
 In development, all data (database, logs, configs) is stored in `src-tauri/.chatspeed/dev_data/` to keep the OS app data directory clean. Controlled by `STORE_DIR` in `constants.rs`.
 
 ### HTTP Server Ports
-| Service | Default Port | Config Key |
-|---------|--------------|------------|
-| Internal HTTP Server | 21912 | Auto-finds available if taken |
-| CCProxy | 11435 | `CFG_CCPROXY_PORT` |
+| Service              | Default Port | Config Key                    |
+| -------------------- | ------------ | ----------------------------- |
+| Internal HTTP Server | 21912        | Auto-finds available if taken |
+| CCProxy              | 11435        | `CFG_CCPROXY_PORT`            |
 
 ### CCProxy Protocol Support
 - Input: OpenAI-compatible, Claude, Gemini, Ollama
@@ -237,14 +233,14 @@ Tests can be run with the test helper that sets up the mock app handle with all 
 
 ## Where to Look
 
-| Task | Location |
-|------|----------|
-| Add AI model support | `src-tauri/src/ccproxy/adapter/backend/` |
-| Fix IPC command | `src-tauri/src/commands/` (see mod.rs for all commands) |
-| Add frontend state | `src/stores/` - use `useXStore` pattern |
-| MCP integration | `src-tauri/src/mcp/` |
-| Routing issues | `src-tauri/src/ccproxy/router.rs` - DO NOT modify order |
-| Workflow tools | Frontend: `src/pkg/workflow/tools/`, Backend: `src-tauri/src/tools/` |
-| i18n strings | `src-tauri/i18n/` (Rust), `src/i18n/locales/` (frontend) |
-| Error types | Module: `src-tauri/src/<module>/errors.rs`, Unified: `src-tauri/src/error.rs` |
-| Constants | `src-tauri/src/constants.rs` |
+| Task                 | Location                                                                      |
+| -------------------- | ----------------------------------------------------------------------------- |
+| Add AI model support | `src-tauri/src/ccproxy/adapter/backend/`                                      |
+| Fix IPC command      | `src-tauri/src/commands/` (see mod.rs for all commands)                       |
+| Add frontend state   | `src/stores/` - use `useXStore` pattern                                       |
+| MCP integration      | `src-tauri/src/mcp/`                                                          |
+| Routing issues       | `src-tauri/src/ccproxy/router.rs` - DO NOT modify order                       |
+| Workflow tools       | Frontend: `src/pkg/workflow/tools/`, Backend: `src-tauri/src/tools/`          |
+| i18n strings         | `src-tauri/i18n/` (Rust), `src/i18n/locales/` (frontend)                      |
+| Error types          | Module: `src-tauri/src/<module>/errors.rs`, Unified: `src-tauri/src/error.rs` |
+| Constants            | `src-tauri/src/constants.rs`                                                  |

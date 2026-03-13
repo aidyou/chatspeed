@@ -12,8 +12,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
+    ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER, TOOL_FINISH_TASK,
+    TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::compression::ContextCompressor;
 use crate::workflow::react::context::ContextManager;
@@ -153,6 +153,7 @@ impl WorkflowExecutor {
         agent_config: Agent,
         allowed_paths: Vec<PathBuf>,
         app_data_dir: PathBuf,
+        resource_path: Option<PathBuf>,
         subagent_type: Option<String>,
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
@@ -167,7 +168,7 @@ impl WorkflowExecutor {
         let chat_state_clone3 = chat_state.clone();
 
         // Create skill_scanner first to get skill_paths
-        let skill_scanner = SkillScanner::new(app_data_dir.clone());
+        let skill_scanner = SkillScanner::new(app_data_dir.clone(), resource_path);
         let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
         // Build sandbox_paths
@@ -247,7 +248,7 @@ impl WorkflowExecutor {
                 chat_state_clone2,
                 initial_provider_id,
                 initial_model_name.clone(),
-                false, // Temporary, will be updated below
+                false,  // Temporary, will be updated below
                 vec![], // MCP tool summaries will be set in init_internal
                 // Memory manager and project root
                 {
@@ -613,7 +614,11 @@ impl WorkflowExecutor {
         }
 
         // 7. MCP Tool Loader (if MCP tools are available)
-        if self.policy.allowed_categories.contains(&ToolCategory::System) {
+        if self
+            .policy
+            .allowed_categories
+            .contains(&ToolCategory::System)
+        {
             // Check if there are any MCP tools
             let has_mcp_tools = self
                 .global_tool_manager
@@ -1300,12 +1305,7 @@ impl WorkflowExecutor {
             .context
             .messages
             .iter()
-            .filter(|m| {
-                m.role == "user"
-                    && m.step_type
-                        .as_ref()
-                        .map_or(true, |st| st != "observe")
-            })
+            .filter(|m| m.role == "user" && m.step_type.as_ref().map_or(true, |st| st != "observe"))
             .map(|m| m.message.clone())
             .collect();
 
@@ -1317,7 +1317,11 @@ impl WorkflowExecutor {
 
         // 2. Read current memories (using Arc directly, no lock needed)
         let current_global = self.memory_manager.read(MemoryScope::Global).ok().flatten();
-        let current_project = self.memory_manager.read(MemoryScope::Project).ok().flatten();
+        let current_project = self
+            .memory_manager
+            .read(MemoryScope::Project)
+            .ok()
+            .flatten();
 
         // 3. Call memory analyzer
         let analysis = MemoryAnalyzer::analyze(
@@ -1336,9 +1340,14 @@ impl WorkflowExecutor {
         if let Some(new_global) = analysis.global_memory {
             let old_global = current_global.unwrap_or_default();
             if new_global.trim() != old_global.trim() {
-                self.memory_manager.write(MemoryScope::Global, &new_global).map_err(|e| {
-                    WorkflowEngineError::General(format!("Failed to write global memory: {}", e))
-                })?;
+                self.memory_manager
+                    .write(MemoryScope::Global, &new_global)
+                    .map_err(|e| {
+                        WorkflowEngineError::General(format!(
+                            "Failed to write global memory: {}",
+                            e
+                        ))
+                    })?;
                 log::info!("Global memory updated");
             }
         }
@@ -1347,9 +1356,14 @@ impl WorkflowExecutor {
             let old_project = current_project.unwrap_or_default();
             if new_project.trim() != old_project.trim() {
                 if self.memory_manager.has_project_memory() {
-                    self.memory_manager.write(MemoryScope::Project, &new_project).map_err(|e| {
-                        WorkflowEngineError::General(format!("Failed to write project memory: {}", e))
-                    })?;
+                    self.memory_manager
+                        .write(MemoryScope::Project, &new_project)
+                        .map_err(|e| {
+                            WorkflowEngineError::General(format!(
+                                "Failed to write project memory: {}",
+                                e
+                            ))
+                        })?;
                     log::info!("Project memory updated");
                 }
             }
