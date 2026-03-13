@@ -1,6 +1,6 @@
 ---
 name: help
-description: Display ChatSpeed help and documentation index. Use this when users ask for help or questions about ChatSpeed features.
+description: Displays ChatSpeed help and documentation index. Use this skill when users want help with or have questions about ChatSpeed features.
 ---
 
 # ChatSpeed Help Index

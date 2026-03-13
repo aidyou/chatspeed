@@ -408,14 +408,14 @@ impl ToolManager {
                                 continue;
                             }
                         }
-                        ToolScope::Workflow => {
-                            // Workflow can see Chat + Workflow + Both
-                        }
                         ToolScope::Both => {
                             // Strictly Both
                             if tool.scope() != ToolScope::Both {
                                 continue;
                             }
+                        }
+                        ToolScope::Workflow => {
+                            // Workflow can see Chat + Workflow + Both
                         }
                     }
                 }
@@ -449,9 +449,7 @@ impl ToolManager {
 
         // Verify it's an MCP tool
         if !tool_name.contains(MCP_TOOL_NAME_SPLIT) {
-            return Err(ToolError::InvalidParams(
-                "Not an MCP tool".to_string(),
-            ));
+            return Err(ToolError::InvalidParams("Not an MCP tool".to_string()));
         }
 
         Ok(tool.tool_calling_spec())

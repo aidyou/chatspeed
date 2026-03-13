@@ -24,8 +24,6 @@ pub const TOOL_TODO_GET: &str = "todo_get";
 
 // skill tools
 pub const TOOL_SKILL: &str = "skill";
-pub const TOOL_SKILL_LIST_REFERENCES: &str = "skill_list_references";
-pub const TOOL_SKILL_LOAD_REFERENCE: &str = "skill_load_reference";
 
 pub const TOOL_ASK_USER: &str = "ask_user";
 pub const TOOL_FINISH_TASK: &str = "finish_task";

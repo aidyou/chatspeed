@@ -67,9 +67,16 @@ Activation will inject the skill's specific instructions into your context."#
         if let Some(skill) = self.available_skills.get(skill_name) {
             log::info!("Skill tool: Activating skill '{}'", skill_name);
 
+            let skill_path = skill
+                .skill_dir
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+
             let result_content = format!(
-                "<activated_skill name=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>",
+                "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>",
                 skill.name,
+                skill_path,
                 skill.instructions
             );
 

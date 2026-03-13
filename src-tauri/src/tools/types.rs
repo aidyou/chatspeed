@@ -15,15 +15,25 @@ pub enum ToolScope {
     Both,
 }
 
+impl ToolScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Workflow => "workflow",
+            Self::Both => "both",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ToolCategory {
     FileSystem,
     Interaction,
     Mcp,
-    System,
-    Web,
     Search,
     Skill,
+    System,
+    Web,
 }
 
 impl Display for ToolCategory {

@@ -1,11 +1,11 @@
 ---
 name: commit
-description: Create well-formatted commits with conventional commit messages
+description: Create well-formatted commits with conventional commit messages. Use this skill when the user wants to create a commit.
 ---
 
 # Claude Command: Commit
 
-This command helps you create well-formatted commits following the Conventional Commits specification.
+This skill helps you create well-formatted commits following the Conventional Commits specification.
 
 ## Usage
 
@@ -21,7 +21,7 @@ With options:
 /commit --style=full --type=feat
 ```
 
-## Command Options
+## Skill Options
 
 - `--no-verify`: Skip pre-commit checks (lint, build, generate:docs)
 - `--style=simple|full`:
@@ -29,7 +29,7 @@ With options:
   - `full`: Creates detailed commit messages with body and footer sections
 - `--type=<type>`: Specify the commit type (overrides automatic detection)
 
-## What This Command Does
+## What This Skill Does
 
 1. **Pre-commit checks** (unless `--no-verify`):
    - `pnpm lint` - ensure code quality

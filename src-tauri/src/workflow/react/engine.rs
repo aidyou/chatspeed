@@ -12,24 +12,26 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER, TOOL_FINISH_TASK,
-    TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
+    ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN,
+    TOOL_WEB_FETCH,
 };
-use crate::workflow::react::compression::ContextCompressor;
-use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::error::WorkflowEngineError;
-use crate::workflow::react::gateway::Gateway;
-use crate::workflow::react::intelligence::IntelligenceManager;
-use crate::workflow::react::llm::LlmProcessor;
-use crate::workflow::react::loop_detector::LoopDetector;
-use crate::workflow::react::memory::{MemoryManager, MemoryScope};
-use crate::workflow::react::memory_analyzer::MemoryAnalyzer;
-use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
-use crate::workflow::react::orchestrator::SubAgentFactory;
-use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
-use crate::workflow::react::security::PathGuard;
-use crate::workflow::react::skills::{SkillManifest, SkillScanner};
-use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
+use crate::workflow::react::{
+    compression::ContextCompressor,
+    context::ContextManager,
+    error::WorkflowEngineError,
+    gateway::Gateway,
+    intelligence::IntelligenceManager,
+    llm::LlmProcessor,
+    loop_detector::LoopDetector,
+    memory::{MemoryManager, MemoryScope},
+    memory_analyzer::MemoryAnalyzer,
+    observation::{ObservationReinforcer, ReinforcedResult},
+    orchestrator::SubAgentFactory,
+    policy::{ExecutionPhase, ExecutionPolicy},
+    security::PathGuard,
+    skills::{SkillManifest, SkillScanner},
+    types::{GatewayPayload, StepType, WorkflowState},
+};
 
 /// Default maximum ReAct steps before the agent is forced to conclude.
 const DEFAULT_MAX_STEPS: usize = 60;
@@ -451,63 +453,50 @@ impl WorkflowExecutor {
                 .iter()
                 .find(|m| m["id"] == name)
                 .map(|m| {
-                    let scope = m["scope"].as_str().unwrap_or("both");
-                    scope == "workflow" || scope == "both"
+                    let scope = m["scope"].as_str().unwrap_or(ToolScope::Both.as_str());
+                    scope == ToolScope::Workflow.as_str() || scope == ToolScope::Both.as_str()
                 })
                 .unwrap_or(true) // Default to allowed for safety if not found in meta
         };
 
-        // 1. Native FS & Search Tools
-        if is_allowed(TOOL_READ_FILE)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(ReadFile)).await?;
-        }
-        if is_allowed(TOOL_WRITE_FILE)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(WriteFile)).await?;
-        }
-        if is_allowed(TOOL_EDIT_FILE)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(EditFile)).await?;
-        }
-        if is_allowed(TOOL_LIST_DIR)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(ListDir)).await?;
-        }
-        if is_allowed(TOOL_GLOB)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(Glob)).await?;
-        }
-        if is_allowed(TOOL_GREP)
-            && self
-                .policy
-                .allowed_categories
-                .contains(&ToolCategory::FileSystem)
-        {
-            tm.register_tool(Arc::new(Grep)).await?;
+        // 1. Register Web tool
+        if self.policy.allowed_categories.contains(&ToolCategory::Web) {
+            if let Ok(ws) = self.global_tool_manager.get_tool(TOOL_WEB_SEARCH).await {
+                tm.register_tool(ws.clone()).await?;
+            }
+            if let Ok(wf) = self.global_tool_manager.get_tool(TOOL_WEB_FETCH).await {
+                tm.register_tool(wf.clone()).await?;
+            }
         }
 
-        // 2. Shell Tool (With session-aware policy)
+        // 2. Native FS & Search Tools
+        if self
+            .policy
+            .allowed_categories
+            .contains(&ToolCategory::FileSystem)
+        {
+            if is_allowed(TOOL_READ_FILE) {
+                tm.register_tool(Arc::new(ReadFile)).await?;
+            }
+
+            if is_allowed(TOOL_WRITE_FILE) {
+                tm.register_tool(Arc::new(WriteFile)).await?;
+            }
+            if is_allowed(TOOL_EDIT_FILE) {
+                tm.register_tool(Arc::new(EditFile)).await?;
+            }
+            if is_allowed(TOOL_LIST_DIR) {
+                tm.register_tool(Arc::new(ListDir)).await?;
+            }
+            if is_allowed(TOOL_GLOB) {
+                tm.register_tool(Arc::new(Glob)).await?;
+            }
+            if is_allowed(TOOL_GREP) {
+                tm.register_tool(Arc::new(Grep)).await?;
+            }
+        }
+
+        // 3. Shell Tool (With session-aware policy)
         if is_allowed(TOOL_BASH)
             && self
                 .policy
@@ -530,7 +519,7 @@ impl WorkflowExecutor {
             .await?;
         }
 
-        // 3. Interaction Tools
+        // 4. Interaction Tools
         if self
             .policy
             .allowed_categories
@@ -547,11 +536,11 @@ impl WorkflowExecutor {
             }
         }
 
-        // 4. Multi-Agent & Skill Tools
+        // 4. Multi-Agent
         if self
             .policy
             .allowed_categories
-            .contains(&ToolCategory::Skill)
+            .contains(&ToolCategory::System)
         {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
@@ -580,7 +569,7 @@ impl WorkflowExecutor {
         if self
             .policy
             .allowed_categories
-            .contains(&ToolCategory::Skill)
+            .contains(&ToolCategory::System)
         {
             tm.register_tool(Arc::new(TodoCreateTool {
                 session_id: self.session_id.clone(),
@@ -625,6 +614,21 @@ impl WorkflowExecutor {
                 .await?;
             }
         }
+        //  MCP is loaded like skills, so we don't register it here.
+        // if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
+        //     if let Ok(global_specs) = self
+        //         .global_tool_manager
+        //         .get_tool_calling_spec(None, None)
+        //         .await
+        //     {
+        //         for spec in global_specs {
+        //             // Only add if it's an MCP tool (identified by name pattern)
+        //             if spec.name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+        //                 available_tools.push(spec);
+        //             }
+        //         }
+        //     }
+        // }
 
         Ok(())
     }
@@ -1056,27 +1060,11 @@ impl WorkflowExecutor {
                     .clone()
             };
 
-            let mut available_tools = self
+            let available_tools = self
                 .tool_manager
                 .get_tool_calling_spec(None, None)
                 .await
                 .unwrap_or_default();
-
-            // 5. Include MCP tools from global manager if allowed by policy
-            if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
-                if let Ok(global_specs) = self
-                    .global_tool_manager
-                    .get_tool_calling_spec(None, None)
-                    .await
-                {
-                    for spec in global_specs {
-                        // Only add if it's an MCP tool (identified by name pattern)
-                        if spec.name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                            available_tools.push(spec);
-                        }
-                    }
-                }
-            }
 
             let (full_response, tool_calls_json, response_reasoning, usage) = self
                 .llm_processor
@@ -1889,9 +1877,11 @@ impl WorkflowExecutor {
                 );
 
                 let activated_content = format!(
-                    "<activated_skill name=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>",
-                    skill.name,
-                    skill.instructions
+                    "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>\n<SYSTEM_REMINDER>\nSkill {} activated. You MUST strictly follow the expert guidance and workflows defined in the <instructions> above to fulfill the following user request. This context is current and complete; proceed immediately.\n</SYSTEM_REMINDER>",
+                    &skill.name,
+                    skill.skill_dir.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                    skill.instructions,
+                    &skill.name
                 );
 
                 // Add as a system message to the context so the LLM sees it immediately.
@@ -1899,7 +1889,7 @@ impl WorkflowExecutor {
                 // it will effectively act as the most recent instruction.
                 self.context
                     .add_message(
-                        "system".to_string(),
+                        "user".to_string(),
                         activated_content,
                         None,
                         None,

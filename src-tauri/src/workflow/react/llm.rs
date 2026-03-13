@@ -2,15 +2,15 @@ use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType};
 use crate::db::{Agent, WorkflowMessage};
+use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
+use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
-use crate::workflow::react::agents_md::AgentsMdScanner;
-use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -531,21 +531,6 @@ impl LlmProcessor {
             system_parts.push(DRAFTING_PROMPT.to_string());
         }
 
-        // 4. Environment Context
-        let reminders = self.build_reminders(current_step, max_steps);
-        system_parts.push(format!(
-            "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
-            reminders
-        ));
-
-        // 5. State Snapshot
-        if let Some(snapshot) = state_snapshot {
-            system_parts.push(format!(
-                "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
-                snapshot
-            ));
-        }
-
         // === NEW: AGENTS.md and Memory ===
 
         // Get memory and AGENTS.md content
@@ -564,7 +549,7 @@ impl LlmProcessor {
             .ok()
             .flatten();
 
-        // 6. Global Instructions (AGENTS.md)
+        // 4. Global Instructions (AGENTS.md)
         if let Some(content) = global_agents {
             system_parts.push(format!(
                 "<GLOBAL_INSTRUCTIONS>\n{}\n\
@@ -577,7 +562,7 @@ impl LlmProcessor {
             ));
         }
 
-        // 7. Project Instructions (AGENTS.md)
+        // 5. Project Instructions (AGENTS.md)
         if let Some(content) = project_agents {
             system_parts.push(format!(
                 "<PROJECT_INSTRUCTIONS>\n{}\n\
@@ -586,6 +571,23 @@ impl LlmProcessor {
                 </SYSTEM_REMINDER>\n\
                 </PROJECT_INSTRUCTIONS>",
                 content
+            ));
+        }
+
+        // 6. Extend tool(skills, mcp) Context
+        let extend_tools = self.build_extend_tools_prompt();
+        if !extend_tools.is_empty() {
+            system_parts.push(format!(
+                "<EXTEND_TOOLS_CONTEXT>\n{}\n</EXTEND_TOOLS_CONTEXT>",
+                extend_tools
+            ));
+        }
+
+        // 7. State Snapshot
+        if let Some(snapshot) = state_snapshot {
+            system_parts.push(format!(
+                "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
+                snapshot
             ));
         }
 
@@ -616,6 +618,13 @@ impl LlmProcessor {
                 content
             ));
         }
+
+        // 10. Environment Context
+        let reminders = self.build_reminders(current_step, max_steps);
+        system_parts.push(format!(
+            "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
+            reminders
+        ));
 
         // === END NEW ===
 
@@ -655,30 +664,39 @@ impl LlmProcessor {
         history
     }
 
-    fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
+    fn build_extend_tools_prompt(&self) -> String {
         let mut reminders = String::new();
 
         // MCP tools (before skills)
         if !self.mcp_tool_summaries.is_empty() {
             reminders.push_str("## AVAILABLE MCP TOOLS:\n");
-            reminders.push_str("The following MCP tools are available. ");
-            reminders.push_str("Use the `mcp_tool_load` tool to get detailed parameter information.\n\n");
             for tool in &self.mcp_tool_summaries {
-                reminders.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+                reminders.push_str(&format!(
+                    "- {}: {}\n",
+                    tool.name,
+                    tool.description.replace("\n", " ")
+                ));
             }
-            reminders.push_str("\n<SYSTEM_REMINDER>Use `mcp_tool_load` to get detailed parameter schemas before calling MCP tools.</SYSTEM_REMINDER>\n\n");
+            reminders.push_str("<SYSTEM_REMINDER>Use `mcp_tool_load` tool to get detailed parameter schemas before calling MCP tools.</SYSTEM_REMINDER>\n\n");
         }
 
         // Skills
         if !self.available_skills.is_empty() {
             reminders.push_str("## AVAILABLE SKILLS:\n");
             for skill in self.available_skills.values() {
-                reminders.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+                reminders.push_str(&format!(
+                    "- {}: {}\n",
+                    skill.name,
+                    skill.description.replace("\n", " ")
+                ));
             }
-            reminders.push_str("\n<SYSTEM_REMINDER>You can use the above specialized skills via the `skill` tool.</SYSTEM_REMINDER>\n");
+            reminders.push_str("<SYSTEM_REMINDER>You can use the above specialized skills via the `skill` tool.</SYSTEM_REMINDER>\n");
         }
 
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        reminders
+    }
+
+    fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
         let allowed_roots = if let Ok(guard) = self.path_guard.read() {
             guard.allowed_roots()
         } else {
@@ -768,9 +786,10 @@ impl LlmProcessor {
                 .unwrap_or_else(|_| platform.to_string())
         };
 
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         env_info.push_str(&format!(
-            " - Platform: {}\n - Shell: {}\n - OS Version: {}\n",
-            platform, shell, os_version
+            " - Platform: {}\n - Shell: {}\n - OS Version: {}\n - Today's date is {}.",
+            platform, shell, os_version, today
         ));
 
         let progress_info = if max_steps > 0 {
@@ -781,8 +800,8 @@ impl LlmProcessor {
         };
 
         format!(
-            "{}{}\n\n<SYSTEM_REMINDER>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is {}.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
-            env_info, progress_info, today
+            "{}{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
+            env_info, progress_info
         )
     }
 }
