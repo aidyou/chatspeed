@@ -128,12 +128,12 @@ impl MemoryAnalyzer {
 
     /// Parses the AI response to extract memory updates.
     fn parse_response(response: &str) -> Result<MemoryAnalysisResult, WorkflowEngineError> {
-        // Try to extract JSON from the response
-        // The AI might wrap the JSON in markdown code blocks
-        let json_str = Self::extract_json(response)?;
+        // AI responses are often wrapped in markdown code blocks or contain reasoning text.
+        // Use our utility function to extract and clean the JSON.
+        let json_str = crate::libs::util::format_json_str(response);
 
         // Parse JSON
-        let result: MemoryAnalysisResult = serde_json::from_str(json_str).map_err(|e| {
+        let result: MemoryAnalysisResult = serde_json::from_str(&json_str).map_err(|e| {
             WorkflowEngineError::General(format!(
                 "Failed to parse memory analysis result: {}. Response: {}",
                 e, response
@@ -143,28 +143,7 @@ impl MemoryAnalyzer {
         Ok(result)
     }
 
-    /// Extracts JSON from the response, handling markdown code blocks.
-    fn extract_json(response: &str) -> Result<&str, WorkflowEngineError> {
-        // Check for markdown code block
-        if let Some(start) = response.find("```json") {
-            let start = start + 7; // Skip "```json"
-            if let Some(end) = response[start..].find("```") {
-                return Ok(&response[start..start + end]);
-            }
-        }
-
-        // Check for plain JSON
-        if let Some(start) = response.find('{') {
-            if let Some(end) = response.rfind('}') {
-                return Ok(&response[start..=end]);
-            }
-        }
-
-        Err(WorkflowEngineError::General(format!(
-            "Could not extract JSON from response: {}",
-            response
-        )))
-    }
+    // Removed manual extract_json as it's replaced by crate::libs::util::format_json_str
 }
 
 #[cfg(test)]

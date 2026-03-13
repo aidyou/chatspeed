@@ -1,7 +1,6 @@
 ---
 name: commit
 description: Create well-formatted commits with conventional commit messages
-argument-hint: [--no-verify] [--style=simple|full] [--type=feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert]
 ---
 
 # Claude Command: Commit

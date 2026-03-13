@@ -295,15 +295,15 @@ pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a high-fidelity Memor
 
 ## Output Format
 
+**CRITICAL: You MUST return ONLY the raw JSON string itself. DO NOT wrap the JSON in markdown code blocks (e.g., ```json ... ```), and DO NOT include any other text, reasoning, or preamble before or after the JSON.**
+
 You MUST return a valid JSON object with this exact structure:
 
-```json
 {
   "globalMemory": null,
   "projectMemory": null,
   "reasoning": "Brief explanation of what was added/removed and why"
 }
-```
 
 Rules:
 1. Use `null` for unchanged memories (do not omit the key)

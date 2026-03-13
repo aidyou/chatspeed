@@ -339,7 +339,6 @@ pub async fn workflow_start(
     let gateway_arc = gateway.inner().clone();
     let factory = factory.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let resource_path = app.path().resource_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
 
     let (clean_prompt, attached_context, allowed_paths) = {
@@ -416,7 +415,6 @@ pub async fn workflow_start(
                 agent_config,
                 allowed_roots,
                 app_data_dir,
-                Some(resource_path),
                 None,
                 Some(signal_rx),
                 tsid_generator,
@@ -435,7 +433,6 @@ pub async fn workflow_start(
                 agent_config,
                 allowed_roots,
                 app_data_dir,
-                Some(resource_path),
                 None,
                 Some(signal_rx),
                 tsid_generator,
@@ -539,7 +536,6 @@ pub async fn workflow_approve_plan(
     let gateway_arc = gateway.inner().clone();
     let factory_arc = factory.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let resource_path = app.path().resource_dir().unwrap_or_default();
 
     let mut context = crate::workflow::react::context::ContextManager::new(
         session_id.clone(),
@@ -626,7 +622,6 @@ pub async fn workflow_approve_plan(
         agent_config,
         allowed_roots,
         app_data_dir,
-        Some(resource_path),
         None,
         Some(signal_rx),
         tsid_generator_arc,
@@ -965,8 +960,7 @@ use crate::workflow::react::skills::{SkillManifest, SkillScanner};
 #[tauri::command]
 pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, String> {
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let resource_path = app.path().resource_dir().unwrap_or_default();
-    let scanner = SkillScanner::new(app_data_dir, Some(resource_path));
+    let scanner = SkillScanner::new(app_data_dir);
     let skills_map = scanner.scan().map_err(|e| e.to_string())?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));

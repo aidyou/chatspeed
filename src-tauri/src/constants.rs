@@ -171,6 +171,31 @@ lazy_static! {
             Arc::new(PLRwLock::new(PathBuf::new()))
         }
     };
+
+    // Resource path, bundled assets in production or source assets in development
+    pub static ref RESOURCE_DIR: Arc<PLRwLock<PathBuf>> = {
+        #[cfg(debug_assertions)]
+        {
+            use std::env;
+            let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+            // If manifest_dir is src-tauri, assets is manifest_dir/assets
+            // If manifest_dir is project root, assets is manifest_dir/src-tauri/assets
+            let path = if manifest_dir.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
+                manifest_dir.join("assets")
+            } else {
+                manifest_dir.join("src-tauri").join("assets")
+            };
+            log::debug!("RESOURCE_DIR (dev) will be: {:?}", path);
+            Arc::new(PLRwLock::new(path))
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Arc::new(PLRwLock::new(PathBuf::new()))
+        }
+    };
 }
 
 /// read the value from the RwLock or return the default value if the lock cannot be acquired

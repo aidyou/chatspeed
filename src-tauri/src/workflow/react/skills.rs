@@ -41,7 +41,7 @@ pub struct SkillScanner {
 }
 
 impl SkillScanner {
-    pub fn new(app_data_dir: PathBuf, resource_path: Option<PathBuf>) -> Self {
+    pub fn new(app_data_dir: PathBuf) -> Self {
         let mut search_paths = vec![];
 
         // 1. ~/.chatspeed/skills (Priority 1)
@@ -58,8 +58,13 @@ impl SkillScanner {
         search_paths.push(app_data_dir.join("skills"));
 
         // 4. builtin skills from tauri assets (Priority 4)
-        if let Some(res_path) = resource_path {
-            search_paths.push(res_path.join("skills"));
+        // In dev mode, resources are in source tree (src-tauri/assets/skills)
+        // In prod mode, resources are bundled and accessible via resource_dir()
+        let resource_dir = crate::RESOURCE_DIR.read().clone();
+        if !resource_dir.as_os_str().is_empty() {
+            let skills_path = resource_dir.join("skills");
+            log::debug!("Builtin skills path from RESOURCE_DIR: {:?}", skills_path);
+            search_paths.push(skills_path);
         }
 
         Self { search_paths }
@@ -220,9 +225,7 @@ impl SkillScanner {
             .and_then(|content| {
                 content.lines().next().map(|line| {
                     // Remove Markdown heading symbols
-                    line.trim_start_matches('#')
-                        .trim()
-                        .to_string()
+                    line.trim_start_matches('#').trim().to_string()
                 })
             })
             .unwrap_or_else(|| filename.clone());
@@ -252,19 +255,23 @@ mod tests {
 
         fs::write(
             refs_dir.join("output-patterns.md"),
-            "# Output Patterns\n\nDetailed patterns..."
-        ).unwrap();
+            "# Output Patterns\n\nDetailed patterns...",
+        )
+        .unwrap();
 
         fs::write(
             refs_dir.join("workflows.md"),
-            "# Workflows\n\nWorkflow examples..."
-        ).unwrap();
+            "# Workflows\n\nWorkflow examples...",
+        )
+        .unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new(), None);
+        let scanner = SkillScanner::new(PathBuf::new());
         let references = scanner.scan_references(skill_dir);
 
         assert_eq!(references.len(), 2);
-        assert!(references.iter().any(|r| r.filename == "output-patterns.md"));
+        assert!(references
+            .iter()
+            .any(|r| r.filename == "output-patterns.md"));
         assert!(references.iter().any(|r| r.filename == "workflows.md"));
     }
 
@@ -273,7 +280,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let skill_dir = temp_dir.path();
 
-        let scanner = SkillScanner::new(PathBuf::new(), None);
+        let scanner = SkillScanner::new(PathBuf::new());
         let references = scanner.scan_references(skill_dir);
 
         assert!(references.is_empty());
@@ -286,7 +293,7 @@ mod tests {
 
         fs::write(&file_path, "# Test Reference\n\nContent here...").unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new(), None);
+        let scanner = SkillScanner::new(PathBuf::new());
         let ref_info = scanner.extract_reference_info(&file_path).unwrap();
 
         assert_eq!(ref_info.filename, "test.md");
@@ -321,10 +328,11 @@ mod tests {
         // Only create SKILL.md
         fs::write(
             skill_dir.join("SKILL.md"),
-            "---\nname: test-skill\ndescription: Test\n---\n\nInstructions..."
-        ).unwrap();
+            "---\nname: test-skill\ndescription: Test\n---\n\nInstructions...",
+        )
+        .unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new(), None);
+        let scanner = SkillScanner::new(PathBuf::new());
         let manifest = scanner.try_load_skill(skill_dir).unwrap();
 
         assert!(manifest.references.is_empty());
@@ -339,18 +347,16 @@ mod tests {
         // Create SKILL.md
         fs::write(
             skill_dir.join("SKILL.md"),
-            "---\nname: test-skill\ndescription: Test\n---\n\nInstructions..."
-        ).unwrap();
+            "---\nname: test-skill\ndescription: Test\n---\n\nInstructions...",
+        )
+        .unwrap();
 
         // Create references
         let refs_dir = skill_dir.join("references");
         fs::create_dir(&refs_dir).unwrap();
-        fs::write(
-            refs_dir.join("guide.md"),
-            "# Guide\n\nDetailed guide..."
-        ).unwrap();
+        fs::write(refs_dir.join("guide.md"), "# Guide\n\nDetailed guide...").unwrap();
 
-        let scanner = SkillScanner::new(PathBuf::new(), None);
+        let scanner = SkillScanner::new(PathBuf::new());
         let manifest = scanner.try_load_skill(skill_dir).unwrap();
 
         assert_eq!(manifest.name, "test-skill");

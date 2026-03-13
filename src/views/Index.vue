@@ -341,7 +341,7 @@
                 <div class="icons">
                   <!-- model selector -->
                   <label v-if="modelProviders.length > 0" class="default">
-                    <ModelSelector position="bottom" :useProviderAvatar="true" :triggerSize="16" />
+                    <ChatModelSelector position="bottom" :useProviderAvatar="true" :triggerSize="16" />
                   </label>
                   <label
                     v-else
@@ -540,7 +540,7 @@ import chatting from '@/components/chat/Chatting.vue'
 import SkillList from '@/components/chat/SkillList.vue'
 import SkillItem from '@/components/chat/SkillItem.vue'
 import Titlebar from '@/components/window/Titlebar.vue'
-import ModelSelector from '@/components/chat/ModelSelector.vue'
+import ChatModelSelector from '@/components/chat/ChatModelSelector.vue'
 
 import { csStorageKey } from '@/config/config'
 import {

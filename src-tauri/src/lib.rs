@@ -494,11 +494,19 @@ pub async fn run() -> crate::error::Result<()> {
 
         // Setup the application with necessary configurations and state management
         .setup(|app| {
-            // Initialize the logger - this is critical and must stay here
-            setup_logger(&app);
+        // Initialize the logger - this is critical and must stay here
+        setup_logger(&app);
 
-            // Initialize the main store
-            #[cfg(debug_assertions)]
+        // Initialize RESOURCE_DIR for production
+        #[cfg(not(debug_assertions))]
+        {
+            if let Ok(res_path) = app.path().resource_dir() {
+                *crate::RESOURCE_DIR.write() = res_path;
+                log::info!("RESOURCE_DIR initialized at: {:?}", *crate::RESOURCE_DIR.read());
+            }
+        }
+
+        // Initialize the main store            #[cfg(debug_assertions)]
             let db_path = {
                 let dev_dir = &*crate::STORE_DIR.read();
                 dev_dir.join("chatspeed.db")
@@ -629,13 +637,11 @@ pub async fn run() -> crate::error::Result<()> {
             app.manage(gateway.clone());
 
             // State 8: SubAgentFactory
-            let resource_path = app.path().resource_dir().unwrap_or_default();
             let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
                 main_store: main_store.clone(),
                 chat_state: chat_state.clone(),
                 gateway: gateway.clone(),
                 app_data_dir: app.path().app_data_dir().unwrap_or_default(),
-                resource_path: Some(resource_path.clone()),
                 tsid_generator: tsid_generator.clone(),
             });
             app.manage(factory);

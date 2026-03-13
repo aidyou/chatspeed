@@ -117,7 +117,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                        }}
+                          }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -265,7 +265,6 @@
               </div>
             </div>
             <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
-
               :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
               @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
 
@@ -294,7 +293,7 @@
                       @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" />
                       <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                        }}</span>
+                      }}</span>
                     </label>
                   </el-tooltip>
 
@@ -369,7 +368,8 @@
     <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails"
       :loading="approvalLoading" @approve="onApproveAction" @approveAll="onApproveAllAction" @reject="onRejectAction" />
 
-    <ModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent" @save="onModelConfigSave" />
+    <WorkflowModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent"
+      @save="onModelConfigSave" />
   </div>
 </template>
 
@@ -394,7 +394,7 @@ import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import StatusNotifier from '@/components/workflow/StatusNotifier.vue'
 import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 import FileTree from '@/components/workflow/FileTree.vue'
-import ModelSelector from '@/components/workflow/ModelSelector.vue'
+import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
 
 // Import types
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser'
@@ -488,10 +488,10 @@ const activeModelName = computed(() => {
   // 1. Try to get from current configs (reflected in settings/workflow)
   const tab = planningMode.value ? 'plan' : 'act'
   const workflow = workflowStore.currentWorkflow || (workflowStore.workflows.length > 0 ? workflowStore.workflows[0] : null)
-  
+
   let providerId = null
   let modelId = null
-  
+
   if (workflow) {
     const model = planningMode.value ? workflow.reasoningModel : workflow.generalModel
     if (model) {
@@ -524,7 +524,7 @@ const onModelConfigSave = async (configs) => {
         act: configs.act
       }
       updatedAgent.models = JSON.stringify(modelsObj)
-      
+
       // Update local store and persist to DB
       await agentStore.saveAgent(updatedAgent)
       // Refetch to sync state
@@ -584,10 +584,10 @@ const filteredSystemSkills = computed(() => {
   // Only search if starts with /
   if (!inputMessage.value.startsWith('/')) return []
   const query = inputMessage.value.substring(1).toLowerCase()
-  
+
   const skills = systemSkills.value.map(s => ({ name: s.name, description: s.description, type: 'skill' }))
   const commands = builtinCommands.map(c => ({ name: c.name, description: c.description, type: 'command' }))
-  
+
   return [...commands, ...skills]
     .filter(item =>
       item.name.toLowerCase().includes(query) ||
@@ -2456,11 +2456,14 @@ const toggleFinalAuditMode = () => {
 
               .simple-text {
                 padding: var(--cs-space);
-                border-radius: 18px 2px 18px 18px;
+                border-radius: var(--cs-border-radius-lg);
                 max-width: 100%;
                 border: 1px solid var(--cs-border-color);
                 margin: 0;
                 white-space: pre-wrap;
+                word-break: break-all;
+                line-height: 1.8;
+                background: var(--cs-bg-color-light);
               }
             }
           }

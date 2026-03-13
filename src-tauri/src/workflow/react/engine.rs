@@ -153,7 +153,6 @@ impl WorkflowExecutor {
         agent_config: Agent,
         allowed_paths: Vec<PathBuf>,
         app_data_dir: PathBuf,
-        resource_path: Option<PathBuf>,
         subagent_type: Option<String>,
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
@@ -168,7 +167,7 @@ impl WorkflowExecutor {
         let chat_state_clone3 = chat_state.clone();
 
         // Create skill_scanner first to get skill_paths
-        let skill_scanner = SkillScanner::new(app_data_dir.clone(), resource_path);
+        let skill_scanner = SkillScanner::new(app_data_dir.clone());
         let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
         // Build sandbox_paths
