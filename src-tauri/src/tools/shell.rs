@@ -7,8 +7,8 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
@@ -169,10 +169,39 @@ impl ShellPolicyEngine {
             "mkfs", "dd", "format", "fdisk", "parted", "sudo", "su", "ssh", "scp",
         ];
         let needs_review = [
-            "rm", "mv", "chmod", "chown", "ln", "kill", "pkill", "crontab", "alias", "eval",
-            "python", "perl", "ruby", "node", "php", "sh", "bash", "zsh", "source",
-            "nc", "netcat", "nmap", "curl", "wget", "apt", "apt-get", "yum", "dnf", "brew",
-            "docker", "podman", "systemctl", "service",
+            "rm",
+            "mv",
+            "chmod",
+            "chown",
+            "ln",
+            "kill",
+            "pkill",
+            "crontab",
+            "alias",
+            "eval",
+            "python",
+            "perl",
+            "ruby",
+            "node",
+            "php",
+            "sh",
+            "bash",
+            "zsh",
+            "source",
+            "nc",
+            "netcat",
+            "nmap",
+            "curl",
+            "wget",
+            "apt",
+            "apt-get",
+            "yum",
+            "dnf",
+            "brew",
+            "docker",
+            "podman",
+            "systemctl",
+            "service",
         ];
 
         let destructive_commands = ["rm", "mv", "chmod", "chown"];
@@ -267,7 +296,12 @@ impl ShellPolicyEngine {
         final_decision
     }
 
-    fn validate_path_token(&self, token: &str, restrict_to_planning: bool, is_delete: bool) -> ShellDecision {
+    fn validate_path_token(
+        &self,
+        token: &str,
+        restrict_to_planning: bool,
+        is_delete: bool,
+    ) -> ShellDecision {
         if token.starts_with('~') {
             return ShellDecision::Deny(
                 "Tilde (~) expansion is blocked. Use absolute paths within the workspace.".into(),
@@ -286,7 +320,12 @@ impl ShellPolicyEngine {
                     let expanded_str: &str = expanded.as_ref();
                     if expanded_str.contains('/') || expanded_str.starts_with('.') {
                         let valid = if let Ok(guard) = self.path_guard.read() {
-                            guard.validate(Path::new(expanded_str), restrict_to_planning, true, is_delete)
+                            guard.validate(
+                                Path::new(expanded_str),
+                                restrict_to_planning,
+                                true,
+                                is_delete,
+                            )
                         } else {
                             Err(WorkflowEngineError::Security("Lock failed".into()))
                         };
@@ -399,12 +438,13 @@ impl ToolDefinition for ShellExecute {
             .as_str()
             .ok_or(ToolError::InvalidParams("command required".into()))?;
 
+        // Defense-in-depth security check: Only enforce hard denials (system-critical commands).
+        // This is a safety net to prevent catastrophic operations even if the workflow engine's
+        // approval checks fail or are bypassed. Review-level checks are handled upstream by
+        // the workflow engine's approval flow.
         match self.policy_engine.check(command_str, self.planning_mode) {
-            ShellDecision::Allow => {}
-            ShellDecision::Review(reason) => {
-                return Err(ToolError::Security(format!("REVIEW_REQUIRED: {}", reason)))
-            }
             ShellDecision::Deny(reason) => return Err(ToolError::Security(reason)),
+            _ => {} // Allow and Review both proceed to execution
         }
 
         let timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
@@ -455,7 +495,8 @@ impl ToolDefinition for ShellExecute {
                         *status_arc.lock().await = "Error".into();
                     }
                     Err(_) => {
-                        *stderr_arc.lock().await = format!("Command timed out after {}ms", timeout_ms);
+                        *stderr_arc.lock().await =
+                            format!("Command timed out after {}ms", timeout_ms);
                         *status_arc.lock().await = "Error".into();
                     }
                 }
@@ -493,7 +534,10 @@ impl ToolDefinition for ShellExecute {
                 }
             }
             Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
-            Err(_) => Err(ToolError::ExecutionFailed(format!("Command timed out after {}ms", timeout_ms))),
+            Err(_) => Err(ToolError::ExecutionFailed(format!(
+                "Command timed out after {}ms",
+                timeout_ms
+            ))),
         }
     }
 }
@@ -515,7 +559,7 @@ mod tests {
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![root_path.clone(), std::env::current_dir().unwrap()],
             vec![],
-            vec![]
+            vec![],
         )));
         (root, root_path, guard)
     }
@@ -552,19 +596,34 @@ mod tests {
 
         // 1. Attempt to remove the root directory itself (Absolute path)
         let cmd_root = format!("rm -rf {}", root_path.display());
-        assert!(matches!(engine.check(&cmd_root, false), ShellDecision::Deny(_)));
+        assert!(matches!(
+            engine.check(&cmd_root, false),
+            ShellDecision::Deny(_)
+        ));
 
         // 2. Attempt to remove the root via "." or "./"
-        assert!(matches!(engine.check("rm -rf .", false), ShellDecision::Deny(_)));
-        assert!(matches!(engine.check("rm -rf ./", false), ShellDecision::Deny(_)));
+        assert!(matches!(
+            engine.check("rm -rf .", false),
+            ShellDecision::Deny(_)
+        ));
+        assert!(matches!(
+            engine.check("rm -rf ./", false),
+            ShellDecision::Deny(_)
+        ));
 
         // 3. Attempt to move the root
         let cmd_mv = format!("mv {} /tmp/moved_root", root_path.display());
-        assert!(matches!(engine.check(&cmd_mv, false), ShellDecision::Deny(_)));
+        assert!(matches!(
+            engine.check(&cmd_mv, false),
+            ShellDecision::Deny(_)
+        ));
 
         // 4. NORMAL FILE removal inside root should NOT be hard-denied (it should be Review)
         let cmd_file = format!("rm {}", root_path.join("file.txt").display());
-        assert!(matches!(engine.check(&cmd_file, false), ShellDecision::Review(_)));
+        assert!(matches!(
+            engine.check(&cmd_file, false),
+            ShellDecision::Review(_)
+        ));
     }
 
     #[test]
@@ -579,7 +638,7 @@ mod tests {
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![authorized_root.clone(), current_dir.clone()],
             vec![],
-            vec![]
+            vec![],
         )));
         let engine = ShellPolicyEngine::new(guard, vec![]);
 
@@ -643,7 +702,7 @@ mod tests {
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![project_root.clone()],
             vec![],
-            vec![]
+            vec![],
         )));
 
         let engine = ShellPolicyEngine::new(guard, vec![]);
@@ -691,7 +750,7 @@ mod tests {
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![project_root.clone()],
             vec![],
-            vec![]
+            vec![],
         )));
 
         let engine = ShellPolicyEngine::new(guard, vec![]);
@@ -739,7 +798,7 @@ mod tests {
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![project_root.clone()],
             vec![],
-            vec![]
+            vec![],
         )));
 
         let engine = ShellPolicyEngine::new(guard.clone(), vec![]);
@@ -747,7 +806,10 @@ mod tests {
         // Test different path formats
         let test_cases = vec![
             ("broadcast/src/common/account_manager.rs", "relative path"),
-            ("./broadcast/src/common/account_manager.rs", "relative with ./"),
+            (
+                "./broadcast/src/common/account_manager.rs",
+                "relative with ./",
+            ),
             ("file.txt", "simple filename"),
             ("./file.txt", "simple filename with ./"),
             ("src/../file.txt", "path with parent dir"),
@@ -763,7 +825,10 @@ mod tests {
 
             // All should be Allow or Review (for skill paths), never Deny
             if matches!(decision, ShellDecision::Deny(_)) {
-                panic!("Path '{}' ({}) was unexpectedly denied: {:?}", path, desc, decision);
+                panic!(
+                    "Path '{}' ({}) was unexpectedly denied: {:?}",
+                    path, desc, decision
+                );
             }
         }
     }

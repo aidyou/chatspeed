@@ -555,14 +555,6 @@ impl WorkflowExecutor {
         {
             tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                 .await?;
-            tm.register_tool(Arc::new(SkillListReferences::new(
-                self.available_skills.clone(),
-            )))
-            .await?;
-            tm.register_tool(Arc::new(SkillLoadReference::new(
-                self.available_skills.clone(),
-            )))
-            .await?;
 
             // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
             // if the current executor is NOT itself a sub-agent.
@@ -713,15 +705,13 @@ impl WorkflowExecutor {
                             self.auto_approve.insert(tool_name.to_string());
                         }
 
-                        // 2. Execution: Try local then global
-                        let result = if let Ok(res) = self
-                            .tool_manager
-                            .tool_call(&tool_name, tool_args.clone())
-                            .await
-                        {
-                            Ok(res)
-                        } else {
+                        // 2. Execution: MCP tools use global, native tools use local
+                        let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                             self.global_tool_manager
+                                .tool_call(&tool_name, tool_args.clone())
+                                .await
+                        } else {
+                            self.tool_manager
                                 .tool_call(&tool_name, tool_args.clone())
                                 .await
                         };

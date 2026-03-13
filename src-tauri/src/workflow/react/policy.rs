@@ -49,10 +49,11 @@ impl ExecutionPolicy {
         Self {
             name: "Planning".to_string(),
             allowed_categories: vec![
-                ToolCategory::Web,
+                ToolCategory::FileSystem,
                 ToolCategory::Interaction,
                 ToolCategory::Skill,
-                ToolCategory::FileSystem,
+                ToolCategory::System,
+                ToolCategory::Web,
             ],
             path_restriction: PathRestriction::SandboxOnly,
             phase: ExecutionPhase::Planning,
@@ -66,11 +67,11 @@ impl ExecutionPolicy {
             name: "Implementation".to_string(),
             allowed_categories: vec![
                 ToolCategory::FileSystem,
+                ToolCategory::Interaction,
+                ToolCategory::Mcp,
+                ToolCategory::Skill,
                 ToolCategory::System,
                 ToolCategory::Web,
-                ToolCategory::Interaction,
-                ToolCategory::Skill,
-                ToolCategory::Mcp,
             ],
             path_restriction: PathRestriction::FullAuthorized,
             phase: ExecutionPhase::Implementation,

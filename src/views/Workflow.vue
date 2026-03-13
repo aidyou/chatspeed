@@ -117,7 +117,7 @@
                       <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
                         <div class="choice-question">{{
                           parseChoiceContent(removeSystemReminder(message.message)).question
-                          }}
+                        }}
                         </div>
                         <div class="choice-options">
                           <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
@@ -293,7 +293,7 @@
                       @click="toggleFinalAuditMode">
                       <cs name="check-circle" class="small" />
                       <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                      }}</span>
+                        }}</span>
                     </label>
                   </el-tooltip>
 
@@ -1058,11 +1058,8 @@ const formatToolTitle = (name, args) => {
       }
       return { icon: 'check', toolType: 'tool-todo', action: t('workflow.todo.update'), target: '' }
     },
-
     'todo_list': () => ({ icon: 'list', toolType: 'tool-todo', action: t('workflow.todo.list'), target: '' }),
-
     'todo_get': () => ({ icon: 'list', toolType: 'tool-todo', action: t('workflow.todo.view'), target: '' }),
-
     'finish_task': () => ({ icon: 'check-circle', toolType: 'tool-todo', action: t('workflow.finishTask'), target: '' })
   }
 
@@ -1820,7 +1817,7 @@ const onInputKeyDown = event => {
 
   // Handle Slash Command Suggestions
   if (showSkillSuggestions.value) {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === 'Tab') {
       event.preventDefault()
       if (filteredSystemSkills.value.length > 0) {
         onSkillSelect(filteredSystemSkills.value[selectedSkillIndex.value])
