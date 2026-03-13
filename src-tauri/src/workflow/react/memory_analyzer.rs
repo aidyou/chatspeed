@@ -81,8 +81,14 @@ impl MemoryAnalyzer {
         let user_prompt = format!(
             "{}",
             super::prompts::MEMORY_ANALYZER_USER_PROMPT_TEMPLATE
-                .replace("{global_memory}", &current_global_memory.unwrap_or_default())
-                .replace("{project_memory}", &current_project_memory.unwrap_or_default())
+                .replace(
+                    "{global_memory}",
+                    &current_global_memory.unwrap_or_default()
+                )
+                .replace(
+                    "{project_memory}",
+                    &current_project_memory.unwrap_or_default()
+                )
                 .replace("{user_inputs}", &user_inputs.join("\n\n---\n\n"))
         );
 
@@ -117,7 +123,9 @@ impl MemoryAnalyzer {
                 },
             )
             .await
-            .map_err(|e| WorkflowEngineError::General(format!("Memory analysis LLM call failed: {}", e)))?;
+            .map_err(|e| {
+                WorkflowEngineError::General(format!("Memory analysis LLM call failed: {}", e))
+            })?;
 
         // Parse JSON response
         // The response should be a JSON object with global_memory and project_memory
@@ -159,14 +167,14 @@ Some text before
 ```
 Some text after
 "#;
-        let json = MemoryAnalyzer::extract_json(response).unwrap();
+        let json = crate::libs::util::format_json_str(response);
         assert!(json.contains("global_memory"));
     }
 
     #[test]
     fn test_extract_json_plain() {
         let response = r#"{"global_memory": null, "project_memory": null}"#;
-        let json = MemoryAnalyzer::extract_json(response).unwrap();
+        let json = crate::libs::util::format_json_str(response);
         assert!(json.contains("global_memory"));
     }
 

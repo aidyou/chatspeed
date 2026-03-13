@@ -1828,6 +1828,13 @@ impl WorkflowExecutor {
             }
         }
 
+        // --- 2. Slash Command Auto-Activation (For User Messages) ---
+        // We do this BEFORE adding the user message to ensure the skill instructions
+        // appear immediately before the query that triggered them.
+        if role == "user" {
+            let _ = self.check_and_auto_activate_skills(&content).await;
+        }
+
         let (msg, needs_compression) = self
             .context
             .add_message(
@@ -1847,8 +1854,8 @@ impl WorkflowExecutor {
             .send(
                 &self.session_id,
                 GatewayPayload::Message {
-                    role,
-                    content,
+                    role: role.clone(),
+                    content: content.clone(),
                     reasoning,
                     step_type,
                     step_index: self.current_step as i32,
@@ -1864,6 +1871,59 @@ impl WorkflowExecutor {
                 .metadata
                 .as_ref()
                 .map_or(false, |m| m["type"] == "summary"))
+    }
+
+    /// Automatically detects and activates skills triggered by slash commands in user input.
+    pub(crate) async fn check_and_auto_activate_skills(
+        &mut self,
+        content: &str,
+    ) -> Result<(), WorkflowEngineError> {
+        // Only check at the start of the message or after a newline
+        if !content.starts_with('/') && !content.contains("\n/") {
+            return Ok(());
+        }
+
+        // Regex to match slash commands: starts with / followed by alphanumeric chars/underscores/hyphens
+        // We use a capture group for the skill name.
+        let re = regex::Regex::new(r"(?m)^/([a-zA-Z0-9_-]+)").map_err(|e| {
+            WorkflowEngineError::General(format!("Failed to compile slash command regex: {}", e))
+        })?;
+
+        for cap in re.captures_iter(content) {
+            let skill_name = &cap[1];
+            if let Some(skill) = self.available_skills.get(skill_name) {
+                log::info!(
+                    "WorkflowExecutor {}: Auto-activating skill '{}' from slash command",
+                    self.session_id,
+                    skill_name
+                );
+
+                let activated_content = format!(
+                    "<activated_skill name=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>",
+                    skill.name,
+                    skill.instructions
+                );
+
+                // Add as a system message to the context so the LLM sees it immediately.
+                // It is added AFTER the user message in history, but since we are about to call the LLM,
+                // it will effectively act as the most recent instruction.
+                self.context
+                    .add_message(
+                        "system".to_string(),
+                        activated_content,
+                        None,
+                        None,
+                        Some(StepType::Think),
+                        self.current_step as i32,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Checks if a stop signal is pending in the channel
