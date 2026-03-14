@@ -8,140 +8,140 @@ A skill for creating new skills and iteratively improving them.
 
 ## Quick Start
 
-1. **确定技能需求** — 和用户聊清楚要做什么
-2. **编写 SKILL.md** — 按照下面的模板
-3. **安装技能** — 直接复制到 `~/.chatspeed/skills/`
-4. **测试迭代** — 在对话中测试和优化
+1. **Define skill requirements** — Discuss with the user what the skill should do
+2. **Write SKILL.md** — Follow the template below
+3. **Install the skill** — Copy directly to `~/.chatspeed/skills/`
+4. **Test and iterate** — Test and optimize in conversations
 
 ---
 
-## 创建技能流程
+## Creating a Skill
 
-### 1. 理解用户需求
+### 1. Understand User Requirements
 
 Start by understanding the user's intent:
 
-1. 这个技能让 AI 能做什么？
-2. 什么时候触发？（用户说什么时调用这个技能）
-3. 期望的输出格式是什么？
-4. 需要设置测试用例吗？
+1. What should this skill enable the AI to do?
+2. When to trigger? (When does the user invoke this skill)
+3. What is the expected output format?
+4. Should test cases be created?
 
-主动问边缘情况、输入输出格式、示例文件、成功标准。
+Ask proactively about edge cases, input/output formats, example files, and success criteria.
 
-### 2. 编写 SKILL.md
+### 2. Write SKILL.md
 
-根据需求填写：
+Fill in according to requirements:
 
 ```yaml
 ---
 name: skill-name
-description: 技能描述（触发条件 + 功能）
+description: Skill description (trigger condition + functionality)
 ---
-# 技能名称
+# Skill Name
 
-## 功能说明
+## Function Description
 
-（详细说明）
+(Detailed explanation)
 ```
 
-**name**: 技能标识符，英文+连字符
+**name**: Skill identifier, English + hyphens
 
-**description**: 触发条件 + 功能。这是主要的触发机制——既要说明技能做什么，也要说明在什么情况下使用。所有"何时触发"的信息写在这里，不是正文。
+**description**: Trigger condition + functionality. This is the main triggering mechanism — explain what the skill does and when to use it. All "when to trigger" information goes here, not in the body.
 
-> **提示**：描述要稍微"主动"一点。比如不要只写"如何构建仪表板"，而要写"如何构建仪表板。当用户提到仪表板、数据可视化、内部指标，或想展示任何类型的数据时，使用此技能。"
+> **Tip**: Make descriptions slightly "proactive". For example, don't just write "how to build a dashboard", write "how to build a dashboard. Use this skill when the user mentions dashboards, data visualization, internal metrics, or wants to display any type of data."
 
-### 3. 技能目录结构
+### 3. Skill Directory Structure
 
 ```
 skill-name/
-├── SKILL.md (必需)
-│   ├── YAML frontmatter (name, description 必需)
-│   └── Markdown 说明
-└── 资源文件 (可选)
-    ├── scripts/    - 辅助脚本
-    ├── references/ - 参考文档
-    └── assets/     - 资源文件
+├── SKILL.md (required)
+│   ├── YAML frontmatter (name, description required)
+│   └── Markdown explanation
+└── Resource files (optional)
+    ├── scripts/    - Helper scripts
+    ├── references/ - Reference documents
+    └── assets/     - Asset files
 ```
 
-### 4. 安装技能
+### 4. Install the Skill
 
-直接把技能文件夹复制到 `~/.chatspeed/skills/`:
+Copy the skill folder directly to `~/.chatspeed/skills/`:
 
 ```bash
 cp -r skill-name/ ~/.chatspeed/skills/
 ```
 
-ChatSpeed 会自动加载该目录下的技能。
+ChatSpeed will automatically load skills from this directory.
 
 ---
 
-## 测试和优化
+## Testing and Optimization
 
-### 测试技能
+### Testing the Skill
 
-1. 告诉用户你已经创建了技能
-2. 给用户 2-3 个测试 query
-3. 用户确认后，在当前对话中使用这个技能
-4. 评估结果，和用户讨论改进点
+1. Tell the user you've created the skill
+2. Give the user 2-3 test queries
+3. After user confirmation, use this skill in the current conversation
+4. Evaluate results and discuss improvements with the user
 
-### 优化描述
+### Optimizing Descriptions
 
-技能描述优化可以直接在对话中进行：
+Skill description optimization can be done directly in the conversation:
 
 ```
-帮我优化一下这个技能的描述：
-技能名称: xxx
-当前描述: xxx
+Help me optimize this skill's description:
+Skill name: xxx
+Current description: xxx
 
-失败的测试案例:
-- query: "xxx" (应该触发但没触发)
-- query: "xxx" (触发了但不应该)
+Failed test cases:
+- query: "xxx" (should trigger but didn't)
+- query: "xxx" (triggered but shouldn't have)
 
-成功的测试案例:
-- query: "xxx" (正确触发)
+Successful test cases:
+- query: "xxx" (triggered correctly)
 
-请给出一个更好的描述。
+Please provide a better description.
 ```
 
-优化要点：
-- 描述控制在 100-200 字
-- 关注用户意图，而不是实现细节
-- 具有辨识度，能和其他技能区分
-- 如果多次尝试都失败，尝试换一种表达方式
+Optimization tips:
+- Keep descriptions between 100-200 words
+- Focus on user intent, not implementation details
+- Make it distinctive, able to differentiate from other skills
+- If multiple attempts fail, try a different way of expressing it
 
 ---
 
-## 技能写作指南
+## Skill Writing Guide
 
-### 编写风格
+### Writing Style
 
-- 使用祈使句
-- 解释为什么重要，而不是堆砌 MUST
-- 例子：
+- Use imperative mood
+- Explain why it's important, don't just list MUSTs
+- Example:
 
 ```markdown
-## 输出格式
+## Output Format
 
-始终使用这个模板：
-# [标题]
-## 总结
-## 关键发现
-## 建议
+Always use this template:
+# [Title]
+## Summary
+## Key Findings
+## Recommendations
 ```
 
 ```markdown
-## 示例
+## Examples
 
-**示例 1:**
-输入: 添加用户认证
-输出: feat(auth): implement JWT-based authentication
+**Example 1:**
+Input: Add user authentication
+Output: feat(auth): implement JWT-based authentication
 ```
 
-### 保持简洁
+### Keep It Concise
 
-- SKILL.md 控制在 500 行以内
-- 大型参考文件（>300 行）加目录
-- 复杂技能按领域组织：
+- Keep SKILL.md under 500 lines
+- Add table of contents for large reference files (>300 lines)
+- Organize complex skills by domain:
 
 ```
 cloud-deploy/
@@ -154,18 +154,18 @@ cloud-deploy/
 
 ---
 
-## 与用户沟通
+## Communicating with Users
 
-这个技能可能被不同技术水平的用户使用。注意：
-- "evaluation"、"benchmark" 可以用
-- "JSON"、"assertion" 需要看用户是否懂
-- 不确定时可以简单解释一下
+This skill may be used by users with varying technical proficiency. Note:
+- "evaluation", "benchmark" are fine to use
+- "JSON", "assertion" — check if the user understands
+- When in doubt, provide a simple explanation
 
 ---
 
-## 保存测试用例（可选）
+## Saving Test Cases (Optional)
 
-如果需要保存测试用例，创建 `evals/evals.json`:
+If test cases need to be saved, create `evals/evals.json`:
 
 ```json
 {
@@ -173,8 +173,8 @@ cloud-deploy/
   "evals": [
     {
       "id": 1,
-      "prompt": "用户的任务描述",
-      "expected_output": "期望结果描述",
+      "prompt": "User's task description",
+      "expected_output": "Expected result description",
       "files": []
     }
   ]
@@ -183,4 +183,4 @@ cloud-deploy/
 
 ---
 
-有问题随时问用户。创建技能是一个迭代过程，不需要一步到位。
+Feel free to ask the user questions anytime. Creating skills is an iterative process — it doesn't need to be perfect from the start.

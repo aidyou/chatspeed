@@ -27,6 +27,18 @@ Which ones would you like installed?
 
 After installing a skill, tell the user: "Restart Chatspeed to pick up new skills."
 
+## Mandatory Vetting
+
+**After installing any skill, you MUST call the skill-vetter skill to vet it before the installation is considered complete.**
+
+Workflow:
+1. Install the skill using the scripts
+2. **Immediately call `skill-vetter` to review the installed skill**
+3. Report the vetting results to the user
+4. If the skill fails vetting (HIGH/EXTREME risk), warn the user and suggest removal
+
+The vetting should read the installed skill files from `~/.chatspeed/skills/<skill-name>/` and apply the full security review protocol.
+
 ## Scripts
 
 All of these scripts use network, so when running in the sandbox, request escalation when running them.
