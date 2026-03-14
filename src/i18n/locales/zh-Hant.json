@@ -173,7 +173,7 @@
       "approvalLevel": "審批級別",
       "approvalLevelDefault": "按智能體配置",
       "approvalLevelFull": "全開 (高風險)",
-      "approvalLevelSmart": "智能審批 (只攔截寫操作)",
+      "approvalLevelSmart": "智能審批 (只攔截風險操作)",
       "authorizedPaths": "授權目錄",
       "authorizedPathsAdd": "新增目錄",
       "authorizedPathsTip": "智能體將只能讀寫這些目錄（及其子目錄）下的檔案。如果不配置，部分檔案操作工具可能無法使用。",

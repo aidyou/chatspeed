@@ -110,30 +110,41 @@ impl ObservationReinforcer {
                     }
                 }
 
-                // --- Structured formatting for web_search results (Formatting for AI) ---
-                if tool_name == TOOL_WEB_SEARCH {
-                    if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&raw_res) {
-                        if !arr.is_empty() {
-                            let mut formatted = String::from("Search Results:\n");
-                            for (i, item) in arr.iter().enumerate() {
-                                let title = item["title"].as_str().unwrap_or("No title");
-                                let snippet = item["snippet"].as_str().unwrap_or("");
-                                let url = item["url"].as_str().unwrap_or("");
-                                formatted.push_str(&format!(
-                                    "{}. **{}**\n   {}\n   URL: {}\n\n",
-                                    i + 1,
-                                    title,
-                                    snippet,
-                                    url
-                                ));
+                // --- Custom Logic for File Tools (Formatting for UI Diff) ---
+                if tool_name == TOOL_EDIT_FILE || tool_name == TOOL_WRITE_FILE {
+                    let mut preview_args = args.clone();
+                    let preview_limit = 100_000;
+
+                    // Truncate large fields for UI history to prevent DB bloat and rendering lag
+                    if let Some(content) = preview_args.get_mut("content") {
+                        if let Some(s) = content.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *content = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
                             }
-                            formatted.push_str("<SYSTEM_REMINDER>Analyze these results carefully. Select the 1-3 most relevant and authoritative URLs, then use web_fetch to extract detailed data. Do NOT search again with similar keywords.</SYSTEM_REMINDER>");
-                            raw_res = formatted;
                         }
                     }
+                    if let Some(old_s) = preview_args.get_mut("old_string") {
+                        if let Some(s) = old_s.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *old_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                            }
+                        }
+                    }
+                    if let Some(new_s) = preview_args.get_mut("new_string") {
+                        if let Some(s) = new_s.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *new_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                            }
+                        }
+                    }
+
+                    raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
-                let display_type = if tool_name == TOOL_EDIT_FILE {
+                let display_type = if tool_name == TOOL_EDIT_FILE || tool_name == TOOL_WRITE_FILE {
                     "diff"
                 } else {
                     "text"

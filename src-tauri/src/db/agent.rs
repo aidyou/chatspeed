@@ -97,6 +97,54 @@ impl Agent {
             updated_at: None,
         }
     }
+
+    /// Merges values from a JSON config string into this Agent instance
+    pub fn merge_config(&mut self, config_json: &str) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(config_json) {
+            if let Some(models) = config.get("models") {
+                if let Ok(m) = serde_json::from_value::<AgentModels>(models.clone()) {
+                    self.models = Some(m);
+                }
+            }
+            if let Some(v) = config.get("shell_policy") {
+                self.shell_policy = Some(if v.is_string() {
+                    v.as_str().unwrap_or_default().to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                });
+            }
+            if let Some(v) = config.get("allowed_paths") {
+                self.allowed_paths = Some(if v.is_string() {
+                    v.as_str().unwrap_or_default().to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                });
+            }
+            if let Some(final_audit) = config.get("final_audit").and_then(|v| v.as_bool()) {
+                self.final_audit = Some(final_audit);
+            }
+            if let Some(v) = config.get("auto_approve") {
+                self.auto_approve = Some(if v.is_string() {
+                    v.as_str().unwrap_or_default().to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                });
+            }
+            if let Some(approval_level) = config.get("approval_level").and_then(|v| v.as_str()) {
+                self.approval_level = Some(approval_level.to_string());
+            }
+            if let Some(v) = config.get("available_tools") {
+                self.available_tools = Some(if v.is_string() {
+                    v.as_str().unwrap_or_default().to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                });
+            }
+            if let Some(max_contexts) = config.get("max_contexts").and_then(|v| v.as_i64()) {
+                self.max_contexts = Some(max_contexts as i32);
+            }
+        }
+    }
 }
 
 impl From<&Row<'_>> for Agent {

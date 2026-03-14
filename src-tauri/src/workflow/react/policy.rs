@@ -9,7 +9,9 @@ pub enum PathRestriction {
     FullAuthorized,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ExecutionPhase {
     /// Research and design phase
     Planning,
@@ -19,7 +21,11 @@ pub enum ExecutionPhase {
     Standard,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+use strum::{Display, EnumString};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ApprovalLevel {
     /// Follow agent config's auto_approve list
     Default,

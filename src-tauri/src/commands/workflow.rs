@@ -443,13 +443,35 @@ pub async fn workflow_start(
         (p, att, paths)
     };
 
-    let agent_config = {
+    let mut agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
             .get_agent(&agent_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Agent {} not found", agent_id))?
     };
+
+    // Load agent_config JSON for easier access to overrides like 'phase'
+    let agent_config_json: Value = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
+            snapshot.workflow.agent_config
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(json!({}))
+        } else {
+            json!({})
+        }
+    };
+
+    // Load agent_config from workflow record if available and merge into agent_config struct
+    if let Some(config_str) = agent_config_json.as_str() {
+        agent_config.merge_config(config_str);
+    } else if !agent_config_json.is_null() {
+        if let Ok(config_str) = serde_json::to_string(&agent_config_json) {
+            agent_config.merge_config(&config_str);
+        }
+    }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
@@ -470,27 +492,46 @@ pub async fn workflow_start(
         })
         .collect();
 
-    // Build execution policy with approval level from agent config
+    // Build execution policy with phase from overrides or default
     let mut policy = if planning_mode {
         crate::workflow::react::policy::ExecutionPolicy::planning()
     } else {
-        crate::workflow::react::policy::ExecutionPolicy::standard()
+        // Try to load phase from overrides
+        if let Some(p_str) = agent_config_json.get("phase").and_then(|v| v.as_str()) {
+            use std::str::FromStr;
+            if let Ok(p) = crate::workflow::react::policy::ExecutionPhase::from_str(p_str) {
+                match p {
+                    crate::workflow::react::policy::ExecutionPhase::Planning => {
+                        crate::workflow::react::policy::ExecutionPolicy::planning()
+                    }
+                    crate::workflow::react::policy::ExecutionPhase::Implementation => {
+                        crate::workflow::react::policy::ExecutionPolicy::implementation()
+                    }
+                    crate::workflow::react::policy::ExecutionPhase::Standard => {
+                        crate::workflow::react::policy::ExecutionPolicy::standard()
+                    }
+                }
+            } else {
+                crate::workflow::react::policy::ExecutionPolicy::standard()
+            }
+        } else {
+            crate::workflow::react::policy::ExecutionPolicy::standard()
+        }
     };
 
-    // Apply approval level from agent config
+    // Apply approval level from merged agent config
     if let Some(ref approval_level_str) = agent_config.approval_level {
-        use crate::workflow::react::policy::ApprovalLevel;
-        let level = match approval_level_str.as_str() {
-            "smart" => ApprovalLevel::Smart,
-            "full" => ApprovalLevel::Full,
-            _ => ApprovalLevel::Default,
-        };
-        policy.approval_level = level.clone();
-        log::info!(
-            "[Workflow] Session {} using approval level: {:?}",
-            session_id,
-            level
-        );
+        use std::str::FromStr;
+        if let Ok(level) =
+            crate::workflow::react::policy::ApprovalLevel::from_str(approval_level_str)
+        {
+            policy.approval_level = level.clone();
+            log::info!(
+                "[Workflow] Session {} using approval level: {:?}",
+                session_id,
+                level
+            );
+        }
     }
 
     let shared_executor: Arc<
@@ -569,11 +610,21 @@ pub async fn workflow_start(
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
+            if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                log::info!(
+                    "Workflow session {} was cancelled by user.",
+                    session_id_for_spawn
+                );
+                BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                return;
+            }
+
             log::error!(
                 "Workflow error in session {}: {:?}",
                 session_id_for_spawn,
                 e
             );
+
             // Notify UI about the fatal crash
             let _ = gateway_for_spawn
                 .send(
@@ -656,13 +707,23 @@ pub async fn workflow_approve_plan(
         let _ = std::fs::create_dir_all(&planning_dir);
     }
 
-    let agent_config = {
+    let mut agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
             .get_agent(&agent_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Agent {} not found", agent_id))?
     };
+
+    // Load agent_config from workflow record if available and merge into agent_config struct
+    {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
+            if let Some(config_str) = snapshot.workflow.agent_config {
+                agent_config.merge_config(&config_str);
+            }
+        }
+    }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
@@ -789,11 +850,21 @@ pub async fn workflow_approve_plan(
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
+            if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                log::info!(
+                    "Workflow session {} was cancelled by user.",
+                    session_id_for_spawn
+                );
+                BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                return;
+            }
+
             log::error!(
                 "Workflow error in session {}: {:?}",
                 session_id_for_spawn,
                 e
             );
+
             // Notify UI about the fatal crash
             let _ = gateway_for_spawn
                 .send(

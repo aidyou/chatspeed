@@ -58,6 +58,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
         } else if (!w.allowedPaths) {
           w.allowedPaths = [];
         }
+
+        // Parse agent_config if present
+        if (w.agentConfig && typeof w.agentConfig === 'string') {
+          try {
+            w.agentConfig = JSON.parse(w.agentConfig);
+          } catch (e) {
+            console.error('Failed to parse agentConfig for workflow', w.id, e);
+          }
+        }
         return w;
       });
     } catch (err) {
@@ -72,6 +81,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
+
+      // Parse agent_config from snapshot
+      if (snapshot.workflow && snapshot.workflow.agentConfig && typeof snapshot.workflow.agentConfig === 'string') {
+        try {
+          snapshot.workflow.agentConfig = JSON.parse(snapshot.workflow.agentConfig);
+        } catch (e) {
+          console.error('Failed to parse snapshot agentConfig:', e);
+        }
+      }
 
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {

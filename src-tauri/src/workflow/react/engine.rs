@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use regex::Regex;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -308,6 +307,20 @@ impl WorkflowExecutor {
         self.available_skills = self.skill_scanner.scan()?;
         self.llm_processor.available_skills = self.available_skills.clone();
 
+        // Load current state from database
+        {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                if let Ok(state) = snapshot.workflow.status.parse::<WorkflowState>() {
+                    self.state = state;
+                }
+            }
+        }
+
         // Get MCP tool summaries for workflow
         self.llm_processor.mcp_tool_summaries = self
             .global_tool_manager
@@ -328,7 +341,20 @@ impl WorkflowExecutor {
         let _ = self.sync_todo_list().await;
 
         if let Some(last_msg) = self.context.messages.last() {
-            self.current_step = last_msg.step_index as usize;
+            // Reset steps if we are resuming a finished or failed workflow
+            if self.state == WorkflowState::Completed
+                || self.state == WorkflowState::Error
+                || self.state == WorkflowState::Cancelled
+            {
+                log::info!(
+                    "WorkflowExecutor {}: Resetting current_step for resumed workflow (previous state: {})",
+                    self.session_id,
+                    self.state
+                );
+                self.current_step = 0;
+            } else {
+                self.current_step = last_msg.step_index as usize;
+            }
 
             // Restore AwaitingApproval state: Rebuild pending_approvals and re-trigger UI signals
             if self.state == WorkflowState::AwaitingApproval {
@@ -731,25 +757,15 @@ impl WorkflowExecutor {
         }
 
         // For file operation commands (cat, head, tail, less, etc.)
-        // Be conservative: only match the exact file
+        // User requested these to have broad wildcards like 'cat *'
         let file_commands = [
             "cat", "head", "tail", "less", "more", "stat", "file", "wc", "du",
         ];
 
-        if file_commands.contains(&base_cmd) && parts.len() > 1 {
-            // Extract the file path (last non-flag argument)
-            let file_path = parts
-                .iter()
-                .rev()
-                .find(|p| !p.starts_with('-'))
-                .unwrap_or(&"");
-
-            if !file_path.is_empty() {
-                // Escape special regex characters in the file path
-                let escaped_path = regex::escape(file_path);
-                // Only match this exact file
-                return format!("^{} .*{}($| .*)", base_cmd, escaped_path);
-            }
+        if file_commands.contains(&base_cmd) {
+            // Return a broad pattern that matches the command with ANY arguments
+            // e.g., "cat file.txt" -> "^cat($| .*)"
+            return format!("^{}($| .*)", base_cmd);
         }
 
         // Default: conservative approach - only match exact command
@@ -843,7 +859,7 @@ impl WorkflowExecutor {
                                     );
 
                                     // Update agent_config.shell_policy in database
-                                    if let Ok(mut store) = self.context.main_store.write() {
+                                    if let Ok(store) = self.context.main_store.write() {
                                         if let Ok(snapshot) =
                                             store.get_workflow_snapshot(&self.session_id)
                                         {
@@ -1075,6 +1091,25 @@ impl WorkflowExecutor {
                     let mut new_policy = ExecutionPolicy::implementation();
                     new_policy.approval_level = self.policy.approval_level.clone();
                     self.policy = new_policy;
+
+                    // Persist phase change to database
+                    if let Ok(store) = self.context.main_store.write() {
+                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                            let mut agent_config: serde_json::Value = snapshot
+                                .workflow
+                                .agent_config
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or(serde_json::json!({}));
+                            agent_config["phase"] =
+                                serde_json::json!(self.policy.phase.to_string());
+                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                let _ = store.update_workflow_agent_config(
+                                    &self.session_id,
+                                    &config_str,
+                                );
+                            }
+                        }
+                    }
 
                     // Reset step count for the new phase to ensure clear history separation
                     self.current_step = 0;
@@ -2077,7 +2112,7 @@ impl WorkflowExecutor {
                 step_type.clone(),
                 self.current_step as i32,
                 is_error,
-                error_type,
+                error_type.clone(),
                 metadata.clone(),
             )
             .await?;
@@ -2092,7 +2127,7 @@ impl WorkflowExecutor {
                     step_type,
                     step_index: self.current_step as i32,
                     is_error,
-                    error_type: None,
+                    error_type: error_type.clone(),
                     metadata,
                 },
             )
@@ -2244,8 +2279,7 @@ impl WorkflowExecutor {
                         self.session_id
                     );
                     // Update agent_config.models
-                    let models_json = serde_json::to_string(configs).unwrap_or_default();
-                    if let Ok(mut store) = self.context.main_store.write() {
+                    if let Ok(store) = self.context.main_store.write() {
                         if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                             let mut agent_config: serde_json::Value = snapshot
                                 .workflow
@@ -2264,6 +2298,61 @@ impl WorkflowExecutor {
                         serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
                     {
                         self.agent_config.models = Some(models);
+                    }
+                }
+            } else if sig_json["type"] == "update_approval_level" {
+                if let Some(level_str) = sig_json.get("level").and_then(|v| v.as_str()) {
+                    log::info!(
+                        "WorkflowExecutor {}: Updating approval level to {}",
+                        self.session_id,
+                        level_str
+                    );
+                    use std::str::FromStr;
+                    if let Ok(level) = crate::workflow::react::policy::ApprovalLevel::from_str(level_str) {
+                        self.policy.approval_level = level;
+                        // Also update agent_config in DB for persistence
+                        if let Ok(store) = self.context.main_store.write() {
+                            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                                let mut agent_config: serde_json::Value = snapshot
+                                    .workflow
+                                    .agent_config
+                                    .and_then(|s| serde_json::from_str(&s).ok())
+                                    .unwrap_or(serde_json::json!({}));
+                                agent_config["approval_level"] = serde_json::json!(level_str);
+                                if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                    let _ = store.update_workflow_agent_config(
+                                        &self.session_id,
+                                        &config_str,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if sig_json["type"] == "update_final_audit" {
+                if let Some(audit) = sig_json.get("audit").and_then(|v| v.as_bool()) {
+                    log::info!(
+                        "WorkflowExecutor {}: Updating final audit to {}",
+                        self.session_id,
+                        audit
+                    );
+                    self.agent_config.final_audit = Some(audit);
+                    // Update agent_config in DB
+                    if let Ok(store) = self.context.main_store.write() {
+                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                            let mut agent_config: serde_json::Value = snapshot
+                                .workflow
+                                .agent_config
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or(serde_json::json!({}));
+                            agent_config["final_audit"] = serde_json::json!(audit);
+                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                let _ = store.update_workflow_agent_config(
+                                    &self.session_id,
+                                    &config_str,
+                                );
+                            }
+                        }
                     }
                 }
             }

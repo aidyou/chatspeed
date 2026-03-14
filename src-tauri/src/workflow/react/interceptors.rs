@@ -39,9 +39,31 @@ impl WorkflowExecutor {
             return false;
         }
 
-        // Default mode: intercept everything not in auto_approve
-        if self.policy.approval_level == ApprovalLevel::Default {
-            return true;
+        // Special handling for bash: Check shell policy first
+        // If a command is explicitly allowed in shell_policy (e.g. via Approve All), don't intercept
+        if name == TOOL_BASH {
+            let command_str = args["command"].as_str().unwrap_or("").trim();
+            if !command_str.is_empty() {
+                let custom_rules: Vec<crate::tools::ShellPolicyRule> = self
+                    .agent_config
+                    .shell_policy
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
+                let policy_engine =
+                    crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
+
+                if let crate::tools::ShellDecision::Allow =
+                    policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning)
+                {
+                    log::info!(
+                        "WorkflowExecutor {}: Auto-approving bash command allowed by policy: {}",
+                        self.session_id,
+                        command_str
+                    );
+                    return false;
+                }
+            }
         }
 
         // Smart mode: allow read/write tools, intercept risky bash or unknown mutations
@@ -94,6 +116,7 @@ impl WorkflowExecutor {
             return true;
         }
 
+        // Default mode: intercept everything else
         true
     }
 
@@ -358,40 +381,38 @@ impl WorkflowExecutor {
             custom
         } else {
             match name {
-                TOOL_EDIT_FILE => {
+                TOOL_EDIT_FILE | TOOL_WRITE_FILE => {
                     display_type = "diff".to_string();
-                    let path = args["file_path"].as_str().unwrap_or("unknown");
-                    let old = args["old_string"].as_str().unwrap_or("");
-                    let new = args["new_string"].as_str().unwrap_or("");
-                    format!("--- {}\n+++ {}\n- {}\n+ {}", path, path, old, new)
-                }
-                TOOL_WRITE_FILE => {
-                    display_type = "diff".to_string();
-                    let path = args["file_path"].as_str().unwrap_or("unknown");
-                    let new_content = args["content"].as_str().unwrap_or("");
+                    let mut preview_args = args.clone();
+                    let preview_limit = 100_000;
 
-                    // Significantly higher limit for approval review
-                    let preview_limit = 100000;
-                    let new_preview: String = new_content.chars().take(preview_limit).collect();
-                    let suffix = if new_content.chars().count() > preview_limit {
-                        "\n... (remaining content truncated for preview)"
-                    } else {
-                        ""
-                    };
-
-                    match std::fs::metadata(path) {
-                        Ok(meta) => {
-                            let size_kb = meta.len() / 1024;
-                            format!(
-                                "--- {}\n+++ {}\n(Full overwrite, size: {} KB)\n- [Existing content...]\n+ {}{}",
-                                path, path, size_kb, new_preview, suffix
-                            )
-                        }
-                        Err(_) => {
-                            // Represent new file as: --- path \n +++ path \n - \n + content
-                            format!("--- {}\n+++ {}\n-\n+ {}{}", path, path, new_preview, suffix)
+                    // Truncate large fields for UI preview to prevent IPC/Rendering lag
+                    if let Some(content) = preview_args.get_mut("content") {
+                        if let Some(s) = content.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *content = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                            }
                         }
                     }
+                    if let Some(old_s) = preview_args.get_mut("old_string") {
+                        if let Some(s) = old_s.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *old_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                            }
+                        }
+                    }
+                    if let Some(new_s) = preview_args.get_mut("new_string") {
+                        if let Some(s) = new_s.as_str() {
+                            if s.chars().count() > preview_limit {
+                                let truncated: String = s.chars().take(preview_limit).collect();
+                                *new_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                            }
+                        }
+                    }
+
+                    serde_json::to_string(&preview_args).unwrap_or_default()
                 }
                 _ => format!(
                     "Tool: {}\nArguments: {}",

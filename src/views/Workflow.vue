@@ -492,8 +492,9 @@ const activeModelName = computed(() => {
   let providerId = null
   let modelId = null
 
-  if (workflow) {
-    const model = planningMode.value ? workflow.reasoningModel : workflow.generalModel
+  if (workflow && workflow.agentConfig && workflow.agentConfig.models) {
+    const models = workflow.agentConfig.models
+    const model = planningMode.value ? (models.plan || models.act) : models.act
     if (model) {
       providerId = model.id
       modelId = model.model
@@ -542,6 +543,9 @@ const onModelConfigSave = async (configs) => {
           configs: configs
         })
       })
+
+      // Refresh current workflow state from DB to update UI
+      await workflowStore.selectWorkflow(currentWorkflowId.value)
     }
     showMessage(t('common.saveSuccess'), 'success')
   } catch (error) {
@@ -596,22 +600,27 @@ const filteredSystemSkills = computed(() => {
     .sort((a, b) => {
       const aName = a.name.toLowerCase()
       const bName = b.name.toLowerCase()
-      const aNameMatch = aName.includes(query)
-      const bNameMatch = bName.includes(query)
+      
+      // 1. Prioritize exact name match
+      if (aName === query && bName !== query) return -1
+      if (aName !== query && bName === query) return 1
 
-      // 1. Prioritize name matches over description-only matches
-      if (aNameMatch && !bNameMatch) return -1
-      if (!aNameMatch && bNameMatch) return 1
-
-      // 2. Within name matches, prioritize "starts with"
+      // 2. Prioritize "starts with" name match
       const aStarts = aName.startsWith(query)
       const bStarts = bName.startsWith(query)
       if (aStarts && !bStarts) return -1
       if (!aStarts && bStarts) return 1
 
-      // 3. Fallback to alphabetical order
-      return a.name.localeCompare(b.name)
-    })})
+      // 3. Prioritize "includes" name match
+      const aIncludes = aName.includes(query)
+      const bIncludes = bName.includes(query)
+      if (aIncludes && !bIncludes) return -1
+      if (!aIncludes && bIncludes) return 1
+
+      // 4. Fallback to alphabetical order
+      return aName.localeCompare(bName)
+    })
+})
 
 const modelSelectorVisible = ref(false)
 const modelSelectorTab = ref('act') // 'plan' or 'act'
@@ -700,6 +709,33 @@ const onSkillSelect = (skill) => {
     })
   }
 }
+watch(approvalLevel, async (newVal) => {
+  if (currentWorkflowId.value) {
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal: JSON.stringify({
+        type: 'update_approval_level',
+        level: newVal
+      })
+    })
+    // Refresh to sync local state if needed
+    await workflowStore.selectWorkflow(currentWorkflowId.value)
+  }
+})
+
+watch(finalAuditMode, async (newVal) => {
+  if (currentWorkflowId.value) {
+    await invokeWrapper('workflow_signal', {
+      sessionId: currentWorkflowId.value,
+      signal: JSON.stringify({
+        type: 'update_final_audit',
+        audit: newVal === 'on'
+      })
+    })
+    await workflowStore.selectWorkflow(currentWorkflowId.value)
+  }
+})
+
 watch(inputMessage, (newVal) => {
   // TRIGGERS ONLY if '/' is the very first character of the whole input
   if (newVal === '/') {
@@ -1330,24 +1366,57 @@ const getDiffMarkdown = (content) => {
   try {
     let data = content
     if (typeof content === 'string') {
-        try {
-            data = JSON.parse(content)
-        } catch (e) {
-            return content
-        }
+      try {
+        data = JSON.parse(content)
+      } catch (e) {
+        return content
+      }
     }
-    
-    // Check if it's diff-like structure
+
     const oldStr = data.old_string !== undefined ? data.old_string : ''
     const newStr = data.new_string !== undefined ? data.new_string : (data.content || '')
     const filePath = data.file_path || data.path || 'file'
 
     // If it's just raw content without diff semantics, return as code block
     if (data.old_string === undefined && data.new_string === undefined && !data.content) {
-        return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
+      return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
     }
 
-    return `File: **${filePath}**\n\n\`\`\`diff\n<<<<<<< Original\n${oldStr}\n=======\n${newStr}\n>>>>>>> Modified\n\`\`\``
+    // Generate standard unidiff-like format for better highlighting
+    let diffContent = `File: **${filePath}**\n\n\`\`\`diff\n`
+    diffContent += `--- ${filePath}\n`
+    diffContent += `+++ ${filePath}\n`
+
+    const UI_LINE_LIMIT = 500 // Limit lines shown in UI for performance
+    
+    if (data.old_string !== undefined) {
+      // For edits, show old and new
+      const oldLines = oldStr.split('\n')
+      const newLines = newStr.split('\n')
+      
+      // If either side is too long, truncate for the UI
+      const displayOldLines = oldLines.slice(0, UI_LINE_LIMIT)
+      const displayNewLines = newLines.slice(0, UI_LINE_LIMIT)
+      
+      displayOldLines.forEach(line => diffContent += `- ${line}\n`)
+      if (oldLines.length > UI_LINE_LIMIT) diffContent += `- ... (${oldLines.length - UI_LINE_LIMIT} lines truncated)\n`
+      
+      displayNewLines.forEach(line => diffContent += `+ ${line}\n`)
+      if (newLines.length > UI_LINE_LIMIT) diffContent += `+ ... (${newLines.length - UI_LINE_LIMIT} lines truncated)\n`
+    } else {
+      // For new files or overwrites: "- " (empty line) then "+ content"
+      diffContent += `- \n` 
+      const newLines = newStr.split('\n')
+      const displayLines = newLines.slice(0, UI_LINE_LIMIT)
+      
+      displayLines.forEach(line => diffContent += `+ ${line}\n`)
+      if (newLines.length > UI_LINE_LIMIT) {
+        diffContent += `+ ... (${newLines.length - UI_LINE_LIMIT} lines truncated)\n`
+      }
+    }
+
+    diffContent += '```'
+    return diffContent
   } catch (e) {
     return typeof content === 'string' ? content : JSON.stringify(content)
   }
@@ -1597,13 +1666,25 @@ const selectWorkflow = async id => {
       await setupWorkflowEvents(id)
     }
 
-    // Initialize finalAuditMode: use workflow value first, then fallback to agent config
-    if (workflowStore.currentWorkflow.finalAudit !== undefined && workflowStore.currentWorkflow.finalAudit !== null) {
-      finalAuditMode.value = workflowStore.currentWorkflow.finalAudit ? 'on' : 'off'
+    // Initialize settings from workflow's agentConfig or fallback to agent defaults
+    const config = workflowStore.currentWorkflow.agentConfig || {}
+    
+    // finalAuditMode
+    if (config.final_audit !== undefined && config.final_audit !== null) {
+      finalAuditMode.value = config.final_audit ? 'on' : 'off'
     } else if (selectedAgent.value?.finalAudit) {
       finalAuditMode.value = 'on'
     } else {
       finalAuditMode.value = 'off'
+    }
+
+    // approvalLevel
+    if (config.approval_level) {
+      approvalLevel.value = config.approval_level
+    } else if (selectedAgent.value?.approvalLevel) {
+      approvalLevel.value = selectedAgent.value.approvalLevel
+    } else {
+      approvalLevel.value = 'default'
     }
   }
 }
@@ -1689,7 +1770,7 @@ const onApproveAction = async () => {
         showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
         approvalVisible.value = false
         // Reset running state since the session is lost
-        isRunning.value = false
+        workflowStore.setRunning(false)
     } else {
         showMessage(String(error), 'error')
     }
@@ -1718,7 +1799,7 @@ const onApproveAllAction = async () => {
         showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
         approvalVisible.value = false
         // Reset running state since the session is lost
-        isRunning.value = false
+        workflowStore.setRunning(false)
     } else {
         showMessage(String(error), 'error')
     }
@@ -1746,7 +1827,7 @@ const onRejectAction = async () => {
         showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
         approvalVisible.value = false
         // Reset running state since the session is lost
-        isRunning.value = false
+        workflowStore.setRunning(false)
     } else {
         showMessage(String(error), 'error')
     }
@@ -2499,6 +2580,7 @@ const toggleFinalAuditMode = () => {
                 padding: var(--cs-space);
                 border-radius: var(--cs-border-radius-lg);
                 max-width: 100%;
+                min-width: 0;
                 border: 1px solid var(--cs-border-color);
                 margin: 0;
                 white-space: pre-wrap;
