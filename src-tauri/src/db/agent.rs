@@ -7,6 +7,25 @@ use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub id: i64,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
+    pub context_size: Option<i32>,
+    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentModels {
+    pub plan: Option<ModelConfig>,
+    pub act: Option<ModelConfig>,
+    pub vision: Option<ModelConfig>,
+}
+
 /// Represents an AI agent for ReAct workflows
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
@@ -24,14 +43,8 @@ pub struct Agent {
     pub available_tools: Option<String>,
     /// JSON array of tools that can be executed without user confirmation
     pub auto_approve: Option<String>,
-    /// Model for planning phase (Legacy, stored in models JSON now)
-    pub plan_model: Option<String>,
-    /// Model for action phase (Legacy, stored in models JSON now)
-    pub act_model: Option<String>,
-    /// Vision model (Legacy, stored in models JSON now)
-    pub vision_model: Option<String>,
     /// Unified models configuration (JSON string)
-    pub models: Option<String>,
+    pub models: Option<AgentModels>,
     /// Shell command whitelist/blacklist (JSON array of {pattern, decision})
     pub shell_policy: Option<String>,
     /// JSON array of authorized directory paths
@@ -59,10 +72,7 @@ impl Agent {
         planning_prompt: Option<String>,
         available_tools: Option<String>,
         auto_approve: Option<String>,
-        plan_model: Option<String>,
-        act_model: Option<String>,
-        vision_model: Option<String>,
-        models: Option<String>,
+        models: Option<AgentModels>,
         shell_policy: Option<String>,
         allowed_paths: Option<String>,
         final_audit: Option<bool>,
@@ -77,9 +87,6 @@ impl Agent {
             planning_prompt,
             available_tools,
             auto_approve,
-            plan_model,
-            act_model,
-            vision_model,
             models,
             shell_policy,
             allowed_paths,
@@ -103,10 +110,10 @@ impl From<&Row<'_>> for Agent {
             planning_prompt: row.get("planning_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
             auto_approve: row.get("auto_approve").ok(),
-            plan_model: row.get("plan_model").ok(),
-            act_model: row.get("act_model").ok(),
-            vision_model: row.get("vision_model").ok(),
-            models: row.get("models").ok(),
+            models: row
+                .get::<_, String>("models")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok()),
             shell_policy: row.get("shell_policy").ok(),
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
@@ -140,24 +147,32 @@ impl MainStore {
             ));
         }
 
+        // Serialize JSON fields
+        let models_json = agent
+            .models
+            .as_ref()
+            .map(|m| serde_json::to_string(m).ok())
+            .flatten();
+        let available_tools_json = agent.available_tools.as_ref().cloned();
+        let auto_approve_json = agent.auto_approve.as_ref().cloned();
+        let shell_policy_json = agent.shell_policy.as_ref().cloned();
+        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 agent.id,
                 agent.name,
                 agent.description,
                 agent.system_prompt,
                 agent.planning_prompt,
-                agent.available_tools,
-                agent.auto_approve,
-                agent.plan_model,
-                agent.act_model,
-                agent.vision_model,
-                agent.models,
-                agent.shell_policy,
-                agent.allowed_paths,
+                available_tools_json,
+                auto_approve_json,
+                models_json,
+                shell_policy_json,
+                allowed_paths_json,
                 agent.final_audit,
                 agent.approval_level,
                 agent.max_contexts,
@@ -189,6 +204,17 @@ impl MainStore {
             ));
         }
 
+        // Serialize JSON fields
+        let models_json = agent
+            .models
+            .as_ref()
+            .map(|m| serde_json::to_string(m).ok())
+            .flatten();
+        let available_tools_json = agent.available_tools.as_ref().cloned();
+        let auto_approve_json = agent.auto_approve.as_ref().cloned();
+        let shell_policy_json = agent.shell_policy.as_ref().cloned();
+        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+
         // Update the agent
         tx.execute(
             "UPDATE agents SET
@@ -198,30 +224,24 @@ impl MainStore {
                 planning_prompt = ?4,
                 available_tools = ?5,
                 auto_approve = ?6,
-                plan_model = ?7,
-                act_model = ?8,
-                vision_model = ?9,
-                models = ?10,
-                shell_policy = ?11,
-                allowed_paths = ?12,
-                final_audit = ?13,
-                approval_level = ?14,
-                max_contexts = ?15,
+                models = ?7,
+                shell_policy = ?8,
+                allowed_paths = ?9,
+                final_audit = ?10,
+                approval_level = ?11,
+                max_contexts = ?12,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?16",
+             WHERE id = ?13",
             params![
                 agent.name,
                 agent.description,
                 agent.system_prompt,
                 agent.planning_prompt,
-                agent.available_tools,
-                agent.auto_approve,
-                agent.plan_model,
-                agent.act_model,
-                agent.vision_model,
-                agent.models,
-                agent.shell_policy,
-                agent.allowed_paths,
+                available_tools_json,
+                auto_approve_json,
+                models_json,
+                shell_policy_json,
+                allowed_paths_json,
                 agent.final_audit,
                 agent.approval_level,
                 agent.max_contexts,

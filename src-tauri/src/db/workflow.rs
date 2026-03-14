@@ -21,8 +21,7 @@ pub struct Workflow {
     #[serde(default = "default_workflow_status")]
     pub status: String,
     pub agent_id: String,
-    pub allowed_paths: Option<Value>,
-    pub final_audit: Option<bool>,
+    pub agent_config: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -61,12 +60,6 @@ pub struct WorkflowSnapshot {
 
 impl From<&Row<'_>> for Workflow {
     fn from(row: &Row<'_>) -> Self {
-        let allowed_paths: Option<Value> = row
-            .get::<_, Option<String>>("allowed_paths")
-            .ok()
-            .flatten()
-            .and_then(|s| serde_json::from_str(&s).ok());
-
         Self {
             id: row.get("id").ok(),
             title: row.get("title").ok(),
@@ -74,8 +67,7 @@ impl From<&Row<'_>> for Workflow {
             todo_list: row.get("todo_list").ok(),
             status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
             agent_id: row.get("agent_id").unwrap_or_default(),
-            allowed_paths,
-            final_audit: row.get("final_audit").ok(),
+            agent_config: row.get("agent_config").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
         }
@@ -117,19 +109,16 @@ impl MainStore {
         id: &str,
         user_query: &str,
         agent_id: &str,
-        allowed_paths: Option<Value>,
-        final_audit: Option<bool>,
+        agent_config: Option<String>,
     ) -> Result<Workflow, StoreError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let allowed_paths_json =
-            allowed_paths.map(|v| serde_json::to_string(&v).unwrap_or_default());
 
         conn.execute(
-            "INSERT INTO workflows (id, user_query, agent_id, allowed_paths, final_audit, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, user_query, agent_id, allowed_paths_json, final_audit.unwrap_or(false), "pending"],
+            "INSERT INTO workflows (id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, user_query, agent_id, agent_config, "pending"],
         )?;
 
         let workflow: Workflow = conn.query_row(
@@ -272,34 +261,18 @@ impl MainStore {
         Ok(())
     }
 
-    pub fn update_workflow_allowed_paths(
+    pub fn update_workflow_agent_config(
         &self,
         id: &str,
-        paths_json: &str,
+        agent_config: &str,
     ) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET allowed_paths = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![paths_json, id],
-        )?;
-        Ok(())
-    }
-
-    pub fn update_workflow_final_audit(
-        &self,
-        id: &str,
-        final_audit: bool,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows SET final_audit = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![final_audit, id],
+            "UPDATE workflows SET agent_config = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![agent_config, id],
         )?;
         Ok(())
     }

@@ -173,7 +173,7 @@
       "approvalLevel": "审批级别",
       "approvalLevelDefault": "按智能体配置",
       "approvalLevelFull": "全开 (高风险)",
-      "approvalLevelSmart": "智能审批 (只拦截写操作)",
+      "approvalLevelSmart": "智能审批 (只拦截风险操作)",
       "authorizedPaths": "授权目录",
       "authorizedPathsAdd": "添加目录",
       "authorizedPathsTip": "智能体将只能读写这些目录（及其子目录）下的文件。如果不配置，部分文件操作工具可能无法使用。",
@@ -827,6 +827,7 @@
     "submit_plan": "提交计划",
     "finishTask": "完成任务",
     "workflowTitle": "工作流标题",
-    "selectAgentFirst": "请先选择一个智能体"
+    "selectAgentFirst": "请先选择一个智能体",
+    "sessionLost": "会话已断开，请重启或刷新页面。"
   }
 }

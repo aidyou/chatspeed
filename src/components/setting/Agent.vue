@@ -259,10 +259,7 @@ const activeTab = ref('basic')
 const modelRoles = [
   { key: 'plan' },
   { key: 'act' },
-  { key: 'vision' },
-  { key: 'coding' },
-  { key: 'copywriting' },
-  { key: 'browsing' }
+  { key: 'vision' }
 ]
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
@@ -280,9 +277,6 @@ const defaultFormData = {
   planModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
   actModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
   visionModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-  codingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-  copywritingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-  browsingModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
   maxContexts: 128000,
   finalAudit: false,
   approvalLevel: 'default'
@@ -291,9 +285,9 @@ const defaultFormData = {
 const agentForm = ref({ ...defaultFormData })
 
 // Model config temporary state
-const modelModes = reactive({ plan: 'provider', act: 'provider', vision: 'provider', coding: 'provider', copywriting: 'provider', browsing: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
-const proxyAliases = reactive({ plan: '', act: '', vision: '', coding: '', copywriting: '', browsing: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider', vision: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', vision: '' })
+const proxyAliases = reactive({ plan: '', act: '', vision: '' })
 
 // Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {

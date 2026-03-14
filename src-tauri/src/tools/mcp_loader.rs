@@ -27,7 +27,7 @@ impl ToolDefinition for McpToolLoad {
     }
 
     fn description(&self) -> &str {
-        "Load detailed parameter schema for a specific MCP tool. Use this before calling an MCP tool to understand its parameters."
+        "Load detailed parameter schema for a specific MCP tool. MUST be called before invoking any MCP tool that doesn't display detailed parameter information. For tools already showing full schemas, this is not needed."
     }
 
     fn category(&self) -> ToolCategory {

@@ -223,28 +223,30 @@ impl LlmProcessor {
             let mut temperature = None;
             let mut max_tokens = None;
 
-            if let Some(ref models_json) = self.agent_config.models {
-                if let Ok(models_obj) = serde_json::from_str::<serde_json::Value>(models_json) {
-                    if let Some(models_map) = models_obj.as_object() {
-                        // Find the config entry that matches the active model name (or alias)
-                        for (_role, config) in models_map {
-                            let model_id = config["id"].as_str().unwrap_or("");
-                            if model_id == self.active_model_name {
-                                // Temperature: any value < 0 is treated as "Off/Unset"
-                                if let Some(temp) = config["temperature"].as_f64() {
-                                    if temp >= 0.0 {
-                                        temperature = Some(temp as f32);
-                                    }
-                                }
-                                // Max Output Tokens: 0 or less is treated as "Unset"
-                                if let Some(mt) = config["maxTokens"].as_i64() {
-                                    if mt > 0 {
-                                        max_tokens = Some(mt as u32);
-                                    }
-                                }
-                                break;
+            // Search through all model roles to find the one matching active_model_name
+            if let Some(ref models) = self.agent_config.models {
+                for model_config in [
+                    models.plan.as_ref(),
+                    models.act.as_ref(),
+                    models.vision.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if model_config.model == self.active_model_name {
+                        // Temperature: any value < 0 is treated as "Off/Unset"
+                        if let Some(temp) = model_config.temperature {
+                            if temp >= 0.0 {
+                                temperature = Some(temp as f32);
                             }
                         }
+                        // Max Output Tokens: 0 or less is treated as "Unset"
+                        if let Some(mt) = model_config.max_tokens {
+                            if mt > 0 {
+                                max_tokens = Some(mt as u32);
+                            }
+                        }
+                        break;
                     }
                 }
             }

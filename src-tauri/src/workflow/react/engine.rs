@@ -84,6 +84,7 @@ pub struct WorkflowExecutor {
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub subagent_type: Option<String>,
+    pub last_compression_step: usize,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Memory manager for reading/writing memory files
@@ -205,21 +206,21 @@ impl WorkflowExecutor {
             }
         }
 
-        let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
-            serde_json::from_str(m).unwrap_or_else(|_| serde_json::json!({}))
+        // Extract model configs from AgentModels structure
+        let act_model_config = agent_config.models.as_ref().and_then(|m| m.act.as_ref());
+        let plan_model_config = agent_config.models.as_ref().and_then(|m| m.plan.as_ref());
+
+        let initial_provider_id = act_model_config.map(|m| m.id).unwrap_or(0);
+        let initial_model_name = act_model_config
+            .map(|m| m.model.clone())
+            .unwrap_or_default();
+
+        // 1. Prioritize 'plan' model for IntelligenceManager (Grader/Audit tasks)
+        let (audit_provider_id, audit_model_name) = if let Some(plan_mc) = plan_model_config {
+            (plan_mc.id, plan_mc.model.clone())
         } else {
-            serde_json::json!({})
+            (initial_provider_id, initial_model_name.clone())
         };
-
-        let act_model = models_val.get("act").cloned().unwrap_or_else(|| {
-            serde_json::json!({
-                "id": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).and_then(|v| v["id"].as_i64()),
-                "model": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
-            })
-        });
-
-        let initial_provider_id = act_model["id"].as_i64().unwrap_or(0);
-        let initial_model_name = act_model["model"].as_str().unwrap_or_default().to_string();
 
         let mut executor = Self {
             session_id,
@@ -261,8 +262,8 @@ impl WorkflowExecutor {
             intelligence_manager: IntelligenceManager::new(
                 session_id_clone3,
                 chat_state_clone3,
-                initial_provider_id,
-                initial_model_name.clone(),
+                audit_provider_id,
+                audit_model_name,
             ),
             available_skills: HashMap::new(),
             agent_config,
@@ -274,6 +275,7 @@ impl WorkflowExecutor {
             signal_rx,
             tsid_generator,
             subagent_type,
+            last_compression_step: 0,
             policy,
             memory_manager: {
                 let project_root = allowed_paths.first().cloned();
@@ -414,7 +416,7 @@ impl WorkflowExecutor {
             let user_query = self.context.get_initial_query();
             if !user_query.is_empty() {
                 log::info!(
-                    "WorkflowExecutor {}: Generating title for workflow with empty title",
+                    "WorkflowExecutor {}: Spawning background task to generate workflow title",
                     self.session_id
                 );
                 let im = IntelligenceManager::new(
@@ -423,14 +425,9 @@ impl WorkflowExecutor {
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
                 );
-                if let Ok(title) = im.generate_workflow_title(&user_query).await {
-                    let store = self
-                        .context
-                        .main_store
-                        .read()
-                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-                    let _ = store.update_workflow_title(&self.session_id, &title);
-                }
+                tokio::spawn(async move {
+                    let _ = im.generate_workflow_title(&user_query).await;
+                });
             }
         }
         Ok(())
@@ -963,66 +960,31 @@ impl WorkflowExecutor {
 
             self.update_state(WorkflowState::Thinking).await?;
 
-            let agent_config = self.agent_config.clone();
-            let models_val: serde_json::Value = if let Some(m) = &agent_config.models {
-                serde_json::from_str(m).unwrap_or_else(|_| serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
+            let agent_config = &self.agent_config;
 
-            let act_model = models_val.get("act").cloned().unwrap_or_else(|| {
-                serde_json::json!({
-                    "id": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["id"].as_i64()),
-                    "model": agent_config.act_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
-                })
-            });
-
-            let plan_model = models_val.get("plan").cloned().unwrap_or_else(|| {
-                serde_json::json!({
-                    "id": agent_config.plan_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["id"].as_i64()),
-                    "model": agent_config.plan_model.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["model"].as_str().map(|s| s.to_string()))
-                })
-            });
+            // Get model configs directly from AgentModels structure
+            let act_model = agent_config.models.as_ref().and_then(|m| m.act.as_ref());
+            let plan_model = agent_config.models.as_ref().and_then(|m| m.plan.as_ref());
+            let vision_model = agent_config.models.as_ref().and_then(|m| m.vision.as_ref());
 
             let target_type = self
                 .subagent_type
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| "General".to_string());
-            let model_config = if self.policy.phase == ExecutionPhase::Planning {
-                if !plan_model["model"].is_null() {
-                    plan_model
-                } else {
-                    act_model.clone()
-                }
+
+            // Select the appropriate model based on phase and subagent type
+            let selected_model = if self.policy.phase == ExecutionPhase::Planning {
+                plan_model.or(act_model)
             } else {
                 match target_type.as_str() {
-                    "Programming" => models_val
-                        .get("coding")
-                        .cloned()
-                        .filter(|m| !m["model"].is_null())
-                        .unwrap_or_else(|| act_model.clone()),
-                    "Vision" => models_val
-                        .get("vision")
-                        .cloned()
-                        .filter(|m| !m["model"].is_null())
-                        .unwrap_or_else(|| act_model.clone()),
-                    "Writing" => models_val
-                        .get("copywriting")
-                        .cloned()
-                        .filter(|m| !m["model"].is_null())
-                        .unwrap_or_else(|| act_model.clone()),
-                    "Browsing" => models_val
-                        .get("browsing")
-                        .cloned()
-                        .filter(|m| !m["model"].is_null())
-                        .unwrap_or_else(|| act_model.clone()),
-                    _ => act_model.clone(),
+                    "Vision" => vision_model.or(act_model),
+                    _ => act_model,
                 }
             };
 
-            let _model_name = model_config["model"].as_str().unwrap_or("").to_string();
-            let provider_id = model_config["id"].as_i64().unwrap_or(0);
+            let _model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
+            let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
 
             // Pierce proxy to get actual model capabilities if needed
             let actual_config = self.resolve_actual_model_config(provider_id, &_model_name);
@@ -1121,9 +1083,41 @@ impl WorkflowExecutor {
             }
 
             self.update_state(WorkflowState::Executing).await?;
-            let (results, has_todo) = self
+            let results_opt = match self
                 .execute_tools(full_response, tool_calls_json, &mut signal_rx)
-                .await?;
+                .await
+            {
+                Ok(results) => Some(results),
+                Err(WorkflowEngineError::Cancelled(msg)) => {
+                    log::info!(
+                        "WorkflowExecutor {}: User cancelled operation: {}",
+                        self.session_id,
+                        msg
+                    );
+                    // Update state to Cancelled and exit gracefully
+                    self.update_state(WorkflowState::Cancelled).await?;
+                    // Add a friendly message about the cancellation
+                    let _ = self
+                        .add_message_and_notify_internal(
+                            "assistant".to_string(),
+                            format!("Task cancelled: {}", msg),
+                            None,
+                            None,
+                            None,
+                            false,
+                            None,
+                            None,
+                        )
+                        .await;
+                    None
+                }
+                Err(e) => return Err(e),
+            };
+
+            let Some((results, has_todo)) = results_opt else {
+                // Cancellation was handled, exit the loop
+                break;
+            };
 
             for (id, reinforced, original_call) in &results {
                 // Extract tool name from the original call for the metadata
@@ -1208,7 +1202,8 @@ impl WorkflowExecutor {
             }
 
             // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
-            if needs_compression {
+            // Cooldown: at least 3 steps since last compression to prevent infinite loops
+            if needs_compression && self.current_step > self.last_compression_step + 3 {
                 // Notify frontend: compression starting
                 self.gateway
                     .send(
@@ -1258,6 +1253,7 @@ impl WorkflowExecutor {
                         .context
                         .compress(summary, self.current_step as i32)
                         .await;
+                    self.last_compression_step = self.current_step;
                 }
             }
 
@@ -1844,11 +1840,13 @@ impl WorkflowExecutor {
             )
             .await?;
 
-        Ok(needs_compression
-            || msg
-                .metadata
-                .as_ref()
-                .map_or(false, |m| m["type"] == "summary"))
+        // Summary messages should not trigger compression - they are the result of compression
+        let is_summary = msg
+            .metadata
+            .as_ref()
+            .map_or(false, |m| m["type"] == "summary");
+
+        Ok(needs_compression && !is_summary)
     }
 
     /// Automatically detects and activates skills triggered by slash commands in user input.

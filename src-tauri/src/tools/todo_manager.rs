@@ -393,19 +393,17 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                None, // models
+                None, // shell_policy
+                None, // allowed_paths
+                None, // final_audit
+                None, // approval_level
+                None, // max_contexts
             );
             store_guard.add_agent(&agent).unwrap();
+            // Pass None for agent_config
             store_guard
-                .create_workflow(&session_id, "Test prompt", &agent_id, None, Some(false))
+                .create_workflow(&session_id, "Test prompt", &agent_id, None)
                 .unwrap();
         }
 

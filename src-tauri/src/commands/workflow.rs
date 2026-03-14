@@ -207,32 +207,95 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 // Workflow Session Persistence Commands
 // ==========================================
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkflowRequest {
+    pub user_query: String,
+    pub agent_id: String,
+    pub allowed_paths: Option<Value>,
+    pub final_audit: Option<bool>,
+}
+
 #[tauri::command]
 pub async fn create_workflow(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
-    workflow: Workflow,
+    request: CreateWorkflowRequest,
 ) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
 
     // Always use TSID for new workflow sessions
     let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
 
-    // Get agent's final_audit config to inherit
-    let final_audit = store
-        .get_agent(&workflow.agent_id)
+    // Get agent to construct initial agent_config
+    let agent = store
+        .get_agent(&request.agent_id)
         .map_err(|e| e.to_string())?
-        .and_then(|agent| agent.final_audit)
-        .unwrap_or(false);
+        .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
+
+    // Construct unified agent_config
+    let mut config_map = serde_json::Map::new();
+
+    // 1. Load models
+    if let Some(models) = &agent.models {
+        if let Ok(val) = serde_json::to_value(&models) {
+            config_map.insert("models".to_string(), val);
+        }
+    }
+
+    // 2. Load shell_policy
+    if let Some(policy_str) = &agent.shell_policy {
+        if let Ok(val) = serde_json::from_str::<Value>(policy_str) {
+            config_map.insert("shell_policy".to_string(), val);
+        }
+    }
+
+    // 3. Load allowed_paths (Priority: Workflow input > Agent default)
+    let paths_val = if let Some(val) = &request.allowed_paths {
+        val.clone()
+    } else if let Some(paths_str) = &agent.allowed_paths {
+        serde_json::from_str::<Value>(paths_str).unwrap_or(json!([]))
+    } else {
+        json!([])
+    };
+    config_map.insert("allowed_paths".to_string(), paths_val);
+
+    // 4. Load final_audit (Priority: Workflow input > Agent default)
+    let audit_val = if let Some(val) = request.final_audit {
+        json!(val)
+    } else {
+        json!(agent.final_audit.unwrap_or(false))
+    };
+    config_map.insert("final_audit".to_string(), audit_val);
+
+    // 5. Load auto_approve
+    if let Some(approve_str) = &agent.auto_approve {
+        if let Ok(val) = serde_json::from_str::<Value>(approve_str) {
+            config_map.insert("auto_approve".to_string(), val);
+        }
+    }
+
+    // 6. Load approval_level
+    if let Some(level) = &agent.approval_level {
+        config_map.insert("approval_level".to_string(), json!(level));
+    }
+
+    // 7. Load available_tools
+    if let Some(tools_str) = &agent.available_tools {
+        if let Ok(val) = serde_json::from_str::<Value>(tools_str) {
+            config_map.insert("available_tools".to_string(), val);
+        }
+    }
+
+    let agent_config_json = serde_json::to_string(&config_map).unwrap_or_default();
 
     store
         .create_workflow(
             &session_id,
-            &workflow.user_query,
-            &workflow.agent_id,
-            workflow.allowed_paths,
-            Some(final_audit),
+            &request.user_query,
+            &request.agent_id,
+            Some(agent_config_json),
         )
         .map_err(|e| e.to_string())?;
 
@@ -348,19 +411,24 @@ pub async fn workflow_start(
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
 
-        let paths: Vec<String> = match wf.allowed_paths {
-            Some(v) => {
+        let agent_config_json: Value = wf
+            .agent_config
+            .as_ref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(json!({}));
+
+        let paths: Vec<String> = agent_config_json
+            .get("allowed_paths")
+            .and_then(|v| {
                 if v.is_array() {
-                    serde_json::from_value(v).unwrap_or_default()
+                    serde_json::from_value(v.clone()).ok()
                 } else if let Some(s) = v.as_str() {
-                    // Handle string-encoded JSON array
-                    serde_json::from_str(s).unwrap_or_default()
+                    serde_json::from_str(s).ok()
                 } else {
-                    Vec::new()
+                    Some(Vec::new())
                 }
-            }
-            None => Vec::new(),
-        };
+            })
+            .unwrap_or_default();
 
         let prompt = initial_prompt
             .clone()
@@ -584,18 +652,27 @@ pub async fn workflow_approve_plan(
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
-        match wf.allowed_paths {
-            Some(v) => {
+
+        let agent_config_json: Value = wf
+            .agent_config
+            .as_ref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(json!({}));
+
+        let paths: Vec<String> = agent_config_json
+            .get("allowed_paths")
+            .and_then(|v| {
                 if v.is_array() {
-                    serde_json::from_value::<Vec<String>>(v).unwrap_or_default()
+                    serde_json::from_value(v.clone()).ok()
                 } else if let Some(s) = v.as_str() {
-                    serde_json::from_str(s).unwrap_or_default()
+                    serde_json::from_str(s).ok()
                 } else {
-                    Vec::new()
+                    Some(Vec::new())
                 }
-            }
-            None => Vec::new(),
-        }
+            })
+            .unwrap_or_default();
+
+        paths
     };
 
     let global_tool_manager = chat_state_arc.tool_manager.clone();
@@ -778,6 +855,27 @@ pub async fn workflow_signal(
                         .await?;
 
                         return Ok("Workflow resumed with input".to_string());
+                    }
+                } else if val["type"] == "approval" {
+                    // For approval signals, check if the workflow is still awaiting approval
+                    let store = state.read().map_err(|e| e.to_string())?;
+                    let snapshot = store
+                        .get_workflow_snapshot(&session_id)
+                        .map_err(|e| e.to_string())?;
+
+                    if snapshot.workflow.status == "awaiting_approval" {
+                        log::warn!(
+                            "[Workflow] Session {} is awaiting approval but no active channel. The workflow may have been interrupted. User should refresh the page.",
+                            session_id
+                        );
+                        return Err(format!(
+                            "Session interrupted while awaiting approval. Please refresh the page to restore the session."
+                        ));
+                    } else {
+                        return Err(format!(
+                            "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
+                            snapshot.workflow.status
+                        ));
                     }
                 }
             }
@@ -974,14 +1072,33 @@ pub async fn update_workflow_allowed_paths(
     allowed_paths: Value,
 ) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
-    // Ensure we store it as a proper JSON string in DB
-    let paths_json = if allowed_paths.is_string() {
-        allowed_paths.as_str().unwrap_or("[]").to_string()
-    } else {
-        serde_json::to_string(&allowed_paths).unwrap_or_else(|_| "[]".to_string())
+
+    // 1. Get current config
+    let mut config_val = {
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({}))
     };
+
+    // 2. Update allowed_paths
+    if let Some(obj) = config_val.as_object_mut() {
+        obj.insert("allowed_paths".to_string(), allowed_paths);
+    } else {
+        config_val = json!({
+            "allowed_paths": allowed_paths
+        });
+    }
+
+    // 3. Save back
+    let new_config_str = serde_json::to_string(&config_val).unwrap_or_default();
     store
-        .update_workflow_allowed_paths(&session_id, &paths_json)
+        .update_workflow_agent_config(&session_id, &new_config_str)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1005,8 +1122,33 @@ pub async fn update_workflow_final_audit(
     final_audit: bool,
 ) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
+
+    // 1. Get current config
+    let mut config_val = {
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({}))
+    };
+
+    // 2. Update final_audit
+    if let Some(obj) = config_val.as_object_mut() {
+        obj.insert("final_audit".to_string(), json!(final_audit));
+    } else {
+        config_val = json!({
+            "final_audit": final_audit
+        });
+    }
+
+    // 3. Save back
+    let new_config_str = serde_json::to_string(&config_val).unwrap_or_default();
     store
-        .update_workflow_final_audit(&session_id, final_audit)
+        .update_workflow_agent_config(&session_id, &new_config_str)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

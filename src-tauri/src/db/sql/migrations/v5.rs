@@ -10,8 +10,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             todo_list TEXT,
             status TEXT DEFAULT 'pending',
             agent_id TEXT REFERENCES agents(id),
-            allowed_paths TEXT,                -- JSON array of authorized directory paths
-            final_audit BOOLEAN DEFAULT 0,
+            agent_config TEXT,                 -- Unified JSON config (models, shell_policy, etc.)
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )"

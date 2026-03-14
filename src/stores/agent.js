@@ -47,21 +47,16 @@ const _transformFromBackend = (backendAgent) => {
   let models = {
     plan: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
     act: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    vision: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    coding: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    copywriting: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    browsing: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 }
+    vision: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 }
   };
 
   if (backendAgent.models) {
     try {
       const unifiedModels = JSON.parse(backendAgent.models);
       // Merge with defaults to ensure temperature exists
-      Object.keys(models).forEach(key => {
-        if (unifiedModels[key]) {
-          models[key] = { ...models[key], ...unifiedModels[key] };
-        }
-      });
+      if (unifiedModels.plan) models.plan = { ...models.plan, ...unifiedModels.plan };
+      if (unifiedModels.act) models.act = { ...models.act, ...unifiedModels.act };
+      if (unifiedModels.vision) models.vision = { ...models.vision, ...unifiedModels.vision };
     } catch (e) {
       console.error('Failed to parse unified models JSON:', e);
     }
@@ -84,9 +79,6 @@ const _transformFromBackend = (backendAgent) => {
     planModel: models.plan,
     actModel: models.act,
     visionModel: models.vision,
-    codingModel: models.coding,
-    copywritingModel: models.copywriting,
-    browsingModel: models.browsing,
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
     models: backendAgent.models || '',
@@ -112,10 +104,7 @@ const _transformToBackend = (frontendAgent) => {
   const modelsJson = JSON.stringify({
     plan: frontendAgent.planModel,
     act: frontendAgent.actModel,
-    vision: frontendAgent.visionModel,
-    coding: frontendAgent.codingModel,
-    copywriting: frontendAgent.copywritingModel,
-    browsing: frontendAgent.browsingModel
+    vision: frontendAgent.visionModel
   });
 
   return {

@@ -284,6 +284,33 @@ impl WorkflowExecutor {
                             "WorkflowExecutor {}: Auto-approving risky bash command in Full mode (Policy: {})",
                             self.session_id, reason
                         );
+                    } else if self.policy.approval_level == ApprovalLevel::Smart {
+                        // In Smart mode, check if this is a read-only command before intercepting
+                        let command_str_lower = command_str.to_lowercase();
+                        let is_read_only = READ_ONLY_BASH_CMDS_EXACT.contains(command_str_lower.as_str())
+                            || READ_ONLY_BASH_PREFIXES.iter().any(|&p| command_str_lower.starts_with(p));
+
+                        if is_read_only {
+                            log::info!(
+                                "WorkflowExecutor {}: Auto-approving read-only bash command in Smart mode: {}",
+                                self.session_id, command_str
+                            );
+                            // Don't intercept - allow the read-only command
+                        } else {
+                            log::info!(
+                                "WorkflowExecutor {}: Intercepting bash command for review in Smart mode: {}",
+                                self.session_id, reason
+                            );
+                            let display_content = format!("Command: {}\nReason: {}", command_str, reason);
+                            return self
+                                .handle_approval_interception(
+                                    id,
+                                    TOOL_BASH,
+                                    args,
+                                    Some(display_content),
+                                )
+                                .await;
+                        }
                     } else {
                         log::info!(
                             "WorkflowExecutor {}: Intercepting bash command for review: {}",

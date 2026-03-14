@@ -593,8 +593,25 @@ const filteredSystemSkills = computed(() => {
       item.name.toLowerCase().includes(query) ||
       (item.description && item.description.toLowerCase().includes(query))
     )
-    .sort((a, b) => a.name.localeCompare(b.name))
-})
+    .sort((a, b) => {
+      const aName = a.name.toLowerCase()
+      const bName = b.name.toLowerCase()
+      const aNameMatch = aName.includes(query)
+      const bNameMatch = bName.includes(query)
+
+      // 1. Prioritize name matches over description-only matches
+      if (aNameMatch && !bNameMatch) return -1
+      if (!aNameMatch && bNameMatch) return 1
+
+      // 2. Within name matches, prioritize "starts with"
+      const aStarts = aName.startsWith(query)
+      const bStarts = bName.startsWith(query)
+      if (aStarts && !bStarts) return -1
+      if (!aStarts && bStarts) return 1
+
+      // 3. Fallback to alphabetical order
+      return a.name.localeCompare(b.name)
+    })})
 
 const modelSelectorVisible = ref(false)
 const modelSelectorTab = ref('act') // 'plan' or 'act'
@@ -1026,7 +1043,7 @@ const formatToolTitle = (name, args) => {
 
     'bash': (args) => {
       const cmd = args.command || ''
-      return { icon: 'terminal', toolType: 'tool-system', action: `Bash ${cmd}`, target: '' }
+      return { icon: 'terminal', toolType: 'tool-system', action: `Bash: ${truncateText(cmd, 60)}`, target: '' }
     },
 
     'todo_create': (args) => {
@@ -1311,24 +1328,28 @@ const removeSystemReminder = (content) => {
 
 const getDiffMarkdown = (content) => {
   try {
-    const data = JSON.parse(content)
-    const oldStr = data.old_string || ''
-    const newStr = data.new_string || data.content || ''
+    let data = content
+    if (typeof content === 'string') {
+        try {
+            data = JSON.parse(content)
+        } catch (e) {
+            return content
+        }
+    }
+    
+    // Check if it's diff-like structure
+    const oldStr = data.old_string !== undefined ? data.old_string : ''
+    const newStr = data.new_string !== undefined ? data.new_string : (data.content || '')
     const filePath = data.file_path || data.path || 'file'
 
-    // Line-based simple diff
-    const oldLines = oldStr.split('\n')
-    const newLines = newStr.split('\n')
-    let diff = ''
-
-    if (oldStr) {
-      oldLines.forEach(line => { if (line.trim()) diff += `- ${line}\n` })
+    // If it's just raw content without diff semantics, return as code block
+    if (data.old_string === undefined && data.new_string === undefined && !data.content) {
+        return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
     }
-    newLines.forEach(line => { if (line.trim()) diff += `+ ${line}\n` })
 
-    return `\`\`\`diff\n--- Original\n+++ Modified\n${diff || ' (No changes)'}\n\`\`\``
+    return `File: **${filePath}**\n\n\`\`\`diff\n<<<<<<< Original\n${oldStr}\n=======\n${newStr}\n>>>>>>> Modified\n\`\`\``
   } catch (e) {
-    return content
+    return typeof content === 'string' ? content : JSON.stringify(content)
   }
 }
 
@@ -1613,13 +1634,11 @@ const startNewWorkflow = async (prompt) => {
 
     // 1. Create workflow in DB first to get a session_id
     const res = await invokeWrapper('create_workflow', {
-      workflow: {
+      request: {
         userQuery: prompt,
         agentId: selectedAgent.value.id,
-        status: 'pending',
         allowedPaths: workflowAllowedPaths,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        finalAudit: finalAuditMode.value === 'on'
       }
     })
 
@@ -1665,6 +1684,15 @@ const onApproveAction = async () => {
     approvalVisible.value = false
   } catch (error) {
     console.error('Failed to approve action:', error)
+    // If session is lost, force close dialog
+    if (String(error).includes('No sender') || String(error).includes('No active session') || String(error).includes('Session interrupted')) {
+        showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
+        approvalVisible.value = false
+        // Reset running state since the session is lost
+        isRunning.value = false
+    } else {
+        showMessage(String(error), 'error')
+    }
   } finally {
     approvalLoading.value = false
   }
@@ -1686,6 +1714,14 @@ const onApproveAllAction = async () => {
     approvalVisible.value = false
   } catch (error) {
     console.error('Failed to approve all actions:', error)
+    if (String(error).includes('No sender') || String(error).includes('No active session') || String(error).includes('Session interrupted')) {
+        showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
+        approvalVisible.value = false
+        // Reset running state since the session is lost
+        isRunning.value = false
+    } else {
+        showMessage(String(error), 'error')
+    }
   } finally {
     approvalLoading.value = false
   }
@@ -1706,6 +1742,14 @@ const onRejectAction = async () => {
     approvalVisible.value = false
   } catch (error) {
     console.error('Failed to reject action:', error)
+    if (String(error).includes('No sender') || String(error).includes('No active session') || String(error).includes('Session interrupted')) {
+        showMessage(t('workflow.sessionLost') || 'Session disconnected. Please refresh the page to restore the workflow.', 'warning')
+        approvalVisible.value = false
+        // Reset running state since the session is lost
+        isRunning.value = false
+    } else {
+        showMessage(String(error), 'error')
+    }
   } finally {
     approvalLoading.value = false
   }
@@ -2459,8 +2503,10 @@ const toggleFinalAuditMode = () => {
                 margin: 0;
                 white-space: pre-wrap;
                 word-break: break-all;
+                overflow-wrap: anywhere;
                 line-height: 1.8;
                 background: var(--cs-bg-color-light);
+                font-family: inherit;
               }
             }
           }
