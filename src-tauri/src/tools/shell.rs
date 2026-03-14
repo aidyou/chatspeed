@@ -1,18 +1,21 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::security::PathGuard;
+use crate::workflow::react::types::GatewayPayload;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
-#[derive(Debug, PartialEq, Clone, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellDecision {
     Allow,
@@ -20,7 +23,7 @@ pub enum ShellDecision {
     Deny(String),
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ShellPolicyRule {
     pub pattern: String,
     pub decision: ShellDecision,
@@ -367,6 +370,8 @@ pub struct ShellExecute {
     policy_engine: ShellPolicyEngine,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     planning_mode: bool,
+    gateway: Option<Arc<dyn Gateway>>,
+    session_id: Option<String>,
 }
 
 impl ShellExecute {
@@ -380,7 +385,16 @@ impl ShellExecute {
             policy_engine: ShellPolicyEngine::new(path_guard, custom_rules),
             tsid_generator,
             planning_mode,
+            gateway: None,
+            session_id: None,
         }
+    }
+
+    /// Sets the gateway for real-time output streaming
+    pub fn with_gateway(mut self, gateway: Arc<dyn Gateway>, session_id: String) -> Self {
+        self.gateway = Some(gateway);
+        self.session_id = Some(session_id);
+        self
     }
 }
 
@@ -508,6 +522,12 @@ impl ToolDefinition for ShellExecute {
             ));
         }
 
+        // Use streaming execution if gateway is configured
+        if self.gateway.is_some() && self.session_id.is_some() {
+            return self.call_with_streaming(command_str, timeout_ms).await;
+        }
+
+        // Fallback to standard execution
         let cmd_future = if cfg!(target_os = "windows") {
             Command::new("cmd").args(["/C", command_str]).output()
         } else {
@@ -538,6 +558,158 @@ impl ToolDefinition for ShellExecute {
                 "Command timed out after {}ms",
                 timeout_ms
             ))),
+        }
+    }
+}
+
+impl ShellExecute {
+    /// Execute command with real-time output streaming to frontend
+    async fn call_with_streaming(
+        &self,
+        command_str: &str,
+        timeout_ms: u64,
+    ) -> NativeToolResult {
+        use std::process::Stdio;
+
+        let gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
+            "Gateway not configured for streaming".to_string(),
+        ))?;
+        let session_id = self.session_id.as_ref().ok_or(ToolError::ExecutionFailed(
+            "Session ID not configured for streaming".to_string(),
+        ))?;
+
+        let mut child = if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .args(["/C", command_str])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
+        } else {
+            Command::new("sh")
+                .args(["-c", command_str])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
+        };
+
+        let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
+            "Failed to capture stdout".to_string(),
+        ))?;
+        let stderr = child.stderr.take().ok_or(ToolError::ExecutionFailed(
+            "Failed to capture stderr".to_string(),
+        ))?;
+
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let mut full_stdout = String::new();
+        let mut full_stderr = String::new();
+
+        // Read stdout and stderr concurrently with timeout
+        let start_time = std::time::Instant::now();
+
+        loop {
+            let timeout_remaining = timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
+            if timeout_remaining == 0 {
+                let _ = child.kill().await;
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Command timed out after {}ms",
+                    timeout_ms
+                )));
+            }
+
+            // Try to read from both stdout and stderr with a small timeout
+            let mut got_output = false;
+
+            // Use tokio::select! to read from either stream
+            tokio::select! {
+                line = stdout_reader.next_line() => {
+                    match line {
+                        Ok(Some(l)) => {
+                            full_stdout.push_str(&l);
+                            full_stdout.push('\n');
+
+                            // Send real-time notification to frontend
+                            let _ = gateway.send(
+                                session_id,
+                                GatewayPayload::Notification {
+                                    message: format!("📄 {}", l),
+                                    category: Some("shell".to_string()),
+                                },
+                            ).await;
+                            got_output = true;
+                        }
+                        Ok(None) => {
+                            // EOF reached for stdout
+                        }
+                        Err(e) => {
+                            log::warn!("Error reading stdout: {}", e);
+                        }
+                    }
+                }
+                line = stderr_reader.next_line() => {
+                    match line {
+                        Ok(Some(l)) => {
+                            full_stderr.push_str(&l);
+                            full_stderr.push('\n');
+
+                            // Send real-time notification to frontend
+                            let _ = gateway.send(
+                                session_id,
+                                GatewayPayload::Notification {
+                                    message: format!("⚠️ {}", l),
+                                    category: Some("shell-error".to_string()),
+                                },
+                            ).await;
+                            got_output = true;
+                        }
+                        Ok(None) => {
+                            // EOF reached for stderr
+                        }
+                        Err(e) => {
+                            log::warn!("Error reading stderr: {}", e);
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    // Check if process has exited
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            // Process has exited
+                            if status.success() {
+                                if full_stdout.len() > 30_000 {
+                                    full_stdout.truncate(30_000);
+                                    full_stdout.push_str("\n[Truncated]");
+                                }
+                                return Ok(ToolCallResult::success(Some(full_stdout), None));
+                            } else {
+                                return Err(ToolError::ExecutionFailed(format!(
+                                    "Exit {}. STDOUT: {}\nSTDERR: {}",
+                                    status,
+                                    full_stdout,
+                                    full_stderr
+                                )));
+                            }
+                        }
+                        Ok(None) => {
+                            // Process still running, continue
+                        }
+                        Err(e) => {
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Failed to check process status: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+            }
+
+            // Small yield to prevent busy loop
+            if !got_output {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         }
     }
 }

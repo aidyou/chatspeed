@@ -470,6 +470,29 @@ pub async fn workflow_start(
         })
         .collect();
 
+    // Build execution policy with approval level from agent config
+    let mut policy = if planning_mode {
+        crate::workflow::react::policy::ExecutionPolicy::planning()
+    } else {
+        crate::workflow::react::policy::ExecutionPolicy::standard()
+    };
+
+    // Apply approval level from agent config
+    if let Some(ref approval_level_str) = agent_config.approval_level {
+        use crate::workflow::react::policy::ApprovalLevel;
+        let level = match approval_level_str.as_str() {
+            "smart" => ApprovalLevel::Smart,
+            "full" => ApprovalLevel::Full,
+            _ => ApprovalLevel::Default,
+        };
+        policy.approval_level = level.clone();
+        log::info!(
+            "[Workflow] Session {} using approval level: {:?}",
+            session_id,
+            level
+        );
+    }
+
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
     > = if planning_mode {
@@ -487,7 +510,7 @@ pub async fn workflow_start(
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
-                crate::workflow::react::policy::ExecutionPolicy::planning(),
+                policy,
             ),
         ))
     } else {
@@ -505,7 +528,7 @@ pub async fn workflow_start(
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
-                crate::workflow::react::policy::ExecutionPolicy::standard(),
+                policy,
             ),
         ))
     };
@@ -857,26 +880,51 @@ pub async fn workflow_signal(
                         return Ok("Workflow resumed with input".to_string());
                     }
                 } else if val["type"] == "approval" {
-                    // For approval signals, check if the workflow is still awaiting approval
-                    let store = state.read().map_err(|e| e.to_string())?;
-                    let snapshot = store
-                        .get_workflow_snapshot(&session_id)
-                        .map_err(|e| e.to_string())?;
+                    // For approval signals, auto-resume the workflow if it's awaiting approval but not active
+                    let agent_id = {
+                        let store = state.read().map_err(|e| e.to_string())?;
+                        let snapshot = store
+                            .get_workflow_snapshot(&session_id)
+                            .map_err(|e| e.to_string())?;
 
-                    if snapshot.workflow.status == "awaiting_approval" {
-                        log::warn!(
-                            "[Workflow] Session {} is awaiting approval but no active channel. The workflow may have been interrupted. User should refresh the page.",
-                            session_id
-                        );
-                        return Err(format!(
-                            "Session interrupted while awaiting approval. Please refresh the page to restore the session."
-                        ));
-                    } else {
-                        return Err(format!(
-                            "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
-                            snapshot.workflow.status
-                        ));
-                    }
+                        if snapshot.workflow.status != "awaiting_approval" {
+                            return Err(format!(
+                                "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
+                                snapshot.workflow.status
+                            ));
+                        }
+                        snapshot.workflow.agent_id
+                    };
+
+                    log::info!(
+                        "[Workflow] Session {} is awaiting approval but no active channel. Auto-resuming workflow to process approval.",
+                        session_id
+                    );
+
+                    // Resume the workflow without initial_prompt - it will restore from AwaitingApproval state
+                    // and rebuild pending_approvals from message history
+                    workflow_start(
+                        app,
+                        state,
+                        chat_state,
+                        tsid_generator,
+                        gateway,
+                        factory,
+                        session_id.clone(),
+                        agent_id,
+                        None, // No initial prompt - restore from saved state
+                        None,
+                    )
+                    .await?;
+
+                    // Wait for the workflow to initialize and restore pending_approvals
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+                    // Now inject the approval signal into the resumed workflow
+                    gateway_arc.inject_input(&session_id, signal.clone()).await
+                        .map_err(|e| format!("Failed to inject approval after resuming: {}", e))?;
+
+                    return Ok("Workflow resumed and approval processed".to_string());
                 }
             }
             Err(format!(

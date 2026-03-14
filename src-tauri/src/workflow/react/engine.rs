@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use regex::Regex;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -507,12 +508,15 @@ impl WorkflowExecutor {
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
 
-            tm.register_tool(Arc::new(ShellExecute::new(
-                self.path_guard.clone(),
-                self.tsid_generator.clone(),
-                custom_rules,
-                self.policy.phase == ExecutionPhase::Planning,
-            )))
+            tm.register_tool(Arc::new(
+                ShellExecute::new(
+                    self.path_guard.clone(),
+                    self.tsid_generator.clone(),
+                    custom_rules,
+                    self.policy.phase == ExecutionPhase::Planning,
+                )
+                .with_gateway(self.gateway.clone(), self.session_id.clone()),
+            ))
             .await?;
         }
 
@@ -630,6 +634,129 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    /// Generates a wildcard pattern from a shell command for auto-approval
+    /// Uses conservative heuristics to avoid over-permissive rules
+    ///
+    /// Note: Hard-denied commands (sudo, dd, mkfs, etc.) are already blocked in shell.rs
+    /// This function only handles commands that passed shell policy and reached approval stage
+    ///
+    /// Examples:
+    /// - "git status" -> "^git status($| .*)"  (specific subcommand)
+    /// - "git log --oneline" -> "^git log($| .*)"  (subcommand only)
+    /// - "pnpm dev" -> "^pnpm dev($| .*)"  (package manager subcommand)
+    /// - "cat file.txt" -> "^cat file\\.txt$"  (exact file match only)
+    /// - "ls -la" -> "^ls($| .*)"  (safe command, allow all args)
+    /// - "rm file.txt" -> NO WILDCARD  (destructive, require approval each time)
+    fn generate_wildcard_pattern(&self, command: &str) -> String {
+        let trimmed = command.trim();
+
+        // Split by spaces to get the command parts
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+        if parts.is_empty() {
+            return "^.*$".to_string();
+        }
+
+        // Get the base command (first part)
+        let base_cmd = parts[0];
+
+        // Destructive commands that should NEVER get wildcard patterns
+        // These are in shell.rs's needs_review list and require explicit approval each time
+        // Note: sudo, dd, mkfs etc. are already hard-denied in shell.rs and won't reach here
+        let destructive_commands = [
+            "rm",
+            "rmdir",
+            "del",
+            "mv",
+            "move",
+            "chmod",
+            "chown",
+            "chgrp",
+            "kill",
+            "killall",
+            "pkill",
+            "ln",
+            "crontab",
+            "curl",
+            "wget", // Could download and execute malicious scripts
+            "apt",
+            "apt-get",
+            "yum",
+            "dnf",
+            "pacman",
+            "brew", // Package managers
+            "docker",
+            "podman",
+            "systemctl",
+            "service",
+        ];
+
+        if destructive_commands.contains(&base_cmd) {
+            // Return a pattern that only matches the EXACT command
+            // This way, "approve all" only applies to this specific invocation
+            let escaped = regex::escape(trimmed);
+            return format!("^{}$", escaped);
+        }
+
+        // Safe read-only commands that can have broad wildcards
+        let safe_commands = [
+            "ls", "dir", "tree", "pwd", "whoami", "id", "groups", "hostname", "date", "uptime",
+            "uname", "arch", "env", "printenv", "ps", "df", "free", "mount", "lsblk", "git", "npm",
+            "yarn", "pnpm", "node", "python", "python3", "cargo", "rustc", "go", "java", "javac",
+        ];
+
+        // For git and package managers, be smart about subcommands
+        let is_git_or_pkg_manager =
+            ["git", "npm", "yarn", "pnpm", "cargo", "go"].contains(&base_cmd);
+
+        if is_git_or_pkg_manager && parts.len() > 1 {
+            let second_part = parts[1];
+
+            // Check if second part is a subcommand (not a flag)
+            let is_subcommand = !second_part.starts_with('-');
+
+            if is_subcommand {
+                // Allow the specific subcommand with any arguments
+                // e.g., "git log --oneline" -> "^git log($| .*)"
+                return format!("^{} {}($| .*)", base_cmd, second_part);
+            } else {
+                // Has flags but no subcommand, allow base command only
+                return format!("^{}($| .*)", base_cmd);
+            }
+        }
+
+        // For safe commands, allow broad wildcards
+        if safe_commands.contains(&base_cmd) {
+            return format!("^{}($| .*)", base_cmd);
+        }
+
+        // For file operation commands (cat, head, tail, less, etc.)
+        // Be conservative: only match the exact file
+        let file_commands = [
+            "cat", "head", "tail", "less", "more", "stat", "file", "wc", "du",
+        ];
+
+        if file_commands.contains(&base_cmd) && parts.len() > 1 {
+            // Extract the file path (last non-flag argument)
+            let file_path = parts
+                .iter()
+                .rev()
+                .find(|p| !p.starts_with('-'))
+                .unwrap_or(&"");
+
+            if !file_path.is_empty() {
+                // Escape special regex characters in the file path
+                let escaped_path = regex::escape(file_path);
+                // Only match this exact file
+                return format!("^{} .*{}($| .*)", base_cmd, escaped_path);
+            }
+        }
+
+        // Default: conservative approach - only match exact command
+        let escaped = regex::escape(trimmed);
+        format!("^{}$", escaped)
+    }
+
     pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
         let mut signal_rx = self
             .signal_rx
@@ -704,6 +831,69 @@ impl WorkflowExecutor {
 
                         if approve_all {
                             self.auto_approve.insert(tool_name.to_string());
+
+                            // Generate wildcard rule for bash commands and persist to workflow
+                            if tool_name == "bash" {
+                                if let Some(cmd) = tool_args.get("command").and_then(|v| v.as_str())
+                                {
+                                    let wildcard_pattern = self.generate_wildcard_pattern(cmd);
+                                    log::info!(
+                                        "WorkflowExecutor {}: Generated wildcard pattern '{}' for command '{}'",
+                                        self.session_id, wildcard_pattern, cmd
+                                    );
+
+                                    // Update agent_config.shell_policy in database
+                                    if let Ok(mut store) = self.context.main_store.write() {
+                                        if let Ok(snapshot) =
+                                            store.get_workflow_snapshot(&self.session_id)
+                                        {
+                                            let mut agent_config: serde_json::Value = snapshot
+                                                .workflow
+                                                .agent_config
+                                                .and_then(|s| serde_json::from_str(&s).ok())
+                                                .unwrap_or(serde_json::json!({}));
+
+                                            let shell_policy = agent_config
+                                                .get("shell_policy")
+                                                .and_then(|v| v.as_array())
+                                                .cloned()
+                                                .unwrap_or_default();
+
+                                            // Add new wildcard rule
+                                            let mut updated_policy = shell_policy;
+                                            updated_policy.push(serde_json::json!({
+                                                "pattern": wildcard_pattern,
+                                                "decision": "allow"
+                                            }));
+
+                                            agent_config["shell_policy"] =
+                                                serde_json::Value::Array(updated_policy.clone());
+
+                                            // Persist to database
+                                            if let Ok(config_str) =
+                                                serde_json::to_string(&agent_config)
+                                            {
+                                                let _ = store.update_workflow_agent_config(
+                                                    &self.session_id,
+                                                    &config_str,
+                                                );
+                                            }
+
+                                            // Update in-memory agent_config
+                                            if let Ok(policy_rules) = serde_json::from_value::<
+                                                Vec<crate::tools::ShellPolicyRule>,
+                                            >(
+                                                serde_json::Value::Array(updated_policy)
+                                            ) {
+                                                self.agent_config.shell_policy = Some(
+                                                    serde_json::to_string(&policy_rules)
+                                                        .unwrap_or_default(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // 2. Execution: MCP tools use global, native tools use local
@@ -910,29 +1100,97 @@ impl WorkflowExecutor {
             // --- Max-step budget guard ---
             if self.current_step > self.max_steps {
                 log::warn!(
-                    "WorkflowExecutor {}: Reached max steps ({}). Forcing conclusion.",
+                    "WorkflowExecutor {}: Reached max steps ({}). Asking user for continuation.",
                     self.session_id,
                     self.max_steps
                 );
-                self.context
-                    .add_message(
-                        "user".to_string(),
-                        format!(
-                            "<SYSTEM_REMINDER>STEP BUDGET EXHAUSTED: You have used {} out of {} \
-                            allowed steps. You MUST conclude the task immediately. Do NOT perform \
-                            any more research. Call 'finish_task' with a summary of what you have \
-                            found so far, clearly noting any incomplete sections.</SYSTEM_REMINDER>",
-                            self.current_step, self.max_steps
-                        ),
-                        None,
-                        None,
-                        Some(StepType::Observe),
-                        self.current_step as i32,
-                        true,
-                        Some("StepBudgetExhausted".to_string()),
-                        None,
-                    )
-                    .await?;
+
+                // In Full approval mode, auto-extend the step budget
+                if self.policy.approval_level == crate::workflow::react::policy::ApprovalLevel::Full
+                {
+                    log::info!(
+                        "WorkflowExecutor {}: Auto-extending step budget in Full approval mode",
+                        self.session_id
+                    );
+                    self.max_steps += DEFAULT_MAX_STEPS;
+                    self.context
+                        .add_message(
+                            "user".to_string(),
+                            format!(
+                                "<SYSTEM_REMINDER>STEP BUDGET AUTO-EXTENDED: Full approval mode detected. \
+                                Step budget has been increased by {}. Current step: {}/{}.</SYSTEM_REMINDER>",
+                                DEFAULT_MAX_STEPS, self.current_step, self.max_steps
+                            ),
+                            None,
+                            None,
+                            Some(StepType::Observe),
+                            self.current_step as i32,
+                            false,
+                            None,
+                            None,
+                        )
+                        .await?;
+                } else {
+                    // In other approval modes, ask user for confirmation
+                    self.update_state(WorkflowState::Paused).await?;
+
+                    // Send ask_user message
+                    let question = rust_i18n::t!(
+                        "workflow.stepBudgetExhausted",
+                        current = self.current_step,
+                        max = self.max_steps
+                    );
+                    let options = vec![
+                        t!("workflow.continue").to_string(),
+                        t!("workflow.stop").to_string(),
+                    ];
+
+                    self.gateway
+                        .send(
+                            &self.session_id,
+                            GatewayPayload::Confirm {
+                                id: "step_budget_check".to_string(),
+                                action: "ask_user".to_string(),
+                                details: serde_json::to_string(&serde_json::json!({
+                                    "question": question,
+                                    "options": options
+                                }))
+                                .unwrap_or_default(),
+                            },
+                        )
+                        .await?;
+
+                    // Wait for user response
+                    if let Some(ref mut signal_rx) = self.signal_rx {
+                        if let Some(signal_str) = signal_rx.recv().await {
+                            if let Ok(sig_json) =
+                                serde_json::from_str::<serde_json::Value>(&signal_str)
+                            {
+                                if sig_json["type"] == "approval" {
+                                    let approved = sig_json["approved"].as_bool().unwrap_or(false);
+                                    if approved {
+                                        // User chose to continue - reset step budget
+                                        log::info!(
+                                            "WorkflowExecutor {}: User approved step budget extension",
+                                            self.session_id
+                                        );
+                                        self.current_step = 0;
+                                        self.max_steps += DEFAULT_MAX_STEPS;
+                                        self.update_state(WorkflowState::Thinking).await?;
+                                    } else {
+                                        // User chose to stop - finish task
+                                        log::info!(
+                                            "WorkflowExecutor {}: User declined step budget extension, finishing task",
+                                            self.session_id
+                                        );
+                                        self.update_state(WorkflowState::Completed).await?;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } else if self.current_step == (self.max_steps * 4 / 5) {
                 // 80% warning — give the LLM a chance to wrap up gracefully
                 self.context
@@ -1976,6 +2234,36 @@ impl WorkflowExecutor {
                     );
                     if let Ok(mut guard) = self.path_guard.write() {
                         guard.update_allowed_roots(paths);
+                    }
+                }
+            } else if sig_json["type"] == "update_model_config" {
+                // Update model configuration for the running workflow
+                if let Some(configs) = sig_json.get("configs") {
+                    log::info!(
+                        "WorkflowExecutor {}: Updating model configuration",
+                        self.session_id
+                    );
+                    // Update agent_config.models
+                    let models_json = serde_json::to_string(configs).unwrap_or_default();
+                    if let Ok(mut store) = self.context.main_store.write() {
+                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                            let mut agent_config: serde_json::Value = snapshot
+                                .workflow
+                                .agent_config
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or(serde_json::json!({}));
+                            agent_config["models"] = configs.clone();
+                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                let _ = store
+                                    .update_workflow_agent_config(&self.session_id, &config_str);
+                            }
+                        }
+                    }
+                    // Update the in-memory agent_config
+                    if let Ok(models) =
+                        serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
+                    {
+                        self.agent_config.models = Some(models);
                     }
                 }
             }

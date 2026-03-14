@@ -312,6 +312,9 @@ updater:
 
 workflow:
   awaiting_approval: "Awaiting approval"
+  stepBudgetExhausted: "Current steps exhausted (%{current}/%{max}), but the task is not yet complete. Do you want to continue?"
+  continue: "Continue"
+  stop: "Stop"
   array_index_out_of_bounds: "Array index out of bounds: %{index}"
   bool_not_supported: "Boolean type does not support this operation: %{operator}"
   bracket_not_match: "Brackets do not match: %{condition}"

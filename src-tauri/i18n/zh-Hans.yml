@@ -313,6 +313,9 @@ updater:
 workflow:
   array_index_out_of_bounds: "数组索引越界: %{index}"
   awaiting_approval: "等待用户审批"
+  stepBudgetExhausted: "当前步数已耗尽 (%{current}/%{max})，但任务尚未完成。是否继续？"
+  continue: "继续"
+  stop: "停止"
   bool_not_supported: "布尔类型不支持此操作: %{operator}"
   bracket_not_match: "括号不匹配: %{condition}"
   cancel_notification_error: "发送工作流取消信号失败"
