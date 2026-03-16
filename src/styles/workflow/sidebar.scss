@@ -1,0 +1,265 @@
+// Workflow sidebar styles
+
+.sidebar-tabs-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  .sidebar-tabs {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    :deep(.el-tabs__header) {
+      margin: 0;
+      padding: 0 15px;
+      background: var(--cs-bg-color);
+    }
+
+    :deep(.el-tabs__content) {
+      flex: 1;
+      overflow: hidden;
+
+      .el-tab-pane {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+    }
+  }
+}
+
+.sidebar {
+  border-right: 1px solid var(--cs-border-color);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  transition: width 0.3s ease;
+  min-width: 0;
+
+  &.dragging {
+    transition: none;
+  }
+
+  .sidebar-tabs-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+
+    .sidebar-tabs {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+
+      .el-tabs__header {
+        margin: 0;
+        padding: 0 var(--cs-space);
+        background: var(--cs-bg-color);
+      }
+
+      .el-tabs__content {
+        flex: 1;
+        overflow: hidden;
+
+        .el-tab-pane {
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          padding: 0 var(--cs-space);
+        }
+      }
+    }
+  }
+
+  .sidebar-header {
+    padding: var(--cs-space) 0;
+    flex-shrink: 0;
+
+    .el-input {
+      box-sizing: border-box;
+
+      .el-input__wrapper {
+        padding: 0;
+        background: var(--cs-input-bg-color) !important;
+        border-radius: var(--cs-border-radius-xxl);
+        font-size: var(--cs-font-size-sm);
+      }
+
+      .el-input__prefix {
+        display: flex;
+        align-items: center;
+        padding-left: var(--cs-space-sm);
+
+        .cs {
+          font-size: var(--cs-font-size-md);
+          color: var(--cs-text-color-secondary);
+        }
+      }
+    }
+  }
+
+  .workflow-list {
+    flex: 1;
+    overflow-y: auto;
+    height: calc(100% - 60px);
+
+    .list {
+      .item {
+        padding: 10px 15px;
+        cursor: pointer;
+        border-radius: 6px;
+        margin-bottom: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: background-color 0.2s ease;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        position: relative;
+
+        &:hover:not(.disabled) {
+          background-color: var(--cs-hover-bg-color);
+        }
+
+        &.active {
+          background-color: var(--cs-active-bg-color);
+          color: var(--el-color-primary);
+        }
+
+        &.disabled {
+          cursor: not-allowed;
+          opacity: 0.6;
+        }
+
+        .workflow-title {
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .workflow-status {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: var(--cs-font-size-xs);
+          color: var(--cs-text-color-secondary);
+
+          .status-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+
+            &.running {
+              background-color: var(--el-color-warning);
+              animation: pulse 1.5s ease-in-out infinite;
+            }
+
+            &.completed {
+              background-color: var(--el-color-success);
+            }
+
+            &.paused {
+              background-color: var(--el-color-info);
+            }
+
+            &.error {
+              background-color: var(--el-color-danger);
+            }
+          }
+        }
+
+        .icons {
+          position: absolute;
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+          display: flex;
+          gap: 4px;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+
+          .icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: var(--cs-border-radius-round);
+            cursor: pointer;
+            color: var(--cs-text-color-secondary);
+
+            &:hover {
+              background-color: var(--cs-bg-color-light);
+              color: var(--cs-text-color-primary);
+            }
+
+            .cs {
+              font-size: var(--cs-font-size-sm);
+            }
+          }
+        }
+
+        &:hover .icons {
+          opacity: 1;
+        }
+      }
+    }
+  }
+}
+
+.sidebar-resize-handle {
+  width: 4px;
+  height: 100%;
+  background-color: transparent;
+  cursor: col-resize;
+  position: relative;
+  z-index: 100;
+  flex-shrink: 0;
+
+  &:hover,
+  &.dragging {
+    background-color: var(--el-color-primary);
+    opacity: 0.5;
+  }
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: -4px;
+    top: 0;
+    width: 12px;
+    height: 100%;
+  }
+}
+
+// Todo floating panel
+.todo-floating-panel {
+  position: absolute;
+  bottom: 100%; // Sit on top of the footer
+  left: 20px;
+  right: 20px;
+  z-index: 100;
+  pointer-events: none; // Allow clicks to pass through to messages below
+  display: flex;
+  justify-content: center;
+
+  // Make the list itself interactive
+  :deep(.todo-list) {
+    pointer-events: auto;
+    background-color: var(--cs-bg-color);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-lg);
+    box-shadow: var(--el-box-shadow-light);
+    padding: 8px 12px;
+    max-width: 600px;
+    width: 100%;
+    opacity: 0.95;
+    backdrop-filter: blur(4px);
+    transition: opacity 0.3s ease;
+
+    &:hover {
+      opacity: 1;
+    }
+  }
+}

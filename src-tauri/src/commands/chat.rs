@@ -427,13 +427,16 @@ pub async fn chat_completion(
     let tools_enabled_in_metadata = final_metadata.tools_enabled.unwrap_or(true);
 
     // Register MCP loader tool if MCP is enabled
+    // Only register if it doesn't already exist (to avoid duplicate registration error)
     if mcp_enabled.unwrap_or(false) {
-        chat_state
-            .tool_manager
-            .register_tool(Arc::new(crate::tools::McpToolLoad {
-                tool_manager: chat_state.tool_manager.clone(),
-            }))
-            .await?;
+        if !chat_state.tool_manager.has_tool("mcp_tool_load").await {
+            chat_state
+                .tool_manager
+                .register_tool(Arc::new(crate::tools::McpToolLoad {
+                    tool_manager: chat_state.tool_manager.clone(),
+                }))
+                .await?;
+        }
     }
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {

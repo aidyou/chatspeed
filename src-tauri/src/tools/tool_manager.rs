@@ -350,6 +350,18 @@ impl ToolManager {
             .ok_or_else(|| ToolError::FunctionNotFound(name.to_string()))
     }
 
+    /// Checks if a tool exists by its name.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the tool to check.
+    ///
+    /// # Returns
+    /// * `bool` - True if the tool exists, false otherwise.
+    pub async fn has_tool(&self, name: &str) -> bool {
+        let tools = self.tools.read().await;
+        tools.contains_key(name)
+    }
+
     /// Returns metadata for all registered native tools.
     /// This is used by the UI to discover available capabilities and their scopes.
     pub async fn get_all_native_tool_metadata(&self) -> Vec<Value> {

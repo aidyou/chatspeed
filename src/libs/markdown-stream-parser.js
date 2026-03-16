@@ -8,12 +8,14 @@ export class MarkdownStreamParser {
     this.buffer = ''
     this.blocks = []
     this.state = 'normal' // 'normal', 'in_code_block', 'in_math_block'
+    this.fenceLength = 0 // Track the length of opening fence (for code blocks)
   }
 
   reset() {
     this.buffer = ''
     this.blocks.length = 0
     this.state = 'normal'
+    this.fenceLength = 0
   }
 
   /**
@@ -66,13 +68,43 @@ export class MarkdownStreamParser {
   // Internal parsing methods
 
   parseNormal() {
-    const codeIdx = this.buffer.indexOf('```')
-    const mathIdx = this.buffer.indexOf('$$')
+    // Find code block fence (3 or more backticks)
+    let codeIdx = -1
+    let codeLen = 0
+    for (let i = 0; i <= this.buffer.length - 3; i++) {
+      if (this.buffer[i] === '`' && this.buffer[i + 1] === '`' && this.buffer[i + 2] === '`') {
+        // Count the number of backticks
+        let len = 3
+        while (i + len < this.buffer.length && this.buffer[i + len] === '`') {
+          len++
+        }
+        // Check if at line start
+        const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
+        if (isAtLineStart) {
+          codeIdx = i
+          codeLen = len
+          break
+        }
+      }
+    }
+
+    // Find math block fence (2 dollar signs)
+    let mathIdx = -1
+    for (let i = 0; i <= this.buffer.length - 2; i++) {
+      if (this.buffer[i] === '$' && this.buffer[i + 1] === '$') {
+        const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
+        if (isAtLineStart) {
+          mathIdx = i
+          break
+        }
+      }
+    }
+
     const paraIdx = this.buffer.indexOf('\n\n')
 
     // Find the first occurrence among potential markers
     const found = [
-      { idx: codeIdx, type: 'code', len: 3 },
+      { idx: codeIdx, type: 'code', len: codeLen },
       { idx: mathIdx, type: 'math', len: 2 },
       { idx: paraIdx, type: 'para', len: 2 }
     ].filter(f => f.idx !== -1).sort((a, b) => a.idx - b.idx)
@@ -80,18 +112,6 @@ export class MarkdownStreamParser {
     if (found.length === 0) return false
 
     const first = found[0]
-
-    // CRITICAL FIX: Code and Math blocks MUST start at the beginning of a line
-    if (first.type === 'code' || first.type === 'math') {
-      const isAtLineStart = first.idx === 0 || this.buffer[first.idx - 1] === '\n'
-      if (!isAtLineStart) {
-        // Not a real block start, treat the content up to marker as paragraph and continue
-        const content = this.buffer.substring(0, first.idx + first.len)
-        this.blocks.push({ type: 'paragraph', content })
-        this.buffer = this.buffer.substring(first.idx + first.len)
-        return true
-      }
-    }
 
     // Push preceding content as a paragraph
     const contentBefore = this.buffer.substring(0, first.idx)
@@ -105,22 +125,50 @@ export class MarkdownStreamParser {
       return true
     }
 
-    this.state = first.type === 'code' ? 'in_code_block' : 'in_math_block'
+    if (first.type === 'code') {
+      this.fenceLength = first.len // Remember the fence length
+      this.state = 'in_code_block'
+    } else {
+      this.state = 'in_math_block'
+    }
     return true
   }
 
   parseCodeBlock() {
-    // Search for closing ``` starting from index 3 to skip the opening one
-    const idx = this.buffer.indexOf('```', 3)
+    // Search for closing fence with the SAME length as opening fence
+    // Start searching after the opening fence
+    const startIdx = this.fenceLength
+
+    let idx = -1
+    for (let i = startIdx; i <= this.buffer.length - this.fenceLength; i++) {
+      // Check if we found enough backticks
+      let match = true
+      for (let j = 0; j < this.fenceLength; j++) {
+        if (this.buffer[i + j] !== '`') {
+          match = false
+          break
+        }
+      }
+
+      if (match) {
+        // Check if there are MORE backticks after (which would be a longer fence, not ours)
+        if (i + this.fenceLength < this.buffer.length && this.buffer[i + this.fenceLength] === '`') {
+          // This is a longer fence, skip it
+          continue
+        }
+
+        // Check if at line start
+        const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
+        if (isAtLineStart) {
+          idx = i
+          break
+        }
+      }
+    }
+
     if (idx === -1) return false
 
-    // Check if closing fence is valid (at start of line or following a newline)
-    const isAtLineStart = idx === 0 || this.buffer[idx - 1] === '\n'
-    
-    // We allow closing even if not at line start to be more permissive with messy LLM output,
-    // but standard MD prefers line start. 
-    // Optimization: If there's content followed by ```, we consider it the end.
-    const blockEnd = idx + 3
+    const blockEnd = idx + this.fenceLength
     const codeContent = this.buffer.substring(0, blockEnd)
     this.blocks.push({ type: 'code', content: codeContent })
 
@@ -129,12 +177,28 @@ export class MarkdownStreamParser {
       this.buffer = this.buffer.substring(1)
     }
     this.state = 'normal'
+    this.fenceLength = 0
     return true
   }
 
   parseMathBlock() {
     // Search for closing $$ starting from index 2
-    const idx = this.buffer.indexOf('$$', 2)
+    let idx = this.buffer.indexOf('$$', 2)
+    if (idx === -1) return false
+
+    // CRITICAL FIX: Keep searching until we find a valid closing fence
+    // A valid closing fence MUST be at the start of a line (after \n or at index 0)
+    while (idx !== -1) {
+      const isAtLineStart = idx === 0 || this.buffer[idx - 1] === '\n'
+      if (isAtLineStart) {
+        // Found a valid closing fence
+        break
+      }
+      // Not a valid closing fence, search for the next one
+      idx = this.buffer.indexOf('$$', idx + 2)
+    }
+
+    // No valid closing fence found
     if (idx === -1) return false
 
     const blockEnd = idx + 2

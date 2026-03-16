@@ -1,0 +1,454 @@
+// Workflow message and tool call styles
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px;
+  scroll-behavior: smooth;
+
+  .message {
+    display: flex;
+    margin-bottom: 20px;
+    position: relative;
+
+    .avatar {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 12px;
+      margin-top: 2px;
+      border-radius: 50%;
+      background-color: var(--cs-bg-color);
+      border: 1px solid var(--cs-border-color);
+
+      .user-icon {
+        color: var(--el-color-primary);
+        font-size: 18px;
+      }
+    }
+
+    .content-container {
+      flex: 1;
+      min-width: 0;
+      max-width: 90%;
+    }
+
+    &.user {
+      justify-content: flex-end;
+
+      .avatar {
+        display: none; // Removing avatar as requested for a cleaner look if desired, or keep only for user
+      }
+
+      .content {
+        display: flex;
+        flex-direction: row-reverse;
+        align-items: flex-start;
+        gap: 8px;
+
+        .simple-text {
+          padding: var(--cs-space);
+          border-radius: var(--cs-border-radius-lg);
+          max-width: 100%;
+          min-width: 0;
+          border: 1px solid var(--cs-border-color);
+          margin: 0;
+          white-space: pre-wrap;
+          word-break: break-all;
+          overflow-wrap: anywhere;
+          line-height: 1.8;
+          background: var(--cs-bg-color-light);
+          font-family: inherit;
+        }
+      }
+    }
+
+    &.assistant,
+    &.tool {
+      position: relative;
+
+      .ai-content {
+        .content {
+          background: none;
+        }
+
+        // CLI Style Tool Calls
+        .cli-tool-calls-container {
+          margin-bottom: 8px;
+        }
+
+        .cli-tool-call {
+          font-family: var(--cs-font-family-mono, monospace);
+          font-size: 13px;
+          line-height: 1.5;
+          margin-bottom: 8px;
+          display: block; // Force block container
+          border-left: 3px solid transparent;
+          padding-left: 8px;
+          transition: all 0.2s ease;
+
+          // Status-based border colors (override tool type colors)
+          &.status-success {
+            border-left-color: var(--el-color-success);
+          }
+
+          &.status-error {
+            border-left-color: var(--el-color-danger);
+
+            .finish-task-display {
+              .finish-text,
+              .cs {
+                color: var(--el-color-danger);
+              }
+
+              .finish-text {
+                text-decoration: line-through;
+              }
+            }
+          }
+
+          &.status-running {
+            border-left-color: var(--el-color-primary);
+            animation: pulse-border 1.5s infinite;
+          }
+
+          .expandable {
+            cursor: pointer;
+          }
+
+          // Tool type icon colors
+          &.tool-file .tool-type-icon {
+            color: var(--el-color-primary);
+          }
+
+          &.tool-network .tool-type-icon {
+            color: var(--el-color-success);
+          }
+
+          &.tool-system .tool-type-icon {
+            color: var(--el-color-warning);
+          }
+
+          &.tool-todo .tool-type-icon {
+            color: #8b5cf6;
+          }
+
+          .tool-line {
+            display: flex;
+            flex-direction: row; // Explicit horizontal
+            align-items: center;
+            white-space: nowrap;
+            width: 100%;
+            gap: var(--cs-space-xs);
+
+            &.title-wrap {
+              user-select: none;
+              margin-bottom: var(--cs-space-xxs);
+              cursor: pointer;
+
+              &.tool-rejected {
+                text-decoration: line-through;
+                opacity: 0.6;
+              }
+
+              .approved-icon {
+                color: var(--el-color-success);
+                margin-left: 4px;
+                flex-shrink: 0;
+              }
+
+              .tool-type-icon {
+                flex-shrink: 0;
+                width: 14px;
+                height: 14px;
+              }
+
+              .tool-name {
+                font-weight: 600;
+                color: var(--cs-text-color-primary);
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+
+              .tool-target {
+                flex: 0 1 auto;
+                max-width: 50%;
+                color: var(--cs-text-color-secondary);
+                font-size: var(--cs-font-size-sm);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+            }
+
+            &.summary {
+              color: var(--cs-text-color-secondary);
+              padding-left: 4px;
+              align-items: flex-start; // Keep icon at top
+
+              .corner-icon {
+                font-size: 16px;
+                width: 16px;
+                display: inline-block;
+                text-align: center;
+                flex-shrink: 0;
+                margin-top: -2px;
+                margin-left: var(--cs-space);
+              }
+
+              .summary-text {
+                font-size: 12px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                flex: 0 1 auto; // Auto-shrink based on content
+                line-height: 1.4;
+                padding-top: var(--cs-space-xs);
+              }
+
+              .expand-hint {
+                font-size: 11px;
+                opacity: 0.4;
+                margin-left: 4px; // Closer to text
+                flex: 0 0 auto; // Keep fixed width
+                line-height: 1.4;
+                padding-top: var(--cs-space-xs); // Match summary-text padding
+              }
+            }
+          }
+
+          // Summary text color for error state
+          &.status-error .summary-text {
+            color: var(--el-color-danger);
+          }
+
+          &.pending {
+            opacity: 0.8;
+
+            .tool-name,
+            .tool-target {
+              color: var(--cs-text-color-placeholder);
+            }
+          }
+
+          // finish_task special display
+          .finish-task-display {
+            display: flex;
+            align-items: center;
+            gap: var(--cs-space-xs);
+            padding: var(--cs-space-xs) 0;
+
+            .finish-icon {
+              color: var(--el-color-success);
+            }
+
+            .finish-text {
+              color: var(--el-color-success);
+              font-weight: 600;
+              font-size: 14px;
+            }
+          }
+
+          .tool-detail {
+            margin-top: 8px;
+            margin-left: 20px;
+            padding: 12px;
+            background-color: var(--cs-bg-color-light);
+            border-radius: var(--cs-border-radius-sm);
+            border-left: 2px solid var(--cs-border-color);
+            font-family: var(--cs-font-family-mono, monospace);
+
+            .choice-container {
+              padding: 12px;
+              background: var(--cs-bg-color-light);
+              border-radius: var(--cs-border-radius-md);
+              margin-top: 8px;
+
+              .choice-question {
+                font-size: var(--cs-font-size-sm);
+                margin-bottom: 12px;
+                color: var(--cs-text-color-primary);
+                line-height: 1.5;
+              }
+
+              .choice-options {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+              }
+            }
+
+            .raw-content {
+              margin: 0;
+              white-space: pre-wrap;
+              word-break: break-all;
+              font-size: 12px;
+              color: var(--cs-text-color-regular);
+              background: none;
+              border: none;
+              padding: 0;
+              max-height: 300px;
+              overflow: auto;
+            }
+          }
+        }
+
+        // Thoughts - collapsible reasoning container
+        .reasoning-container {
+          margin-bottom: 12px;
+
+          .reasoning-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 4px 0;
+
+            .reasoning-icon {
+              color: var(--cs-text-color-secondary);
+              font-size: 14px;
+
+              &.rotating {
+                animation: cs-rotate 2s linear infinite;
+              }
+            }
+
+            .reasoning-text {
+              color: var(--cs-text-color-secondary);
+              font-style: italic;
+              font-size: 13px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .reasoning-toggle {
+              color: var(--cs-text-color-placeholder);
+              font-size: 12px;
+
+              &:hover {
+                color: var(--cs-color-primary);
+              }
+            }
+          }
+
+          .reasoning-content {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background-color: var(--cs-bg-color);
+            border-radius: var(--cs-border-radius-sm);
+            border-left: 3px solid var(--cs-border-color-light);
+            color: var(--cs-text-color-secondary);
+            font-style: italic;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            animation: slideDown 0.2s ease;
+          }
+
+          @keyframes slideDown {
+            from {
+              opacity: 0;
+              max-height: 0;
+              margin-top: 0;
+            }
+
+            to {
+              opacity: 1;
+              max-height: 500px;
+              margin-top: 8px;
+            }
+          }
+        }
+
+        // Legacy thought-content (keep for compatibility)
+        .thought-content {
+          margin-bottom: 12px;
+          color: var(--cs-text-color-secondary);
+          font-style: italic;
+          font-size: 13px;
+          line-height: 1.6;
+          padding: 8px 12px;
+          background-color: var(--cs-bg-color);
+          border-radius: var(--cs-border-radius-sm);
+          border-left: 3px solid var(--cs-border-color-light);
+          white-space: pre-wrap;
+        }
+
+        // Custom <thought> tag styling
+        thought {
+          display: block;
+          font-style: italic;
+          color: var(--cs-text-color-secondary);
+          background-color: var(--cs-bg-color-light);
+          padding: 8px 12px;
+          border-left: 3px solid var(--cs-border-color-light);
+          border-radius: var(--cs-border-radius);
+          margin: 10px 0;
+          font-size: 0.9em;
+          line-height: 1.5;
+          white-space: pre-wrap;
+
+          &::before {
+            content: "Thought";
+            display: block;
+            font-weight: bold;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+            opacity: 0.6;
+          }
+        }
+      }
+    }
+
+    &.observe {
+      opacity: 0.9;
+      font-size: 0.95em;
+    }
+  }
+}
+
+// Retry status alert
+.retry-status-alert {
+  margin-top: 12px;
+  max-width: 500px;
+
+  .el-alert {
+    border-radius: var(--cs-border-radius-lg);
+    border: 1px solid var(--el-color-warning-light-5);
+    background-color: var(--el-color-warning-light-9);
+  }
+}
+
+// Context compression status
+.compression-status {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+
+  .compression-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background-color: var(--cs-bg-color-light);
+    border-radius: var(--cs-border-radius-xxl);
+    border: 1px solid var(--cs-border-color);
+
+    .cs {
+      color: var(--el-color-primary);
+    }
+
+    .compression-text {
+      font-size: 13px;
+      color: var(--cs-text-color-secondary);
+    }
+  }
+}

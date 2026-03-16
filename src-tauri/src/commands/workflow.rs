@@ -7,6 +7,7 @@ use crate::workflow::react::types::StepType;
 use chrono::{DateTime, Local};
 use glob::glob;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -207,7 +208,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 // Workflow Session Persistence Commands
 // ==========================================
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWorkflowRequest {
     pub user_query: String,
@@ -1268,6 +1269,19 @@ pub async fn update_workflow_final_audit(
     let new_config_str = serde_json::to_string(&config_val).unwrap_or_default();
     store
         .update_workflow_agent_config(&session_id, &new_config_str)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_agent_config(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    agent_config: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_agent_config(&session_id, &agent_config)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

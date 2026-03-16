@@ -1,0 +1,24 @@
+// Workflow layout styles
+
+.workflow-layout {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  .workflow-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+
+    .main-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      height: 100%;
+      position: relative; // For floating panels
+    }
+  }
+}

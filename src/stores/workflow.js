@@ -43,32 +43,72 @@ export const useWorkflowStore = defineStore('workflow', () => {
     throw err; // Re-throw for component-level handling if needed
   };
 
+  /**
+   * Parse agentConfig and extract allowedPaths from it
+   * agentConfig is stored as JSON string in DB, with structure:
+   * {
+   *   "allowed_paths": [...],
+   *   "models": {...},
+   *   "shell_policy": [...],
+   *   "approval_level": "...",
+   *   "final_audit": true/false
+   * }
+   *
+   * This function normalizes the internal field names from snake_case to camelCase
+   */
+  const _parseWorkflowData = (w) => {
+    // Initialize defaults
+    if (!w.agentConfig) {
+      w.agentConfig = {};
+    } else if (typeof w.agentConfig === 'string') {
+      try {
+        w.agentConfig = JSON.parse(w.agentConfig);
+      } catch (e) {
+        console.error('Failed to parse agentConfig for workflow', w.id, e);
+        w.agentConfig = {};
+      }
+    }
+
+    // Normalize agentConfig internal fields from snake_case to camelCase
+    if (w.agentConfig && typeof w.agentConfig === 'object') {
+      const config = w.agentConfig;
+
+      // allowed_paths -> allowedPaths
+      if (config.allowed_paths !== undefined) {
+        config.allowedPaths = config.allowed_paths;
+        delete config.allowed_paths;
+      }
+
+      // shell_policy -> shellPolicy
+      if (config.shell_policy !== undefined) {
+        config.shellPolicy = config.shell_policy;
+        delete config.shell_policy;
+      }
+
+      // approval_level -> approvalLevel
+      if (config.approval_level !== undefined) {
+        config.approvalLevel = config.approval_level;
+        delete config.approval_level;
+      }
+
+      // final_audit -> finalAudit
+      if (config.final_audit !== undefined) {
+        config.finalAudit = config.final_audit;
+        delete config.final_audit;
+      }
+    }
+
+    // Extract allowedPaths from agentConfig (now in camelCase)
+    w.allowedPaths = w.agentConfig.allowedPaths || [];
+
+    return w;
+  };
+
   const loadWorkflows = async () => {
     error.value = null;
     try {
       const result = await invokeWrapper('list_workflows');
-      workflows.value = (result || []).map(w => {
-        if (w.allowedPaths && typeof w.allowedPaths === 'string') {
-          try {
-            w.allowedPaths = JSON.parse(w.allowedPaths);
-          } catch (e) {
-            console.error('Failed to parse allowedPaths for workflow', w.id, e);
-            w.allowedPaths = [];
-          }
-        } else if (!w.allowedPaths) {
-          w.allowedPaths = [];
-        }
-
-        // Parse agent_config if present
-        if (w.agentConfig && typeof w.agentConfig === 'string') {
-          try {
-            w.agentConfig = JSON.parse(w.agentConfig);
-          } catch (e) {
-            console.error('Failed to parse agentConfig for workflow', w.id, e);
-          }
-        }
-        return w;
-      });
+      workflows.value = (result || []).map(w => _parseWorkflowData(w));
     } catch (err) {
       await _handleError(err);
     }
@@ -82,14 +122,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
 
-      // Parse agent_config from snapshot
-      if (snapshot.workflow && snapshot.workflow.agentConfig && typeof snapshot.workflow.agentConfig === 'string') {
-        try {
-          snapshot.workflow.agentConfig = JSON.parse(snapshot.workflow.agentConfig);
-        } catch (e) {
-          console.error('Failed to parse snapshot agentConfig:', e);
-        }
-      }
+      // Parse workflow data (agentConfig, allowedPaths)
+      _parseWorkflowData(snapshot.workflow);
 
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
@@ -118,26 +152,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
         todoList.value = [];
       }
 
-      // Initialize allowedPaths in the workflow object in the list
+      // Update workflow in the list with the parsed data
       const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
       console.log('workflowStore: workflowIndex for update:', workflowIndex);
       if (workflowIndex !== -1) {
-        let paths = [];
-        if (snapshot.workflow.allowedPaths) {
-          try {
-            paths = typeof snapshot.workflow.allowedPaths === 'string'
-              ? JSON.parse(snapshot.workflow.allowedPaths)
-              : snapshot.workflow.allowedPaths;
-          } catch (e) {
-            console.error('Failed to parse allowedPaths from snapshot:', e);
-          }
-        }
-        console.log('workflowStore: setting allowedPaths to:', paths);
-        // Force update the object in the list to trigger reactivity
         workflows.value[workflowIndex] = {
           ...workflows.value[workflowIndex],
-          ...snapshot.workflow,
-          allowedPaths: Array.isArray(paths) ? paths : []
+          ...snapshot.workflow
         };
       }
     } catch (err) {
@@ -180,13 +201,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const addMessage = (message) => {
-    // Ensure metadata is an object
-    if (message.metadata && typeof message.metadata === 'string') {
-      try {
-        message.metadata = JSON.parse(message.metadata);
-      } catch (e) {
-        console.error('Failed to parse message metadata:', e);
-      }
+    // Note: metadata is already an object from Rust (serde_json::Value)
+    // No need to parse, just ensure it's not null/undefined
+    if (!message.metadata) {
+      message.metadata = {};
     }
 
     const index = messages.value.findIndex(m =>

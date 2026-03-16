@@ -34,37 +34,28 @@ const label = getCurrentWebviewWindow().label;
 const _transformFromBackend = (backendAgent) => {
   if (!backendAgent) return null;
 
-  const parseModel = (modelStr) => {
-    try {
-      if (modelStr && typeof modelStr === 'string' && modelStr.trim().startsWith('{')) return JSON.parse(modelStr);
-      if (modelStr && typeof modelStr === 'object') return modelObj;
-    } catch (e) {
-      console.error('Failed to parse model string:', modelStr, e);
-    }
-    return { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 };
-  };
+  // Default model config
+  const defaultModel = { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 };
 
+  // models field is already an object (struct AgentModels), not a JSON string
+  // Tauri IPC auto-serializes Rust structs to JS objects
   let models = {
-    plan: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    act: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-    vision: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 }
+    plan: { ...defaultModel },
+    act: { ...defaultModel },
+    vision: { ...defaultModel }
   };
 
   if (backendAgent.models) {
-    try {
-      const unifiedModels = JSON.parse(backendAgent.models);
-      // Merge with defaults to ensure temperature exists
-      if (unifiedModels.plan) models.plan = { ...models.plan, ...unifiedModels.plan };
-      if (unifiedModels.act) models.act = { ...models.act, ...unifiedModels.act };
-      if (unifiedModels.vision) models.vision = { ...models.vision, ...unifiedModels.vision };
-    } catch (e) {
-      console.error('Failed to parse unified models JSON:', e);
+    // models is already an object { plan: {...}, act: {...}, vision: {...} }
+    if (backendAgent.models.plan) {
+      models.plan = { ...defaultModel, ...backendAgent.models.plan };
     }
-  } else {
-    // Fallback to individual fields
-    models.plan = { ...models.plan, ...parseModel(backendAgent.plan_model) };
-    models.act = { ...models.act, ...parseModel(backendAgent.act_model) };
-    models.vision = { ...models.vision, ...parseModel(backendAgent.vision_model) };
+    if (backendAgent.models.act) {
+      models.act = { ...defaultModel, ...backendAgent.models.act };
+    }
+    if (backendAgent.models.vision) {
+      models.vision = { ...defaultModel, ...backendAgent.models.vision };
+    }
   }
 
   return {
@@ -74,14 +65,20 @@ const _transformFromBackend = (backendAgent) => {
     systemPrompt: backendAgent.system_prompt,
     planningPrompt: backendAgent.planning_prompt,
 
+    // These are JSON strings, need to parse
     availableTools: backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : [],
     autoApprove: backendAgent.auto_approve ? JSON.parse(backendAgent.auto_approve) : [],
+
+    // Models are already objects
     planModel: models.plan,
     actModel: models.act,
     visionModel: models.vision,
+
+    // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
-    models: backendAgent.models || '',
+
+    models: backendAgent.models || null,
     maxContexts: backendAgent.max_contexts || 128000,
     finalAudit: !!backendAgent.final_audit,
     approvalLevel: backendAgent.approval_level || 'default'
@@ -93,19 +90,26 @@ const _transformFromBackend = (backendAgent) => {
  * to the backend format (snake_case, JSON strings).
  */
 const _transformToBackend = (frontendAgent) => {
-  const stringifyModel = (modelObj) => {
-    if (modelObj?.id !== undefined && modelObj.model) {
-      return JSON.stringify(modelObj);
+  // Build models as an object (not JSON string) - backend expects struct AgentModels
+  // When model is empty/not selected, pass null instead of object with empty id
+  const buildModelConfig = (modelObj) => {
+    if (modelObj?.id !== undefined && modelObj.id !== '' && modelObj.model) {
+      return {
+        id: typeof modelObj.id === 'string' ? parseInt(modelObj.id, 10) : modelObj.id,
+        model: modelObj.model,
+        temperature: modelObj.temperature ?? -0.1,
+        contextSize: modelObj.contextSize ?? 128000,
+        maxTokens: modelObj.maxTokens ?? 0
+      };
     }
-    return '';
+    return null;
   };
 
-  // Rebuild models field from individual model settings to ensure updates persist
-  const modelsJson = JSON.stringify({
-    plan: frontendAgent.planModel,
-    act: frontendAgent.actModel,
-    vision: frontendAgent.visionModel
-  });
+  const modelsObj = {
+    plan: buildModelConfig(frontendAgent.planModel),
+    act: buildModelConfig(frontendAgent.actModel),
+    vision: buildModelConfig(frontendAgent.visionModel)
+  };
 
   return {
     id: frontendAgent.id || '',
@@ -113,14 +117,13 @@ const _transformToBackend = (frontendAgent) => {
     description: frontendAgent.description?.trim() || '',
     system_prompt: frontendAgent.systemPrompt.trim(),
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
+    // JSON strings
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
     allowed_paths: JSON.stringify(frontendAgent.allowedPaths || []),
-    plan_model: stringifyModel(frontendAgent.planModel),
-    act_model: stringifyModel(frontendAgent.actModel),
-    vision_model: stringifyModel(frontendAgent.visionModel),
-    models: modelsJson,
+    // Struct object
+    models: modelsObj,
     max_contexts: frontendAgent.maxContexts,
     final_audit: !!frontendAgent.finalAudit,
     approval_level: frontendAgent.approvalLevel || 'default'
