@@ -81,11 +81,20 @@ footer.input-container {
           font-family: var(--cs-font-family-mono, monospace);
         }
 
+        .file-root-hint {
+          flex-shrink: 0;
+          font-size: 11px;
+          color: var(--cs-text-color-secondary);
+          margin-left: 4px;
+          opacity: 0.7;
+        }
+
         &.active {
           background-color: var(--cs-active-bg-color);
 
           .file-path,
-          .file-icon {
+          .file-icon,
+          .file-root-hint {
             color: var(--el-color-primary);
           }
         }

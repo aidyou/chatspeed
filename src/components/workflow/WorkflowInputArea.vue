@@ -16,6 +16,11 @@
         :class="{ active: idx === selectedFileIndex }" @click="onFileSelect(file)">
         <cs :name="file.is_directory ? 'folder' : 'file'" size="14px" class="file-icon" />
         <span class="file-path">{{ file.relative_path }}</span>
+        <!-- Show root hint for non-primary directories -->
+        <span v-if="file.root_path && props.currentPaths?.length > 0 && file.root_path !== props.currentPaths[0]"
+          class="file-root-hint">
+          ({{ file.root_path.split(/[/\\]/).filter(p => p !== '').pop() }})
+        </span>
       </div>
     </div>
 

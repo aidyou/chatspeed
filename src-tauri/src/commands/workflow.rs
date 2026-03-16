@@ -1047,6 +1047,7 @@ pub struct WorkspaceFile {
     pub name: String,
     pub relative_path: String,
     pub path: String,
+    pub root_path: String,
     pub is_directory: bool,
     pub score: i32,
 }
@@ -1154,6 +1155,7 @@ pub async fn search_workspace_files(
                 name,
                 relative_path: rel_path,
                 path: path.to_string_lossy().to_string(),
+                root_path: root_str.clone(),
                 is_directory: is_dir,
                 score,
             });

@@ -108,8 +108,20 @@ export function useWorkflowInput({
     const textBeforeCursor = inputMessage.value.slice(0, cursorPosition)
     const textAfterCursor = inputMessage.value.slice(cursorPosition)
 
+    // Smart path display: primary directory uses relative path, others use absolute path
+    let displayPath: string
+    const primaryRoot = currentPaths.value?.[0] // First authorized path is the primary directory
+
+    if (file.root_path && file.root_path !== primaryRoot) {
+      // Not from primary directory: show absolute path for backend to expand
+      displayPath = file.path
+    } else {
+      // From primary directory: use simple relative path
+      displayPath = file.relative_path
+    }
+
     // Replace the @query part with @path
-    const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, `@${file.relative_path} `)
+    const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, `@${displayPath} `)
     inputMessage.value = newTextBefore + textAfterCursor
 
     showFileSuggestions.value = false
