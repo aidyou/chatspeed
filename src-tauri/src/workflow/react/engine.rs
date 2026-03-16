@@ -352,6 +352,9 @@ impl WorkflowExecutor {
                     self.state
                 );
                 self.current_step = 0;
+
+                // Reset state to Thinking so the run_loop can actually execute
+                self.update_state(WorkflowState::Thinking).await?;
             } else {
                 self.current_step = last_msg.step_index as usize;
             }
@@ -997,10 +1000,13 @@ impl WorkflowExecutor {
                                 primary_root.as_deref(),
                             )
                         };
-                        let observation = format!("The user doesn't want to proceed with this tool use. The tool '{}' was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", tool_name);
+                        let observation = format!(
+                            "<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
+                            tool_name
+                        );
 
                         self.add_message_and_notify_internal(
-                            "tool".to_string(),
+                            "user".to_string(),
                             observation,
                             None,
                             None,
@@ -1008,9 +1014,8 @@ impl WorkflowExecutor {
                             true,
                             Some("UserRejected".to_string()),
                             Some(serde_json::json!({
-                                "tool_call_id": signal_id,
                                 "tool_name": tool_name,
-                                "title": pretty_title, // Restored the missing title
+                                "title": pretty_title,
                                 "summary": "User rejected",
                                 "is_error": true,
                                 "error_type": "UserRejected"

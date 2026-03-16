@@ -134,6 +134,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
             console.error('Failed to parse snapshot message metadata:', e);
           }
         }
+        // Normalize is_error to isError
+        if (m.is_error !== undefined) {
+          m.isError = m.is_error;
+        }
         return m;
       });
 

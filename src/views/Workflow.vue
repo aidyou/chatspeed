@@ -228,7 +228,7 @@ const {
 // Input composable - needs currentPaths, systemSkills
 const inputComposable = useWorkflowInput({
   inputRef: computed(() => inputAreaRef.value?.inputRef),
-  onSendMessage: null, // Not used anymore
+  onSendMessage: null, // Will be set after core composable is initialized
   currentPaths: computed(() => currentPaths.value),
   systemSkills: computed(() => systemSkills.value)
 })
@@ -304,18 +304,25 @@ const {
   toggleFinalAuditMode
 } = core
 
-// ============================================================
-// Wrapper functions combining multiple composables
-// ============================================================
-
-// Wrapper function that handles input clearing after send
-const onSendMessage = async () => {
+// Set up the onSendMessage callback for the input composable
+inputComposable.onSendMessage.value = async () => {
   const message = inputMessage.value
   if (!message.trim()) return
 
   clearInput()
   const wasCommand = await coreOnSendMessage(message)
   return wasCommand
+}
+
+// ============================================================
+// Wrapper functions combining multiple composables
+// ============================================================
+
+// Wrapper function that calls the input composable's send handler
+const onSendMessage = async () => {
+  if (inputComposable.onSendMessage.value) {
+    return await inputComposable.onSendMessage.value()
+  }
 }
 
 // Wrapper for createNewWorkflow that also clears input
@@ -401,34 +408,6 @@ watch(
   },
   { deep: true }
 )
-
-// Watch for approval level changes
-watch(approvalLevel, async (newVal) => {
-  if (currentWorkflowId.value) {
-    await invokeWrapper('workflow_signal', {
-      sessionId: currentWorkflowId.value,
-      signal: JSON.stringify({
-        type: 'update_approval_level',
-        level: newVal
-      })
-    })
-    await workflowStore.selectWorkflow(currentWorkflowId.value)
-  }
-})
-
-// Watch for final audit mode changes
-watch(finalAuditMode, async (newVal) => {
-  if (currentWorkflowId.value) {
-    await invokeWrapper('workflow_signal', {
-      sessionId: currentWorkflowId.value,
-      signal: JSON.stringify({
-        type: 'update_final_audit',
-        audit: newVal === 'on'
-      })
-    })
-    await workflowStore.selectWorkflow(currentWorkflowId.value)
-  }
-})
 
 onMounted(async () => {
   unlistenFocusInput.value = await listen('cs://workflow-focus-input', (event) => {

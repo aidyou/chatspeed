@@ -93,6 +93,53 @@ export function useWorkflowCore({
     return !isRunning.value
   })
 
+  // Unified function to update workflow config
+  const updateWorkflowConfig = async (key, value) => {
+    if (!currentWorkflowId.value) return
+
+    try {
+      // 1. Update database
+      const snapshot = await invokeWrapper('get_workflow_snapshot', {
+        sessionId: currentWorkflowId.value
+      })
+
+      let agentConfig = {}
+      if (snapshot.workflow?.agentConfig) {
+        agentConfig = typeof snapshot.workflow.agentConfig === 'string'
+          ? JSON.parse(snapshot.workflow.agentConfig)
+          : snapshot.workflow.agentConfig
+      }
+
+      agentConfig[key] = value
+
+      await invokeWrapper('update_workflow_agent_config', {
+        sessionId: currentWorkflowId.value,
+        agentConfig: JSON.stringify(agentConfig)
+      })
+
+      // 2. Signal engine if workflow is active
+      const status = currentWorkflow.value?.status
+      if (status && ['thinking', 'executing', 'paused', 'awaiting_approval'].includes(status)) {
+        try {
+          await invokeWrapper('workflow_signal', {
+            sessionId: currentWorkflowId.value,
+            signal: JSON.stringify({
+              type: `update_${key}`,
+              [key]: value
+            })
+          })
+        } catch (error) {
+          console.warn(`Failed to signal engine for ${key}:`, error)
+        }
+      }
+
+      // 3. Refresh UI
+      await workflowStore.selectWorkflow(currentWorkflowId.value)
+    } catch (error) {
+      console.error(`Failed to update ${key}:`, error)
+    }
+  }
+
   // Watch for state changes to handle UI side effects
   watch(
     () => currentWorkflow.value?.status,
@@ -139,10 +186,10 @@ export function useWorkflowCore({
           role: payload.role,
           message: payload.content,
           reasoning: payload.reasoning,
-          stepType: payload.stepType,
-          stepIndex: payload.stepIndex,
-          isError: payload.isError,
-          errorType: payload.errorType,
+          stepType: payload.step_type,
+          stepIndex: payload.step_index,
+          isError: payload.is_error,
+          errorType: payload.error_type,
           metadata: payload.metadata
         })
 
@@ -322,6 +369,9 @@ export function useWorkflowCore({
           // If we were awaiting approval, continue in planning mode if we send a message (rejecting the plan)
           const isCurrentlyAwaiting = currentWorkflow.value?.status === 'awaiting_approval'
 
+          // Ensure event listener is setup for this session
+          await setupWorkflowEvents(currentWorkflowId.value)
+
           await invokeWrapper('workflow_start', {
             sessionId: currentWorkflowId.value,
             agentId: selectedAgent.value.id,
@@ -479,20 +529,27 @@ export function useWorkflowCore({
           act: configs.act
         }
 
-        // Save back to workflow
+        // Save back to workflow (database update)
         await invokeWrapper('update_workflow_agent_config', {
           sessionId: currentWorkflowId.value,
           agentConfig: JSON.stringify(agentConfig)
         })
 
-        // Signal the engine to update runtime config
-        await invokeWrapper('workflow_signal', {
-          sessionId: currentWorkflowId.value,
-          signal: JSON.stringify({
-            type: 'update_model_config',
-            configs: configs
-          })
-        })
+        // Signal the engine to update runtime config (only if workflow is active)
+        const status = currentWorkflow.value?.status
+        if (status && ['thinking', 'executing', 'paused', 'awaiting_approval'].includes(status)) {
+          try {
+            await invokeWrapper('workflow_signal', {
+              sessionId: currentWorkflowId.value,
+              signal: JSON.stringify({
+                type: 'update_model_config',
+                configs: configs
+              })
+            })
+          } catch (error) {
+            console.warn('Failed to signal engine (workflow may not be running):', error)
+          }
+        }
 
         // Refresh current workflow state from DB to update UI
         await workflowStore.selectWorkflow(currentWorkflowId.value)
@@ -587,39 +644,16 @@ export function useWorkflowCore({
   const toggleFinalAuditMode = () => {
     const newValue = finalAuditMode.value === 'on' ? 'off' : 'on'
     finalAuditMode.value = newValue
-    // Persist to database
-    if (currentWorkflowId.value) {
-      workflowStore.updateWorkflowFinalAudit(currentWorkflowId.value, newValue === 'on')
-    }
   }
 
   // Watch for approval level changes
   watch(approvalLevel, async (newVal) => {
-    if (currentWorkflowId.value) {
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({
-          type: 'update_approval_level',
-          level: newVal
-        })
-      })
-      // Refresh to sync local state if needed
-      await workflowStore.selectWorkflow(currentWorkflowId.value)
-    }
+    await updateWorkflowConfig('approval_level', newVal)
   })
 
   // Watch for final audit mode changes
   watch(finalAuditMode, async (newVal) => {
-    if (currentWorkflowId.value) {
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({
-          type: 'update_final_audit',
-          audit: newVal === 'on'
-        })
-      })
-      await workflowStore.selectWorkflow(currentWorkflowId.value)
-    }
+    await updateWorkflowConfig('final_audit', newVal === 'on')
   })
 
   return {

@@ -1274,6 +1274,44 @@ pub async fn update_workflow_final_audit(
 }
 
 #[tauri::command]
+pub async fn update_workflow_approval_level(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    approval_level: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+
+    // 1. Get current config
+    let mut config_val = {
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({}))
+    };
+
+    // 2. Update approval_level
+    if let Some(obj) = config_val.as_object_mut() {
+        obj.insert("approval_level".to_string(), json!(approval_level));
+    } else {
+        config_val = json!({
+            "approval_level": approval_level
+        });
+    }
+
+    // 3. Save back
+    let new_config_str = serde_json::to_string(&config_val).unwrap_or_default();
+    store
+        .update_workflow_agent_config(&session_id, &new_config_str)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_workflow_agent_config(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     session_id: String,

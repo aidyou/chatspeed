@@ -1,7 +1,7 @@
 <template>
   <div class="messages" ref="messagesRef">
     <div v-for="(message, index) in messages" :key="message.displayId" class="message"
-      :class="[message.role, message.stepType?.toLowerCase()]">
+      :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
       </div>

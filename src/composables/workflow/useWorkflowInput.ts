@@ -1,6 +1,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
+import { useSettingStore } from '@/stores/setting'
 
 /**
  * Composable for managing input handling
@@ -8,11 +9,12 @@ import { invokeWrapper } from '@/libs/tauri'
  */
 export function useWorkflowInput({
   inputRef,
-  onSendMessage,
+  onSendMessage: onSendMessageCallback,
   currentPaths,
   systemSkills = ref([])
 }) {
   const { t } = useI18n()
+  const settingStore = useSettingStore()
 
   const inputMessage = ref('')
   const composing = ref(false)
@@ -24,6 +26,9 @@ export function useWorkflowInput({
   const fileSuggestions = ref([])
   const fileQuery = ref('')
   const ignoreNextSearch = ref(false)
+
+  // Make onSendMessage mutable so it can be updated after composable creation
+  const onSendMessage = ref(onSendMessageCallback)
 
   const builtinCommands = [
     { name: 'settings', description: 'Open settings window' },
@@ -216,6 +221,20 @@ export function useWorkflowInput({
         return
       }
     }
+
+    // Handle Enter key for sending message based on user settings
+    if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && onSendMessage.value) {
+      const shouldSend =
+        settingStore.settings.sendMessageKey === 'Enter'
+          ? !event.shiftKey // Enter to send, Shift+Enter for line break
+          : event.shiftKey // Shift+Enter to send, Enter for line break
+
+      if (shouldSend) {
+        event.preventDefault()
+        onSendMessage.value()
+        return
+      }
+    }
   }
 
   // Watch for input changes to trigger suggestions
@@ -262,6 +281,7 @@ export function useWorkflowInput({
     onSkillSelect,
     onFileSelect,
     searchFiles,
-    clearInput
+    clearInput,
+    onSendMessage
   }
 }

@@ -431,6 +431,11 @@ impl LlmProcessor {
         let mut history: Vec<serde_json::Value> = Vec::new();
 
         for m in raw_history {
+            // As part of defensive programming, filter out system messages
+            if m.role == "system" {
+                continue;
+            }
+
             let role = m.role.clone();
             let mut content = m.message.clone();
             let tool_calls = m
@@ -483,8 +488,27 @@ impl LlmProcessor {
                         last["content"] =
                             serde_json::json!(format!("{}\n\n{}", last_content, content));
                     }
-                    if let Some(tc) = tool_calls {
-                        last["tool_calls"] = tc;
+
+                    // Merge tool_calls instead of overwriting
+                    if let Some(new_tc) = tool_calls {
+                        if let Some(existing_tc) = last["tool_calls"].as_array_mut() {
+                            if let Some(new_tc_array) = new_tc.as_array() {
+                                existing_tc.extend(new_tc_array.clone());
+                            } else {
+                                existing_tc.push(new_tc);
+                            }
+                        } else {
+                            last["tool_calls"] = new_tc;
+                        }
+
+                        // For assistant messages with tool_calls, if content is still empty, set it to Null
+                        if role == "assistant"
+                            && last["content"]
+                                .as_str()
+                                .map_or(true, |s| s.trim().is_empty())
+                        {
+                            last["content"] = serde_json::Value::Null;
+                        }
                     }
                     continue;
                 }
@@ -494,7 +518,12 @@ impl LlmProcessor {
                 continue;
             }
 
-            let mut msg = serde_json::json!({ "role": role, "content": content });
+            let mut msg =
+                if role == "assistant" && tool_calls.is_some() && content.trim().is_empty() {
+                    serde_json::json!({ "role": role, "content": serde_json::Value::Null })
+                } else {
+                    serde_json::json!({ "role": role, "content": content })
+                };
             if let Some(tc) = tool_calls {
                 msg["tool_calls"] = tc;
             }
@@ -632,14 +661,14 @@ impl LlmProcessor {
 
         let combined_system_prompt = system_parts.join("\n\n---\n\n");
 
-        if let Some(sys_msg) = history.iter_mut().find(|m| m["role"] == "system") {
-            sys_msg["content"] = serde_json::json!(combined_system_prompt);
-        } else {
-            history.insert(
-                0,
-                serde_json::json!({ "role": "system", "content": combined_system_prompt }),
-            );
-        }
+        // 1. Remove all existing system messages
+        history.retain(|m| m["role"] != "system");
+
+        // 2. Insert the single consolidated system message at the top
+        history.insert(
+            0,
+            serde_json::json!({ "role": "system", "content": combined_system_prompt }),
+        );
 
         // 10. Phase Instructions (injected into user's first message)
         let phase_instruction = match policy.phase {
