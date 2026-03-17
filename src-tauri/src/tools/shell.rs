@@ -76,9 +76,7 @@ impl ShellPolicyEngine {
         // 2.5. Whitelist mode: If custom rules are configured but none matched, require review.
         // This ensures commands not in the allowed list are flagged for approval.
         if !self.custom_rules.is_empty() {
-            return ShellDecision::Review(
-                format!("Command '{}' requires review (not in allowed list)", command_str),
-            );
+            return ShellDecision::Review("Requires review (not in allowed list)".to_string());
         }
 
         // 3. Recursive Check: Audit nested structure contents
@@ -572,11 +570,7 @@ impl ToolDefinition for ShellExecute {
 
 impl ShellExecute {
     /// Execute command with real-time output streaming to frontend
-    async fn call_with_streaming(
-        &self,
-        command_str: &str,
-        timeout_ms: u64,
-    ) -> NativeToolResult {
+    async fn call_with_streaming(&self, command_str: &str, timeout_ms: u64) -> NativeToolResult {
         use std::process::Stdio;
 
         let gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
@@ -621,7 +615,8 @@ impl ShellExecute {
         let start_time = std::time::Instant::now();
 
         loop {
-            let timeout_remaining = timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
+            let timeout_remaining =
+                timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
             if timeout_remaining == 0 {
                 let _ = child.kill().await;
                 return Err(ToolError::ExecutionFailed(format!(
@@ -644,9 +639,7 @@ impl ShellExecute {
                         } else {
                             return Err(ToolError::ExecutionFailed(format!(
                                 "Exit {}. STDOUT: {}\nSTDERR: {}",
-                                status,
-                                full_stdout,
-                                full_stderr
+                                status, full_stdout, full_stderr
                             )));
                         }
                     }
