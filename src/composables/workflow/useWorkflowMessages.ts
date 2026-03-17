@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useI18n } from 'vue-i18n'
+import * as Diff from 'diff'
 
 /**
  * Composable for managing message processing and display
@@ -35,20 +36,25 @@ export function useWorkflowMessages() {
         meta = {}
       }
 
-      if (m.role === 'tool' && meta?.tool_call_id) {
+      // Check for tool messages OR rejected user messages with tool_call_id
+      const hasToolCallId = meta?.tool_call_id
+      if (hasToolCallId) {
         const id = meta.tool_call_id
+        const approvalStatus = meta.approval_status || ''
         const summary = (meta.summary || '').toLowerCase()
-        const isWaiting = summary.includes('awaiting') || summary.includes('待审批')
 
-        if (isWaiting) {
+        // Use approval_status as the primary indicator
+        if (approvalStatus === 'pending') {
           toolHasWaitingMsg.add(id)
-        } else {
-          const isRejected =
-            summary.includes('rejected') ||
-            m.message.includes('rejected') ||
-            m.message.includes('拒绝')
+        } else if (approvalStatus === 'rejected' || approvalStatus === 'approved') {
+          // Final states
+          const isRejected = approvalStatus === 'rejected'
           const isError = m.isError || m.is_error || meta.is_error || false
           toolStates.set(id, { isFinal: true, isRejected, hasError: isError })
+        } else if (m.role === 'tool') {
+          // Fallback: normal tool execution result (no approval flow)
+          const isError = m.isError || m.is_error || meta.is_error || false
+          toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         }
       }
       return { ...m, metadata: meta } // Cache parsed meta for Pass 2
@@ -57,21 +63,26 @@ export function useWorkflowMessages() {
     // --- PASS 2: Filter and Transform (O(N)) ---
     return processedMsgs
       .filter((m) => {
-        // Hide redundancy
-        if (m.role === 'tool' && m.metadata?.tool_call_id) {
+        // Hide redundancy for tool-related messages
+        if (m.metadata?.tool_call_id) {
           const id = m.metadata.tool_call_id
           const state = toolStates.get(id)
+          const approvalStatus = m.metadata.approval_status
 
-          if (state?.isFinal && !state.hasError) {
-            const summary = (m.metadata.summary || '').toLowerCase()
-            const isWaiting = summary.includes('awaiting') || summary.includes('待审批')
-
-            // If result is success, hide the result message and keep the waiting one
-            if (!isWaiting && toolHasWaitingMsg.has(id)) return false
-            // If we are looking at the waiting message but it's already resolved, we KEEP it (for info)
+          // If there's a final result (approved, rejected, or executed)
+          if (state?.isFinal) {
+            // Hide "pending" messages when there's a final result
+            if (approvalStatus === 'pending' && toolHasWaitingMsg.has(id)) return false
           }
         }
-        return !(m.role === 'user' && m.stepType === 'observe')
+
+        // Hide user messages with stepType 'observe' (internal system messages)
+        // BUT keep rejected messages which have tool_call_id
+        if (m.role === 'user' && m.stepType === 'observe' && !m.metadata?.tool_call_id) {
+          return false
+        }
+
+        return true
       })
       .map((message, idx) => {
         const toolDisplay = getToolDisplayInfo(message)
@@ -79,7 +90,15 @@ export function useWorkflowMessages() {
 
         let isRejected = false
         let isApproved = false
-        if (message.role === 'tool' && message.metadata?.tool_call_id) {
+
+        // Check approval status from metadata (preferred method)
+        const approvalStatus = message.metadata?.approval_status
+        if (approvalStatus === 'rejected') {
+          isRejected = true
+        } else if (approvalStatus === 'approved') {
+          isApproved = true
+        } else if (message.metadata?.tool_call_id) {
+          // Fallback: Check tool states for backward compatibility
           const state = toolStates.get(message.metadata.tool_call_id)
           if (state?.isFinal) {
             if (state.isRejected) isRejected = true
@@ -412,27 +431,44 @@ export function useWorkflowMessages() {
 
       // Generate standard unidiff-like format for better highlighting
       let diffContent = `File: **${filePath}**\n\n\`\`\`diff\n`
-      diffContent += `--- ${filePath}\n`
-      diffContent += `+++ ${filePath}\n`
 
       const UI_LINE_LIMIT = 500 // Limit lines shown in UI for performance
 
       if (data.old_string !== undefined) {
-        // For edits, show old and new
-        const oldLines = oldStr.split('\n')
-        const newLines = newStr.split('\n')
+        // Use diff library to generate proper line-by-line diff
+        const changes = Diff.diffLines(oldStr, newStr)
+        let lineCount = 0
 
-        // If either side is too long, truncate for the UI
-        const displayOldLines = oldLines.slice(0, UI_LINE_LIMIT)
-        const displayNewLines = newLines.slice(0, UI_LINE_LIMIT)
+        changes.forEach((change) => {
+          if (lineCount >= UI_LINE_LIMIT) return
 
-        displayOldLines.forEach((line) => (diffContent += `- ${line}\n`))
-        if (oldLines.length > UI_LINE_LIMIT)
-          diffContent += `- ... (${oldLines.length - UI_LINE_LIMIT} lines truncated)\n`
+          const lines = change.value.split('\n')
+          // Remove last empty line if exists
+          if (lines[lines.length - 1] === '') {
+            lines.pop()
+          }
 
-        displayNewLines.forEach((line) => (diffContent += `+ ${line}\n`))
-        if (newLines.length > UI_LINE_LIMIT)
-          diffContent += `+ ... (${newLines.length - UI_LINE_LIMIT} lines truncated)\n`
+          lines.forEach((line) => {
+            if (lineCount >= UI_LINE_LIMIT) return
+
+            if (change.added) {
+              diffContent += `+ ${line}\n`
+              lineCount++
+            } else if (change.removed) {
+              diffContent += `- ${line}\n`
+              lineCount++
+            } else {
+              // Unchanged lines - show with space prefix for context (optional, can be omitted for compactness)
+              // diffContent += `  ${line}\n`
+              // lineCount++
+              // For compactness, we skip unchanged lines like ApprovalDialog does
+            }
+          })
+        })
+
+        if (lineCount >= UI_LINE_LIMIT) {
+          diffContent += `... (truncated for preview)\n`
+        }
       } else {
         // For new files or overwrites: "- " (empty line) then "+ content"
         diffContent += `- \n`

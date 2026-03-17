@@ -606,6 +606,8 @@ impl ShellExecute {
 
         let mut full_stdout = String::new();
         let mut full_stderr = String::new();
+        let mut stdout_eof = false;
+        let mut stderr_eof = false;
 
         // Read stdout and stderr concurrently with timeout
         let start_time = std::time::Instant::now();
@@ -620,12 +622,46 @@ impl ShellExecute {
                 )));
             }
 
+            // Check if both streams reached EOF and process has exited
+            if stdout_eof && stderr_eof {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Process has exited
+                        if status.success() {
+                            if full_stdout.len() > 30_000 {
+                                full_stdout.truncate(30_000);
+                                full_stdout.push_str("\n[Truncated]");
+                            }
+                            return Ok(ToolCallResult::success(Some(full_stdout), None));
+                        } else {
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Exit {}. STDOUT: {}\nSTDERR: {}",
+                                status,
+                                full_stdout,
+                                full_stderr
+                            )));
+                        }
+                    }
+                    Ok(None) => {
+                        // Both streams EOF but process still running - wait a bit
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "Failed to check process status: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+
             // Try to read from both stdout and stderr with a small timeout
             let mut got_output = false;
 
             // Use tokio::select! to read from either stream
             tokio::select! {
-                line = stdout_reader.next_line() => {
+                line = stdout_reader.next_line(), if !stdout_eof => {
                     match line {
                         Ok(Some(l)) => {
                             full_stdout.push_str(&l);
@@ -643,13 +679,14 @@ impl ShellExecute {
                         }
                         Ok(None) => {
                             // EOF reached for stdout
+                            stdout_eof = true;
                         }
                         Err(e) => {
                             log::warn!("Error reading stdout: {}", e);
                         }
                     }
                 }
-                line = stderr_reader.next_line() => {
+                line = stderr_reader.next_line(), if !stderr_eof => {
                     match line {
                         Ok(Some(l)) => {
                             full_stderr.push_str(&l);
@@ -667,6 +704,7 @@ impl ShellExecute {
                         }
                         Ok(None) => {
                             // EOF reached for stderr
+                            stderr_eof = true;
                         }
                         Err(e) => {
                             log::warn!("Error reading stderr: {}", e);

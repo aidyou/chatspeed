@@ -902,7 +902,7 @@ impl WorkflowExecutor {
                                             if let Ok(policy_rules) = serde_json::from_value::<
                                                 Vec<crate::tools::ShellPolicyRule>,
                                             >(
-                                                serde_json::Value::Array(updated_policy)
+                                                serde_json::Value::Array(updated_policy),
                                             ) {
                                                 self.agent_config.shell_policy = Some(
                                                     serde_json::to_string(&policy_rules)
@@ -942,6 +942,7 @@ impl WorkflowExecutor {
                             )
                             .await?;
 
+                        // Mark as approved since this went through user approval
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
                             reinforced.content,
@@ -957,7 +958,8 @@ impl WorkflowExecutor {
                                 "summary": reinforced.summary,
                                 "is_error": reinforced.is_error,
                                 "error_type": reinforced.error_type,
-                                "display_type": reinforced.display_type
+                                "display_type": reinforced.display_type,
+                                "approval_status": "approved"
                             })),
                         )
                         .await?;
@@ -1014,11 +1016,13 @@ impl WorkflowExecutor {
                             true,
                             Some("UserRejected".to_string()),
                             Some(serde_json::json!({
+                                "tool_call_id": signal_id,
                                 "tool_name": tool_name,
                                 "title": pretty_title,
                                 "summary": "User rejected",
                                 "is_error": true,
-                                "error_type": "UserRejected"
+                                "error_type": "UserRejected",
+                                "approval_status": "rejected"
                             })),
                         )
                         .await?;
@@ -1108,10 +1112,8 @@ impl WorkflowExecutor {
                             agent_config["phase"] =
                                 serde_json::json!(self.policy.phase.to_string());
                             if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store.update_workflow_agent_config(
-                                    &self.session_id,
-                                    &config_str,
-                                );
+                                let _ = store
+                                    .update_workflow_agent_config(&self.session_id, &config_str);
                             }
                         }
                     }
@@ -1425,6 +1427,22 @@ impl WorkflowExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
 
+                // Build metadata with approval_status if present
+                let mut metadata = serde_json::json!({
+                    "tool_call_id": id,
+                    "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
+                    "title": reinforced.title,
+                    "summary": reinforced.summary,
+                    "is_error": reinforced.is_error,
+                    "error_type": reinforced.error_type,
+                    "display_type": reinforced.display_type
+                });
+
+                // Add approval_status if it exists in the reinforced result
+                if let Some(approval_status) = &reinforced.approval_status {
+                    metadata["approval_status"] = serde_json::json!(approval_status);
+                }
+
                 let _ = self
                     .add_message_and_notify_internal(
                         "tool".to_string(),
@@ -1434,15 +1452,7 @@ impl WorkflowExecutor {
                         Some(StepType::Observe),
                         reinforced.is_error,
                         reinforced.error_type.clone(),
-                        Some(serde_json::json!({
-                            "tool_call_id": id,
-                            "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
-                            "title": reinforced.title,
-                            "summary": reinforced.summary,
-                            "is_error": reinforced.is_error,
-                            "error_type": reinforced.error_type,
-                            "display_type": reinforced.display_type
-                        })),
+                        Some(metadata),
                     )
                     .await?;
             }
@@ -1746,6 +1756,7 @@ impl WorkflowExecutor {
                     is_error: false,
                     error_type: None,
                     display_type: "text".to_string(),
+                    approval_status: Some("rejected".to_string()),
                 }, call));
                 continue;
             }
@@ -1861,6 +1872,7 @@ impl WorkflowExecutor {
                 is_error: false,
                 error_type: None,
                 display_type: "text".to_string(),
+                approval_status: None,
             });
         }
 
@@ -1889,6 +1901,7 @@ impl WorkflowExecutor {
                                     is_error: false,
                                     error_type: None,
                                     display_type: "text".to_string(),
+                                    approval_status: None,
                                 });
                             }
                             _ => {}
@@ -1964,6 +1977,7 @@ impl WorkflowExecutor {
                 is_error: true,
                 error_type: Some("LoopDetected".to_string()),
                 display_type: "text".to_string(),
+                approval_status: None,
             }));
         }
 
@@ -1996,6 +2010,23 @@ impl WorkflowExecutor {
             return self
                 .handle_approval_interception(id, name, args, None)
                 .await;
+        }
+
+        // Log auto-approval for better visibility
+        if self.policy.approval_level == crate::workflow::react::policy::ApprovalLevel::Full
+            || self.auto_approve.contains(name)
+        {
+            log::info!(
+                "WorkflowExecutor {}: Auto-approved tool '{}' in {} mode",
+                self.session_id,
+                name,
+                if self.policy.approval_level == crate::workflow::react::policy::ApprovalLevel::Full
+                {
+                    "Full"
+                } else {
+                    "Default (auto_approve list)"
+                }
+            );
         }
 
         Ok(None)
@@ -2313,7 +2344,9 @@ impl WorkflowExecutor {
                         level_str
                     );
                     use std::str::FromStr;
-                    if let Ok(level) = crate::workflow::react::policy::ApprovalLevel::from_str(level_str) {
+                    if let Ok(level) =
+                        crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
+                    {
                         self.policy.approval_level = level;
                         // Also update agent_config in DB for persistence
                         if let Ok(store) = self.context.main_store.write() {
@@ -2352,10 +2385,8 @@ impl WorkflowExecutor {
                                 .unwrap_or(serde_json::json!({}));
                             agent_config["final_audit"] = serde_json::json!(audit);
                             if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store.update_workflow_agent_config(
-                                    &self.session_id,
-                                    &config_str,
-                                );
+                                let _ = store
+                                    .update_workflow_agent_config(&self.session_id, &config_str);
                             }
                         }
                     }

@@ -16,6 +16,7 @@ pub struct ReinforcedResult {
     pub is_error: bool,
     pub error_type: Option<String>,
     pub display_type: String, // "default", "diff", "text"
+    pub approval_status: Option<String>, // "pending", "approved", "rejected", None
 }
 
 impl ObservationReinforcer {
@@ -163,6 +164,7 @@ impl ObservationReinforcer {
                         is_error: false,
                         error_type: None,
                         display_type: display_type.to_string(),
+                        approval_status: None,
                     }
                 } else if raw_res.len() > 20000 {
                     let truncated = match raw_res.char_indices().nth(20000) {
@@ -179,6 +181,7 @@ impl ObservationReinforcer {
                         is_error: false,
                         error_type: None,
                         display_type: display_type.to_string(),
+                        approval_status: None,
                     }
                 } else {
                     ReinforcedResult {
@@ -188,6 +191,7 @@ impl ObservationReinforcer {
                         is_error: false,
                         error_type: None,
                         display_type: display_type.to_string(),
+                        approval_status: None,
                     }
                 }
             }
@@ -214,6 +218,7 @@ impl ObservationReinforcer {
                     is_error: true,
                     error_type: Some(error_type.to_string()),
                     display_type: "text".to_string(),
+                    approval_status: None,
                 }
             }
         }

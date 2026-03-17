@@ -132,6 +132,7 @@ impl WorkflowExecutor {
                 is_error: true,
                 error_type: Some("NoSummary".into()),
                 display_type: "text".to_string(),
+                approval_status: None,
             }));
         }
 
@@ -158,6 +159,7 @@ impl WorkflowExecutor {
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),
+            approval_status: None,
         }))
     }
 
@@ -193,6 +195,7 @@ impl WorkflowExecutor {
             is_error: false,
             error_type: None,
             display_type: if options.is_some() { "choice" } else { "text" }.to_string(),
+            approval_status: None,
         }))
     }
 
@@ -208,6 +211,7 @@ impl WorkflowExecutor {
                 is_error: true,
                 error_type: Some("NoSummary".into()),
                 display_type: "text".to_string(),
+                approval_status: None,
             }));
         }
 
@@ -230,6 +234,7 @@ impl WorkflowExecutor {
                         is_error: true,
                         error_type: Some("PendingTodos".into()),
                         display_type: "text".to_string(),
+                        approval_status: None,
                     }));
                 }
             }
@@ -254,6 +259,7 @@ impl WorkflowExecutor {
                     is_error: true,
                     error_type: Some("AuditRejected".into()),
                     display_type: "text".to_string(),
+                    approval_status: None,
                 }));
             }
         }
@@ -267,6 +273,7 @@ impl WorkflowExecutor {
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),
+            approval_status: None,
         }))
     }
 
@@ -299,6 +306,7 @@ impl WorkflowExecutor {
                         is_error: true,
                         error_type: Some("Security".to_string()),
                         display_type: "text".to_string(),
+                        approval_status: None,
                     }));
                 }
                 crate::tools::ShellDecision::Review(reason) => {
@@ -310,8 +318,11 @@ impl WorkflowExecutor {
                     } else if self.policy.approval_level == ApprovalLevel::Smart {
                         // In Smart mode, check if this is a read-only command before intercepting
                         let command_str_lower = command_str.to_lowercase();
-                        let is_read_only = READ_ONLY_BASH_CMDS_EXACT.contains(command_str_lower.as_str())
-                            || READ_ONLY_BASH_PREFIXES.iter().any(|&p| command_str_lower.starts_with(p));
+                        let is_read_only = READ_ONLY_BASH_CMDS_EXACT
+                            .contains(command_str_lower.as_str())
+                            || READ_ONLY_BASH_PREFIXES
+                                .iter()
+                                .any(|&p| command_str_lower.starts_with(p));
 
                         if is_read_only {
                             log::info!(
@@ -324,7 +335,8 @@ impl WorkflowExecutor {
                                 "WorkflowExecutor {}: Intercepting bash command for review in Smart mode: {}",
                                 self.session_id, reason
                             );
-                            let display_content = format!("Command: {}\nReason: {}", command_str, reason);
+                            let display_content =
+                                format!("Command: {}\nReason: {}", command_str, reason);
                             return self
                                 .handle_approval_interception(
                                     id,
@@ -391,7 +403,10 @@ impl WorkflowExecutor {
                         if let Some(s) = content.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *content = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *content = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -399,7 +414,10 @@ impl WorkflowExecutor {
                         if let Some(s) = old_s.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *old_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *old_s = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -407,7 +425,10 @@ impl WorkflowExecutor {
                         if let Some(s) = new_s.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *new_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *new_s = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -453,6 +474,7 @@ impl WorkflowExecutor {
             is_error: false,
             error_type: None,
             display_type,
+            approval_status: Some("pending".to_string()),
         }))
     }
 
@@ -480,6 +502,7 @@ impl WorkflowExecutor {
                     is_error: true,
                     error_type: Some("Security".to_string()),
                     display_type: "text".to_string(),
+                    approval_status: None,
                 }));
             }
         }
