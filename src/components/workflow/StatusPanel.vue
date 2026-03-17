@@ -4,7 +4,7 @@
     <div v-if="isVisible && hasData" ref="panelRef" class="status-panel"
       :class="{ collapsed: isCollapsed, dragging: isDragging }" :style="panelStyle">
       <!-- Drag handle/header -->
-      <div class="panel-header" @mousedown="startDrag" @touchstart="startDrag">
+      <div class="panel-header upperLayer" @mousedown="startDrag" @touchstart="startDrag">
         <div class="header-left">
           <cs name="list" size="14px" class="drag-icon" />
           <span v-if="!isCollapsed" class="header-title">{{ t('workflow.statusPanel.title') }}</span>
@@ -655,7 +655,7 @@ onMounted(() => {
 
     // If constrained position differs from default, we need to set it explicitly
     if (targetLeft !== window.innerWidth - panelWidth - defaultRight ||
-        targetTop !== window.innerHeight - panelHeight - defaultBottom) {
+      targetTop !== window.innerHeight - panelHeight - defaultBottom) {
       position.value = { x: targetLeft, y: targetTop }
       isPositioned.value = true
       // Calculate edge distance for this position

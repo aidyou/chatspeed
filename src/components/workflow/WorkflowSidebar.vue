@@ -1,10 +1,10 @@
 <template>
-  <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }"
-    class="sidebar" :style="sidebarStyle">
+  <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }" class="sidebar"
+    :style="sidebarStyle">
     <div v-show="!sidebarCollapsed" class="sidebar-tabs-container">
       <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
         <el-tab-pane :label="$t('workflow.historyTab')" name="history">
-          <div class="sidebar-header upperLayer">
+          <div class="sidebar-header">
             <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
               <template #prefix>
                 <cs name="search" />

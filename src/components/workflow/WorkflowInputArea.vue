@@ -44,17 +44,15 @@
 
       <div class="input-footer">
         <div class="footer-left">
-          <div class="agent-selector-wrap" :class="{ disabled: currentWorkflowId }">
+          <div class="selector-wrap" :class="{ disabled: currentWorkflowId }">
             <AgentSelector :model-value="selectedAgent" :agent="currentWorkflow?.agentId
               ? agents.find(a => a.id === currentWorkflow.agentId)
               : null
               " :disabled="!!currentWorkflowId" />
           </div>
-          <div class="input-header">
-            <div class="model-selector-trigger" @click="$emit('open-model-selector')">
-              <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
-              <cs name="arrow-down" size="12px" />
-            </div>
+          <div class="selector-wrap model-selector-trigger" @click="$emit('open-model-selector')">
+            <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
+            <cs name="arrow-down" size="12px" />
           </div>
 
           <div class="icons">
@@ -71,7 +69,7 @@
                 @click="$emit('toggle-final-audit-mode')">
                 <cs name="check-circle" class="small" />
                 <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                  }}</span>
+                }}</span>
               </label>
             </el-tooltip>
 
