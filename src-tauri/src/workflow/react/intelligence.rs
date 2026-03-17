@@ -402,7 +402,9 @@ impl IntelligenceManager {
                 store.get_config("conversation_title_gen_model", serde_json::json!({}));
 
             if gen_model_config.is_object() {
-                let p_id = gen_model_config["id"].as_i64().unwrap_or(self.active_provider_id);
+                let p_id = gen_model_config["id"]
+                    .as_i64()
+                    .unwrap_or(self.active_provider_id);
                 let m_name = gen_model_config["model"]
                     .as_str()
                     .unwrap_or(&self.active_model_name)

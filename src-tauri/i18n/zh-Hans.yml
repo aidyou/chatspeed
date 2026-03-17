@@ -356,7 +356,7 @@ workflow:
   summary:
     submit_plan: "提交计划"
     todo_create: "创建任务"
-    todo_update: "更新任务 '%{subject}' 为 %{status}"
+    todo_update: "更新任务：%{subject} -> %{status}"
     todo_list: "获取待办列表"
     todo_get: "获取任务详情"
     todo_status_done: "已完成"

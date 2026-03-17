@@ -353,7 +353,7 @@ workflow:
   summary:
     submit_plan: "Отправить план"
     todo_create: "Создать задачу"
-    todo_update: "Обновить задачу '%{subject}' до %{status}"
+    todo_update: "Обновить задачу: %{subject} -> %{status}"
     todo_list: "Получить список дел"
     todo_get: "Получить детали задачи"
     todo_status_done: "Готово"

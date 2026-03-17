@@ -353,7 +353,7 @@ workflow:
   summary:
     submit_plan: "提交計劃"
     todo_create: "建立任務"
-    todo_update: "更新任務 '%{subject}' 為 %{status}"
+    todo_update: "更新任務：%{subject} -> %{status}"
     todo_list: "獲取待辦清單"
     todo_get: "獲取任務詳情"
     todo_status_done: "已完成"

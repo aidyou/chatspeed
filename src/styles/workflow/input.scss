@@ -18,22 +18,18 @@ footer.input-container {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      background: var(--cs-bg-color-light);
-      border: 1px solid var(--cs-border-color);
+      padding: var(--cs-space-xs) var(--cs-space-sm);
+      background: var(--cs-bg-color);
+      border: 1px solid var(--cs-color-primary);
       border-radius: var(--cs-border-radius-lg);
       cursor: pointer;
-      font-size: 11px;
-      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-md);
+      color: var(--cs-color-primary);
       transition: all 0.2s;
-      backdrop-filter: blur(10px);
-      opacity: 0.8;
 
       &:hover {
-        opacity: 1;
-        background: var(--cs-bg-color-hover);
-        color: var(--cs-text-color-primary);
-        border-color: var(--el-color-primary-light-5);
+        background: var(--cs-hover-bg-color);
+        border-color: var(--el-color-primary);
       }
 
       .model-name {

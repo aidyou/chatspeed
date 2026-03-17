@@ -15,7 +15,7 @@ pub struct ReinforcedResult {
     pub summary: String,
     pub is_error: bool,
     pub error_type: Option<String>,
-    pub display_type: String, // "default", "diff", "text"
+    pub display_type: String,            // "default", "diff", "text"
     pub approval_status: Option<String>, // "pending", "approved", "rejected", None
 }
 
@@ -65,7 +65,8 @@ impl ObservationReinforcer {
                         serde_json::to_string(val).unwrap_or_default()
                     };
 
-                let title = Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
+                let title =
+                    Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
                 let summary = Self::generate_summary(tool_name, &raw_res_for_summary, &args);
 
                 let mut raw_res = raw_res_for_summary;
@@ -121,7 +122,10 @@ impl ObservationReinforcer {
                         if let Some(s) = content.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *content = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *content = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -129,7 +133,10 @@ impl ObservationReinforcer {
                         if let Some(s) = old_s.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *old_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *old_s = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -137,7 +144,10 @@ impl ObservationReinforcer {
                         if let Some(s) = new_s.as_str() {
                             if s.chars().count() > preview_limit {
                                 let truncated: String = s.chars().take(preview_limit).collect();
-                                *new_s = serde_json::json!(format!("{}\n... (truncated for preview)", truncated));
+                                *new_s = serde_json::json!(format!(
+                                    "{}\n... (truncated for preview)",
+                                    truncated
+                                ));
                             }
                         }
                     }
@@ -197,7 +207,8 @@ impl ObservationReinforcer {
             }
             Err(err) => {
                 let err_msg = err.to_string();
-                let title = Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
+                let title =
+                    Self::generate_title(tool_name, &args, extra_context.as_ref(), primary_root);
                 let error_type = match err {
                     ToolError::Security(_) => "Security",
                     ToolError::IoError(_) => "Io",
@@ -230,15 +241,15 @@ impl ObservationReinforcer {
         extra_context: Option<&Value>,
         primary_root: Option<&std::path::Path>,
     ) -> String {
-        let truncate = |s: &str, len: usize| -> String {
-            let chars: Vec<char> = s.chars().collect();
-            if chars.len() <= len {
-                s.to_string()
-            } else {
-                let truncated: String = chars.iter().take(len - 3).collect();
-                format!("{}...", truncated)
-            }
-        };
+        // let truncate = |s: &str, len: usize| -> String {
+        //     let chars: Vec<char> = s.chars().collect();
+        //     if chars.len() <= len {
+        //         s.to_string()
+        //     } else {
+        //         let truncated: String = chars.iter().take(len - 3).collect();
+        //         format!("{}...", truncated)
+        //     }
+        // };
 
         let get_domain = |url: &str| -> String {
             if let Some(host) = url.split("://").nth(1).and_then(|s| s.split('/').next()) {
@@ -320,7 +331,7 @@ impl ObservationReinforcer {
                     .as_str()
                     .or(args["glob"].as_str())
                     .unwrap_or("");
-                format!("Glob {}", truncate(pattern, 30))
+                format!("Glob {}", pattern)
             }
             TOOL_GREP => {
                 let pattern = args["pattern"]
@@ -330,13 +341,9 @@ impl ObservationReinforcer {
                 let path = args["path"].as_str().unwrap_or("");
                 if !path.is_empty() {
                     let display_path = get_relative_path(path);
-                    format!(
-                        "Grep \"{}\" in {}",
-                        truncate(pattern, 15),
-                        truncate(&display_path, 15)
-                    )
+                    format!("Grep \"{}\" in {}", pattern, display_path)
                 } else {
-                    format!("Grep \"{}\"", truncate(pattern, 25))
+                    format!("Grep \"{}\"", pattern)
                 }
             }
             TOOL_WEB_FETCH => {
@@ -347,14 +354,14 @@ impl ObservationReinforcer {
                 let query = args["query"].as_str().unwrap_or("");
                 let num_results = args["num_results"].as_i64();
                 if let Some(n) = num_results {
-                    format!("Search \"{}\" Number:{}", truncate(query, 30), n)
+                    format!("Search \"{}\" Number:{}", query, n)
                 } else {
-                    format!("Search \"{}\"", truncate(query, 30))
+                    format!("Search \"{}\"", query)
                 }
             }
             TOOL_BASH => {
                 let cmd = args["command"].as_str().unwrap_or("");
-                format!("Bash {}", truncate(cmd, 30))
+                format!("Bash {}", cmd)
             }
             TOOL_TODO_CREATE => {
                 if let Some(tasks) = args["tasks"].as_array() {
@@ -407,7 +414,7 @@ impl ObservationReinforcer {
                 };
                 t!(
                     "workflow.summary.todo_update",
-                    subject = truncate(&display_subject, 20),
+                    subject = &display_subject,
                     status = status
                 )
                 .to_string()
@@ -419,9 +426,8 @@ impl ObservationReinforcer {
             _ => {
                 // Special handling for MCP tools (format: server__MCP__tool)
                 if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                    let parts: Vec<&str> = tool_name
-                        .split(crate::tools::MCP_TOOL_NAME_SPLIT)
-                        .collect();
+                    let parts: Vec<&str> =
+                        tool_name.split(crate::tools::MCP_TOOL_NAME_SPLIT).collect();
                     if parts.len() == 2 {
                         let server = parts[0];
                         let tool = parts[1].replace(['_', '-'], " ");

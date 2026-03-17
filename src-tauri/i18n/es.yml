@@ -353,7 +353,7 @@ workflow:
   summary:
     submit_plan: "Enviar plan"
     todo_create: "Crear tarea"
-    todo_update: "Actualizar tarea '%{subject}' a %{status}"
+    todo_update: "Actualizar tarea: %{subject} -> %{status}"
     todo_list: "Obtener lista de tareas"
     todo_get: "Obtener detalles de tarea"
     todo_status_done: "Completado"

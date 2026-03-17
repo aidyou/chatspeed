@@ -356,7 +356,7 @@ workflow:
   summary:
     submit_plan: "Submit plan"
     todo_create: "Create task"
-    todo_update: "Update task '%{subject}' to %{status}"
+    todo_update: "Update task: %{subject} -> %{status}"
     todo_list: "Get todo list"
     todo_get: "Get task details"
     todo_status_done: "Done"

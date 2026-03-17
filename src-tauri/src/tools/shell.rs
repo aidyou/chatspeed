@@ -73,6 +73,14 @@ impl ShellPolicyEngine {
             }
         }
 
+        // 2.5. Whitelist mode: If custom rules are configured but none matched, require review.
+        // This ensures commands not in the allowed list are flagged for approval.
+        if !self.custom_rules.is_empty() {
+            return ShellDecision::Review(
+                format!("Command '{}' requires review (not in allowed list)", command_str),
+            );
+        }
+
         // 3. Recursive Check: Audit nested structure contents
         let nested_patterns = [
             (

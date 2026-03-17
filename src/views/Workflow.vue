@@ -48,15 +48,15 @@
         <!-- Input Area -->
         <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
           :is-awaiting-approval="isAwaitingApproval" :current-workflow="currentWorkflow"
-          :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent"
-          :active-model-name="activeModelName" :planning-mode="planningMode" :approval-level="approvalLevel"
-          :final-audit-mode="finalAuditMode" :agents="agentStore.agents" :active-ask-user="activeAskUser"
-          :show-skill-suggestions="showSkillSuggestions" :show-file-suggestions="showFileSuggestions"
-          :filtered-system-skills="filteredSystemSkills" :file-suggestions="fileSuggestions"
-          :selected-skill-index="selectedSkillIndex" :selected-file-index="selectedFileIndex"
-          :on-input-key-down="onInputKeyDown" :on-composition-start="onCompositionStart"
-          :on-composition-end="onCompositionEnd" :on-skill-select="onSkillSelect" :on-file-select="onFileSelect"
-          @send-message="onSendMessage" @continue="onContinue" @stop="onStop" @approve-plan="onApprovePlan"
+          :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :active-model-name="activeModelName"
+          :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
+          :agents="agentStore.agents" :active-ask-user="activeAskUser" :show-skill-suggestions="showSkillSuggestions"
+          :show-file-suggestions="showFileSuggestions" :filtered-system-skills="filteredSystemSkills"
+          :file-suggestions="fileSuggestions" :selected-skill-index="selectedSkillIndex"
+          :selected-file-index="selectedFileIndex" :on-input-key-down="onInputKeyDown"
+          :on-composition-start="onCompositionStart" :on-composition-end="onCompositionEnd"
+          :on-skill-select="onSkillSelect" :on-file-select="onFileSelect" @send-message="onSendMessage"
+          @continue="onContinue" @stop="onStop" @approve-plan="onApprovePlan"
           @toggle-planning-mode="planningMode = !planningMode" @toggle-final-audit-mode="toggleFinalAuditMode"
           @update-approval-level="approvalLevel = $event" @create-new-workflow="createNewWorkflow"
           @open-model-selector="openModelSelector" />
@@ -78,7 +78,8 @@
     </el-dialog>
 
     <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails"
-      :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction" @reject="onRejectAction" />
+      :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction"
+      @reject="onRejectAction" />
 
     <WorkflowModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent"
       @save="onModelConfigSave" />

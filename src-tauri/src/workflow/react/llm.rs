@@ -394,8 +394,17 @@ impl LlmProcessor {
 
                         tokio::select! {
                             _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
-                            _ = self.check_signal(signal_rx) => {
-                                return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                            sig = signal_rx.recv() => {
+                                if let Some(sig_str) = sig {
+                                    let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
+                                    if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
+                                        log::info!(
+                                            "WorkflowExecutor {}: Stop signal received during retry backoff",
+                                            self.session_id
+                                        );
+                                        return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                                    }
+                                }
                             }
                         }
                         last_error = Some(WorkflowEngineError::Ai(e));

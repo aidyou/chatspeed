@@ -19,11 +19,11 @@
         <!-- Show root hint for non-primary directories -->
         <span v-if="file.root_path && props.currentPaths?.length > 0 && file.root_path !== props.currentPaths[0]"
           class="file-root-hint">
-          ({{ file.root_path.split(/[/\\]/).filter(p => p !== '').pop() }})
+          ({{file.root_path.split(/[/\\]/).filter(p => p !== '').pop()}})
         </span>
       </div>
     </div>
-
+    <StatusNotifier />
     <div class="input">
       <div v-if="currentWorkflow?.status === 'paused'" class="input-status-hint">
         <div class="hint-header">
@@ -31,18 +31,13 @@
           <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
         </div>
         <div v-if="activeAskUser" class="hint-options">
-          <el-button v-for="opt in activeAskUser.options" :key="opt" size="small" plain round @click="inputMessage = opt">
+          <el-button v-for="opt in activeAskUser.options" :key="opt" size="small" plain round
+            @click="inputMessage = opt">
             {{ opt }}
           </el-button>
         </div>
       </div>
-      <StatusNotifier />
-      <div class="input-header">
-        <div class="model-selector-trigger" @click="$emit('open-model-selector')">
-          <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
-          <cs name="arrow-down" size="12px" />
-        </div>
-      </div>
+
       <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
         :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
         @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
@@ -50,14 +45,16 @@
       <div class="input-footer">
         <div class="footer-left">
           <div class="agent-selector-wrap" :class="{ disabled: currentWorkflowId }">
-            <AgentSelector
-              :model-value="selectedAgent"
-              :agent="currentWorkflow?.agentId
-                ? agents.find(a => a.id === currentWorkflow.agentId)
-                : null
-              "
-              :disabled="!!currentWorkflowId"
-            />
+            <AgentSelector :model-value="selectedAgent" :agent="currentWorkflow?.agentId
+              ? agents.find(a => a.id === currentWorkflow.agentId)
+              : null
+              " :disabled="!!currentWorkflowId" />
+          </div>
+          <div class="input-header">
+            <div class="model-selector-trigger" @click="$emit('open-model-selector')">
+              <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
+              <cs name="arrow-down" size="12px" />
+            </div>
           </div>
 
           <div class="icons">
@@ -81,8 +78,7 @@
             <!-- Approval Level Dropdown -->
             <el-dropdown trigger="click" @command="$emit('update-approval-level', $event)">
               <label class="icon-btn upperLayer" :class="{ 'warning-mode': approvalLevel === 'full' }">
-                <cs
-                  :name="approvalLevel === 'default' ? 'setting' : (approvalLevel === 'smart' ? 'brain' : 'warning')"
+                <cs :name="approvalLevel === 'default' ? 'setting' : (approvalLevel === 'smart' ? 'brain' : 'warning')"
                   class="small" />
               </label>
               <template #dropdown>
@@ -97,8 +93,7 @@
                     <span class="dropdown-text">{{ $t('settings.agent.approvalLevelSmart') }}</span>
                     <cs v-if="approvalLevel === 'smart'" name="check" size="14px" class="dropdown-check" />
                   </el-dropdown-item>
-                  <el-dropdown-item command="full" class="danger-option"
-                    :class="{ active: approvalLevel === 'full' }">
+                  <el-dropdown-item command="full" class="danger-option" :class="{ active: approvalLevel === 'full' }">
                     <cs name="warning" size="14px" class="dropdown-icon" />
                     <span class="dropdown-text">{{ $t('settings.agent.approvalLevelFull') }}</span>
                     <cs v-if="approvalLevel === 'full'" name="check" size="14px" class="dropdown-check" />

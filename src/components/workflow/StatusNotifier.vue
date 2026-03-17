@@ -4,7 +4,7 @@
       <cs v-if="category === 'warning'" name="warning" size="14px" class="status-icon" />
       <cs v-else-if="isRunning" name="loading" size="14px" class="status-icon rotating" />
       <cs v-else name="info" size="14px" class="status-icon" />
-      
+
       <transition name="fade-slide" mode="out-in">
         <span :key="displayMessage" class="status-message">{{ displayMessage }}</span>
       </transition>
@@ -22,6 +22,8 @@ const workflowStore = useWorkflowStore();
 
 const visible = computed(() => workflowStore.isRunning || workflowStore.notification.message);
 const isRunning = computed(() => workflowStore.isRunning);
+// const visible = ref(true);
+// const isRunning = ref(true);
 const category = computed(() => workflowStore.notification.category || 'info');
 
 // Funny messages repository
@@ -149,7 +151,7 @@ const displayMessage = computed(() => {
 const getMessagePool = () => {
   const lang = locale.value.startsWith('zh') ? 'zh' : 'en';
   const pool = funnyMessages[lang];
-  
+
   // Map internal state to funny pool keys
   const state = workflowStore.currentWorkflow?.status?.toLowerCase() || 'thinking';
   if (state.includes('executing') || state.includes('acting')) return pool.acting;
@@ -209,12 +211,13 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .status-notifier {
-  padding: 6px 12px;
+  margin: auto var(--cs-space);
+  padding: var(--cs-space-xs) var(--cs-space);
   background: var(--cs-bg-color-overlay);
   border-bottom: 1px solid var(--cs-border-color-light);
   font-size: 12px;
   color: var(--cs-text-color-secondary);
-  height: 32px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   overflow: hidden;
@@ -266,8 +269,13 @@ onBeforeUnmount(() => {
 }
 
 @keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .fade-slide-enter-active,
