@@ -285,6 +285,11 @@ export function useWorkflowCore({
         approvalLevel.value = 'default'
       }
     }
+
+    // Scroll to bottom after switching workflow
+    nextTick(() => {
+      scrollToBottom()
+    })
   }
 
   const startNewWorkflow = async (prompt) => {
