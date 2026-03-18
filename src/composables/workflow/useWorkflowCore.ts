@@ -31,6 +31,7 @@ export function useWorkflowCore({
   compressionMessage,
   fetchSystemSkills,
   resetChatState,
+  clearRetryTimer,
   setRetryStatus,
   processChunk,
   processReasoningChunk,
@@ -100,8 +101,10 @@ export function useWorkflowCore({
   })
 
   const canSwitchWorkflow = computed(() => {
-    // Can't switch if a workflow is currently running
-    return !isRunning.value
+    // [UI Enhancement] Allow switching workflow view even if one is running in background.
+    // The event listener will switch to the new session, and background sessions will
+    // continue to run on the server.
+    return true
   })
 
   // Unified function to update workflow config
@@ -572,6 +575,12 @@ export function useWorkflowCore({
       // Optimistic update: Immediately set running to false to toggle the UI button.
       // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
       workflowStore.setRunning(false)
+      
+      // Clear any pending retry status or AI notifications
+      clearRetryTimer()
+      resetChatState()
+      workflowStore.setNotification('', 'info')
+
       try {
         await invokeWrapper('workflow_stop', {
           sessionId: currentWorkflowId.value

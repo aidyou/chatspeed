@@ -270,6 +270,7 @@ const core = useWorkflowCore({
   compressionMessage,
   fetchSystemSkills,
   resetChatState,
+  clearRetryTimer,
   setRetryStatus,
   processChunk,
   processReasoningChunk,

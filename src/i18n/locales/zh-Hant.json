@@ -830,6 +830,7 @@
       "statusPending": "待處理"
     },
     "submit_plan": "提交計劃",
+    "untitled": "未命名工作流程",
     "finishTask": "完成任務",
     "workflowTitle": "工作流程標題",
     "selectAgentFirst": "請先選擇一個智能體"

@@ -832,6 +832,7 @@
       "statusPending": "待处理"
     },
     "submit_plan": "提交计划",
+    "untitled": "未命名工作流",
     "finishTask": "完成任务",
     "workflowTitle": "工作流标题",
     "selectAgentFirst": "请先选择一个智能体",

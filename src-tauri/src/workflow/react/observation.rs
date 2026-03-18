@@ -491,8 +491,7 @@ impl ObservationReinforcer {
                 // Return success immediately, handled by reinforcement usually
                 "Fetched content".to_string()
             }
-            TOOL_EDIT_FILE => "Applied changes".to_string(),
-            TOOL_WRITE_FILE => "File written".to_string(),
+            TOOL_EDIT_FILE | TOOL_WRITE_FILE => content.to_string(),
             TOOL_BASH => {
                 let last_line = content.lines().last().unwrap_or("Done");
                 match last_line.char_indices().nth(30) {

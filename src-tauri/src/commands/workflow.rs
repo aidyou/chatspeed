@@ -447,28 +447,32 @@ pub async fn workflow_start(
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
 
-        let agent_config_json: Value = wf
+        let agent_cfg = wf
             .agent_config
             .as_ref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(json!({}));
-
-        let paths: Vec<String> = agent_config_json
-            .get("allowed_paths")
-            .and_then(|v| {
-                if v.is_array() {
-                    serde_json::from_value(v.clone()).ok()
-                } else if let Some(s) = v.as_str() {
-                    serde_json::from_str(s).ok()
-                } else {
-                    Some(Vec::new())
-                }
-            })
+            .and_then(|s| crate::db::AgentConfig::from_json(s))
             .unwrap_or_default();
+
+        let paths: Vec<String> = agent_cfg.allowed_paths.unwrap_or_default();
 
         let prompt = initial_prompt
             .clone()
             .unwrap_or_else(|| wf.user_query.clone());
+
+        // [Bug Fix] If this is the first real message (initial_prompt is Some)
+        // and the DB record has an empty user_query, update it now.
+        if initial_prompt.is_some() && wf.user_query.is_empty() {
+            log::info!(
+                "[Workflow] First message detected for session {}, updating user_query",
+                session_id
+            );
+            let title = if prompt.len() > 30 {
+                format!("{}...", &prompt[..27])
+            } else {
+                prompt.clone()
+            };
+            let _ = store.update_workflow_title_and_query(&session_id, &title, &prompt);
+        }
 
         let (p, att) = if initial_prompt.is_some() {
             inject_at_mentions(&prompt, &paths)
@@ -775,24 +779,13 @@ pub async fn workflow_approve_plan(
             .map_err(|e| e.to_string())?;
         let wf = snapshot.workflow;
 
-        let agent_config_json: Value = wf
+        let agent_cfg = wf
             .agent_config
             .as_ref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(json!({}));
-
-        let paths: Vec<String> = agent_config_json
-            .get("allowed_paths")
-            .and_then(|v| {
-                if v.is_array() {
-                    serde_json::from_value(v.clone()).ok()
-                } else if let Some(s) = v.as_str() {
-                    serde_json::from_str(s).ok()
-                } else {
-                    Some(Vec::new())
-                }
-            })
+            .and_then(|s| crate::db::AgentConfig::from_json(s))
             .unwrap_or_default();
+
+        let paths: Vec<String> = agent_cfg.allowed_paths.unwrap_or_default();
 
         paths
     };

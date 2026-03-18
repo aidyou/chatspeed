@@ -168,6 +168,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         'auditing',
         'awaiting_approval',
         'awaiting_auto_approval',
+        'paused',
         'running'
       ].includes(status);
 
@@ -302,6 +303,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           'auditing',
           'awaiting_approval',
           'awaiting_auto_approval',
+          'paused',
           'running'
         ].includes(s);
       } else {

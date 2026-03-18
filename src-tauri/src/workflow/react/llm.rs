@@ -264,7 +264,7 @@ impl LlmProcessor {
                         custom_headers: Some(custom_headers),
                         temperature,
                         max_tokens,
-                        tool_choice: if require_tool_call {
+                        tool_choice: if require_tool_call && !tools.is_empty() {
                             Some(serde_json::json!("required"))
                         } else {
                             None

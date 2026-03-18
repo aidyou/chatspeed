@@ -18,7 +18,7 @@
                   active: wf.id === currentWorkflowId,
                   disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
                 }">
-                <div class="workflow-title">{{ wf.title || wf.userQuery }}</div>
+                <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
                 <div class="workflow-status" v-if="wf.status">
                   <span :class="['status-indicator', wf.status.toLowerCase()]"></span>
                   {{ wf.status }}
@@ -46,7 +46,10 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
+
+const { t } = useI18n()
 
 const props = defineProps({
   workflows: {
@@ -98,8 +101,14 @@ const hoveredWorkflowIndex = ref(null)
 
 const filteredWorkflows = computed(() => {
   if (!searchQuery.value) return props.workflows
-  return props.workflows.filter((wf) =>
-    (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.value.toLowerCase())
-  )
+  const query = searchQuery.value.toLowerCase()
+  return props.workflows.filter((wf) => {
+    const title = wf.title || ''
+    const userQuery = wf.userQuery || ''
+    const untitled = t('workflow.untitled').toLowerCase()
+    return title.toLowerCase().includes(query) ||
+      userQuery.toLowerCase().includes(query) ||
+      ((!title && !userQuery) && untitled.includes(query))
+  })
 })
 </script>

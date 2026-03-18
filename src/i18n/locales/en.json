@@ -811,6 +811,7 @@
       "title": "To-do List",
       "next": "Next"
     },
+    "untitled": "Untitled",
     "workflowTitle": "Workflow Title",
     "todo": {
       "create": "Create todo",
