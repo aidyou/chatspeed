@@ -64,24 +64,35 @@ export function useWorkflowCore({
       (workflowStore.workflows.length > 0 ? workflowStore.workflows[0] : null)
 
     let providerId = null
-    let modelId = null
+    let modelName = null
 
     if (workflow && workflow.agentConfig && workflow.agentConfig.models) {
       const models = workflow.agentConfig.models
       const model = planningMode.value ? models.plan || models.act : models.act
       if (model) {
         providerId = model.id
-        modelId = model.model
+        modelName = model.model
       }
     }
 
-    if (providerId && modelId) {
+    // Handle proxy models (providerId === 0)
+    if (providerId === 0 && modelName) {
+      // Proxy model format: "group@alias" or just "alias" (default group)
+      if (modelName.includes('@')) {
+        const [group, alias] = modelName.split('@')
+        return `${alias} (${group})`
+      }
+      return modelName
+    }
+
+    // Handle regular models
+    if (providerId && modelName) {
       const provider = modelStore.getModelProviderById(providerId)
       if (provider) {
-        const model = provider.models.find((m) => m.id === modelId)
+        const model = provider.models.find((m) => m.id === modelName)
         if (model) return model.name
       }
-      return modelId
+      return modelName
     }
 
     if (selectedAgent.value) return selectedAgent.value.name
@@ -193,6 +204,11 @@ export function useWorkflowCore({
           metadata: payload.metadata
         })
 
+        // Clear tool stream when tool message is finalized
+        if (payload.role === 'tool' && payload.metadata?.tool_call_id) {
+          workflowStore.clearToolStream(payload.metadata.tool_call_id)
+        }
+
         // Message finalized, clear chatting buffer (including reasoning)
         resetChatState()
 
@@ -216,6 +232,14 @@ export function useWorkflowCore({
         }
       } else if (payload.type === 'notification') {
         workflowStore.setNotification(payload.message, payload.category)
+      } else if (payload.type === 'auto_approved_tools_updated') {
+        workflowStore.setAutoApprovedTools(payload.tools)
+      } else if (payload.type === 'shell_policy_updated') {
+        workflowStore.setShellPolicy(payload.policy)
+      } else if (payload.type === 'tool_stream') {
+        // Handle tool streaming output
+        const { tool_id, output } = payload
+        workflowStore.appendToolStream(tool_id, output)
       }
     })
   }
@@ -269,8 +293,56 @@ export function useWorkflowCore({
     if (!prompt || !prompt.trim()) return
 
     try {
-      console.log('Initiating workflow creation...')
-      // Get allowed paths: use pendingPaths if any, otherwise fall back to agent's paths
+      console.log('Starting workflow...')
+
+      // Check if we already have an empty workflow (created by createNewWorkflow)
+      if (currentWorkflowId.value && workflowStore.currentWorkflow) {
+        const currentQuery = workflowStore.currentWorkflow.userQuery
+        if (!currentQuery || currentQuery.trim() === '') {
+          // We have an empty workflow, update it with the query and start
+          console.log('Using existing empty workflow:', currentWorkflowId.value)
+
+          // Update workflow title and user_query in backend
+          await invokeWrapper('update_workflow_title_and_query', {
+            sessionId: currentWorkflowId.value,
+            title: prompt.substring(0, 50),
+            userQuery: prompt
+          })
+
+          // Trigger engine
+          console.log('Calling workflow_start backend command...')
+          await invokeWrapper('workflow_start', {
+            sessionId: currentWorkflowId.value,
+            agentId: selectedAgent.value.id,
+            initialPrompt: prompt,
+            planningMode: planningMode.value
+          })
+          console.log('Workflow engine started successfully')
+          return
+        }
+      }
+
+      // No empty workflow, create a new one with query
+      console.log('Creating new workflow with query')
+
+      // Get inherited config if from another workflow
+      let inheritedAgentConfig = null
+      let inheritedAgentId = null
+      if (currentWorkflowId.value) {
+        try {
+          const snapshot = await invokeWrapper('get_workflow_snapshot', {
+            sessionId: currentWorkflowId.value
+          })
+          if (snapshot.workflow?.agentConfig) {
+            inheritedAgentConfig = JSON.stringify(snapshot.workflow.agentConfig)
+            inheritedAgentId = snapshot.workflow.agentId
+          }
+        } catch (error) {
+          console.warn('Failed to get previous workflow config:', error)
+        }
+      }
+
+      // Get allowed paths
       let workflowAllowedPaths = []
       if (pendingPaths.value.length > 0) {
         workflowAllowedPaths = [...pendingPaths.value]
@@ -285,13 +357,14 @@ export function useWorkflowCore({
         }
       }
 
-      // 1. Create workflow in DB first to get a session_id
+      // Create workflow with query
       const res = await invokeWrapper('create_workflow', {
         request: {
           userQuery: prompt,
-          agentId: selectedAgent.value.id,
+          agentId: inheritedAgentId || selectedAgent.value.id,
           allowedPaths: workflowAllowedPaths,
-          finalAudit: finalAuditMode.value === 'on'
+          finalAudit: finalAuditMode.value === 'on',
+          inheritedAgentConfig
         }
       })
 
@@ -301,16 +374,24 @@ export function useWorkflowCore({
       // Clear pending paths after workflow is created
       pendingPaths.value = []
 
-      // 2. Sync UI state
+      // Update selectedAgent if we inherited a different agent
+      if (inheritedAgentId && inheritedAgentId !== selectedAgent.value?.id) {
+        const inheritedAgent = agentStore.agents.find(a => a.id === inheritedAgentId)
+        if (inheritedAgent) {
+          selectedAgent.value = inheritedAgent
+        }
+      }
+
+      // Sync UI state
       await workflowStore.loadWorkflows()
       await workflowStore.selectWorkflow(newWorkflowId)
       await setupWorkflowEvents(newWorkflowId)
 
-      // 4. Trigger engine
+      // Trigger engine
       console.log('Calling workflow_start backend command...')
       await invokeWrapper('workflow_start', {
         sessionId: newWorkflowId,
-        agentId: selectedAgent.value.id,
+        agentId: inheritedAgentId || selectedAgent.value.id,
         initialPrompt: prompt,
         planningMode: planningMode.value
       })
@@ -601,10 +682,15 @@ export function useWorkflowCore({
   }
 
   const onDeleteWorkflow = (id) => {
-    ElMessageBox.confirm(t('workflow.confirmDeleteWorkflow'), {
-      confirmButtonText: t('common.confirm'),
-      cancelButtonText: t('common.cancel')
-    }).then(async () => {
+    ElMessageBox.confirm(
+      t('workflow.confirmDeleteWorkflow'),
+      t('common.warning'),
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
+        teleported: true
+      }
+    ).then(async () => {
       try {
         await invokeWrapper('delete_workflow', { sessionId: id })
 
@@ -626,19 +712,88 @@ export function useWorkflowCore({
     })
   }
 
-  const createNewWorkflow = () => {
-    // 1. Capture current environment before clearing
-    const currentPathsToPreserve = [...pendingPaths.value]
-    const currentAgentToPreserve = selectedAgent.value
+  const createNewWorkflow = async () => {
+    try {
+      // 1. Get current config to inherit
+      let inheritedAgentConfig = null
+      let inheritedAgentId = selectedAgent.value?.id
+      let inheritedAllowedPaths = []
+      let inheritedFinalAudit = null
+      let inheritedApprovalLevel = null
 
-    // 2. Clear only the session-specific state in the store
-    workflowStore.clearCurrentWorkflow()
+      if (workflowStore.currentWorkflow?.agentConfig) {
+        inheritedAgentConfig = JSON.stringify(workflowStore.currentWorkflow.agentConfig)
+        inheritedAgentId = workflowStore.currentWorkflow.agentId
+        // Inherit allowed paths from current workflow's agentConfig
+        const config = workflowStore.currentWorkflow.agentConfig
+        if (config.allowedPaths && Array.isArray(config.allowedPaths)) {
+          inheritedAllowedPaths = config.allowedPaths
+        }
+        // Inherit finalAudit from current workflow's agentConfig
+        if (config.finalAudit !== undefined && config.finalAudit !== null) {
+          inheritedFinalAudit = config.finalAudit
+        }
+        // Inherit approvalLevel from current workflow's agentConfig
+        if (config.approvalLevel) {
+          inheritedApprovalLevel = config.approvalLevel
+        }
+      }
 
-    // 3. Restore environment into local state for the next workflow
-    pendingPaths.value = currentPathsToPreserve
-    selectedAgent.value = currentAgentToPreserve
+      // 2. Get allowed paths - prioritize inherited paths
+      let workflowAllowedPaths = []
+      if (inheritedAllowedPaths.length > 0) {
+        workflowAllowedPaths = [...inheritedAllowedPaths]
+      } else if (pendingPaths.value.length > 0) {
+        workflowAllowedPaths = [...pendingPaths.value]
+      } else if (selectedAgent.value?.allowedPaths) {
+        try {
+          workflowAllowedPaths =
+            typeof selectedAgent.value.allowedPaths === 'string'
+              ? JSON.parse(selectedAgent.value.allowedPaths)
+              : selectedAgent.value.allowedPaths
+        } catch (e) {
+          console.error('Failed to parse agent allowedPaths:', e)
+        }
+      }
 
-    // Note: input clearing is handled by the caller
+      // 3. Use inherited finalAudit if available, otherwise use current local state
+      const workflowFinalAudit = inheritedFinalAudit !== null ? inheritedFinalAudit : finalAuditMode.value === 'on'
+
+      // 4. Update local state to match inherited values
+      if (inheritedApprovalLevel) {
+        approvalLevel.value = inheritedApprovalLevel
+      }
+      if (inheritedFinalAudit !== null) {
+        finalAuditMode.value = inheritedFinalAudit ? 'on' : 'off'
+      }
+
+      // 5. Create empty workflow in backend
+      const newWorkflowId = await invokeWrapper('create_workflow', {
+        request: {
+          agentId: inheritedAgentId,
+          allowedPaths: workflowAllowedPaths,
+          finalAudit: workflowFinalAudit,
+          inheritedAgentConfig
+        }
+      })
+
+      // 6. Update selectedAgent if we inherited a different agent
+      if (inheritedAgentId && inheritedAgentId !== selectedAgent.value?.id) {
+        const inheritedAgent = agentStore.agents.find(a => a.id === inheritedAgentId)
+        if (inheritedAgent) {
+          selectedAgent.value = inheritedAgent
+        }
+      }
+
+      // 7. Load and select the new workflow
+      await workflowStore.loadWorkflows()
+      await workflowStore.selectWorkflow(newWorkflowId)
+
+      console.log('Created empty workflow:', newWorkflowId)
+    } catch (error) {
+      console.error('Failed to create new workflow:', error)
+      showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+    }
   }
 
   const toggleFinalAuditMode = () => {
@@ -648,12 +803,12 @@ export function useWorkflowCore({
 
   // Watch for approval level changes
   watch(approvalLevel, async (newVal) => {
-    await updateWorkflowConfig('approval_level', newVal)
+    await updateWorkflowConfig('approvalLevel', newVal)
   })
 
   // Watch for final audit mode changes
   watch(finalAuditMode, async (newVal) => {
-    await updateWorkflowConfig('final_audit', newVal === 'on')
+    await updateWorkflowConfig('finalAudit', newVal === 'on')
   })
 
   return {

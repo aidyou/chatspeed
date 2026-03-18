@@ -410,6 +410,24 @@ watch(
   { deep: true }
 )
 
+// Watch for current workflow changes to sync approvalLevel
+watch(
+  () => workflowStore.currentWorkflow?.agentConfig,
+  (newConfig) => {
+    if (newConfig) {
+      // Sync approvalLevel from workflow config
+      if (newConfig.approvalLevel) {
+        approvalLevel.value = newConfig.approvalLevel
+      }
+      // Sync finalAuditMode from workflow config
+      if (newConfig.finalAudit !== undefined && newConfig.finalAudit !== null) {
+        finalAuditMode.value = newConfig.finalAudit ? 'on' : 'off'
+      }
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
   unlistenFocusInput.value = await listen('cs://workflow-focus-input', (event) => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {

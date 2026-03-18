@@ -141,6 +141,7 @@
     "unpin": "Unpin",
     "updateButtonText": "Update",
     "uploadFailed": "File upload failed",
+    "warning": "Warning",
     "collapse": "Collapse"
   },
   "menu": {
@@ -791,8 +792,14 @@
       "title": "Security Approval",
       "warning": "This operation has potential risks. Please confirm whether to continue."
     },
+    "autoApprovedTools": "Auto-Approved Tools",
+    "allowedShellCommands": "Allowed Shell Commands",
+    "shellPolicyNote": "Configured in Agent settings",
+    "shellPolicyClickRemove": "Click × to remove items",
+    "noAutoApprovedItems": "No auto-approved items",
     "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
     "continue": "Continue",
+    "tools": "Tools",
     "editWorkflowTitle": "Edit Workflow Title",
     "newWorkflow": "New Workflow",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",

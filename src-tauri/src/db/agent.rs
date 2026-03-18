@@ -7,19 +7,82 @@ use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
+/// Shell policy rule for audit decisions
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellPolicyRule {
+    pub pattern: String,
+    pub decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Agent runtime configuration stored in workflow sessions
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfig {
+    pub allowed_paths: Option<Vec<String>>,
+    pub shell_policy: Option<Vec<ShellPolicyRule>>,
+    pub approval_level: Option<String>,
+    pub auto_approve: Option<Vec<String>>,
+    pub available_tools: Option<Vec<String>>,
+    pub final_audit: Option<bool>,
+    pub models: Option<AgentModels>,
+    pub max_contexts: Option<i32>,
+}
+
+impl AgentConfig {
+    pub fn from_json(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn merge_from(&mut self, other: &AgentConfig) {
+        if self.allowed_paths.is_none() && other.allowed_paths.is_some() {
+            self.allowed_paths = other.allowed_paths.clone();
+        }
+        if self.shell_policy.is_none() && other.shell_policy.is_some() {
+            self.shell_policy = other.shell_policy.clone();
+        }
+        if self.approval_level.is_none() && other.approval_level.is_some() {
+            self.approval_level = other.approval_level.clone();
+        }
+        if self.auto_approve.is_none() && other.auto_approve.is_some() {
+            self.auto_approve = other.auto_approve.clone();
+        }
+        if self.available_tools.is_none() && other.available_tools.is_some() {
+            self.available_tools = other.available_tools.clone();
+        }
+        if self.final_audit.is_none() && other.final_audit.is_some() {
+            self.final_audit = other.final_audit;
+        }
+        if self.models.is_none() && other.models.is_some() {
+            self.models = other.models.clone();
+        }
+        if self.max_contexts.is_none() && other.max_contexts.is_some() {
+            self.max_contexts = other.max_contexts;
+        }
+    }
+}
+
+/// Model configuration within an Agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelConfig {
     pub id: i64,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
-    #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_size: Option<i32>,
-    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentModels {
     pub plan: Option<ModelConfig>,
     pub act: Option<ModelConfig>,
@@ -99,49 +162,47 @@ impl Agent {
     }
 
     /// Merges values from a JSON config string into this Agent instance
+    /// The config JSON uses camelCase field names (from AgentConfig serialization)
     pub fn merge_config(&mut self, config_json: &str) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(config_json) {
-            if let Some(models) = config.get("models") {
-                if let Ok(m) = serde_json::from_value::<AgentModels>(models.clone()) {
-                    self.models = Some(m);
-                }
+        if let Some(config) = AgentConfig::from_json(config_json) {
+            // Merge models
+            if config.models.is_some() {
+                self.models = config.models;
             }
-            if let Some(v) = config.get("shell_policy") {
-                self.shell_policy = Some(if v.is_string() {
-                    v.as_str().unwrap_or_default().to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                });
+
+            // Merge shell_policy (Vec<ShellPolicyRule> -> JSON string)
+            if let Some(policy) = config.shell_policy {
+                self.shell_policy = serde_json::to_string(&policy).ok();
             }
-            if let Some(v) = config.get("allowed_paths") {
-                self.allowed_paths = Some(if v.is_string() {
-                    v.as_str().unwrap_or_default().to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                });
+
+            // Merge allowed_paths (Vec<String> -> JSON string)
+            if let Some(paths) = config.allowed_paths {
+                self.allowed_paths = serde_json::to_string(&paths).ok();
             }
-            if let Some(final_audit) = config.get("final_audit").and_then(|v| v.as_bool()) {
-                self.final_audit = Some(final_audit);
+
+            // Merge final_audit
+            if config.final_audit.is_some() {
+                self.final_audit = config.final_audit;
             }
-            if let Some(v) = config.get("auto_approve") {
-                self.auto_approve = Some(if v.is_string() {
-                    v.as_str().unwrap_or_default().to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                });
+
+            // Merge auto_approve (Vec<String> -> JSON string)
+            if let Some(tools) = config.auto_approve {
+                self.auto_approve = serde_json::to_string(&tools).ok();
             }
-            if let Some(approval_level) = config.get("approval_level").and_then(|v| v.as_str()) {
-                self.approval_level = Some(approval_level.to_string());
+
+            // Merge approval_level
+            if config.approval_level.is_some() {
+                self.approval_level = config.approval_level;
             }
-            if let Some(v) = config.get("available_tools") {
-                self.available_tools = Some(if v.is_string() {
-                    v.as_str().unwrap_or_default().to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                });
+
+            // Merge available_tools (Vec<String> -> JSON string)
+            if let Some(tools) = config.available_tools {
+                self.available_tools = serde_json::to_string(&tools).ok();
             }
-            if let Some(max_contexts) = config.get("max_contexts").and_then(|v| v.as_i64()) {
-                self.max_contexts = Some(max_contexts as i32);
+
+            // Merge max_contexts
+            if config.max_contexts.is_some() {
+                self.max_contexts = config.max_contexts;
             }
         }
     }

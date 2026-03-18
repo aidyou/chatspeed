@@ -100,6 +100,90 @@
               </template>
             </el-dropdown>
 
+            <!-- Auto-Approved Tools & Shell Commands Popover -->
+            <el-popover
+              v-if="approvalLevel === 'default' && (autoApprovedTools.length > 0 || allowedShellCommands.length > 0)"
+              placement="top"
+              :width="360"
+              trigger="click"
+              popper-class="auto-approved-popover"
+            >
+              <template #reference>
+                <label class="icon-btn upperLayer auto-approve-badge has-items">
+                  <cs name="tool" class="small" />
+                  <span v-if="autoApprovedTools.length > 0 || allowedShellCommands.length > 0" class="badge">
+                    {{ autoApprovedTools.length + allowedShellCommands.length }}
+                  </span>
+                </label>
+              </template>
+
+              <div class="auto-approved-panel">
+                <!-- Auto-Approved Tools Section -->
+                <div v-if="autoApprovedTools.length > 0" class="panel-section">
+                  <div class="section-header">
+                    <cs name="tool" size="14px" class="section-icon" />
+                    <span class="section-title">{{ $t('workflow.autoApprovedTools') }}</span>
+                    <span class="section-count">{{ autoApprovedTools.length }}</span>
+                  </div>
+                  <div class="section-content">
+                    <div v-for="tool in autoApprovedTools" :key="tool" class="tool-item">
+                      <div class="tool-info">
+                        <code class="tool-name">{{ tool }}</code>
+                      </div>
+                      <el-button
+                        size="small"
+                        type="danger"
+                        text
+                        class="remove-btn"
+                        @click="removeAutoApprovedTool(tool)"
+                      >
+                        <cs name="close" size="12px" />
+                      </el-button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Divider -->
+                <div v-if="autoApprovedTools.length > 0 && allowedShellCommands.length > 0" class="section-divider"></div>
+
+                <!-- Allowed Shell Commands Section -->
+                <div v-if="allowedShellCommands.length > 0" class="panel-section">
+                  <div class="section-header">
+                    <cs name="skill-terminal" size="14px" class="section-icon" />
+                    <span class="section-title">{{ $t('workflow.allowedShellCommands') || 'Allowed Shell Patterns' }}</span>
+                    <span class="section-count">{{ allowedShellCommands.length }}</span>
+                  </div>
+                  <div class="section-content">
+                    <div v-for="(cmd, idx) in allowedShellCommands" :key="idx" class="tool-item shell-item">
+                      <div class="tool-info">
+                        <code class="tool-name shell-pattern">{{ cmd.pattern }}</code>
+                        <span v-if="cmd.description" class="tool-desc">{{ cmd.description }}</span>
+                      </div>
+                      <el-button
+                        size="small"
+                        type="danger"
+                        text
+                        class="remove-btn"
+                        @click="removeShellPolicyItem(cmd.pattern)"
+                      >
+                        <cs name="close" size="12px" />
+                      </el-button>
+                    </div>
+                  </div>
+                  <div class="section-footer">
+                    <cs name="info" size="12px" />
+                    <span>{{ $t('workflow.shellPolicyClickRemove') || 'Click × to remove items' }}</span>
+                  </div>
+                </div>
+
+                <!-- Empty State -->
+                <div v-if="autoApprovedTools.length === 0 && allowedShellCommands.length === 0" class="empty-state">
+                  <cs name="tool" size="32px" class="empty-icon" />
+                  <span class="empty-text">{{ $t('workflow.noAutoApprovedItems') || 'No auto-approved items' }}</span>
+                </div>
+              </div>
+            </el-popover>
+
             <el-tooltip :content="$t('workflow.newWorkflow')" :hide-after="0" :enterable="false" placement="top">
               <label @click="$emit('create-new-workflow')" :class="{ disabled: isRunning }">
                 <cs name="new-chat" class="small" :class="{ disabled: isRunning }" />
@@ -112,7 +196,7 @@
             {{ $t('workflow.approvePlan') }}
           </el-button>
           <el-button
-            v-if="!isRunning && !isAwaitingApproval && currentWorkflowId && currentWorkflow?.status !== 'completed' && currentWorkflow?.status !== 'error'"
+            v-if="!isRunning && !isAwaitingApproval && currentWorkflowId && currentWorkflow?.status !== 'pending' && currentWorkflow?.status !== 'completed' && currentWorkflow?.status !== 'error'"
             size="small" round type="primary" @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
@@ -231,6 +315,38 @@ defineEmits([
   'create-new-workflow',
   'open-model-selector'
 ])
+
+import { useWorkflowStore } from '@/stores/workflow'
+import { invokeWrapper } from '@/libs/tauri'
+
+const workflowStore = useWorkflowStore()
+
+const autoApprovedTools = computed(() => workflowStore.autoApprovedTools)
+const allowedShellCommands = computed(() => workflowStore.allowedShellCommands)
+
+const removeAutoApprovedTool = async (toolName) => {
+  try {
+    await invokeWrapper('remove_auto_approved_tool', {
+      sessionId: props.currentWorkflowId,
+      toolName
+    })
+    workflowStore.removeAutoApprovedTool(toolName)
+  } catch (error) {
+    console.error('Failed to remove auto-approved tool:', error)
+  }
+}
+
+const removeShellPolicyItem = async (pattern) => {
+  try {
+    await invokeWrapper('remove_shell_policy_item', {
+      sessionId: props.currentWorkflowId,
+      pattern
+    })
+    workflowStore.removeShellPolicyItem(pattern)
+  } catch (error) {
+    console.error('Failed to remove shell policy item:', error)
+  }
+}
 
 const inputRef = ref(null)
 

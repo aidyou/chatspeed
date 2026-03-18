@@ -141,7 +141,8 @@
     "to": "到",
     "unpin": "取消置顶",
     "updateButtonText": "更新",
-    "uploadFailed": "文件上传失败"
+    "uploadFailed": "文件上传失败",
+    "warning": "警告"
   },
   "menu": {
     "about": "关于",
@@ -794,8 +795,14 @@
       "title": "安全审批",
       "warning": "该操作具有潜在风险，请确认是否继续执行。"
     },
+    "autoApprovedTools": "自动审批的工具",
+    "allowedShellCommands": "允许的 Shell 命令",
+    "shellPolicyNote": "在 Agent 设置中配置",
+    "shellPolicyClickRemove": "点击 × 移除项目",
+    "noAutoApprovedItems": "没有自动审批的项目",
     "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
     "continue": "继续执行",
+    "tools": "工具",
     "editWorkflowTitle": "编辑工作流标题",
     "finalAuditTooltip": "终审模式：任务结束前由 AI 自动进行质量审核",
     "historyTab": "会话",

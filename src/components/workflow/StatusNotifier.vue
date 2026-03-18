@@ -200,6 +200,20 @@ watch(isRunning, (newVal) => {
   }
 }, { immediate: true });
 
+// Clear notification when workflow state changes (except for special categories)
+watch(() => workflowStore.currentWorkflow?.status, (newStatus, oldStatus) => {
+  if (oldStatus && newStatus !== oldStatus) {
+    // State changed - clear notification unless it's a special category
+    // We use category as identifier instead of message content for i18n safety
+    const specialCategories = ['warning', 'error'];
+    const shouldKeep = specialCategories.includes(workflowStore.notification.category);
+
+    if (!shouldKeep) {
+      workflowStore.setNotification('', 'info');
+    }
+  }
+});
+
 onMounted(() => {
   if (isRunning.value) startRandomizer();
 });

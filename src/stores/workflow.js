@@ -15,10 +15,31 @@ export const useWorkflowStore = defineStore('workflow', () => {
     category: 'info',
     timestamp: 0
   });
+  const autoApprovedTools = ref([]);
+  const shellPolicy = ref([]);
+  const toolStreams = ref(new Map()); // tool_id -> string[] (max 100 lines)
 
   const currentWorkflow = computed(() => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
+
+  /**
+   * Extract allowed shell commands from shellPolicy
+   * Returns array of { pattern, description } for commands with decision "allow"
+   */
+  const allowedShellCommands = computed(() => {
+    if (!shellPolicy.value || !Array.isArray(shellPolicy.value)) return [];
+    return shellPolicy.value
+      .filter(item => item.decision === 'allow' && item.pattern)
+      .map(item => ({
+        pattern: item.pattern,
+        description: item.description || ''
+      }));
+  });
+
+  const setShellPolicy = (policy) => {
+    shellPolicy.value = policy || [];
+  };
 
   const setNotification = (message, category = 'info') => {
     notification.value = {
@@ -27,6 +48,53 @@ export const useWorkflowStore = defineStore('workflow', () => {
       timestamp: Date.now()
     };
   };
+
+  const setAutoApprovedTools = (tools) => {
+    autoApprovedTools.value = tools;
+  };
+
+  const removeAutoApprovedTool = (tool) => {
+    const index = autoApprovedTools.value.indexOf(tool);
+    if (index > -1) {
+      autoApprovedTools.value.splice(index, 1);
+    }
+  };
+
+  const removeShellPolicyItem = (pattern) => {
+    const index = shellPolicy.value.findIndex(item => item.pattern === pattern);
+    if (index > -1) {
+      shellPolicy.value.splice(index, 1);
+    }
+  };
+
+  /**
+   * Append a line to tool stream output, keeping max 100 lines
+   */
+  const appendToolStream = (toolId, line) => {
+    if (!toolStreams.value.has(toolId)) {
+      toolStreams.value.set(toolId, [])
+    }
+    const lines = toolStreams.value.get(toolId)
+    lines.push(line)
+    // Keep only latest 100 lines
+    if (lines.length > 100) {
+      lines.splice(0, lines.length - 100)
+    }
+  }
+
+  /**
+   * Clear tool stream for a specific tool
+   */
+  const clearToolStream = (toolId) => {
+    toolStreams.value.delete(toolId)
+  }
+
+  /**
+   * Get tool stream lines for a specific tool
+   */
+  const getToolStream = (toolId) => {
+    return toolStreams.value.get(toolId) || []
+  }
 
   const setTodoList = (todos) => {
     todoList.value = todos;
@@ -44,17 +112,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   /**
-   * Parse agentConfig and extract allowedPaths from it
-   * agentConfig is stored as JSON string in DB, with structure:
-   * {
-   *   "allowed_paths": [...],
-   *   "models": {...},
-   *   "shell_policy": [...],
-   *   "approval_level": "...",
-   *   "final_audit": true/false
-   * }
-   *
-   * This function normalizes the internal field names from snake_case to camelCase
+   * Parse agentConfig from JSON string to object
+   * agentConfig is stored as JSON string in DB with camelCase field names
    */
   const _parseWorkflowData = (w) => {
     // Initialize defaults
@@ -69,37 +128,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     }
 
-    // Normalize agentConfig internal fields from snake_case to camelCase
-    if (w.agentConfig && typeof w.agentConfig === 'object') {
-      const config = w.agentConfig;
-
-      // allowed_paths -> allowedPaths
-      if (config.allowed_paths !== undefined) {
-        config.allowedPaths = config.allowed_paths;
-        delete config.allowed_paths;
-      }
-
-      // shell_policy -> shellPolicy
-      if (config.shell_policy !== undefined) {
-        config.shellPolicy = config.shell_policy;
-        delete config.shell_policy;
-      }
-
-      // approval_level -> approvalLevel
-      if (config.approval_level !== undefined) {
-        config.approvalLevel = config.approval_level;
-        delete config.approval_level;
-      }
-
-      // final_audit -> finalAudit
-      if (config.final_audit !== undefined) {
-        config.finalAudit = config.final_audit;
-        delete config.final_audit;
-      }
-    }
-
-    // Extract allowedPaths from agentConfig (now in camelCase)
+    // Extract allowedPaths and shellPolicy from agentConfig
     w.allowedPaths = w.agentConfig.allowedPaths || [];
+    w.shellPolicy = w.agentConfig.shellPolicy || [];
 
     return w;
   };
@@ -122,8 +153,23 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
 
-      // Parse workflow data (agentConfig, allowedPaths)
+      // Parse workflow data (agentConfig, allowedPaths, shellPolicy)
       _parseWorkflowData(snapshot.workflow);
+
+      // Set shell policy from parsed workflow data
+      setShellPolicy(snapshot.workflow.shellPolicy || []);
+
+      // Reset isRunning based on workflow status
+      const status = snapshot.workflow.status?.toLowerCase() || 'pending';
+      // Running states: thinking, executing, auditing, awaiting_approval, awaiting_auto_approval
+      isRunning.value = [
+        'thinking',
+        'executing',
+        'auditing',
+        'awaiting_approval',
+        'awaiting_auto_approval',
+        'running'
+      ].includes(status);
 
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
@@ -154,6 +200,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
       } else {
         todoList.value = [];
+      }
+
+      // Fetch auto-approved tools for this workflow
+      try {
+        const tools = await invokeWrapper('get_auto_approved_tools', { sessionId: workflowId })
+        if (tools && Array.isArray(tools)) {
+          autoApprovedTools.value = tools
+        } else {
+          autoApprovedTools.value = []
+        }
+      } catch (e) {
+        console.log('Could not fetch auto-approved tools:', e)
+        autoApprovedTools.value = []
       }
 
       // Update workflow in the list with the parsed data
@@ -236,11 +295,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
         // Update running state based on status
         const s = status.toLowerCase();
-        if (s === 'thinking' || s === 'executing' || s === 'running') {
-          isRunning.value = true;
-        } else {
-          isRunning.value = false;
-        }
+        // Running states: thinking, executing, auditing, awaiting_approval, awaiting_auto_approval
+        isRunning.value = [
+          'thinking',
+          'executing',
+          'auditing',
+          'awaiting_approval',
+          'awaiting_auto_approval',
+          'running'
+        ].includes(s);
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }
@@ -297,6 +360,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messages.value = [];
     todoList.value = [];
     isRunning.value = false;
+    autoApprovedTools.value = [];
+    shellPolicy.value = [];
   };
 
   return {
@@ -308,8 +373,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isRunning,
     error,
     notification,
+    autoApprovedTools,
+    shellPolicy,
+    allowedShellCommands,
     currentWorkflow,
     setNotification,
+    setAutoApprovedTools,
+    removeAutoApprovedTool,
+    setShellPolicy,
+    removeShellPolicyItem,
+    appendToolStream,
+    clearToolStream,
+    getToolStream,
     setTodoList,
     loadWorkflows,
     selectWorkflow,

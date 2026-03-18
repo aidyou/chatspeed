@@ -14,7 +14,7 @@ mod sql;
 mod types;
 mod workflow;
 
-pub use agent::Agent;
+pub use agent::{Agent, AgentConfig};
 pub use backup::{BackupConfig, DbBackup};
 pub use error::StoreError;
 pub use main_store::MainStore;

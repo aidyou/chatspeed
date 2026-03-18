@@ -530,7 +530,7 @@ impl ToolDefinition for ShellExecute {
 
         // Use streaming execution if gateway is configured
         if self.gateway.is_some() && self.session_id.is_some() {
-            return self.call_with_streaming(command_str, timeout_ms).await;
+            return self.call_with_streaming(command_str, timeout_ms, params.clone()).await;
         }
 
         // Fallback to standard execution
@@ -570,7 +570,7 @@ impl ToolDefinition for ShellExecute {
 
 impl ShellExecute {
     /// Execute command with real-time output streaming to frontend
-    async fn call_with_streaming(&self, command_str: &str, timeout_ms: u64) -> NativeToolResult {
+    async fn call_with_streaming(&self, command_str: &str, timeout_ms: u64, params: Value) -> NativeToolResult {
         use std::process::Stdio;
 
         let gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
@@ -579,6 +579,17 @@ impl ShellExecute {
         let session_id = self.session_id.as_ref().ok_or(ToolError::ExecutionFailed(
             "Session ID not configured for streaming".to_string(),
         ))?;
+
+        // Use tool_call_id from params (injected by workflow engine) or generate one
+        let tool_id = params[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "bash_{}",
+                    self.tsid_generator.generate().unwrap_or_default()
+                )
+            });
 
         let mut child = if cfg!(target_os = "windows") {
             Command::new("cmd")
@@ -668,12 +679,16 @@ impl ShellExecute {
                             full_stdout.push_str(&l);
                             full_stdout.push('\n');
 
-                            // Send real-time notification to frontend
+                            // Send real-time streaming output to frontend
                             let _ = gateway.send(
                                 session_id,
-                                GatewayPayload::Notification {
-                                    message: format!("📄 {}", l),
-                                    category: Some("shell".to_string()),
+                                GatewayPayload::ToolStream {
+                                    tool_id: tool_id.clone(),
+                                    output: l.clone(),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64,
                                 },
                             ).await;
                             got_output = true;
@@ -693,12 +708,16 @@ impl ShellExecute {
                             full_stderr.push_str(&l);
                             full_stderr.push('\n');
 
-                            // Send real-time notification to frontend
+                            // Send real-time streaming output to frontend
                             let _ = gateway.send(
                                 session_id,
-                                GatewayPayload::Notification {
-                                    message: format!("⚠️ {}", l),
-                                    category: Some("shell-error".to_string()),
+                                GatewayPayload::ToolStream {
+                                    tool_id: tool_id.clone(),
+                                    output: format!("[STDERR] {}", l),
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64,
                                 },
                             ).await;
                             got_output = true;

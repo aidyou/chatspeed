@@ -802,6 +802,55 @@ impl WorkflowExecutor {
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
+                // Handle remove_auto_approved_tool signal
+                if signal_json["type"] == "remove_auto_approved_tool" {
+                    if let Some(tool_name) = signal_json["tool_name"].as_str() {
+                        self.remove_auto_approved_tool(tool_name);
+
+                        // Send update event to frontend
+                        let tools = self.get_auto_approved_tools();
+                        if let Err(e) = self
+                            .gateway
+                            .send(
+                                &self.session_id,
+                                GatewayPayload::AutoApprovedToolsUpdated { tools },
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "WorkflowExecutor {}: Failed to send auto-approved tools update after removal: {}",
+                                self.session_id,
+                                e
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                // Handle remove_shell_policy_item signal
+                if signal_json["type"] == "remove_shell_policy_item" {
+                    if let Some(pattern) = signal_json["pattern"].as_str() {
+                        if let Some(updated_policy) = self.remove_shell_policy_item(pattern).await {
+                            // Send update event to frontend
+                            if let Err(e) = self
+                                .gateway
+                                .send(
+                                    &self.session_id,
+                                    GatewayPayload::ShellPolicyUpdated { policy: updated_policy },
+                                )
+                                .await
+                            {
+                                log::error!(
+                                    "WorkflowExecutor {}: Failed to send shell policy update after removal: {}",
+                                    self.session_id,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 if signal_json["type"] == "stop" {
                     log::info!(
                         "WorkflowExecutor {}: Received STOP signal while PAUSED",
@@ -850,6 +899,43 @@ impl WorkflowExecutor {
 
                         if approve_all {
                             self.auto_approve.insert(tool_name.to_string());
+
+                            // Send update event to frontend
+                            let tools = self.get_auto_approved_tools();
+                            if let Err(e) = self
+                                .gateway
+                                .send(
+                                    &self.session_id,
+                                    GatewayPayload::AutoApprovedToolsUpdated { tools: tools.clone() },
+                                )
+                                .await
+                            {
+                                log::error!(
+                                    "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                    self.session_id,
+                                    e
+                                );
+                            }
+
+                            // Persist auto_approve list to database
+                            if let Ok(store) = self.context.main_store.write() {
+                                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                                    let mut agent_config: serde_json::Value = snapshot
+                                        .workflow
+                                        .agent_config
+                                        .and_then(|s| serde_json::from_str(&s).ok())
+                                        .unwrap_or(serde_json::json!({}));
+
+                                    agent_config["auto_approve"] = serde_json::to_value(&tools).unwrap_or(serde_json::json!([]));
+
+                                    if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                        let _ = store.update_workflow_agent_config(
+                                            &self.session_id,
+                                            &config_str,
+                                        );
+                                    }
+                                }
+                            }
 
                             // Generate wildcard rule for bash commands and persist to workflow
                             if tool_name == "bash" {
@@ -916,13 +1002,18 @@ impl WorkflowExecutor {
                         }
 
                         // 2. Execution: MCP tools use global, native tools use local
+                        // Inject internal tool_call_id for streaming tools
+                        let mut enriched_args = tool_args.clone();
+                        enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+                            serde_json::json!(signal_id);
+
                         let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                             self.global_tool_manager
-                                .tool_call(&tool_name, tool_args.clone())
+                                .tool_call(&tool_name, enriched_args)
                                 .await
                         } else {
                             self.tool_manager
-                                .tool_call(&tool_name, tool_args.clone())
+                                .tool_call(&tool_name, enriched_args)
                                 .await
                         };
 
@@ -1804,15 +1895,21 @@ impl WorkflowExecutor {
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
+
+                // Inject internal tool_call_id for streaming tools
+                let mut enriched_args = args.clone();
+                enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+                    serde_json::json!(id);
+
                 tool_futures.push_back(async move {
                     let _permit = semaphore_clone.acquire().await.ok();
 
                     let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                         // MCP tools are managed globally
-                        gtm_clone.tool_call(&name, args.clone()).await
+                        gtm_clone.tool_call(&name, enriched_args).await
                     } else {
                         // Native tools are managed session-locally. No fallback.
-                        tm_clone.tool_call(&name, args.clone()).await
+                        tm_clone.tool_call(&name, enriched_args).await
                     };
                     (id, name, args, call, final_res)
                 });
@@ -1828,12 +1925,17 @@ impl WorkflowExecutor {
 
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         for (id, name, args, call) in sequential_execution_queue {
+            // Inject internal tool_call_id for streaming tools
+            let mut enriched_args = args.clone();
+            enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+                serde_json::json!(id);
+
             let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                 self.global_tool_manager
-                    .tool_call(&name, args.clone())
+                    .tool_call(&name, enriched_args)
                     .await
             } else {
-                self.tool_manager.tool_call(&name, args.clone()).await
+                self.tool_manager.tool_call(&name, enriched_args).await
             };
 
             let reinforced = self
@@ -2414,6 +2516,41 @@ impl WorkflowExecutor {
             )
             .await?;
         Ok(())
+    }
+
+    /// Get list of auto-approved tools
+    pub fn get_auto_approved_tools(&self) -> Vec<String> {
+        self.auto_approve.iter().cloned().collect()
+    }
+
+    /// Remove a tool from auto-approve list
+    pub fn remove_auto_approved_tool(&mut self, tool_name: &str) {
+        self.auto_approve.remove(tool_name);
+        log::info!(
+            "WorkflowExecutor {}: Removed '{}' from auto-approve list",
+            self.session_id,
+            tool_name
+        );
+    }
+
+    /// Remove an item from shell_policy and return the updated policy
+    pub async fn remove_shell_policy_item(&mut self, pattern: &str) -> Option<Vec<crate::db::agent::ShellPolicyRule>> {
+        // Update runtime agent_config.shell_policy
+        if let Some(policy_str) = &self.agent_config.shell_policy {
+            if let Ok(mut policy) = serde_json::from_str::<Vec<crate::db::agent::ShellPolicyRule>>(policy_str) {
+                policy.retain(|item| item.pattern != pattern);
+                self.agent_config.shell_policy = Some(
+                    serde_json::to_string(&policy).unwrap_or_default()
+                );
+                log::info!(
+                    "WorkflowExecutor {}: Removed shell policy item with pattern '{}'",
+                    self.session_id,
+                    pattern
+                );
+                return Some(policy);
+            }
+        }
+        None
     }
 
     /// Resolves the actual ModelConfig by piercing through proxy aliases if necessary.

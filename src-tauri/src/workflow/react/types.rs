@@ -76,6 +76,20 @@ pub enum GatewayPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         category: Option<String>, // e.g., "info", "warning", "error", "fun"
     },
+    /// Auto-approved tools list updated
+    AutoApprovedToolsUpdated {
+        tools: Vec<String>,
+    },
+    /// Shell policy updated
+    ShellPolicyUpdated {
+        policy: Vec<crate::db::agent::ShellPolicyRule>,
+    },
+    /// Tool streaming output
+    ToolStream {
+        tool_id: String,
+        output: String,
+        timestamp: u64,
+    },
     Error {
         message: String,
     },

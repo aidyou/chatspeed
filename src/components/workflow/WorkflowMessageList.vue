@@ -40,6 +40,15 @@
                 <span class="expand-hint">(click to expand)</span>
               </div>
               <div v-if="isMessageExpanded(message)" class="tool-detail">
+                <!-- Tool Stream Output (for bash commands) -->
+                <div v-if="message.metadata?.tool_call_id && workflowStore.getToolStream(message.metadata.tool_call_id).length > 0"
+                  class="tool-stream-output">
+                  <div v-for="(line, idx) in workflowStore.getToolStream(message.metadata.tool_call_id)"
+                    :key="idx" class="stream-line">
+                    {{ line }}
+                  </div>
+                </div>
+                <!-- Final Result -->
                 <MarkdownSimple v-if="message.toolDisplay.displayType === 'diff'"
                   :content="getDiffMarkdown(removeSystemReminder(message.message))" />
                 <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
@@ -157,6 +166,9 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 import MarkdownSimple from './MarkdownSimple.vue'
+import { useWorkflowStore } from '@/stores/workflow'
+
+const workflowStore = useWorkflowStore()
 
 defineProps({
   messages: {

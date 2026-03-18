@@ -225,3 +225,7 @@ pub static RESTRICTED_EXTENSIONS: phf::Set<&'static str> = phf::phf_set! {
     ".wmv", ".flv", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".iso", ".exe", ".dmg", ".apk",
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp",
 };
+
+// Internal parameter names for tool execution context
+// These are injected by the workflow engine and should be removed before tool processing
+pub const INTERNAL_PARAM_TOOL_CALL_ID: &str = "__inner_tool_call_id";
