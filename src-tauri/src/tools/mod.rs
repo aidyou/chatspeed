@@ -26,4 +26,3 @@ pub use types::ToolScope;
 pub use types::{ToolCallResult, ToolCategory};
 pub use web_fetch::WebFetch;
 pub use web_search::WebSearch;
-

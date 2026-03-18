@@ -82,7 +82,7 @@ pub enum GatewayPayload {
     },
     /// Shell policy updated
     ShellPolicyUpdated {
-        policy: Vec<crate::db::agent::ShellPolicyRule>,
+        policy: Vec<crate::tools::ShellPolicyRule>,
     },
     /// Tool streaming output
     ToolStream {

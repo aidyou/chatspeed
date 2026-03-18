@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
-#[derive(Debug, PartialEq, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellDecision {
     Allow,
@@ -23,10 +23,42 @@ pub enum ShellDecision {
     Deny(String),
 }
 
+impl<'de> serde::Deserialize<'de> for ShellDecision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?.to_lowercase();
+        match s.as_str() {
+            "allow" => Ok(ShellDecision::Allow),
+            s if s.starts_with("review") => {
+                // Handle "review" or "review:reason" format
+                let reason = if s.len() > 6 {
+                    s[6..].trim_start_matches(':').to_string()
+                } else {
+                    "Requires review".to_string()
+                };
+                Ok(ShellDecision::Review(reason))
+            }
+            s if s.starts_with("deny") => {
+                let reason = if s.len() > 4 {
+                    s[4..].trim_start_matches(':').to_string()
+                } else {
+                    "Command denied".to_string()
+                };
+                Ok(ShellDecision::Deny(reason))
+            }
+            _ => Ok(ShellDecision::Review("Unknown decision, requires review".to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ShellPolicyRule {
     pub pattern: String,
     pub decision: ShellDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Industrial-grade Shell Policy Engine with graded auditing.

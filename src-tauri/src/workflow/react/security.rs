@@ -93,15 +93,8 @@ impl PathGuard {
         roots_with_ignore
     }
 
-    pub fn allowed_roots(&self) -> Vec<PathBuf> {
-        let mut all = Vec::new();
-        for (r, _) in &self.workspace_roots {
-            all.push(r.clone());
-        }
-        for (r, _) in &self.sandbox_roots {
-            all.push(r.clone());
-        }
-        all
+    pub fn workspace_roots(&self) -> Vec<PathBuf> {
+        self.workspace_roots.iter().map(|(r, _)| r.clone()).collect()
     }
 
     pub fn get_primary_root(&self) -> Option<&std::path::Path> {

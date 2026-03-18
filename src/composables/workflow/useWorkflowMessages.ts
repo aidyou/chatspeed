@@ -423,14 +423,22 @@ export function useWorkflowMessages() {
             const newStr =
                 data.new_string !== undefined ? data.new_string : data.content || ''
             const filePath = data.file_path || data.path || 'file'
+            const startLine = data.start_line || 1
 
             // If it's just raw content without diff semantics, return as code block
             if (data.old_string === undefined && data.new_string === undefined && !data.content) {
                 return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
             }
 
-            // Generate standard unidiff-like format for better highlighting
-            let diffContent = `File: **${filePath}**\n\n\`\`\`diff\n`
+            const oldLinesCount = oldStr.split('\n').length
+            const newLinesCount = newStr.split('\n').length
+
+            // Generate standard unidiff-like format with line numbers
+            let diffContent = `File: **${filePath}**\n`
+            if (data.start_line) {
+                diffContent += `Range: L${startLine} - L${startLine + Math.max(oldLinesCount, newLinesCount) - 1}\n`
+            }
+            diffContent += `\n\`\`\`diff\n`
 
             const UI_LINE_LIMIT = 3000 // Limit lines shown in UI for performance
 
@@ -438,6 +446,8 @@ export function useWorkflowMessages() {
                 // Use diff library to generate proper line-by-line diff
                 const changes = Diff.diffLines(oldStr, newStr)
                 let lineCount = 0
+                let currentLineOld = startLine
+                let currentLineNew = startLine
 
                 changes.forEach((change) => {
                     if (lineCount >= UI_LINE_LIMIT) return
@@ -451,15 +461,22 @@ export function useWorkflowMessages() {
                     lines.forEach((line) => {
                         if (lineCount >= UI_LINE_LIMIT) return
 
+                        const lineNumDisplay = change.added ? currentLineNew : currentLineOld
+                        const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
+
                         if (change.added) {
-                            diffContent += `+ ${line}\n`
+                            diffContent += `${lineNumStr} | + ${line}\n`
+                            currentLineNew++
                             lineCount++
                         } else if (change.removed) {
-                            diffContent += `- ${line}\n`
+                            diffContent += `${lineNumStr} | - ${line}\n`
+                            currentLineOld++
                             lineCount++
                         } else {
                             // Show unchanged lines for context
-                            diffContent += `  ${line}\n`
+                            diffContent += `${lineNumStr} |   ${line}\n`
+                            currentLineOld++
+                            currentLineNew++
                             lineCount++
                         }
                     })

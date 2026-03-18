@@ -7,14 +7,8 @@ use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
-/// Shell policy rule for audit decisions
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShellPolicyRule {
-    pub pattern: String,
-    pub decision: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
+// Re-export ShellPolicyRule for backward compatibility
+pub use crate::tools::ShellPolicyRule;
 
 /// Agent runtime configuration stored in workflow sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

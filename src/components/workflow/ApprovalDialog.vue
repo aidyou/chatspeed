@@ -68,19 +68,22 @@ const diffMarkdown = computed(() => {
     const data = JSON.parse(props.details)
     const oldStr = data.old_string || ''
     const newStr = data.new_string || ''
+    const startLine = data.start_line || 1
 
-    return `\`\`\`diff\n${generateDiff(oldStr, newStr)}\n\`\`\``
+    return `\`\`\`diff\n${generateDiff(oldStr, newStr, startLine)}\n\`\`\``
   } catch (e) {
     return props.details
   }
 })
 
 // Use diff library to generate proper line-by-line diff
-const generateDiff = (oldStr, newStr) => {
+const generateDiff = (oldStr, newStr, startLine = 1) => {
   if (oldStr === newStr) return ' (No visible changes)'
 
   const changes = Diff.diffLines(oldStr, newStr)
   let diff = ''
+  let currentLineOld = startLine
+  let currentLineNew = startLine
 
   changes.forEach(change => {
     const lines = change.value.split('\n')
@@ -91,13 +94,20 @@ const generateDiff = (oldStr, newStr) => {
     }
 
     lines.forEach(line => {
+      const lineNumDisplay = change.added ? currentLineNew : currentLineOld
+      const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
+
       if (change.added) {
-        diff += `+ ${line}\n`
+        diff += `${lineNumStr} | + ${line}\n`
+        currentLineNew++
       } else if (change.removed) {
-        diff += `- ${line}\n`
+        diff += `${lineNumStr} | - ${line}\n`
+        currentLineOld++
       } else {
-        // Unchanged lines can be shown with space prefix (optional)
-        diff += `  ${line}\n`
+        // Show unchanged lines with space prefix for context
+        diff += `${lineNumStr} |   ${line}\n`
+        currentLineOld++
+        currentLineNew++
       }
     })
   })

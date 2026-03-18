@@ -269,43 +269,7 @@ impl ToolDefinition for EditFile {
         // A. If the Windows variant matches, use it (preserves \r\n)
         // B. If the Unix variant matches, use it (preserves \n)
         // C. If neither matches, try normalization as a fallback
-        // Helper to generate a contextual diff for observation
-        let generate_diff = |content: &str, old: &str, new: &str, matches: Vec<usize>| -> String {
-            let mut diff_output = String::new();
-            let lines: Vec<&str> = content.lines().collect();
-            
-            for (i, &pos) in matches.iter().enumerate() {
-                if i > 0 { diff_output.push_str("\n...\n"); }
-                
-                // Find line number and surrounding lines
-                let line_idx = content[..pos].lines().count().saturating_sub(1);
-                let start_idx = line_idx.saturating_sub(3);
-                let end_idx = (line_idx + old.lines().count() + 3).min(lines.len());
-                
-                for idx in start_idx..end_idx {
-                    let line_num = idx + 1;
-                    let line_content = lines[idx];
-                    
-                    if idx >= line_idx && idx < line_idx + old.lines().count() {
-                        // This is the changed part
-                        let old_line = lines[idx];
-                        let new_lines: Vec<&str> = new.lines().collect();
-                        let offset = idx - line_idx;
-                        
-                        diff_output.push_str(&format!("{:4} | - {}\n", line_num, old_line));
-                        if offset < new_lines.len() {
-                            diff_output.push_str(&format!("{:4} | + {}\n", line_num, new_lines[offset]));
-                        }
-                    } else {
-                        // Context line
-                        diff_output.push_str(&format!("{:4} |   {}\n", line_num, line_content));
-                    }
-                }
-            }
-            diff_output
-        };
-
-        let mut diff_info = String::new();
+        let mut start_line = 0;
         if raw_content.contains(&old_str_win) {
             let matches: Vec<usize> = raw_content.match_indices(&old_str_win).map(|(i, _)| i).collect();
             if !replace_all && matches.len() > 1 {
@@ -316,7 +280,7 @@ impl ToolDefinition for EditFile {
                 )));
             }
             
-            diff_info = generate_diff(&raw_content, &old_str_win, &new_str_win, if replace_all { matches.clone() } else { vec![matches[0]] });
+            start_line = raw_content[..matches[0]].lines().count();
             final_content = if replace_all {
                 raw_content.replace(&old_str_win, &new_str_win)
             } else {
@@ -333,7 +297,7 @@ impl ToolDefinition for EditFile {
                 )));
             }
             
-            diff_info = generate_diff(&raw_content, old_str_unix, new_str_unix, if replace_all { matches.clone() } else { vec![matches[0]] });
+            start_line = raw_content[..matches[0]].lines().count();
             final_content = if replace_all {
                 raw_content.replace(old_str_unix, new_str_unix)
             } else {
@@ -355,7 +319,7 @@ impl ToolDefinition for EditFile {
                     )));
                 }
                 
-                diff_info = generate_diff(&normalized_file, old_str_unix, new_str_unix, if replace_all { matches.clone() } else { vec![matches[0]] });
+                start_line = normalized_file[..matches[0]].lines().count();
                 let replaced_normalized = if replace_all {
                     normalized_file.replace(old_str_unix, new_str_unix)
                 } else {
@@ -389,6 +353,7 @@ impl ToolDefinition for EditFile {
             "file_path": path_str,
             "old_string": old_str_unix,
             "new_string": new_str_unix,
+            "start_line": start_line + 1,
         });
 
         Ok(ToolCallResult::success(

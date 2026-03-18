@@ -743,12 +743,15 @@ impl LlmProcessor {
     }
 
     fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
-        let allowed_roots = if let Ok(guard) = self.path_guard.read() {
-            guard.allowed_roots()
+        let (allowed_roots, cwd) = if let Ok(guard) = self.path_guard.read() {
+            let roots = guard.workspace_roots();
+            let primary = guard.get_primary_root().map(|p| p.to_path_buf());
+            (roots, primary)
         } else {
-            vec![]
+            (vec![], None)
         };
-        let cwd = allowed_roots.first().cloned().unwrap_or_default();
+        
+        let cwd = cwd.or_else(|| allowed_roots.first().cloned()).unwrap_or_default();
 
         let is_git = if !cwd.as_os_str().is_empty() {
             std::process::Command::new("git")
