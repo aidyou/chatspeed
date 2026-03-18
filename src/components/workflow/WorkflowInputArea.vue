@@ -69,7 +69,7 @@
                 @click="$emit('toggle-final-audit-mode')">
                 <cs name="check-circle" class="small" />
                 <span class="audit-label" v-if="finalAuditMode !== 'off'">{{ finalAuditMode.toUpperCase()
-                }}</span>
+                  }}</span>
               </label>
             </el-tooltip>
 
@@ -103,11 +103,7 @@
             <!-- Auto-Approved Tools & Shell Commands Popover -->
             <el-popover
               v-if="approvalLevel === 'default' && (autoApprovedTools.length > 0 || allowedShellCommands.length > 0)"
-              placement="top"
-              :width="360"
-              trigger="click"
-              popper-class="auto-approved-popover"
-            >
+              placement="top" :width="360" trigger="click" popper-class="auto-approved-popover">
               <template #reference>
                 <label class="icon-btn upperLayer auto-approve-badge has-items">
                   <cs name="tool" class="small" />
@@ -130,27 +126,24 @@
                       <div class="tool-info">
                         <code class="tool-name">{{ tool }}</code>
                       </div>
-                      <el-button
-                        size="small"
-                        type="danger"
-                        text
-                        class="remove-btn"
-                        @click="removeAutoApprovedTool(tool)"
-                      >
-                        <cs name="close" size="12px" />
+                      <el-button size="small" type="danger" text class="remove-btn"
+                        @click="removeAutoApprovedTool(tool)">
+                        <cs name="trash" size="12px" />
                       </el-button>
                     </div>
                   </div>
                 </div>
 
                 <!-- Divider -->
-                <div v-if="autoApprovedTools.length > 0 && allowedShellCommands.length > 0" class="section-divider"></div>
+                <div v-if="autoApprovedTools.length > 0 && allowedShellCommands.length > 0" class="section-divider">
+                </div>
 
                 <!-- Allowed Shell Commands Section -->
                 <div v-if="allowedShellCommands.length > 0" class="panel-section">
                   <div class="section-header">
                     <cs name="skill-terminal" size="14px" class="section-icon" />
-                    <span class="section-title">{{ $t('workflow.allowedShellCommands') || 'Allowed Shell Patterns' }}</span>
+                    <span class="section-title">{{ $t('workflow.allowedShellCommands') || 'Allowed Shell Patterns'
+                      }}</span>
                     <span class="section-count">{{ allowedShellCommands.length }}</span>
                   </div>
                   <div class="section-content">
@@ -159,14 +152,9 @@
                         <code class="tool-name shell-pattern">{{ cmd.pattern }}</code>
                         <span v-if="cmd.description" class="tool-desc">{{ cmd.description }}</span>
                       </div>
-                      <el-button
-                        size="small"
-                        type="danger"
-                        text
-                        class="remove-btn"
-                        @click="removeShellPolicyItem(cmd.pattern)"
-                      >
-                        <cs name="close" size="12px" />
+                      <el-button size="small" type="danger" text class="remove-btn"
+                        @click="removeShellPolicyItem(cmd.pattern)">
+                        <cs name="trash" size="12px" />
                       </el-button>
                     </div>
                   </div>
@@ -321,8 +309,12 @@ import { invokeWrapper } from '@/libs/tauri'
 
 const workflowStore = useWorkflowStore()
 
-const autoApprovedTools = computed(() => workflowStore.autoApprovedTools)
-const allowedShellCommands = computed(() => workflowStore.allowedShellCommands)
+const autoApprovedTools = computed(() =>
+  [...workflowStore.autoApprovedTools].sort((a, b) => a.localeCompare(b))
+)
+const allowedShellCommands = computed(() =>
+  [...workflowStore.allowedShellCommands].sort((a, b) => a.pattern.localeCompare(b.pattern))
+)
 
 const removeAutoApprovedTool = async (toolName) => {
   try {
