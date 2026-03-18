@@ -1457,6 +1457,7 @@ impl WorkflowExecutor {
                     self.max_steps,
                     &self.policy,
                     &mut signal_rx,
+                    true, // require_tool_call: ReAct main loop requires tool calls
                 )
                 .await?;
 
@@ -2264,6 +2265,15 @@ impl WorkflowExecutor {
         // appear immediately before the query that triggered them.
         if role == "user" {
             let _ = self.check_and_auto_activate_skills(&content).await;
+
+            // [Bug Fix] If user sends a message while the session is Paused or AwaitingApproval, 
+            // automatically transition back to Thinking state so the loop can resume.
+            // This is especially important for resumed sessions where the engine was restarted 
+            // in a paused state but given a new initial prompt.
+            if self.state == WorkflowState::Paused || self.state == WorkflowState::AwaitingApproval {
+                log::info!("WorkflowExecutor {}: User message received while {:?}, transitioning to Thinking", self.session_id, self.state);
+                self.update_state(WorkflowState::Thinking).await?;
+            }
         }
 
         let (msg, needs_compression) = self

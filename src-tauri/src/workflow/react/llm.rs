@@ -77,6 +77,7 @@ impl LlmProcessor {
         max_steps: usize,
         policy: &ExecutionPolicy,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        require_tool_call: bool,
     ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
@@ -263,6 +264,11 @@ impl LlmProcessor {
                         custom_headers: Some(custom_headers),
                         temperature,
                         max_tokens,
+                        tool_choice: if require_tool_call {
+                            Some(serde_json::json!("required"))
+                        } else {
+                            None
+                        },
                         ..Default::default()
                     }),
                     move |chunk| {
