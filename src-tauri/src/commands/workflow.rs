@@ -211,7 +211,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWorkflowRequest {
-    pub user_query: Option<String>,  // Allow empty for new workflow creation
+    pub user_query: Option<String>, // Allow empty for new workflow creation
     pub agent_id: String,
     pub allowed_paths: Option<Value>,
     pub final_audit: Option<bool>,
@@ -255,7 +255,11 @@ pub async fn create_workflow(
     }
 
     // 4. Load final_audit (Priority: Workflow input > Agent default)
-    config.final_audit = Some(request.final_audit.unwrap_or(agent.final_audit.unwrap_or(false)));
+    config.final_audit = Some(
+        request
+            .final_audit
+            .unwrap_or(agent.final_audit.unwrap_or(false)),
+    );
 
     // 5. Load auto_approve (parse from JSON string)
     if let Some(approve_str) = &agent.auto_approve {
@@ -487,7 +491,9 @@ pub async fn workflow_start(
     let agent_config_json: Value = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
-            snapshot.workflow.agent_config
+            snapshot
+                .workflow
+                .agent_config
                 .as_ref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or(json!({}))
@@ -1024,7 +1030,9 @@ pub async fn workflow_signal(
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
                     // Now inject the approval signal into the resumed workflow
-                    gateway_arc.inject_input(&session_id, signal.clone()).await
+                    gateway_arc
+                        .inject_input(&session_id, signal.clone())
+                        .await
                         .map_err(|e| format!("Failed to inject approval after resuming: {}", e))?;
 
                     return Ok("Workflow resumed and approval processed".to_string());
@@ -1391,10 +1399,16 @@ pub async fn remove_auto_approved_tool(
     }
 
     // Signal running engine to update runtime auto_approve HashSet (after releasing store lock)
-    let _ = gateway.inject_input(&session_id, serde_json::json!({
-        "type": "remove_auto_approved_tool",
-        "tool_name": tool_name
-    }).to_string()).await;
+    let _ = gateway
+        .inject_input(
+            &session_id,
+            serde_json::json!({
+                "type": "remove_auto_approved_tool",
+                "tool_name": tool_name
+            })
+            .to_string(),
+        )
+        .await;
 
     Ok(())
 }
@@ -1434,10 +1448,16 @@ pub async fn remove_shell_policy_item(
     }
 
     // Signal running engine to update runtime shell_policy
-    let _ = gateway.inject_input(&session_id, serde_json::json!({
-        "type": "remove_shell_policy_item",
-        "pattern": pattern
-    }).to_string()).await;
+    let _ = gateway
+        .inject_input(
+            &session_id,
+            serde_json::json!({
+                "type": "remove_shell_policy_item",
+                "pattern": pattern
+            })
+            .to_string(),
+        )
+        .await;
 
     Ok(())
 }

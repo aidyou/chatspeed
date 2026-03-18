@@ -802,6 +802,17 @@ impl WorkflowExecutor {
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
+                // DEBUG: Log all received signals to help diagnose empty message issue
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "WorkflowExecutor {}: Received signal while {}: type={}, has_content={}, content={}",
+                    self.session_id,
+                    self.state,
+                    signal_json["type"].as_str().unwrap_or("unknown"),
+                    signal_json.get("content").is_some(),
+                    signal_json.get("content").and_then(|c| c.as_str()).unwrap_or("<none>")
+                );
+
                 // Handle remove_auto_approved_tool signal
                 if signal_json["type"] == "remove_auto_approved_tool" {
                     if let Some(tool_name) = signal_json["tool_name"].as_str() {
@@ -836,7 +847,9 @@ impl WorkflowExecutor {
                                 .gateway
                                 .send(
                                     &self.session_id,
-                                    GatewayPayload::ShellPolicyUpdated { policy: updated_policy },
+                                    GatewayPayload::ShellPolicyUpdated {
+                                        policy: updated_policy,
+                                    },
                                 )
                                 .await
                             {
@@ -906,7 +919,9 @@ impl WorkflowExecutor {
                                 .gateway
                                 .send(
                                     &self.session_id,
-                                    GatewayPayload::AutoApprovedToolsUpdated { tools: tools.clone() },
+                                    GatewayPayload::AutoApprovedToolsUpdated {
+                                        tools: tools.clone(),
+                                    },
                                 )
                                 .await
                             {
@@ -919,14 +934,16 @@ impl WorkflowExecutor {
 
                             // Persist auto_approve list to database
                             if let Ok(store) = self.context.main_store.write() {
-                                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id)
+                                {
                                     let mut agent_config: serde_json::Value = snapshot
                                         .workflow
                                         .agent_config
                                         .and_then(|s| serde_json::from_str(&s).ok())
                                         .unwrap_or(serde_json::json!({}));
 
-                                    agent_config["auto_approve"] = serde_json::to_value(&tools).unwrap_or(serde_json::json!([]));
+                                    agent_config["auto_approve"] = serde_json::to_value(&tools)
+                                        .unwrap_or(serde_json::json!([]));
 
                                     if let Ok(config_str) = serde_json::to_string(&agent_config) {
                                         let _ = store.update_workflow_agent_config(
@@ -1012,9 +1029,7 @@ impl WorkflowExecutor {
                                 .tool_call(&tool_name, enriched_args)
                                 .await
                         } else {
-                            self.tool_manager
-                                .tool_call(&tool_name, enriched_args)
-                                .await
+                            self.tool_manager.tool_call(&tool_name, enriched_args).await
                         };
 
                         let tool_call_obj = serde_json::json!({
@@ -1126,17 +1141,29 @@ impl WorkflowExecutor {
                     continue;
                 } else {
                     let user_input = signal_json["content"].as_str().unwrap_or("").to_string();
-                    self.add_message_and_notify_internal(
-                        "user".to_string(),
-                        user_input,
-                        None,
-                        None,
-                        None,
-                        false,
-                        None,
-                        None,
-                    )
-                    .await?;
+                    if !user_input.is_empty() {
+                        self.add_message_and_notify_internal(
+                            "user".to_string(),
+                            user_input,
+                            None,
+                            None,
+                            None,
+                            false,
+                            None,
+                            None,
+                        )
+                        .await?;
+                    } else {
+                        #[cfg(debug_assertions)]
+                        log::debug!(
+                            "WorkflowExecutor {}: Received signal {} with empty content, ignoring",
+                            self.session_id,
+                            signal_json
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                        );
+                    }
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
@@ -1927,8 +1954,7 @@ impl WorkflowExecutor {
         for (id, name, args, call) in sequential_execution_queue {
             // Inject internal tool_call_id for streaming tools
             let mut enriched_args = args.clone();
-            enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
-                serde_json::json!(id);
+            enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] = serde_json::json!(id);
 
             let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                 self.global_tool_manager
@@ -2534,14 +2560,18 @@ impl WorkflowExecutor {
     }
 
     /// Remove an item from shell_policy and return the updated policy
-    pub async fn remove_shell_policy_item(&mut self, pattern: &str) -> Option<Vec<crate::db::agent::ShellPolicyRule>> {
+    pub async fn remove_shell_policy_item(
+        &mut self,
+        pattern: &str,
+    ) -> Option<Vec<crate::db::agent::ShellPolicyRule>> {
         // Update runtime agent_config.shell_policy
         if let Some(policy_str) = &self.agent_config.shell_policy {
-            if let Ok(mut policy) = serde_json::from_str::<Vec<crate::db::agent::ShellPolicyRule>>(policy_str) {
+            if let Ok(mut policy) =
+                serde_json::from_str::<Vec<crate::db::agent::ShellPolicyRule>>(policy_str)
+            {
                 policy.retain(|item| item.pattern != pattern);
-                self.agent_config.shell_policy = Some(
-                    serde_json::to_string(&policy).unwrap_or_default()
-                );
+                self.agent_config.shell_policy =
+                    Some(serde_json::to_string(&policy).unwrap_or_default());
                 log::info!(
                     "WorkflowExecutor {}: Removed shell policy item with pattern '{}'",
                     self.session_id,

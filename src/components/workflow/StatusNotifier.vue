@@ -225,8 +225,7 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .status-notifier {
-  margin: auto var(--cs-space);
-  padding: var(--cs-space-xs) var(--cs-space);
+  padding: var(--cs-space-sm) 0;
   background: var(--cs-bg-color-overlay);
   border-bottom: 1px solid var(--cs-border-color-light);
   font-size: 12px;
@@ -235,11 +234,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   overflow: hidden;
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 10;
   backdrop-filter: blur(8px);
   transition: all 0.3s ease;
   opacity: 0;
