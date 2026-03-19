@@ -1,6 +1,34 @@
-1. 工作流创建会话需要保持前一对话配置
-@src/views/Workflow.vue 点击「新建工作流」是，需将前一会话的配置运用到新会话中，主要配置包括：授权目录、模型选择、终审开关、审核模式、自动审批的工具。其实就是相当于把上一个工作流的 `workflow.agent_config`复制到新会话即可。在体验上，前端创建新会话后，所有开关的状态保持跟上一个会话一致。简单的理解，相当于上一个会话清空上下文重头开始。
-
-2. 当审批模式为“按智能体设置”是，在其右侧显示一个 icon，图表 name 用 `hammer`，点击后显示一个下拉菜单，展示所有已自动审批的列表，可以点击移除已自动审批的工具。每当有用户在审批的时候选择“全部通过”时，自动加入到已自动审批的列表中。
-
-3. 优化 StatusNotifier 组件。当有通知消息时候展示通知消息。在状态转换后，切换为随机的消息`funnyMessages`。这个逻辑是否明白？比如压缩的时候会显示正在压缩，当压缩完成后动作会切换到thinking或者之前的状态，所以状态应该是从暂停（如果我没记错，压缩的时候会暂停一切）切换回之前的状态或者 thinking 状态（具体状态我不确定，需要你研究下代码）。这里我只想告诉你，通知消息的结束可以从状态的转换作为判断条件，具体你研究下是否在理。另外，当前 shell 工具调用的消息作为通知消息展示到 `StatusNotifier`组件应该不太合适，因为 shell 消息通常会比较多，只展示一行不好。我认为可以将 shell 动态添加到正在执行的 shell 工具的 详情并展开详情（详情默认应是折叠的），shell 工具执行完成后，按工具调用的正常显示即可。
+1. 前端模型切换的时候，没将当前模型的设置的最大上下文窗口和温度运用上去；
+2. 前端点击 stop 后，如果处于 thinking 状态，会导致ai 返回的数据为：
+[src/ai/chat/openai.rs:268:13] &token_usage = TokenUsage {
+    total_tokens: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    tokens_per_second: 0.0,
+}
+然后触发 20:18:47.988 [W] chatspeed_lib::workflow::react::engine - src/workflow/react/engine.rs:1581 WorkflowExecutor 0pt4me7mr0400: No tool calls in response (consecutive: 2)
+然后又进一步调用 llm，用户再点一次才真正停止，整个日志：
+```log
+20:18:47.584 [D] chatspeed_lib::workflow::react::gateway - src/workflow/react/gateway.rs:149 [Workflow Gateway] Injecting input for session 0pt4me7mr0400: {"type": "stop"}
+20:18:47.976 [D] chatspeed_lib::ccproxy::helper::stat_guard - src/ccproxy/helper/stat_guard.rs:56 StreamStatGuard dropped. Recording stat: provider='Code Plan Claude-腾讯', model='minimax-m2.5', tokens=25070/0/0
+[src/ai/chat/openai.rs:268:13] &token_usage = TokenUsage {
+    total_tokens: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    tokens_per_second: 0.0,
+}
+20:18:47.988 [W] chatspeed_lib::workflow::react::engine - src/workflow/react/engine.rs:1581 WorkflowExecutor 0pt4me7mr0400: No tool calls in response (consecutive: 2)
+20:18:48.096 [D] chatspeed_lib::ai::network::client - src/ai/network/client.rs:315 Request URL: http://127.0.0.1:11436/v1/chat/completions
+20:18:48.098 [D] chatspeed_lib::ccproxy::auth - src/ccproxy/auth.rs:37 Internal request authenticated successfully.
+20:18:48.098 [I] chatspeed_lib::ccproxy::helper::common - src/ccproxy/helper/common.rs:678 ccproxy: model=minimax-m2.5, provider=Code Plan Claude-腾讯, base_url=https://api.lkeap.cloud.tencent.com/coding/anthropic/v1, protocol=claude, selected=eAlIfB7k
+20:18:48.098 [D] chatspeed_lib::ccproxy::adapter::backend::common - src/ccproxy/adapter/backend/common.rs:30 preprocess_unified_request: Starting with 1 messages
+20:18:48.098 [D] chatspeed_lib::ccproxy::adapter::backend::common - src/ccproxy/adapter/backend/common.rs:129 preprocess_unified_request: Completed processing, final message count: 1
+20:18:52.577 [D] chatspeed_lib::workflow::react::gateway - src/workflow/react/gateway.rs:149 [Workflow Gateway] Injecting input for session 0pt4me7mr0400: {"type": "stop"}
+20:19:24.734 [D] chatspeed_lib::ccproxy::helper::stat_guard - src/ccproxy/helper/stat_guard.rs:56 StreamStatGuard dropped. Recording stat: provider='Code Plan Claude-腾讯', model='minimax-m2.5', tokens=2131/898/0
+[src/ai/chat/openai.rs:268:13] &token_usage = TokenUsage {
+    total_tokens: 3029,
+    prompt_tokens: 2131,
+    completion_tokens: 898,
+    tokens_per_second: 25.303190412848416,
+}
+```
