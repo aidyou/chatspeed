@@ -184,17 +184,26 @@ const initFromStore = () => {
   agentModels.plan = defaultModelConfig()
   agentModels.act = defaultModelConfig()
 
-  // 1. Get reference agent: 
+  // 1. Get reference agent:
   // - Direct prop agent
+  // - Or current workflow's agentConfig (has higher priority if workflow is active)
   // - Or last workflow's agent
   let refAgent = props.agent
-  if (!refAgent && workflowStore.workflows.length > 0) {
+
+  // 1a. Check current workflow's agentConfig first (higher priority for active workflow)
+  const currentWf = workflowStore.currentWorkflow
+  if (currentWf?.agentConfig?.models) {
+    const wfModels = currentWf.agentConfig.models
+    if (wfModels.plan) agentModels.plan = { ...defaultModelConfig(), ...wfModels.plan }
+    if (wfModels.act) agentModels.act = { ...defaultModelConfig(), ...wfModels.act }
+  } else if (!refAgent && workflowStore.workflows.length > 0) {
+    // 1b. Fallback to last workflow's agent
     const lastWf = workflowStore.workflows[0]
     refAgent = agentStore.agents.find(a => a.id === lastWf.agentId)
   }
 
-  // 2. Parse models from agent
-  if (refAgent && refAgent.models) {
+  // 2. Parse models from agent (only if workflow didn't have models)
+  if (!workflowStore.currentWorkflow?.agentConfig?.models && refAgent && refAgent.models) {
     try {
       const modelsObj = typeof refAgent.models === 'string' ? JSON.parse(refAgent.models) : refAgent.models
       if (modelsObj.plan) agentModels.plan = { ...defaultModelConfig(), ...modelsObj.plan }

@@ -35,18 +35,12 @@ impl ClaudeBackendAdapter {
         let mut pending_tool_calls: std::collections::HashSet<String> =
             std::collections::HashSet::new();
 
-        for (i, msg) in messages.iter().enumerate() {
+        for (_i, msg) in messages.iter().enumerate() {
             match msg.role {
                 UnifiedRole::Assistant => {
                     // Check for tool calls in assistant messages
                     for block in &msg.content {
-                        if let UnifiedContentBlock::ToolUse { id, name, .. } = block {
-                            log::debug!(
-                                "Found tool call in message[{}]: id={}, name={}",
-                                i,
-                                id,
-                                name
-                            );
+                        if let UnifiedContentBlock::ToolUse { id, .. } = block {
                             pending_tool_calls.insert(id.clone());
                         }
                     }
@@ -55,11 +49,6 @@ impl ClaudeBackendAdapter {
                     // Check for tool results in user/tool messages
                     for block in &msg.content {
                         if let UnifiedContentBlock::ToolResult { tool_use_id, .. } = block {
-                            log::debug!(
-                                "Found tool result in message[{}]: tool_use_id={}",
-                                i,
-                                tool_use_id
-                            );
                             pending_tool_calls.remove(tool_use_id.as_str());
                         }
                     }
@@ -633,7 +622,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
                         name,
                         input,
                         cache_control: _,
-                    } => content_blocks.push(UnifiedContentBlock::ToolUse { id: crate::ccproxy::get_tool_id(), name, input }),
+                    } => content_blocks.push(UnifiedContentBlock::ToolUse {
+                        id: crate::ccproxy::get_tool_id(),
+                        name,
+                        input,
+                    }),
                     ClaudeNativeContentBlock::ToolResult {
                         tool_use_id,
                         content,

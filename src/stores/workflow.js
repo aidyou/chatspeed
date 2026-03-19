@@ -131,6 +131,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // Extract allowedPaths and shellPolicy from agentConfig
     w.allowedPaths = w.agentConfig.allowedPaths || [];
     w.shellPolicy = w.agentConfig.shellPolicy || [];
+    // w.autoApprove = w.agentConfig.autoApprove || [];
+    // w.approvalLevel = w.agentConfig.approvalLevel || 'default';
+    // w.finalAudit = w.agentConfig.finalAudit || false;
+    // w.maxContexts = w.agentConfig.maxContexts || null;
+    // w.models = w.agentConfig.models || {};
 
     return w;
   };

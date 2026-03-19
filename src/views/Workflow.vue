@@ -275,7 +275,7 @@ const core = useWorkflowCore({
   processChunk,
   processReasoningChunk,
   setCompressionStatus,
-  scrollToBottom: () => messageListRef.value?.scrollToBottom()
+  scrollToBottom: (force = false) => messageListRef.value?.scrollToBottom(force)
 })
 
 const {
