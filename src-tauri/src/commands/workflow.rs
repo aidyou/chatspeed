@@ -466,8 +466,8 @@ pub async fn workflow_start(
                 "[Workflow] First message detected for session {}, updating user_query",
                 session_id
             );
-            let title = if prompt.len() > 30 {
-                format!("{}...", &prompt[..27])
+            let title = if prompt.chars().count() > 30 {
+                format!("{}...", prompt.chars().take(27).collect::<String>())
             } else {
                 prompt.clone()
             };

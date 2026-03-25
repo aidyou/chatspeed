@@ -137,6 +137,7 @@ impl UnifiedRequest {
             if let Some(tools) = &self.tools {
                 let prompt = generate_tool_prompt(tools);
                 self.tools = None; // Clear tools as they are now in the prompt.
+                self.tool_choice = None; // Clear tool_choice as tools are now in the prompt.
                 prompt
             } else {
                 String::new()
