@@ -10,6 +10,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -28,6 +29,15 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Efficiently count lines using BufReader streaming (no full content load)
+/// Returns None if file cannot be read or is binary
+fn count_lines(path: &Path) -> Option<u64> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    // BufReader::lines() handles various line endings (\n, \r\n)
+    Some(reader.lines().count() as u64)
+}
+
 fn get_file_metadata_info(path: &Path) -> String {
     let metadata = match fs::metadata(path) {
         Ok(m) => m,
@@ -42,7 +52,11 @@ fn get_file_metadata_info(path: &Path) -> String {
         })
         .unwrap_or_else(|_| "Unknown".to_string());
 
-    format!("Size: {}, Modified: {}", size_str, modified)
+    let lines_str = count_lines(path)
+        .map(|n| format!("{} lines", n))
+        .unwrap_or_else(|| "Unknown lines".to_string());
+
+    format!("Size: {}, Lines: {}, Modified: {}", size_str, lines_str, modified)
 }
 
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
@@ -92,9 +106,9 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                 let size = metadata.len();
                 let info = get_file_metadata_info(&path);
 
-                if size > 500 * 1024 {
+                if size > 10 * 1024 {
                     injections.push(format!(
-                        "\n<file_content path={:?}>\n[File too large to show full content]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Above are its basic attributes. If you need to analyze the file content, use 'read_file' or 'grep' tools to read specific parts as needed.</SYSTEM_REMINDER>",
+                        "\n<file_content path={:?}>\n[File too large to show full content]\n{}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Use 'read_file' tool with 'offset' and 'limit' parameters to read specific line ranges (e.g., offset=1, limit=100 for lines 1-100). Use 'grep' tool to search for specific patterns.</SYSTEM_REMINDER>",
                         rel_pattern, info, rel_pattern
                     ));
                 } else {

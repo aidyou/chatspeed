@@ -36,7 +36,7 @@
       <div class="chat-main">
         <!-- side bar -->
         <el-aside class="sidebar" :class="{ collapsed: sidebarCollapsed }" :width="sidebarWidth">
-          <div class="sidebar-header upperLayer">
+          <div class="sidebar-header">
             <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true">
               <template #prefix>
                 <cs name="search" />
@@ -341,7 +341,10 @@
                 <div class="icons">
                   <!-- model selector -->
                   <label v-if="modelProviders.length > 0" class="default">
-                    <ChatModelSelector position="bottom" :useProviderAvatar="true" :triggerSize="16" />
+                    <ChatModelSelector
+                      position="bottom"
+                      :useProviderAvatar="true"
+                      :triggerSize="16" />
                   </label>
                   <label
                     v-else
@@ -400,13 +403,17 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
-                    :content="sensitiveStore.status.healthy ? $t('chat.sensitiveFiltering') : `${$t('chat.sensitiveFiltering')} (${$t('chat.moduleUnavailable')}): ${sensitiveStore.status.error || ''}`"
+                    :content="
+                      sensitiveStore.status.healthy
+                        ? $t('chat.sensitiveFiltering')
+                        : `${$t('chat.sensitiveFiltering')} (${$t('chat.moduleUnavailable')}): ${sensitiveStore.status.error || ''}`
+                    "
                     :hide-after="0"
                     :enterable="false"
                     placement="top">
                     <label
                       @click="sensitiveStore.status.healthy && onToggleSensitiveFiltering()"
-                      :class="{ 
+                      :class="{
                         active: sensitiveStore.config.enabled && sensitiveStore.status.healthy,
                         disabled: !sensitiveStore.status.healthy
                       }">
@@ -859,18 +866,18 @@ const groupConversationsByDate = conversations => {
       }
     }
     let createdDate = new Date(conversation.createdAt)
-    
+
     // Fix for Windows WebView2/Safari: Handle SQLite 'YYYY-MM-DD HH:MM:SS' format
     if (isNaN(createdDate.getTime()) && typeof conversation.createdAt === 'string') {
-       // Assume UTC if no timezone provided (SQLite CURRENT_TIMESTAMP is UTC)
-       const isoString = conversation.createdAt.replace(' ', 'T') + 'Z'
-       createdDate = new Date(isoString)
+      // Assume UTC if no timezone provided (SQLite CURRENT_TIMESTAMP is UTC)
+      const isoString = conversation.createdAt.replace(' ', 'T') + 'Z'
+      createdDate = new Date(isoString)
     }
 
     // Fallback: If date is still invalid, treat as today to prevent hiding the conversation
     if (isNaN(createdDate.getTime())) {
       console.warn('Invalid date for conversation:', conversation.id, conversation.createdAt)
-      createdDate = new Date() 
+      createdDate = new Date()
     }
 
     const timeDiff = now - createdDate
@@ -1805,7 +1812,10 @@ onMounted(async () => {
       console.log('Conversations loaded successfully')
     } catch (error) {
       if (attempts < maxAttempts) {
-        console.warn(`Failed to load conversations (attempt ${attempts + 1}/${maxAttempts}), retrying in 1s...`, error)
+        console.warn(
+          `Failed to load conversations (attempt ${attempts + 1}/${maxAttempts}), retrying in 1s...`,
+          error
+        )
         setTimeout(() => loadConversationsWithRetry(attempts + 1, maxAttempts), 1000)
       } else {
         console.error('Max retry attempts reached for loading conversations', error)
