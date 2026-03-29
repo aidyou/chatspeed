@@ -465,15 +465,15 @@ export function useWorkflowMessages() {
                         const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
 
                         if (change.added) {
-                            diffContent += `+${lineNumStr} | ${line}\n`
+                            diffContent += `+ ${lineNumStr} | ${line}\n`
                             currentLineNew++
                             lineCount++
                         } else if (change.removed) {
-                            diffContent += `-${lineNumStr} | ${line}\n`
+                            diffContent += `- ${lineNumStr} | ${line}\n`
                             currentLineOld++
                             lineCount++
                         } else {
-                            diffContent += ` ${lineNumStr} | ${line}\n`
+                            diffContent += `  ${lineNumStr} | ${line}\n`
                             currentLineOld++
                             currentLineNew++
                             lineCount++
