@@ -166,11 +166,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       // Reset isRunning based on workflow status
       const status = snapshot.workflow.status?.toLowerCase() || 'pending';
-      // Running states: thinking, executing, auditing, awaiting_approval, awaiting_auto_approval
+      // Running states: thinking, executing, auditing, awaiting_user, awaiting_approval, awaiting_auto_approval
       isRunning.value = [
         'thinking',
         'executing',
         'auditing',
+        'awaiting_user',
         'awaiting_approval',
         'awaiting_auto_approval',
         'paused',

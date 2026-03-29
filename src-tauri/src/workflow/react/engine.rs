@@ -383,7 +383,34 @@ impl WorkflowExecutor {
                                     let tool_info = self.context.messages.iter().rev().find_map(|m| {
                                         if m.role == "assistant" {
                                             if let Some(m_meta) = &m.metadata {
+                                                // Try multiple formats: tool_calls, function_call, tools
                                                 if let Some(calls) = m_meta.get("tool_calls").and_then(|v| v.as_array()) {
+                                                    for call in calls {
+                                                        let call_id = call.get("id").and_then(|v| v.as_str());
+                                                        if call_id == Some(id) {
+                                                            let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
+                                                            let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
+                                                            if let (Some(n), Some(a)) = (name, args) {
+                                                                return Some(json!({ "name": n, "arguments": a }));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // Try function_call format
+                                                if let Some(func_call) = m_meta.get("function_call").and_then(|v| v.as_object()) {
+                                                    let call_id = func_call.get("id").and_then(|v| v.as_str());
+                                                    if call_id == Some(id) {
+                                                        let name = func_call.get("name").and_then(|v| v.as_str());
+                                                        let args = func_call.get("arguments");
+                                                        if let (Some(n), Some(a)) = (name, args) {
+                                                            return Some(json!({ "name": n, "arguments": a }));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Also check message content for tool calls
+                                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.message) {
+                                                if let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
                                                     for call in calls {
                                                         let call_id = call.get("id").and_then(|v| v.as_str());
                                                         if call_id == Some(id) {
@@ -791,8 +818,10 @@ impl WorkflowExecutor {
                 break;
             }
 
-            // Handle Paused or AwaitingApproval state - wait for user signal
-            if self.state == WorkflowState::Paused || self.state == WorkflowState::AwaitingApproval
+            // Handle Paused, AwaitingUser or AwaitingApproval state - wait for user signal
+            if self.state == WorkflowState::Paused 
+                || self.state == WorkflowState::AwaitingUser 
+                || self.state == WorkflowState::AwaitingApproval
             {
                 let signal_str = signal_rx
                     .recv()
@@ -872,6 +901,30 @@ impl WorkflowExecutor {
                     self.update_state(WorkflowState::Cancelled).await?;
                     self.signal_rx = Some(signal_rx);
                     return Ok(());
+                }
+
+                if signal_json["type"] == "request_confirm_broadcast" {
+                    log::info!(
+                        "WorkflowExecutor {}: Received request to re-broadcast pending confirmations",
+                        self.session_id
+                    );
+                    if self.state == WorkflowState::AwaitingApproval {
+                        let items: Vec<_> = self.pending_approvals.iter().map(|r| (r.key().clone(), r.value().clone())).collect();
+                        for (id, info) in items {
+                            let _ = self
+                                .gateway
+                                .send(
+                                    &self.session_id,
+                                    GatewayPayload::Confirm {
+                                        id,
+                                        action: info["name"].as_str().unwrap_or("unknown").to_string(),
+                                        details: "{}".to_string(),
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                    continue;
                 }
 
                 if signal_json["type"] == "approval" {
@@ -1153,18 +1206,13 @@ impl WorkflowExecutor {
                             None,
                         )
                         .await?;
+                        self.update_state(WorkflowState::Thinking).await?;
                     } else {
-                        #[cfg(debug_assertions)]
-                        log::debug!(
-                            "WorkflowExecutor {}: Received signal {} with empty content, ignoring",
-                            self.session_id,
-                            signal_json
-                                .get("type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown")
+                        log::warn!(
+                            "WorkflowExecutor {}: Received empty user input, continuing to wait",
+                            self.session_id
                         );
                     }
-                    self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
             }
@@ -1859,9 +1907,11 @@ impl WorkflowExecutor {
 
             // --- CAUSAL BLOCKING CHECK ---
             // If a PREVIOUS tool in this TURN has already transitioned the engine to a blocking state
-            // (like AwaitingApproval or Paused), we MUST NOT run or even audit subsequent tools.
+            // (like AwaitingApproval, AwaitingUser or Paused), we MUST NOT run or even audit subsequent tools.
             // They are simply postponed until the previous turn's block is resolved.
-            if self.state == WorkflowState::AwaitingApproval || self.state == WorkflowState::Paused
+            if self.state == WorkflowState::AwaitingApproval 
+                || self.state == WorkflowState::AwaitingUser 
+                || self.state == WorkflowState::Paused
             {
                 log::info!(
                     "WorkflowExecutor {}: Postponing tool '{}' due to Turn-Level block (Causality)",
@@ -2266,11 +2316,13 @@ impl WorkflowExecutor {
         if role == "user" {
             let _ = self.check_and_auto_activate_skills(&content).await;
 
-            // [Bug Fix] If user sends a message while the session is Paused or AwaitingApproval,
+            // [Bug Fix] If user sends a message while the session is Paused, AwaitingUser or AwaitingApproval,
             // automatically transition back to Thinking state so the loop can resume.
             // This is especially important for resumed sessions where the engine was restarted
             // in a paused state but given a new initial prompt.
-            if self.state == WorkflowState::Paused || self.state == WorkflowState::AwaitingApproval
+            if self.state == WorkflowState::Paused 
+                || self.state == WorkflowState::AwaitingUser 
+                || self.state == WorkflowState::AwaitingApproval
             {
                 log::info!("WorkflowExecutor {}: User message received while {:?}, transitioning to Thinking", self.session_id, self.state);
                 self.update_state(WorkflowState::Thinking).await?;

@@ -175,7 +175,7 @@ impl WorkflowExecutor {
         // We no longer send a Confirm signal here to avoid redundant popups.
         // The message is already displayed in the chat stream.
         // We just pause the engine and wait for user input in the main text area.
-        self.update_state(WorkflowState::Paused).await?;
+        self.update_state(WorkflowState::AwaitingUser).await?;
 
         // Format content as JSON if we have options, otherwise just the question
         let content = if let Some(opts) = options {

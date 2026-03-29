@@ -133,7 +133,7 @@ export function useWorkflowCore({
 
             // 2. Signal engine if workflow is active
             const status = currentWorkflow.value?.status
-            if (status && ['thinking', 'executing', 'paused', 'awaiting_approval'].includes(status)) {
+            if (status && ['thinking', 'executing', 'paused', 'awaiting_user', 'awaiting_approval'].includes(status)) {
                 try {
                     await invokeWrapper('workflow_signal', {
                         sessionId: currentWorkflowId.value,
@@ -430,7 +430,8 @@ export function useWorkflowCore({
             await startNewWorkflow(message)
         } else {
             // 2. Decide: Signal or Re-start?
-            const isPaused = currentWorkflow.value?.status === 'paused'
+            const status = currentWorkflow.value?.status
+            const isPaused = status === 'paused' || status === 'awaiting_user'
             if (isRunning.value || isPaused) {
                 // Just send signal to the running loop
                 try {
@@ -633,7 +634,7 @@ export function useWorkflowCore({
 
                 // Signal the engine to update runtime config (only if workflow is active)
                 const status = currentWorkflow.value?.status
-                if (status && ['thinking', 'executing', 'paused', 'awaiting_approval'].includes(status)) {
+                if (status && ['thinking', 'executing', 'paused', 'awaiting_user', 'awaiting_approval'].includes(status)) {
                     try {
                         await invokeWrapper('workflow_signal', {
                             sessionId: currentWorkflowId.value,

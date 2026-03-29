@@ -640,19 +640,30 @@ pub async fn workflow_start(
             } else {
                 Some(attached_context)
             };
-            executor
-                .add_message_and_notify(
-                    "user".into(),
-                    clean_prompt,
-                    att_opt,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
+            
+            // Check if message already exists to avoid duplicates
+            let messages = executor.messages();
+            let is_duplicate = messages.iter().any(|m| {
+                m.role == "user" && m.message == clean_prompt
+            });
+            
+            if !is_duplicate {
+                executor
+                    .add_message_and_notify(
+                        "user".into(),
+                        clean_prompt,
+                        att_opt,
+                        None,
+                        None,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+            } else {
+                log::warn!("[Workflow] Skipping duplicate message on resume");
+            }
         }
     }
 
@@ -1033,14 +1044,26 @@ pub async fn workflow_signal(
                     )
                     .await?;
 
-                    // Wait for the workflow to initialize and restore pending_approvals
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-                    // Now inject the approval signal into the resumed workflow
-                    gateway_arc
-                        .inject_input(&session_id, signal.clone())
-                        .await
-                        .map_err(|e| format!("Failed to inject approval after resuming: {}", e))?;
+                    let mut retries = 5;
+                    let mut last_error = None;
+                    while retries > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                            Ok(_) => {
+                                log::info!("[Workflow] Approval signal injected successfully after retry");
+                                break;
+                            }
+                            Err(e) => {
+                                last_error = Some(e);
+                                retries -= 1;
+                                log::warn!("[Workflow] Failed to inject approval signal, retries left: {}", retries);
+                            }
+                        }
+                    }
+                    if retries == 0 {
+                        let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
+                        return Err(format!("Failed to inject approval after resuming: {}", err_msg));
+                    }
 
                     return Ok("Workflow resumed and approval processed".to_string());
                 }
