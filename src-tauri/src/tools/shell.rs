@@ -583,12 +583,13 @@ impl ToolDefinition for ShellExecute {
                 if output.status.success() {
                     Ok(ToolCallResult::success(Some(stdout), None))
                 } else {
-                    Err(ToolError::ExecutionFailed(format!(
-                        "Exit {}. STDOUT: {}\nSTDERR: {}",
-                        output.status,
-                        stdout,
-                        String::from_utf8_lossy(&output.stderr)
-                    )))
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let error_msg = if stderr.is_empty() {
+                        format!("Exit {}. STDOUT: {}", output.status, stdout)
+                    } else {
+                        stderr.to_string()
+                    };
+                    Err(ToolError::ExecutionFailed(error_msg))
                 }
             }
             Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
@@ -680,10 +681,12 @@ impl ShellExecute {
                             }
                             return Ok(ToolCallResult::success(Some(full_stdout), None));
                         } else {
-                            return Err(ToolError::ExecutionFailed(format!(
-                                "Exit {}. STDOUT: {}\nSTDERR: {}",
-                                status, full_stdout, full_stderr
-                            )));
+                            let error_msg = if full_stderr.is_empty() {
+                                format!("Exit {}. STDOUT: {}", status, full_stdout)
+                            } else {
+                                full_stderr.clone()
+                            };
+                            return Err(ToolError::ExecutionFailed(error_msg));
                         }
                     }
                     Ok(None) => {
@@ -775,12 +778,12 @@ impl ShellExecute {
                                 }
                                 return Ok(ToolCallResult::success(Some(full_stdout), None));
                             } else {
-                                return Err(ToolError::ExecutionFailed(format!(
-                                    "Exit {}. STDOUT: {}\nSTDERR: {}",
-                                    status,
-                                    full_stdout,
-                                    full_stderr
-                                )));
+                                let error_msg = if full_stderr.is_empty() {
+                                    format!("Exit {}. STDOUT: {}", status, full_stdout)
+                                } else {
+                                    full_stderr.clone()
+                                };
+                                return Err(ToolError::ExecutionFailed(error_msg));
                             }
                         }
                         Ok(None) => {
