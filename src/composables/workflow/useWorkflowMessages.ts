@@ -465,16 +465,15 @@ export function useWorkflowMessages() {
                         const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
 
                         if (change.added) {
-                            diffContent += `${lineNumStr} | + ${line}\n`
+                            diffContent += `+${lineNumStr} | ${line}\n`
                             currentLineNew++
                             lineCount++
                         } else if (change.removed) {
-                            diffContent += `${lineNumStr} | - ${line}\n`
+                            diffContent += `-${lineNumStr} | ${line}\n`
                             currentLineOld++
                             lineCount++
                         } else {
-                            // Show unchanged lines for context
-                            diffContent += `${lineNumStr} |   ${line}\n`
+                            diffContent += ` ${lineNumStr} | ${line}\n`
                             currentLineOld++
                             currentLineNew++
                             lineCount++
@@ -486,8 +485,7 @@ export function useWorkflowMessages() {
                     diffContent += `... (truncated for preview)\n`
                 }
             } else {
-                // For new files or overwrites: "- " (empty line) then "+ content"
-                diffContent += `- \n`
+                diffContent += `- (empty)\n`
                 const newLines = newStr.split('\n')
                 const displayLines = newLines.slice(0, UI_LINE_LIMIT)
 
