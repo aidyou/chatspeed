@@ -341,10 +341,8 @@ impl WorkflowExecutor {
         let _ = self.sync_todo_list().await;
 
         if let Some(last_msg) = self.context.messages.last() {
-            // Reset steps if we are resuming a finished or failed workflow
             if self.state == WorkflowState::Completed
                 || self.state == WorkflowState::Error
-                || self.state == WorkflowState::Cancelled
             {
                 log::info!(
                     "WorkflowExecutor {}: Resetting current_step for resumed workflow (previous state: {})",
@@ -352,14 +350,26 @@ impl WorkflowExecutor {
                     self.state
                 );
                 self.current_step = 0;
-
-                // Reset state to Thinking so the run_loop can actually execute
                 self.update_state(WorkflowState::Thinking).await?;
+            } else if self.state == WorkflowState::Cancelled {
+                log::info!(
+                    "WorkflowExecutor {}: Workflow was cancelled, waiting for user to resume",
+                    self.session_id
+                );
+            } else if self.state == WorkflowState::Paused {
+                log::info!(
+                    "WorkflowExecutor {}: Workflow was paused, waiting for user to resume",
+                    self.session_id
+                );
+            } else if self.state == WorkflowState::AwaitingUser {
+                log::info!(
+                    "WorkflowExecutor {}: Workflow is awaiting user input, waiting for user response",
+                    self.session_id
+                );
             } else {
                 self.current_step = last_msg.step_index as usize;
             }
 
-            // Restore AwaitingApproval state: Rebuild pending_approvals and re-trigger UI signals
             if self.state == WorkflowState::AwaitingApproval {
                 log::info!(
                     "WorkflowExecutor {}: Re-broadcasting pending approvals to UI",
