@@ -1580,16 +1580,14 @@ impl WorkflowExecutor {
                         self.session_id,
                         msg
                     );
-                    // Update state to Cancelled and exit gracefully
                     self.update_state(WorkflowState::Cancelled).await?;
-                    // Add a friendly message about the cancellation
                     let _ = self
                         .add_message_and_notify_internal(
-                            "assistant".to_string(),
-                            format!("Task cancelled: {}", msg),
+                            "user".to_string(),
+                            "Task cancelled.<SYSTEM_REMINDER>User cancelled the operation. Waiting for further instructions.</SYSTEM_REMINDER>".to_string(),
                             None,
                             None,
-                            None,
+                            Some(StepType::Observe),
                             false,
                             None,
                             None,
@@ -2451,6 +2449,7 @@ impl WorkflowExecutor {
         while let Ok(s) = rx.try_recv() {
             let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
             if sig_json["type"] == "stop" || s.contains("stop") {
+                log::info!("WorkflowExecutor {}: Stop signal detected, cancelling workflow", self.session_id);
                 self.update_state(WorkflowState::Cancelled).await?;
                 return Ok(true);
             } else if sig_json["type"] == "user_input" {
