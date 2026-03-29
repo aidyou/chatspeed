@@ -1007,22 +1007,29 @@ pub async fn workflow_signal(
                         return Ok("Workflow resumed with input".to_string());
                     }
                 } else if val["type"] == "request_confirm_broadcast" {
-                    // For request_confirm_broadcast, always try to resume the workflow
-                    // Don't check status - the workflow may have incorrect status in DB but still have pending approvals in messages
-                    let agent_id = {
+                    // Only re-broadcast if workflow is actually awaiting approval
+                    let snapshot = {
                         let store = state.read().map_err(|e| e.to_string())?;
-                        let snapshot = store
+                        store
                             .get_workflow_snapshot(&session_id)
-                            .map_err(|e| e.to_string())?;
-                        snapshot.workflow.agent_id
+                            .map_err(|e| e.to_string())?
                     };
 
+                    let status_lower = snapshot.workflow.status.to_lowercase();
+                    if status_lower != "awaiting_approval" && status_lower != "awaitingapproval" {
+                        log::info!(
+                            "[Workflow] Session {} is not awaiting approval (status: {}), skipping confirm broadcast",
+                            session_id,
+                            snapshot.workflow.status
+                        );
+                        return Ok("Workflow is not awaiting approval".to_string());
+                    }
+
                     log::info!(
-                        "[Workflow] Session {} requesting confirm broadcast. Resuming workflow to re-broadcast pending approvals.",
+                        "[Workflow] Session {} requesting confirm broadcast. Resuming workflow.",
                         session_id
                     );
 
-                    // Resume the workflow - init_internal will re-broadcast pending approvals
                     workflow_start(
                         app,
                         state,
@@ -1031,7 +1038,7 @@ pub async fn workflow_signal(
                         gateway,
                         factory,
                         session_id.clone(),
-                        agent_id,
+                        snapshot.workflow.agent_id,
                         None,
                         None,
                     )
