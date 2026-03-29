@@ -1007,21 +1007,18 @@ pub async fn workflow_signal(
                         return Ok("Workflow resumed with input".to_string());
                     }
                 } else if val["type"] == "request_confirm_broadcast" {
-                    // For request_confirm_broadcast, resume the workflow to re-broadcast pending approvals
+                    // For request_confirm_broadcast, always try to resume the workflow
+                    // Don't check status - the workflow may have incorrect status in DB but still have pending approvals in messages
                     let agent_id = {
                         let store = state.read().map_err(|e| e.to_string())?;
                         let snapshot = store
                             .get_workflow_snapshot(&session_id)
                             .map_err(|e| e.to_string())?;
-
-                        if snapshot.workflow.status.to_lowercase() != "awaiting_approval" && snapshot.workflow.status.to_lowercase() != "awaitingapproval" {
-                            return Ok("Workflow is not awaiting approval, no broadcast needed".to_string());
-                        }
                         snapshot.workflow.agent_id
                     };
 
                     log::info!(
-                        "[Workflow] Session {} requesting confirm broadcast but no active channel. Resuming workflow.",
+                        "[Workflow] Session {} requesting confirm broadcast. Resuming workflow to re-broadcast pending approvals.",
                         session_id
                     );
 
