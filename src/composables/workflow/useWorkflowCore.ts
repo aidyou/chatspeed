@@ -274,20 +274,16 @@ export function useWorkflowCore({
             // Setup event listeners for the existing session (always setup, even if no agent)
             await setupWorkflowEvents(id)
             
-            // Check if we need to request confirm broadcast
-            // 1. Check status: awaiting_approval or awaitingapproval
-            // 2. Check if any message has approval_status: "pending"
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const messages = workflowStore.messages || []
-            const hasPendingApproval = messages.some(m => 
-                m.role === 'tool' && 
-                (m.metadata?.approval_status === 'pending' || m.metadata?.approval_status === 'awaiting_approval')
-            )
+            const lastMessages = messages.slice(-2)
+            const lastToolMessage = lastMessages.find(m => m.role === 'tool')
+            const hasPendingApproval = lastToolMessage?.metadata?.approval_status === 'pending'
             
             console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval)
             
-            if (status === 'awaiting_approval' || status === 'awaitingapproval' || hasPendingApproval) {
-                console.log('[Workflow] Requesting confirm broadcast for workflow with pending approvals, status:', status, 'hasPending:', hasPendingApproval)
+            if (hasPendingApproval) {
+                console.log('[Workflow] Requesting confirm broadcast for workflow with pending approval in last tool message')
                 try {
                     await invokeWrapper('workflow_signal', {
                         sessionId: id,
