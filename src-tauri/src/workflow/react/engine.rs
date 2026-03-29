@@ -1581,19 +1581,6 @@ impl WorkflowExecutor {
                         msg
                     );
                     self.update_state(WorkflowState::Cancelled).await?;
-                    // Add system message for tracking (won't be sent to AI)
-                    let _ = self
-                        .add_message_and_notify_internal(
-                            "system".to_string(),
-                            "Task cancelled.<SYSTEM_REMINDER>User cancelled the operation. Waiting for further instructions.</SYSTEM_REMINDER>".to_string(),
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            false,
-                            None,
-                            None,
-                        )
-                        .await;
                     None
                 }
                 Err(e) => return Err(e),
