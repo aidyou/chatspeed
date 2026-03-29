@@ -1006,6 +1006,41 @@ pub async fn workflow_signal(
 
                         return Ok("Workflow resumed with input".to_string());
                     }
+                } else if val["type"] == "request_confirm_broadcast" {
+                    // For request_confirm_broadcast, resume the workflow to re-broadcast pending approvals
+                    let agent_id = {
+                        let store = state.read().map_err(|e| e.to_string())?;
+                        let snapshot = store
+                            .get_workflow_snapshot(&session_id)
+                            .map_err(|e| e.to_string())?;
+
+                        if snapshot.workflow.status != "awaiting_approval" {
+                            return Ok("Workflow is not awaiting approval, no broadcast needed".to_string());
+                        }
+                        snapshot.workflow.agent_id
+                    };
+
+                    log::info!(
+                        "[Workflow] Session {} requesting confirm broadcast but no active channel. Resuming workflow.",
+                        session_id
+                    );
+
+                    // Resume the workflow - init_internal will re-broadcast pending approvals
+                    workflow_start(
+                        app,
+                        state,
+                        chat_state,
+                        tsid_generator,
+                        gateway,
+                        factory,
+                        session_id.clone(),
+                        agent_id,
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                    return Ok("Workflow resumed and confirm broadcast triggered".to_string());
                 } else if val["type"] == "approval" {
                     // For approval signals, auto-resume the workflow if it's awaiting approval but not active
                     let agent_id = {

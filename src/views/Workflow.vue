@@ -455,20 +455,7 @@ onMounted(async () => {
   // Load the last workflow if available
   if (workflowStore.workflows.length > 0) {
     await selectWorkflow(workflowStore.workflows[0].id)
-
-    // Check if we need to show approval dialog after loading
-    nextTick(() => {
-      const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
-      if (
-        currentWorkflow.value?.status === 'awaiting_approval' &&
-        lastMsg?.role === 'tool'
-      ) {
-        approvalRequestId.value = lastMsg.metadata?.tool_call_id || 'restored'
-        approvalAction.value = lastMsg.toolDisplay.action
-        approvalDetails.value = removeSystemReminder(lastMsg.message)
-        approvalVisible.value = true
-      }
-    })
+    // Approval dialog will be shown via request_confirm_broadcast in selectWorkflow
   }
 
   windowStore.initWorkflowWindowAlwaysOnTop()
