@@ -294,7 +294,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     error.value = null;
     try {
       // Avoid database update if it's an internal engine state transition that doesn't need persistence
-      if (['thinking', 'executing', 'paused', 'completed', 'error'].includes(status.toLowerCase())) {
+      if (['thinking', 'executing', 'paused', 'awaiting_user', 'completed', 'error'].includes(status.toLowerCase())) {
         const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
         if (workflowIndex !== -1) {
           workflows.value[workflowIndex].status = status;
@@ -307,6 +307,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           'thinking',
           'executing',
           'auditing',
+          'awaiting_user',
           'awaiting_approval',
           'awaiting_auto_approval',
           'paused',

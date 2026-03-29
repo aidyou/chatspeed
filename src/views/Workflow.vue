@@ -360,7 +360,8 @@ const filteredWorkflows = computed(() => {
 })
 
 const activeAskUser = computed(() => {
-  if (currentWorkflow.value?.status !== 'paused') return null
+  const status = currentWorkflow.value?.status
+  if (status !== 'paused' && status !== 'awaiting_user') return null
   const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
   if (
     lastMsg?.role === 'tool' &&

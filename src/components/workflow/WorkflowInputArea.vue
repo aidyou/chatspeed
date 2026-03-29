@@ -25,7 +25,7 @@
     </div>
     <StatusNotifier />
     <div class="input">
-      <div v-if="currentWorkflow?.status === 'paused'" class="input-status-hint">
+      <div v-if="currentWorkflow?.status === 'paused' || currentWorkflow?.status === 'awaiting_user'" class="input-status-hint">
         <div class="hint-header">
           <cs name="talk" size="12px" />
           <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
