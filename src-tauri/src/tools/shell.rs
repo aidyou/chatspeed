@@ -581,13 +581,15 @@ impl ToolDefinition for ShellExecute {
                 }
 
                 if output.status.success() {
+                    // Success: just return the output, no prefix
                     Ok(ToolCallResult::success(Some(stdout), None))
                 } else {
+                    // Error: show Error: prefix with stderr
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     let error_msg = if stderr.is_empty() {
-                        format!("Exit {}. STDOUT: {}", output.status, stdout)
+                        format!("Error: Exit {}", output.status)
                     } else {
-                        stderr.to_string()
+                        format!("Error: {}", stderr)
                     };
                     Err(ToolError::ExecutionFailed(error_msg))
                 }
@@ -682,9 +684,9 @@ impl ShellExecute {
                             return Ok(ToolCallResult::success(Some(full_stdout), None));
                         } else {
                             let error_msg = if full_stderr.is_empty() {
-                                format!("Exit {}. STDOUT: {}", status, full_stdout)
+                                format!("Error: Exit {}", status)
                             } else {
-                                full_stderr.clone()
+                                format!("Error: {}", full_stderr)
                             };
                             return Err(ToolError::ExecutionFailed(error_msg));
                         }
@@ -779,9 +781,9 @@ impl ShellExecute {
                                 return Ok(ToolCallResult::success(Some(full_stdout), None));
                             } else {
                                 let error_msg = if full_stderr.is_empty() {
-                                    format!("Exit {}. STDOUT: {}", status, full_stdout)
+                                    format!("Error: Exit {}", status)
                                 } else {
-                                    full_stderr.clone()
+                                    format!("Error: {}", full_stderr)
                                 };
                                 return Err(ToolError::ExecutionFailed(error_msg));
                             }
