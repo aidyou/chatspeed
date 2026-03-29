@@ -260,20 +260,22 @@ export function useWorkflowCore({
             const agent = agentStore.agents.find((a) => a.id === workflowStore.currentWorkflow.agentId)
             if (agent) {
                 selectedAgent.value = agent
-                // Setup event listeners for the existing session
-                await setupWorkflowEvents(id)
-                
-                // Request backend to re-broadcast pending confirmations after listener is ready
-                const status = workflowStore.currentWorkflow?.status
-                if (status === 'awaiting_approval') {
-                    try {
-                        await invokeWrapper('workflow_signal', {
-                            sessionId: id,
-                            signal: JSON.stringify({ type: 'request_confirm_broadcast' })
-                        })
-                    } catch (e) {
-                        console.warn('Failed to request confirm broadcast:', e)
-                    }
+            }
+            
+            // Setup event listeners for the existing session (always setup, even if no agent)
+            await setupWorkflowEvents(id)
+            
+            // Request backend to re-broadcast pending confirmations after listener is ready
+            const status = workflowStore.currentWorkflow?.status?.toLowerCase()
+            if (status === 'awaiting_approval' || status === 'awaitingapproval') {
+                console.log('[Workflow] Requesting confirm broadcast for awaiting_approval workflow, status:', status)
+                try {
+                    await invokeWrapper('workflow_signal', {
+                        sessionId: id,
+                        signal: JSON.stringify({ type: 'request_confirm_broadcast' })
+                    })
+                } catch (e) {
+                    console.warn('Failed to request confirm broadcast:', e)
                 }
             }
 

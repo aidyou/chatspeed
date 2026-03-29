@@ -1014,7 +1014,7 @@ pub async fn workflow_signal(
                             .get_workflow_snapshot(&session_id)
                             .map_err(|e| e.to_string())?;
 
-                        if snapshot.workflow.status != "awaiting_approval" {
+                        if snapshot.workflow.status.to_lowercase() != "awaiting_approval" && snapshot.workflow.status.to_lowercase() != "awaitingapproval" {
                             return Ok("Workflow is not awaiting approval, no broadcast needed".to_string());
                         }
                         snapshot.workflow.agent_id
