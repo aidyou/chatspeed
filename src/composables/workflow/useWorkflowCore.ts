@@ -147,8 +147,15 @@ export function useWorkflowCore({
                 }
             }
 
-            // 3. Refresh UI
-            await workflowStore.selectWorkflow(currentWorkflowId.value)
+            // 3. Update local workflow store state (don't call selectWorkflow to avoid recursion)
+            const workflowIndex = workflowStore.workflows.findIndex(w => w.id === currentWorkflowId.value)
+            if (workflowIndex !== -1) {
+                const existingConfig = workflowStore.workflows[workflowIndex].agentConfig || {}
+                workflowStore.workflows[workflowIndex].agentConfig = {
+                    ...existingConfig,
+                    [key]: value
+                }
+            }
         } catch (error) {
             console.error(`Failed to update ${key}:`, error)
         }
@@ -255,6 +262,8 @@ export function useWorkflowCore({
 
         // Select the workflow in store
         await workflowStore.selectWorkflow(id)
+        
+        console.log('[Workflow] selectWorkflow completed, currentWorkflow:', workflowStore.currentWorkflow?.id, 'status:', workflowStore.currentWorkflow?.status)
 
         if (workflowStore.currentWorkflow) {
             const agent = agentStore.agents.find((a) => a.id === workflowStore.currentWorkflow.agentId)
@@ -267,6 +276,7 @@ export function useWorkflowCore({
             
             // Request backend to re-broadcast pending confirmations after listener is ready
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
+            console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id)
             if (status === 'awaiting_approval' || status === 'awaitingapproval') {
                 console.log('[Workflow] Requesting confirm broadcast for awaiting_approval workflow, status:', status)
                 try {
@@ -274,9 +284,12 @@ export function useWorkflowCore({
                         sessionId: id,
                         signal: JSON.stringify({ type: 'request_confirm_broadcast' })
                     })
+                    console.log('[Workflow] Confirm broadcast request sent successfully')
                 } catch (e) {
-                    console.warn('Failed to request confirm broadcast:', e)
+                    console.warn('[Workflow] Failed to request confirm broadcast:', e)
                 }
+            } else {
+                console.log('[Workflow] Not requesting confirm broadcast, status is:', status)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
