@@ -377,17 +377,7 @@ impl WorkflowExecutor {
         args: &serde_json::Value,
         display_content: Option<String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        // 1. Stash the full tool name and arguments in the server-side map.
-        // This ensures the frontend doesn't need to pass complex JSON back to us.
-        let stash_obj = json!({
-            "name": name,
-            "arguments": args
-        });
-        self.pending_approvals.insert(id.to_string(), stash_obj);
-
-        self.update_state(WorkflowState::AwaitingApproval).await?;
-
-        // 2. Determine what to show the user in the UI (Generate Diffs for File Ops)
+        // 1. Determine what to show the user in the UI (Generate Diffs for File Ops)
         let mut display_type = "text".to_string();
         let content = if let Some(custom) = display_content {
             custom
@@ -442,6 +432,16 @@ impl WorkflowExecutor {
                 ),
             }
         };
+
+        // 2. Stash the full tool name, arguments, and details for later request_confirm_broadcast
+        let stash_obj = json!({
+            "name": name,
+            "arguments": args,
+            "details": content.clone()
+        });
+        self.pending_approvals.insert(id.to_string(), stash_obj);
+
+        self.update_state(WorkflowState::AwaitingApproval).await?;
 
         // 3. Notify frontend to show the confirmation prompt
         self.gateway

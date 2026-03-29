@@ -429,7 +429,13 @@ impl WorkflowExecutor {
 
                                     if let Some(info) = tool_info {
                                         log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
-                                        self.pending_approvals.insert(id.to_string(), info.clone());
+                                        // Include details from the message for later request_confirm_broadcast
+                                        let info_with_details = json!({
+                                            "name": info["name"],
+                                            "arguments": info["arguments"],
+                                            "details": msg.message.clone()
+                                        });
+                                        self.pending_approvals.insert(id.to_string(), info_with_details);
 
                                         // 3. Re-trigger the Gateway signal so the UI automatically displays the confirmation block
                                         let _ = self
@@ -911,6 +917,9 @@ impl WorkflowExecutor {
                     if self.state == WorkflowState::AwaitingApproval {
                         let items: Vec<_> = self.pending_approvals.iter().map(|r| (r.key().clone(), r.value().clone())).collect();
                         for (id, info) in items {
+                            let details = info.get("details")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("{}");
                             let _ = self
                                 .gateway
                                 .send(
@@ -918,7 +927,7 @@ impl WorkflowExecutor {
                                     GatewayPayload::Confirm {
                                         id,
                                         action: info["name"].as_str().unwrap_or("unknown").to_string(),
-                                        details: "{}".to_string(),
+                                        details: details.to_string(),
                                     },
                                 )
                                 .await;
