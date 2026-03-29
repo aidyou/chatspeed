@@ -73,6 +73,10 @@
       .ai-content {
         .content {
           background: none;
+
+          table{
+            max-width: 100%;
+          }
         }
 
         // CLI Style Tool Calls
