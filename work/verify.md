@@ -459,6 +459,7 @@ tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 2. 前端在 `setupWorkflowEvents` 完成后发送 `request_confirm_broadcast` 信号
 3. 后端重新广播待处理的 `GatewayPayload::Confirm` 事件
 4. `pending_approvals` 现在存储 `details` 字段，确保重新广播时内容完整
+5. 在 `workflow_signal` 中添加 `request_confirm_broadcast` 处理，当引擎未运行时自动恢复工作流
 
 #### 问题 4：后端 tool_info 查找失败
 
