@@ -4,8 +4,8 @@
 //! Memory files are stored in markdown format and contain user preferences,
 //! constraints, facts, and conventions that should be remembered across sessions.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use super::error::WorkflowEngineError;
 
@@ -20,7 +20,16 @@ pub enum MemoryScope {
 /// Memory manager for reading and writing memory files.
 ///
 /// Global memory: `~/.chatspeed/memory.md`
-/// Project memory: `{project_root}/.cs/memory.md`
+/// Project memory: `~/.chatspeed/project/{transformed_path}/memory.md`
+///
+/// The project path is transformed to create a unique directory name:
+/// - Remove leading slash from absolute path
+/// - Replace all slashes with dashes
+/// - Example: `/home/user/projects/myapp` → `home-user-projects-myapp`
+/// - Final path: `~/.chatspeed/project/home-user-projects-myapp/memory.md`
+///
+/// This approach keeps project memory out of the project directory itself,
+/// avoiding git tracking issues while maintaining accessibility for AI tools.
 pub struct MemoryManager {
     /// Path to global memory file.
     global_path: PathBuf,
@@ -39,7 +48,20 @@ impl MemoryManager {
             .map(|h| h.join(".chatspeed").join("memory.md"))
             .unwrap_or_else(|| PathBuf::from(".chatspeed/memory.md"));
 
-        let project_path = project_root.map(|p| p.join(".cs").join("memory.md"));
+        let project_path = project_root.and_then(|p| {
+            let chatspeed_dir = dirs::home_dir()?.join(".chatspeed");
+            let path_str = p.to_string_lossy();
+            let transformed = path_str
+                .strip_prefix('/')
+                .unwrap_or(&path_str)
+                .replace('/', "-");
+            Some(
+                chatspeed_dir
+                    .join("project")
+                    .join(transformed)
+                    .join("memory.md"),
+            )
+        });
 
         Self {
             global_path,
@@ -71,9 +93,7 @@ impl MemoryManager {
 
         std::fs::read_to_string(path)
             .map(Some)
-            .map_err(|e| {
-                WorkflowEngineError::General(format!("Failed to read memory file: {}", e))
-            })
+            .map_err(|e| WorkflowEngineError::General(format!("Failed to read memory file: {}", e)))
     }
 
     /// Reads the last N non-empty lines of memory content from the specified scope.
@@ -132,10 +152,9 @@ impl MemoryManager {
             })?;
         }
 
-        std::fs::write(path, content)
-            .map_err(|e| {
-                WorkflowEngineError::General(format!("Failed to write memory file: {}", e))
-            })
+        std::fs::write(path, content).map_err(|e| {
+            WorkflowEngineError::General(format!("Failed to write memory file: {}", e))
+        })
     }
 
     /// Returns true if project memory is available (i.e., project_root was provided).
@@ -210,7 +229,11 @@ mod tests {
         let project = MemoryScope::Project;
 
         // Should serialize to lowercase
-        assert!(serde_json::to_string(&global).unwrap().contains("\"global\""));
-        assert!(serde_json::to_string(&project).unwrap().contains("\"project\""));
+        assert!(serde_json::to_string(&global)
+            .unwrap()
+            .contains("\"global\""));
+        assert!(serde_json::to_string(&project)
+            .unwrap()
+            .contains("\"project\""));
     }
 }
