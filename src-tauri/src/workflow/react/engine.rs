@@ -341,9 +341,7 @@ impl WorkflowExecutor {
         let _ = self.sync_todo_list().await;
 
         if let Some(last_msg) = self.context.messages.last() {
-            if self.state == WorkflowState::Completed
-                || self.state == WorkflowState::Error
-            {
+            if self.state == WorkflowState::Completed || self.state == WorkflowState::Error {
                 log::info!(
                     "WorkflowExecutor {}: Resetting current_step for resumed workflow (previous state: {})",
                     self.session_id,
@@ -445,7 +443,8 @@ impl WorkflowExecutor {
                                             "arguments": info["arguments"],
                                             "details": msg.message.clone()
                                         });
-                                        self.pending_approvals.insert(id.to_string(), info_with_details);
+                                        self.pending_approvals
+                                            .insert(id.to_string(), info_with_details);
 
                                         // 3. Re-trigger the Gateway signal so the UI automatically displays the confirmation block
                                         let _ = self
@@ -835,15 +834,15 @@ impl WorkflowExecutor {
             }
 
             // Handle Paused, AwaitingUser or AwaitingApproval state - wait for user signal
-            if self.state == WorkflowState::Paused 
-                || self.state == WorkflowState::AwaitingUser 
+            if self.state == WorkflowState::Paused
+                || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
             {
                 let signal_str = signal_rx
                     .recv()
                     .await
                     .ok_or_else(|| WorkflowEngineError::General("Signal channel closed".into()))?;
-                // ... (existing signal handling logic)
+
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
@@ -925,18 +924,24 @@ impl WorkflowExecutor {
                         self.session_id
                     );
                     if self.state == WorkflowState::AwaitingApproval {
-                        let items: Vec<_> = self.pending_approvals.iter().map(|r| (r.key().clone(), r.value().clone())).collect();
+                        let items: Vec<_> = self
+                            .pending_approvals
+                            .iter()
+                            .map(|r| (r.key().clone(), r.value().clone()))
+                            .collect();
                         for (id, info) in items {
-                            let details = info.get("details")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("{}");
+                            let details =
+                                info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
                             let _ = self
                                 .gateway
                                 .send(
                                     &self.session_id,
                                     GatewayPayload::Confirm {
                                         id,
-                                        action: info["name"].as_str().unwrap_or("unknown").to_string(),
+                                        action: info["name"]
+                                            .as_str()
+                                            .unwrap_or("unknown")
+                                            .to_string(),
                                         details: details.to_string(),
                                     },
                                 )
@@ -1914,8 +1919,8 @@ impl WorkflowExecutor {
             // If a PREVIOUS tool in this TURN has already transitioned the engine to a blocking state
             // (like AwaitingApproval, AwaitingUser or Paused), we MUST NOT run or even audit subsequent tools.
             // They are simply postponed until the previous turn's block is resolved.
-            if self.state == WorkflowState::AwaitingApproval 
-                || self.state == WorkflowState::AwaitingUser 
+            if self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
             {
                 log::info!(
@@ -2325,8 +2330,8 @@ impl WorkflowExecutor {
             // automatically transition back to Thinking state so the loop can resume.
             // This is especially important for resumed sessions where the engine was restarted
             // in a paused state but given a new initial prompt.
-            if self.state == WorkflowState::Paused 
-                || self.state == WorkflowState::AwaitingUser 
+            if self.state == WorkflowState::Paused
+                || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
             {
                 log::info!("WorkflowExecutor {}: User message received while {:?}, transitioning to Thinking", self.session_id, self.state);
@@ -2437,7 +2442,10 @@ impl WorkflowExecutor {
         while let Ok(s) = rx.try_recv() {
             let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
             if sig_json["type"] == "stop" || s.contains("stop") {
-                log::info!("WorkflowExecutor {}: Stop signal detected, cancelling workflow", self.session_id);
+                log::info!(
+                    "WorkflowExecutor {}: Stop signal detected, cancelling workflow",
+                    self.session_id
+                );
                 self.update_state(WorkflowState::Cancelled).await?;
                 return Ok(true);
             } else if sig_json["type"] == "user_input" {
