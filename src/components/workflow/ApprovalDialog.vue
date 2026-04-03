@@ -21,6 +21,9 @@
     </div>
     <template #footer>
       <div class="dialog-footer">
+        <el-button @click="onStop" :loading="loading" round type="danger">{{
+          $t('common.stop')
+        }}</el-button>
         <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
@@ -46,7 +49,7 @@ const props = defineProps({
   loading: Boolean
 })
 
-const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject'])
+const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject', 'stop'])
 
 const { t } = useI18n()
 
@@ -136,6 +139,10 @@ const onApproveAll = () => {
 
 const onReject = () => {
   emit('reject')
+}
+
+const onStop = () => {
+  emit('stop')
 }
 </script>
 

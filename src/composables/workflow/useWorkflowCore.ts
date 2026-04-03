@@ -763,6 +763,21 @@ export function useWorkflowCore({
 
     const createNewWorkflow = async () => {
         try {
+            // 0. Ensure we have an agent selected
+            if (!selectedAgent.value) {
+                // Try to select the first available agent
+                if (agentStore.agents.length > 0) {
+                    selectedAgent.value = agentStore.agents[0]
+                    console.log('[Workflow] Auto-selected first agent:', selectedAgent.value.id)
+                } else {
+                    // No agents available - show error
+                    const errorMsg = t('workflow.noAgentError') || 'No agent available. Please create an agent first.'
+                    console.error('[Workflow] Cannot create workflow: no agent available')
+                    showMessage(errorMsg, 'error')
+                    return
+                }
+            }
+
             // 1. Get current config to inherit
             let inheritedAgentConfig = null
             let inheritedAgentId = selectedAgent.value?.id

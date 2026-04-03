@@ -136,6 +136,7 @@
     "reject": "拒绝",
     "refresh": "刷新",
     "restart": "重启",
+    "stop": "停止",
     "save": "保存",
     "saveSuccess": "保存成功",
     "search": "搜索",
@@ -810,6 +811,7 @@
     "newWorkflow": "新建工作流",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "startFailed": "启动工作流失败: {error}",
+    "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "statusPanel": {
       "contextUsage": "上下文使用率",
       "empty": "暂无任务",

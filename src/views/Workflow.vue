@@ -79,7 +79,7 @@
 
     <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails"
       :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction"
-      @reject="onRejectAction" />
+      @reject="onRejectAction" @stop="onStop" />
 
     <WorkflowModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent"
       @save="onModelConfigSave" />

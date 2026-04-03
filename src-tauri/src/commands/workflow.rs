@@ -243,6 +243,12 @@ pub async fn create_workflow(
 
     // Always use TSID for new workflow sessions
     let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
+    
+    log::info!(
+        "[Workflow][session={}][phase=create] Creating workflow for agent_id={}",
+        session_id,
+        request.agent_id
+    );
 
     // Get agent to construct initial agent_config
     let agent = store
@@ -340,6 +346,12 @@ pub async fn create_workflow(
     chat_state
         .workflow_keys
         .insert(session_id.clone(), session_key);
+
+    log::info!(
+        "[Workflow][session={}][phase=create] Workflow created successfully, agent_id={}",
+        session_id,
+        request.agent_id
+    );
 
     Ok(session_id)
 }
@@ -446,6 +458,13 @@ pub async fn workflow_start(
     initial_prompt: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
+    log::info!(
+        "[Workflow][session={}][phase=start] Starting workflow, agent_id={}, planning_mode={}",
+        session_id,
+        agent_id,
+        planning_mode.unwrap_or(false)
+    );
+    
     let main_store_arc = state.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
@@ -671,6 +690,11 @@ pub async fn workflow_start(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
     );
+    
+    log::info!(
+        "[Workflow][session={}][phase=start] Executor registered to BACKGROUND_TASKS, spawning run_loop",
+        session_id
+    );
 
     let session_id_for_spawn = session_id.clone();
     let gateway_for_spawn = gateway_arc.clone();
@@ -679,7 +703,7 @@ pub async fn workflow_start(
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 log::info!(
-                    "Workflow session {} was cancelled by user.",
+                    "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
                 );
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
@@ -687,7 +711,7 @@ pub async fn workflow_start(
             }
 
             log::error!(
-                "Workflow error in session {}: {:?}",
+                "[Workflow][session={}][phase=run_loop][event=crash] Workflow error: {:?}",
                 session_id_for_spawn,
                 e
             );
@@ -967,13 +991,34 @@ pub async fn workflow_signal(
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
+    let signal_type = serde_json::from_str::<serde_json::Value>(&signal)
+        .ok()
+        .and_then(|v| v["type"].as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    log::info!(
+        "[Workflow][session={}][phase=signal] Signal received, type={}",
+        session_id,
+        signal_type
+    );
+    
     let gateway_arc = gateway.inner().clone();
 
-    // Try to inject signal into existing running loop
     match gateway_arc.inject_input(&session_id, signal.clone()).await {
-        Ok(_) => Ok("Signal injected".to_string()),
-        Err(_) => {
-            // If injection fails, the engine is likely not running (e.g. after a restart)
+        Ok(_) => {
+            log::info!(
+                "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
+                session_id,
+                signal_type
+            );
+            Ok("Signal injected".to_string())
+        },
+        Err(e) => {
+            log::warn!(
+                "[Workflow][session={}][phase=signal] Signal injection failed: {}, attempting recovery",
+                session_id,
+                e
+            );
             // If the signal is user_input, we can resume the workflow by starting it again
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
                 if val["type"] == "user_input" {

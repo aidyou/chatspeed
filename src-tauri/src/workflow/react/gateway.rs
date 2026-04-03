@@ -146,20 +146,31 @@ impl Gateway for TauriGateway {
         session_id: &str,
         input: String,
     ) -> Result<(), WorkflowEngineError> {
+        let signal_type = serde_json::from_str::<serde_json::Value>(&input)
+            .ok()
+            .and_then(|v| v["type"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "raw".to_string());
+        
         log::debug!(
-            "[Workflow Gateway] Injecting input for session {}: {}",
+            "[Workflow][session={}][phase=gateway] Injecting signal, type={}",
             session_id,
-            input
+            signal_type
         );
+        
         let senders = self.input_senders.lock().await;
         if let Some(tx) = senders.get(session_id) {
             tx.send(input)
                 .await
                 .map_err(|e| WorkflowEngineError::Gateway(e.to_string()))?;
+            log::debug!(
+                "[Workflow][session={}][phase=gateway] Signal injected successfully, type={}",
+                session_id,
+                signal_type
+            );
             Ok(())
         } else {
             log::warn!(
-                "[Workflow Gateway] Failed to inject input: No sender for session {}",
+                "[Workflow][session={}][phase=gateway] No input channel found for session",
                 session_id
             );
             Err(WorkflowEngineError::Gateway(format!(
@@ -170,8 +181,8 @@ impl Gateway for TauriGateway {
     }
 
     async fn register_session_tx(&self, session_id: String, tx: mpsc::Sender<String>) {
-        log::debug!(
-            "[Workflow Gateway] Registering input sender for session {}",
+        log::info!(
+            "[Workflow][session={}][phase=gateway] Registering signal channel",
             session_id
         );
         let mut senders = self.input_senders.lock().await;

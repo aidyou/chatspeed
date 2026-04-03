@@ -838,6 +838,19 @@ impl WorkflowExecutor {
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
             {
+                let wait_reason = match &self.state {
+                    WorkflowState::Paused => "paused",
+                    WorkflowState::AwaitingUser => "user_input",
+                    WorkflowState::AwaitingApproval => "approval",
+                    _ => "unknown",
+                };
+                
+                log::info!(
+                    "[Workflow][session={}][phase=wait] Entering wait state, reason={}",
+                    self.session_id,
+                    wait_reason
+                );
+                
                 let signal_str = signal_rx
                     .recv()
                     .await
@@ -845,6 +858,14 @@ impl WorkflowExecutor {
 
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
+                
+                let signal_type = signal_json["type"].as_str().unwrap_or("unknown");
+                log::info!(
+                    "[Workflow][session={}][phase=wait] Signal received, type={}, wait_reason={}",
+                    self.session_id,
+                    signal_type,
+                    wait_reason
+                );
 
                 // DEBUG: Log all received signals to help diagnose empty message issue
                 #[cfg(debug_assertions)]
@@ -2225,6 +2246,15 @@ impl WorkflowExecutor {
         &mut self,
         new_state: WorkflowState,
     ) -> Result<(), WorkflowEngineError> {
+        let old_state = self.state.clone();
+        
+        log::info!(
+            "[Workflow][session={}][phase=state] State transition: {} -> {}",
+            self.session_id,
+            old_state,
+            new_state
+        );
+        
         self.state = new_state.clone();
 
         // Cleanup pending approvals when transitioning away from approval-waiting states
@@ -2232,6 +2262,15 @@ impl WorkflowExecutor {
             new_state,
             WorkflowState::Thinking | WorkflowState::Executing | WorkflowState::Completed
         ) {
+            let pending_count = self.pending_approvals.len();
+            if pending_count > 0 {
+                log::info!(
+                    "[Workflow][session={}][phase=state] Clearing {} pending approvals on transition to {}",
+                    self.session_id,
+                    pending_count,
+                    new_state
+                );
+            }
             self.pending_approvals.clear();
         }
 
