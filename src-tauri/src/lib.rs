@@ -642,7 +642,11 @@ pub async fn run() -> crate::error::Result<()> {
             let gateway = Arc::new(crate::workflow::react::gateway::TauriGateway::new(app.handle().clone()));
             app.manage(gateway.clone());
 
-            // State 8: SubAgentFactory
+            // State 8: WorkflowManager (Session lifecycle manager)
+            let workflow_manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
+            app.manage(workflow_manager.clone());
+
+            // State 9: SubAgentFactory
             let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
                 main_store: main_store.clone(),
                 chat_state: chat_state.clone(),

@@ -2,6 +2,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
+use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
 use crate::workflow::react::types::StepType;
 use chrono::{DateTime, Local};
@@ -453,6 +454,7 @@ pub async fn workflow_start(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
     factory: State<'_, Arc<dyn SubAgentFactory>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
@@ -470,8 +472,19 @@ pub async fn workflow_start(
     let tsid_generator = tsid_generator.inner().clone();
     let gateway_arc = gateway.inner().clone();
     let factory = factory.inner().clone();
+    let workflow_manager_arc = workflow_manager.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
+
+    // Early check: If session already exists in manager, reject immediately
+    // This prevents signal channel replacement which would break the existing executor
+    if workflow_manager_arc.has_session(&session_id) {
+        log::warn!(
+            "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
+            session_id
+        );
+        return Err(format!("Session already exists: {}", session_id));
+    }
 
     let (clean_prompt, attached_context, allowed_paths) = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -686,18 +699,34 @@ pub async fn workflow_start(
         }
     }
 
+    // Register to WorkflowManager FIRST (primary registry)
+    if let Err(e) = workflow_manager_arc.register_session(
+        session_id.clone(),
+        shared_executor.clone(),
+        ManagedSessionStatus::Active,
+    ) {
+        log::error!(
+            "[Workflow][session={}][phase=start] Failed to register to WorkflowManager: {}",
+            session_id,
+            e
+        );
+        return Err(format!("Failed to register workflow session: {}", e));
+    }
+    
+    // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
     );
     
     log::info!(
-        "[Workflow][session={}][phase=start] Executor registered to BACKGROUND_TASKS, spawning run_loop",
+        "[Workflow][session={}][phase=start] Executor registered to WorkflowManager (primary) and BACKGROUND_TASKS (compat), spawning run_loop",
         session_id
     );
 
     let session_id_for_spawn = session_id.clone();
     let gateway_for_spawn = gateway_arc.clone();
+    let manager_for_spawn = workflow_manager_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
@@ -707,6 +736,7 @@ pub async fn workflow_start(
                     session_id_for_spawn
                 );
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                manager_for_spawn.remove_session(&session_id_for_spawn);
                 return;
             }
 
@@ -746,6 +776,7 @@ pub async fn workflow_start(
                 .await;
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
+        manager_for_spawn.remove_session(&session_id_for_spawn);
     });
 
     Ok(session_id)
@@ -759,6 +790,7 @@ pub async fn workflow_approve_plan(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
     factory: State<'_, Arc<dyn SubAgentFactory>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_id: String,
     plan: String,
@@ -768,6 +800,7 @@ pub async fn workflow_approve_plan(
     let tsid_generator_arc = tsid_generator.inner().clone();
     let gateway_arc = gateway.inner().clone();
     let factory_arc = factory.inner().clone();
+    let workflow_manager_arc = workflow_manager.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
 
     let mut context = crate::workflow::react::context::ContextManager::new(
@@ -920,6 +953,21 @@ pub async fn workflow_approve_plan(
         }
     }
 
+    // Register to WorkflowManager FIRST (primary registry)
+    if let Err(e) = workflow_manager_arc.register_session(
+        session_id.clone(),
+        shared_executor.clone(),
+        ManagedSessionStatus::Active,
+    ) {
+        log::error!(
+            "[Workflow][session={}][phase=approve_plan] Failed to register to WorkflowManager: {}",
+            session_id,
+            e
+        );
+        return Err(format!("Failed to register workflow session: {}", e));
+    }
+
+    // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
@@ -927,20 +975,22 @@ pub async fn workflow_approve_plan(
 
     let session_id_for_spawn = session_id.clone();
     let gateway_for_spawn = gateway_arc.clone();
+    let manager_for_spawn = workflow_manager_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 log::info!(
-                    "Workflow session {} was cancelled by user.",
+                    "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
                 );
+                manager_for_spawn.remove_session(&session_id_for_spawn);
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
                 return;
             }
 
             log::error!(
-                "Workflow error in session {}: {:?}",
+                "[Workflow][session={}][phase=run_loop][event=crash] Workflow error: {:?}",
                 session_id_for_spawn,
                 e
             );
@@ -974,6 +1024,7 @@ pub async fn workflow_approve_plan(
                 )
                 .await;
         }
+        manager_for_spawn.remove_session(&session_id_for_spawn);
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
     });
 
@@ -988,6 +1039,7 @@ pub async fn workflow_signal(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
     factory: State<'_, Arc<dyn SubAgentFactory>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
@@ -1002,118 +1054,74 @@ pub async fn workflow_signal(
         signal_type
     );
     
+    let workflow_manager_arc = workflow_manager.inner().clone();
     let gateway_arc = gateway.inner().clone();
 
-    match gateway_arc.inject_input(&session_id, signal.clone()).await {
-        Ok(_) => {
-            log::info!(
-                "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
-                session_id,
-                signal_type
-            );
-            Ok("Signal injected".to_string())
-        },
-        Err(e) => {
+    // Phase 1: Check manager first (primary path)
+    if workflow_manager_arc.has_session(&session_id) {
+        log::info!(
+            "[WorkflowManager][session={}][event=session_lookup_hit] Session exists in manager",
+            session_id
+        );
+        
+        // Route signal through manager
+        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
             log::warn!(
-                "[Workflow][session={}][phase=signal] Signal injection failed: {}, attempting recovery",
+                "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
                 session_id,
+                signal_type,
                 e
             );
-            // If the signal is user_input, we can resume the workflow by starting it again
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
-                if val["type"] == "user_input" {
-                    if let Some(content) = val["content"].as_str() {
-                        log::info!("[Workflow] No active channel for session {}, attempting to resume with new input", session_id);
+            return Err(format!("Signal rejected: {}", e));
+        }
+        
+        log::info!(
+            "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
+            session_id,
+            signal_type
+        );
+        
+        // Now inject through gateway
+        match gateway_arc.inject_input(&session_id, signal.clone()).await {
+            Ok(_) => {
+                log::info!(
+                    "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
+                    session_id,
+                    signal_type
+                );
+                Ok("Signal injected".to_string())
+            },
+            Err(e) => {
+                log::warn!(
+                    "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
+                    session_id,
+                    e
+                );
+                // Session exists in manager but gateway failed - still return error
+                // This shouldn't normally happen if session is properly registered
+                Err(format!("Gateway injection failed: {}", e))
+            }
+        }
+    } else {
+        log::info!(
+            "[WorkflowManager][session={}][event=session_lookup_miss] Session not found in manager, entering recovery",
+            session_id
+        );
+        
+        // Session not in manager - enter recovery logic
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
+            if val["type"] == "user_input" {
+                if let Some(content) = val["content"].as_str() {
+                    log::info!("[Workflow] Session {} not active, resuming with new input", session_id);
 
-                        // Find the agent ID for this session from DB
-                        let agent_id = {
-                            let store = state.read().map_err(|e| e.to_string())?;
-                            let snapshot = store
-                                .get_workflow_snapshot(&session_id)
-                                .map_err(|e| e.to_string())?;
-                            snapshot.workflow.agent_id
-                        };
-
-                        // Use our robust workflow_start logic to resume
-                        workflow_start(
-                            app,
-                            state,
-                            chat_state,
-                            tsid_generator,
-                            gateway,
-                            factory,
-                            session_id,
-                            agent_id,
-                            Some(content.to_string()),
-                            None,
-                        )
-                        .await?;
-
-                        return Ok("Workflow resumed with input".to_string());
-                    }
-                } else if val["type"] == "request_confirm_broadcast" {
-                    // Only re-broadcast if workflow is actually awaiting approval
-                    let snapshot = {
-                        let store = state.read().map_err(|e| e.to_string())?;
-                        store
-                            .get_workflow_snapshot(&session_id)
-                            .map_err(|e| e.to_string())?
-                    };
-
-                    let status_lower = snapshot.workflow.status.to_lowercase();
-                    if status_lower != "awaiting_approval" && status_lower != "awaitingapproval" {
-                        log::info!(
-                            "[Workflow] Session {} is not awaiting approval (status: {}), skipping confirm broadcast",
-                            session_id,
-                            snapshot.workflow.status
-                        );
-                        return Ok("Workflow is not awaiting approval".to_string());
-                    }
-
-                    log::info!(
-                        "[Workflow] Session {} requesting confirm broadcast. Resuming workflow.",
-                        session_id
-                    );
-
-                    workflow_start(
-                        app,
-                        state,
-                        chat_state,
-                        tsid_generator,
-                        gateway,
-                        factory,
-                        session_id.clone(),
-                        snapshot.workflow.agent_id,
-                        None,
-                        None,
-                    )
-                    .await?;
-
-                    return Ok("Workflow resumed and confirm broadcast triggered".to_string());
-                } else if val["type"] == "approval" {
-                    // For approval signals, auto-resume the workflow if it's awaiting approval but not active
                     let agent_id = {
                         let store = state.read().map_err(|e| e.to_string())?;
                         let snapshot = store
                             .get_workflow_snapshot(&session_id)
                             .map_err(|e| e.to_string())?;
-
-                        if snapshot.workflow.status != "awaiting_approval" {
-                            return Err(format!(
-                                "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
-                                snapshot.workflow.status
-                            ));
-                        }
                         snapshot.workflow.agent_id
                     };
 
-                    log::info!(
-                        "[Workflow] Session {} is awaiting approval but no active channel. Auto-resuming workflow to process approval.",
-                        session_id
-                    );
-
-                    // Resume the workflow without initial_prompt - it will restore from AwaitingApproval state
-                    // and rebuild pending_approvals from message history
                     workflow_start(
                         app,
                         state,
@@ -1121,42 +1129,119 @@ pub async fn workflow_signal(
                         tsid_generator,
                         gateway,
                         factory,
-                        session_id.clone(),
+                        workflow_manager,
+                        session_id,
                         agent_id,
-                        None, // No initial prompt - restore from saved state
+                        Some(content.to_string()),
                         None,
                     )
                     .await?;
 
-                    let mut retries = 5;
-                    let mut last_error = None;
-                    while retries > 0 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        match gateway_arc.inject_input(&session_id, signal.clone()).await {
-                            Ok(_) => {
-                                log::info!("[Workflow] Approval signal injected successfully after retry");
-                                break;
-                            }
-                            Err(e) => {
-                                last_error = Some(e);
-                                retries -= 1;
-                                log::warn!("[Workflow] Failed to inject approval signal, retries left: {}", retries);
-                            }
+                    return Ok("Workflow resumed with input".to_string());
+                }
+            } else if val["type"] == "request_confirm_broadcast" {
+                let snapshot = {
+                    let store = state.read().map_err(|e| e.to_string())?;
+                    store
+                        .get_workflow_snapshot(&session_id)
+                        .map_err(|e| e.to_string())?
+                };
+
+                let status_lower = snapshot.workflow.status.to_lowercase();
+                if status_lower != "awaiting_approval" && status_lower != "awaitingapproval" {
+                    log::info!(
+                        "[Workflow] Session {} is not awaiting approval (status: {}), skipping confirm broadcast",
+                        session_id,
+                        snapshot.workflow.status
+                    );
+                    return Ok("Workflow is not awaiting approval".to_string());
+                }
+
+                log::info!(
+                    "[Workflow] Session {} requesting confirm broadcast. Resuming workflow.",
+                    session_id
+                );
+
+                workflow_start(
+                    app,
+                    state,
+                    chat_state,
+                    tsid_generator,
+                    gateway,
+                    factory,
+                    workflow_manager,
+                    session_id.clone(),
+                    snapshot.workflow.agent_id,
+                    None,
+                    None,
+                )
+                .await?;
+
+                return Ok("Workflow resumed and confirm broadcast triggered".to_string());
+            } else if val["type"] == "approval" {
+                let agent_id = {
+                    let store = state.read().map_err(|e| e.to_string())?;
+                    let snapshot = store
+                        .get_workflow_snapshot(&session_id)
+                        .map_err(|e| e.to_string())?;
+
+                    if snapshot.workflow.status != "awaiting_approval" {
+                        return Err(format!(
+                            "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
+                            snapshot.workflow.status
+                        ));
+                    }
+                    snapshot.workflow.agent_id
+                };
+
+                log::info!(
+                    "[Workflow] Session {} is awaiting approval but not active. Auto-resuming workflow to process approval.",
+                    session_id
+                );
+
+                workflow_start(
+                    app,
+                    state,
+                    chat_state,
+                    tsid_generator,
+                    gateway,
+                    factory,
+                    workflow_manager,
+                    session_id.clone(),
+                    agent_id,
+                    None,
+                    None,
+                )
+                .await?;
+
+                let mut retries = 5;
+                let mut last_error = None;
+                while retries > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                        Ok(_) => {
+                            log::info!("[Workflow] Approval signal injected successfully after retry");
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+                            retries -= 1;
+                            log::warn!("[Workflow] Failed to inject approval signal, retries left: {}", retries);
                         }
                     }
-                    if retries == 0 {
-                        let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
-                        return Err(format!("Failed to inject approval after resuming: {}", err_msg));
-                    }
-
-                    return Ok("Workflow resumed and approval processed".to_string());
                 }
+                if retries == 0 {
+                    let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
+                    return Err(format!("Failed to inject approval after resuming: {}", err_msg));
+                }
+
+                return Ok("Workflow resumed and approval processed".to_string());
             }
-            Err(format!(
-                "Failed to send signal: No active session for {}",
-                session_id
-            ))
         }
+        Err(format!(
+            "Failed to send signal: No active session for {}",
+            session_id
+        ))
     }
 }
 

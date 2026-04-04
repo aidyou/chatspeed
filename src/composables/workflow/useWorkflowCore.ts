@@ -131,9 +131,9 @@ export function useWorkflowCore({
                 agentConfig: JSON.stringify(agentConfig)
             })
 
-            // 2. Signal engine if workflow is active
+            // 2. Signal engine if workflow is active (skip for awaiting_approval to avoid race with request_confirm_broadcast)
             const status = currentWorkflow.value?.status
-            if (status && ['thinking', 'executing', 'paused', 'awaiting_user', 'awaiting_approval'].includes(status)) {
+            if (status && ['thinking', 'executing', 'paused', 'awaiting_user'].includes(status)) {
                 try {
                     await invokeWrapper('workflow_signal', {
                         sessionId: currentWorkflowId.value,
@@ -282,8 +282,8 @@ export function useWorkflowCore({
             
             console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval)
             
-            if (hasPendingApproval) {
-                console.log('[Workflow] Requesting confirm broadcast for workflow with pending approval in last tool message')
+            if (status === 'awaiting_approval' && hasPendingApproval) {
+                console.log('[Workflow] Requesting confirm broadcast for workflow in awaiting_approval state with pending approval')
                 try {
                     await invokeWrapper('workflow_signal', {
                         sessionId: id,
@@ -294,7 +294,7 @@ export function useWorkflowCore({
                     console.warn('[Workflow] Failed to request confirm broadcast:', e)
                 }
             } else {
-                console.log('[Workflow] Not requesting confirm broadcast, status is:', status)
+                console.log('[Workflow] Not requesting confirm broadcast, status is:', status, 'hasPendingApproval:', hasPendingApproval)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults

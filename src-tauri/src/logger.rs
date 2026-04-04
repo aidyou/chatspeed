@@ -117,7 +117,7 @@ lazy_static! {
                     |
                     (?P<val_q_single_open>')(?P<val_single_quoted_content>(?:\\.|[^\\'])*?)(?P<val_q_single_close>') # Single quoted string
                     |
-                    (?P<val_unquoted_content>[^"'\s,}}&]*) # Unquoted value
+                    (?P<val_unquoted_content>[\w\-+=]+) # Unquoted value: only match word chars, hyphens, plus, equals
                 )
             "#,
             keyword_alternatives = "api_key|apikey|access_token|refresh_token|card_number|bank_account|client_secret|app_secret|proxyPassword|proxyUsername|user_id|sessionid|set-cookie|credit_card|password|passwd|secret|token|user|username|account|email|mail|mobile|phone|telephone|id_card|idnumber|session|cookie|device_token|authentication|credentials|auth|api|jwt|key|otp|pin|pwd|ssn|tk"
@@ -218,7 +218,10 @@ pub fn setup_logger(app: &tauri::App) {
     // 2. Ensure log directory exists safely
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
         eprintln!("========================================");
-        eprintln!("CRITICAL: Failed to create log directory at {:?}: {}", log_dir, e);
+        eprintln!(
+            "CRITICAL: Failed to create log directory at {:?}: {}",
+            log_dir, e
+        );
         eprintln!("Error kind: {:?}", e.kind());
         eprintln!("Logs will only be available in console output");
         eprintln!("========================================");
@@ -235,7 +238,7 @@ pub fn setup_logger(app: &tauri::App) {
         Ok(f) => {
             eprintln!("Log file created successfully: {:?}", log_file_path);
             Some(f)
-        },
+        }
         Err(e) => {
             eprintln!("========================================");
             eprintln!("WARNING: Failed to create log file: {}", e);
@@ -425,5 +428,43 @@ mod tests {
         let sanitized_message1 = crate::logger::replace_sensitive_info(logs);
         print!("{}", sanitized_message1);
         assert!(sanitized_message1.contains(r#""api_key": "***""#));
+    }
+
+    #[test]
+    fn test_session_boundary_handling() {
+        // Test case 1: session with bracket boundary - value replaced, boundary preserved
+        let log1 = "[Workflow][session=abc123][phase=start] message";
+        let sanitized1 = crate::logger::replace_sensitive_info(log1);
+        assert!(sanitized1.contains("session=***"));
+        assert!(sanitized1.contains("][phase=start]"));
+        assert!(sanitized1.contains("[Workflow]"));
+
+        // Test case 2: session with parenthesis boundary
+        let log2 = "(session=xyz789)";
+        let sanitized2 = crate::logger::replace_sensitive_info(log2);
+        assert!(sanitized2.contains("session=***"));
+        assert!(sanitized2.ends_with(")"));
+
+        // Test case 3: session with space boundary
+        let log3 = "session=test-value-123 other content";
+        let sanitized3 = crate::logger::replace_sensitive_info(log3);
+        assert!(sanitized3.contains("session=***"));
+        assert!(sanitized3.contains(" other content"));
+
+        // Test case 4: session with comma boundary
+        let log4 = "session=abc,token=def";
+        let sanitized4 = crate::logger::replace_sensitive_info(log4);
+        assert!(sanitized4.contains("session=***"));
+        assert!(sanitized4.contains("token=***"));
+
+        // Test case 5: session in JSON-like format
+        let log5 = r#"{"session": "my-session-id"}"#;
+        let sanitized5 = crate::logger::replace_sensitive_info(log5);
+        assert!(sanitized5.contains(r#""session": "***""#));
+
+        // Test case 6: key with underscore and hyphen in value
+        let log6 = "api_key=sk-abc_123-xyz";
+        let sanitized6 = crate::logger::replace_sensitive_info(log6);
+        assert!(sanitized6.contains("api_key=***"));
     }
 }

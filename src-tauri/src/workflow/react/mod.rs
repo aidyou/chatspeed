@@ -7,6 +7,7 @@ pub mod intelligence;
 pub mod interceptors;
 pub mod llm;
 pub mod loop_detector;
+pub mod manager;
 pub mod memory;
 pub mod memory_analyzer;
 pub mod observation;

@@ -374,7 +374,6 @@ const activeAskUser = computed(() => {
 })
 
 const sendUserChoice = async (option) => {
-  if (isRunning.value) return
   inputMessage.value = option
   onSendMessage()
 }
