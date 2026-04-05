@@ -21,6 +21,7 @@ pub struct Workflow {
     pub todo_list: Option<String>,
     #[serde(default = "default_workflow_status")]
     pub status: String,
+    pub wait_reason: Option<String>,
     pub agent_id: String,
     pub agent_config: Option<String>,
     pub created_at: Option<String>,
@@ -67,6 +68,7 @@ impl From<&Row<'_>> for Workflow {
             user_query: row.get("user_query").unwrap_or_default(),
             todo_list: row.get("todo_list").ok(),
             status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
+            wait_reason: row.get("wait_reason").ok(),
             agent_id: row.get("agent_id").unwrap_or_default(),
             agent_config: row.get("agent_config").ok(),
             created_at: row.get("created_at").ok(),
@@ -172,11 +174,21 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        let workflow: Workflow = conn.query_row(
+        let mut workflow: Workflow = conn.query_row(
             "SELECT * FROM workflows WHERE id = ?1",
             params![id],
             |row| Ok(Workflow::from(row)),
         )?;
+
+        // Get wait_reason from workflow_snapshots table
+        let wait_reason: Option<String> = conn
+            .query_row(
+                "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok();
+        workflow.wait_reason = wait_reason;
 
         let mut stmt =
             conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;

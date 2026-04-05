@@ -21,6 +21,7 @@
     </div>
     <template #footer>
       <div class="dialog-footer">
+        <el-button @click="onClose" round type="info" plain>关闭弹窗（临时测试用）</el-button>
         <el-button @click="onStop" :loading="loading" round type="danger">{{
           $t('common.stop')
         }}</el-button>
@@ -49,7 +50,7 @@ const props = defineProps({
   loading: Boolean
 })
 
-const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject', 'stop'])
+const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject', 'stop', 'close'])
 
 const { t } = useI18n()
 
@@ -69,8 +70,21 @@ const diffMarkdown = computed(() => {
   if (!isEditAction.value) return ''
   try {
     const data = JSON.parse(props.details)
-    const oldStr = data.old_string || ''
-    const newStr = data.new_string || ''
+    // edit_file has old_string and new_string
+    // write_file has only content (treat as new file)
+    let oldStr = ''
+    let newStr = ''
+    
+    if (data.old_string !== undefined || data.new_string !== undefined) {
+      // edit_file format
+      oldStr = data.old_string || ''
+      newStr = data.new_string || ''
+    } else if (data.content !== undefined) {
+      // write_file format - treat as creating new file from empty
+      oldStr = ''
+      newStr = data.content || ''
+    }
+    
     const startLine = data.start_line || 1
 
     return `\`\`\`diff\n${generateDiff(oldStr, newStr, startLine)}\n\`\`\``
@@ -82,6 +96,20 @@ const diffMarkdown = computed(() => {
 // Use diff library to generate proper line-by-line diff
 const generateDiff = (oldStr, newStr, startLine = 1) => {
   if (oldStr === newStr) return ' (No visible changes)'
+
+  // Handle new file creation (empty old string)
+  if (!oldStr && newStr) {
+    let diff = '- 1 | (empty)\n'
+    const lines = newStr.split('\n')
+    if (lines[lines.length - 1] === '') {
+      lines.pop()
+    }
+    lines.forEach((line, index) => {
+      const lineNum = index + 1
+      diff += `+ ${lineNum} | ${line}\n`
+    })
+    return diff
+  }
 
   const changes = Diff.diffLines(oldStr, newStr)
   let diff = ''
@@ -97,18 +125,18 @@ const generateDiff = (oldStr, newStr, startLine = 1) => {
     }
 
     lines.forEach(line => {
-      const lineNumDisplay = change.added ? currentLineNew : currentLineOld
-      const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
-
       if (change.added) {
-        diff += `${lineNumStr} | + ${line}\n`
+        const lineNumStr = currentLineNew.toString()
+        diff += `+ ${lineNumStr} | ${line}\n`
         currentLineNew++
       } else if (change.removed) {
-        diff += `${lineNumStr} | - ${line}\n`
+        const lineNumStr = currentLineOld.toString()
+        diff += `- ${lineNumStr} | ${line}\n`
         currentLineOld++
       } else {
         // Show unchanged lines with space prefix for context
-        diff += `${lineNumStr} |   ${line}\n`
+        const lineNumStr = currentLineOld.toString()
+        diff += `  ${lineNumStr} | ${line}\n`
         currentLineOld++
         currentLineNew++
       }
@@ -143,6 +171,10 @@ const onReject = () => {
 
 const onStop = () => {
   emit('stop')
+}
+
+const onClose = () => {
+  emit('update:modelValue', false)
 }
 </script>
 

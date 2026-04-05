@@ -30,7 +30,10 @@ use crate::workflow::react::{
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
     skills::{SkillManifest, SkillScanner},
-    types::{ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason, WorkflowState},
+    types::{
+        ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason,
+        WorkflowSignal, WorkflowState,
+    },
 };
 
 /// Default maximum ReAct steps before the agent is forced to conclude.
@@ -201,7 +204,7 @@ impl WorkflowExecutor {
         )));
         let path_guard_clone = path_guard.clone();
 
-        let max_contexts = agent_config.max_contexts.unwrap_or(128000);
+let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         let max_steps = if policy.phase == ExecutionPhase::Planning {
             10
         } else {
@@ -447,7 +450,8 @@ impl WorkflowExecutor {
                                 "arguments": tool.arguments.clone(),
                                 "details": tool.details.clone().unwrap_or_default()
                             });
-                            self.pending_approvals.insert(tool.tool_call_id.clone(), info_with_details);
+                            self.pending_approvals
+                                .insert(tool.tool_call_id.clone(), info_with_details);
 
                             let _ = self
                                 .gateway
@@ -486,7 +490,8 @@ impl WorkflowExecutor {
                                     || summary == rust_i18n::t!("workflow.awaiting_approval");
 
                                 if is_waiting {
-                                    if let Some(id) = meta.get("tool_call_id").and_then(|v| v.as_str())
+                                    if let Some(id) =
+                                        meta.get("tool_call_id").and_then(|v| v.as_str())
                                     {
                                         let tool_info = self.context.messages.iter().rev().find_map(|m| {
                                             if m.role == "assistant" {
@@ -534,22 +539,25 @@ impl WorkflowExecutor {
 
                                         if let Some(info) = tool_info {
                                             log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
-                                            
+
                                             // Parse arguments if it's a JSON string (OpenAI format)
                                             let args_value = info["arguments"].clone();
                                             let args_obj = if args_value.is_string() {
-                                                serde_json::from_str::<serde_json::Value>(args_value.as_str().unwrap_or("{}"))
-                                                    .unwrap_or_else(|_| json!({}))
+                                                serde_json::from_str::<serde_json::Value>(
+                                                    args_value.as_str().unwrap_or("{}"),
+                                                )
+                                                .unwrap_or_else(|_| json!({}))
                                             } else {
                                                 args_value
                                             };
-                                            
+
                                             let info_with_details = json!({
                                                 "name": info["name"],
                                                 "arguments": args_obj,
                                                 "details": msg.message.clone()
                                             });
-                                            self.pending_approvals.insert(id.to_string(), info_with_details);
+                                            self.pending_approvals
+                                                .insert(id.to_string(), info_with_details);
 
                                             let _ = self
                                                 .gateway
@@ -943,33 +951,56 @@ impl WorkflowExecutor {
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
             {
-                let wait_reason = match &self.state {
-                    WorkflowState::Paused => "paused",
-                    WorkflowState::AwaitingUser => "user_input",
-                    WorkflowState::AwaitingApproval => "approval",
-                    _ => "unknown",
+                let wait_reason_enum = match &self.state {
+                    WorkflowState::Paused => Some(WaitReason::Confirmation),
+                    WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+                    WorkflowState::AwaitingApproval => Some(WaitReason::Approval),
+                    _ => None,
                 };
-                
+
                 log::info!(
-                    "[Workflow][session={}][phase=wait] Entering wait state, reason={}",
+                    "[Workflow][session={}][phase=wait][event=enter] Entering wait state, reason={:?}",
                     self.session_id,
-                    wait_reason
+                    wait_reason_enum
                 );
-                
+
                 let signal_str = signal_rx
                     .recv()
                     .await
                     .ok_or_else(|| WorkflowEngineError::General("Signal channel closed".into()))?;
 
+                let workflow_signal = WorkflowSignal::parse(&signal_str);
+
+                if let Some(signal) = &workflow_signal {
+                    if !signal.is_valid_for(wait_reason_enum.as_ref()) {
+                        log::warn!(
+                            "[Workflow][session={}][phase=wait][event=signal_rejected] Signal '{}' is not valid for wait_reason {:?}",
+                            self.session_id,
+                            signal.type_name(),
+                            wait_reason_enum
+                        );
+                        // Continue waiting for a valid signal
+                        continue;
+                    }
+
+                    log::info!(
+                        "[Workflow][session={}][phase=wait][event=signal_received] Signal '{}' accepted for wait_reason {:?}",
+                        self.session_id,
+                        signal.type_name(),
+                        wait_reason_enum
+                    );
+                }
+
+                // Fall back to JSON parsing for legacy handling
                 let signal_json: Value = serde_json::from_str(&signal_str)
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
-                
+
                 let signal_type = signal_json["type"].as_str().unwrap_or("unknown");
                 log::info!(
-                    "[Workflow][session={}][phase=wait] Signal received, type={}, wait_reason={}",
+                    "[Workflow][session={}][phase=wait] Signal received, type={}, wait_reason={:?}",
                     self.session_id,
                     signal_type,
-                    wait_reason
+                    wait_reason_enum
                 );
 
                 // DEBUG: Log all received signals to help diagnose empty message issue
@@ -1036,7 +1067,7 @@ impl WorkflowExecutor {
 
                 if signal_json["type"] == "stop" {
                     log::info!(
-                        "WorkflowExecutor {}: Received STOP signal while PAUSED",
+                        "[Workflow][session={}][phase=wait][event=stop] Stop signal received in waiting state",
                         self.session_id
                     );
                     self.update_state(WorkflowState::Cancelled).await?;
@@ -1225,12 +1256,14 @@ impl WorkflowExecutor {
                         // Inject internal tool_call_id for streaming tools
                         // Ensure tool_args is an object (parse if it's a JSON string from fallback)
                         let tool_args_obj = if tool_args.is_string() {
-                            serde_json::from_str::<serde_json::Value>(tool_args.as_str().unwrap_or("{}"))
-                                .unwrap_or_else(|_| tool_args.clone())
+                            serde_json::from_str::<serde_json::Value>(
+                                tool_args.as_str().unwrap_or("{}"),
+                            )
+                            .unwrap_or_else(|_| tool_args.clone())
                         } else {
                             tool_args.clone()
                         };
-                        
+
                         let mut enriched_args = tool_args_obj.clone();
                         enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
                             serde_json::json!(signal_id);
@@ -1350,29 +1383,54 @@ impl WorkflowExecutor {
 
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
-                } else {
-                    let user_input = signal_json["content"].as_str().unwrap_or("").to_string();
-                    if !user_input.is_empty() {
-                        self.add_message_and_notify_internal(
-                            "user".to_string(),
-                            user_input,
-                            None,
-                            None,
-                            None,
-                            false,
-                            None,
-                            None,
-                        )
-                        .await?;
-                        self.update_state(WorkflowState::Thinking).await?;
+                }
+
+                // Handle structured WorkflowSignal
+                if let Some(signal) = WorkflowSignal::parse(&signal_str) {
+                    if signal.is_valid_for(wait_reason_enum.as_ref()) {
+                        match signal {
+                            WorkflowSignal::Continue => {
+                                log::info!(
+                                    "[Workflow][session={}][phase=wait][event=signal_received] Continue signal accepted for wait_reason {:?}",
+                                    self.session_id,
+                                    wait_reason_enum
+                                );
+                                self.current_step = 0;
+                                self.max_steps += DEFAULT_MAX_STEPS;
+                                self.update_state(WorkflowState::Thinking).await?;
+                            }
+                            WorkflowSignal::UserMessage { content } => {
+                                self.add_message_and_notify_internal(
+                                    "user".to_string(),
+                                    content,
+                                    None,
+                                    None,
+                                    None,
+                                    false,
+                                    None,
+                                    None,
+                                )
+                                .await?;
+                                self.update_state(WorkflowState::Thinking).await?;
+                            }
+                            _ => {}
+                        }
                     } else {
                         log::warn!(
-                            "WorkflowExecutor {}: Received empty user input, continuing to wait",
-                            self.session_id
+                            "[Workflow][session={}][phase=wait][event=signal_rejected] Signal {:?} rejected for wait_reason {:?}",
+                            self.session_id,
+                            signal,
+                            wait_reason_enum
                         );
                     }
-                    continue;
+                } else {
+                    log::warn!(
+                        "[Workflow][session={}][phase=wait] Unknown signal type: {}, ignoring",
+                        self.session_id,
+                        signal_type
+                    );
                 }
+                continue;
             }
 
             // Handle AwaitingAutoApproval state - trigger automatic transition
@@ -1462,6 +1520,13 @@ impl WorkflowExecutor {
             }
 
             self.current_step += 1;
+            log::info!(
+                "[Workflow][session={}][step] Step {}/{}, approval_level={:?}",
+                self.session_id,
+                self.current_step,
+                self.max_steps,
+                self.policy.approval_level
+            );
 
             // --- Max-step budget guard ---
             if self.current_step > self.max_steps {
@@ -1497,65 +1562,16 @@ impl WorkflowExecutor {
                         )
                         .await?;
                 } else {
-                    // In other approval modes, ask user for confirmation
-                    self.update_state(WorkflowState::Paused).await?;
-
-                    // Send ask_user message
-                    let question = rust_i18n::t!(
-                        "workflow.stepBudgetExhausted",
-                        current = self.current_step,
-                        max = self.max_steps
+                    // In other approval modes, enter confirmation waiting
+                    // The unified waiting loop will handle Continue/Stop signals
+                    log::info!(
+                        "WorkflowExecutor {}: Step budget exhausted ({}/{}), entering confirmation waiting",
+                        self.session_id,
+                        self.current_step,
+                        self.max_steps
                     );
-                    let options = vec![
-                        t!("workflow.continue").to_string(),
-                        t!("workflow.stop").to_string(),
-                    ];
-
-                    self.gateway
-                        .send(
-                            &self.session_id,
-                            GatewayPayload::Confirm {
-                                id: "step_budget_check".to_string(),
-                                action: "ask_user".to_string(),
-                                details: serde_json::to_string(&serde_json::json!({
-                                    "question": question,
-                                    "options": options
-                                }))
-                                .unwrap_or_default(),
-                            },
-                        )
-                        .await?;
-
-                    // Wait for user response
-                    if let Some(ref mut signal_rx) = self.signal_rx {
-                        if let Some(signal_str) = signal_rx.recv().await {
-                            if let Ok(sig_json) =
-                                serde_json::from_str::<serde_json::Value>(&signal_str)
-                            {
-                                if sig_json["type"] == "approval" {
-                                    let approved = sig_json["approved"].as_bool().unwrap_or(false);
-                                    if approved {
-                                        // User chose to continue - reset step budget
-                                        log::info!(
-                                            "WorkflowExecutor {}: User approved step budget extension",
-                                            self.session_id
-                                        );
-                                        self.current_step = 0;
-                                        self.max_steps += DEFAULT_MAX_STEPS;
-                                        self.update_state(WorkflowState::Thinking).await?;
-                                    } else {
-                                        // User chose to stop - finish task
-                                        log::info!(
-                                            "WorkflowExecutor {}: User declined step budget extension, finishing task",
-                                            self.session_id
-                                        );
-                                        self.update_state(WorkflowState::Completed).await?;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.update_state(WorkflowState::Paused).await?;
+                    continue;
                 }
             } else if self.current_step == (self.max_steps * 4 / 5) {
                 // 80% warning — give the LLM a chance to wrap up gracefully
@@ -2361,6 +2377,24 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         let old_state = self.state.clone();
 
+        // Log resume from waiting state
+        let was_waiting = matches!(
+            old_state,
+            WorkflowState::Paused | WorkflowState::AwaitingUser | WorkflowState::AwaitingApproval
+        );
+        let now_running = matches!(
+            new_state,
+            WorkflowState::Thinking | WorkflowState::Executing
+        );
+        if was_waiting && now_running {
+            log::info!(
+                "[Workflow][session={}][phase=wait][event=resume] Resuming from {} to {}",
+                self.session_id,
+                old_state,
+                new_state
+            );
+        }
+
         log::info!(
             "[Workflow][session={}][phase=state] State transition: {} -> {}",
             self.session_id,
@@ -2387,11 +2421,22 @@ impl WorkflowExecutor {
             self.pending_approvals.clear();
         }
 
+        // Calculate wait_reason atomically with state
+        let wait_reason = match &new_state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
+            _ => None,
+        };
+
         self.gateway
             .send(
                 &self.session_id,
                 GatewayPayload::State {
                     state: new_state.clone(),
+                    wait_reason,
                 },
             )
             .await?;
@@ -2873,7 +2918,9 @@ impl WorkflowExecutor {
         let wait_reason = match &self.state {
             WorkflowState::Paused => Some(WaitReason::Confirmation),
             WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
-            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => Some(WaitReason::Approval),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
             _ => None,
         };
 
@@ -2890,7 +2937,10 @@ impl WorkflowExecutor {
                         .unwrap_or("unknown")
                         .to_string(),
                     arguments: value.get("arguments").cloned().unwrap_or(json!({})),
-                    details: value.get("details").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    details: value
+                        .get("details")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 }
             })
             .collect();

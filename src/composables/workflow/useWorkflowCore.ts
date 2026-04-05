@@ -55,7 +55,23 @@ export function useWorkflowCore({
 
     const workflows = computed(() => workflowStore.workflows)
     const isRunning = computed(() => workflowStore.isRunning)
-    const isAwaitingApproval = computed(() => currentWorkflow.value?.status === 'awaiting_approval')
+    const waitReason = computed(() => workflowStore.waitReason)
+    
+    const isWaiting = computed(() => {
+        const status = currentWorkflow.value?.status?.toLowerCase()
+        const result = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status || '')
+        return result
+    })
+    
+    const isAwaitingApproval = computed(() => {
+        const status = currentWorkflow.value?.status
+        if (waitReason.value === 'approval') {
+            console.log('[Workflow][isAwaitingApproval] Detected by wait_reason=approval')
+            return true
+        }
+        const result = status === 'awaiting_approval'
+        return result
+    })
 
     const activeModelName = computed(() => {
         // 1. Try to get from current configs (reflected in settings/workflow)
@@ -183,7 +199,21 @@ export function useWorkflowCore({
             const payload = event.payload
 
             if (payload.type === 'state') {
-                workflowStore.updateWorkflowStatus(sessionId, payload.state)
+                const prevState = workflowStore.currentWorkflow?.status
+                const prevWaitReason = workflowStore.waitReason
+                workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
+                
+                console.log('[Workflow][state] State changed:', {
+                    from: prevState,
+                    to: payload.state,
+                    wait_reason: payload.wait_reason || null,
+                    prevWaitReason
+                })
+
+                // Check for confirmation waiting
+                if (payload.state === 'paused' && payload.wait_reason === 'confirmation') {
+                    showConfirmationDialog()
+                }
 
                 // If we move out of Thinking/Executing, reset the parser
                 // Use a small timeout to allow final rendering of streaming buffers
@@ -293,6 +323,10 @@ export function useWorkflowCore({
                 } catch (e) {
                     console.warn('[Workflow] Failed to request confirm broadcast:', e)
                 }
+            } else if (status === 'paused' && workflowStore.waitReason === 'confirmation') {
+                // Confirmation waiting - show dialog for user to continue or stop
+                console.log('[Workflow] Workflow in confirmation waiting, showing dialog')
+                showConfirmationDialog()
             } else {
                 console.log('[Workflow] Not requesting confirm broadcast, status is:', status, 'hasPendingApproval:', hasPendingApproval)
             }
@@ -323,6 +357,45 @@ export function useWorkflowCore({
         nextTick(() => {
             console.log('Scrolling to bottom after switching workflow')
             scrollToBottom(true)
+        })
+    }
+
+    const showConfirmationDialog = async () => {
+        ElMessageBox.confirm(t('workflow.confirmationWaiting'), t('workflow.confirmationTitle'), {
+            confirmButtonText: t('workflow.continue'),
+            cancelButtonText: t('workflow.stop'),
+            type: 'warning',
+            showClose: false,
+            closeOnClickModal: false,
+            closeOnPressEscape: false
+        }).then(async () => {
+            console.log('[Workflow] User chose to continue')
+            const signal = JSON.stringify({ type: 'continue' })
+            try {
+                await invokeWrapper('workflow_signal', {
+                    sessionId: currentWorkflowId.value,
+                    signal
+                })
+            } catch (error) {
+                console.error('Failed to send continue signal:', error)
+            }
+        }).catch(async () => {
+            console.log('[Workflow] User chose to stop')
+            // Immediately update UI state
+            workflowStore.setRunning(false)
+            clearRetryTimer()
+            resetChatState()
+            workflowStore.setNotification('', 'info')
+            
+            const signal = JSON.stringify({ type: 'stop' })
+            try {
+                await invokeWrapper('workflow_signal', {
+                    sessionId: currentWorkflowId.value,
+                    signal
+                })
+            } catch (error) {
+                console.error('Failed to send stop signal:', error)
+            }
         })
     }
 
@@ -463,18 +536,20 @@ export function useWorkflowCore({
             await startNewWorkflow(message)
         } else {
             // 2. Decide: Signal or Re-start?
-            const status = currentWorkflow.value?.status
-            const isPaused = status === 'paused' || status === 'awaiting_user'
-            if (isRunning.value || isPaused) {
+            // Phase 3: Use unified waiting check - all waiting states should send signal
+            // Backend will validate signal type based on wait_reason
+            if (isRunning.value || isWaiting.value) {
                 // Just send signal to the running loop
                 try {
                     const signal = JSON.stringify({
-                        type: 'user_input',
+                        type: 'user_message',
                         content: message
                     })
 
-                    // Optimistic update to clear the "AI is waiting" hint immediately
-                    if (isPaused) {
+                    // Optimistic update only for states that accept user_input signal
+                    // Do NOT update for approval waiting - backend will reject user_input signal
+                    const shouldOptimisticUpdate = waitReason.value === 'user_input' || waitReason.value === 'confirmation'
+                    if (shouldOptimisticUpdate) {
                         workflowStore.updateWorkflowStatus(currentWorkflowId.value, 'thinking')
                     }
 
@@ -483,16 +558,18 @@ export function useWorkflowCore({
                         signal: signal
                     })
                     console.log('Signal sent successfully:', res)
+                    
+                    // Log rejection for approval waiting (backend should reject)
+                    if (waitReason.value === 'approval') {
+                        console.log('[Workflow][phase=signal] user_input signal sent during approval waiting - backend should reject')
+                    }
                 } catch (error) {
                     console.error('Failed to send signal:', error)
                 }
             } else {
-                // Engine is stopped (Completed, Error, or Awaiting Approval).
+                // Engine is stopped (Completed, Error, or Cancelled).
                 // DO NOT add message manually here, workflow_start will handle it and broadcast via events.
                 try {
-                    // If we were awaiting approval, continue in planning mode if we send a message (rejecting the plan)
-                    const isCurrentlyAwaiting = currentWorkflow.value?.status === 'awaiting_approval'
-
                     // Ensure event listener is setup for this session
                     await setupWorkflowEvents(currentWorkflowId.value)
 
@@ -500,7 +577,7 @@ export function useWorkflowCore({
                         sessionId: currentWorkflowId.value,
                         agentId: selectedAgent.value.id,
                         initialPrompt: message,
-                        planningMode: isCurrentlyAwaiting || planningMode.value
+                        planningMode: planningMode.value
                     })
                 } catch (error) {
                     console.error('Failed to resume workflow:', error)
@@ -544,8 +621,6 @@ export function useWorkflowCore({
         if (!currentWorkflowId.value || isRunning.value) return
 
         try {
-            // If it's paused, we might need to send a signal,
-            // but usually 'workflow_start' with no prompt works to resume the loop if it's not active.
             await invokeWrapper('workflow_start', {
                 sessionId: currentWorkflowId.value,
                 agentId: selectedAgent.value.id
@@ -620,6 +695,10 @@ export function useWorkflowCore({
             clearRetryTimer()
             resetChatState()
             workflowStore.setNotification('', 'info')
+            
+            if (approvalVisible.value) {
+                approvalVisible.value = false
+            }
 
             try {
                 await invokeWrapper('workflow_stop', {
@@ -885,6 +964,8 @@ export function useWorkflowCore({
         editWorkflowTitle,
         workflows,
         isRunning,
+        isWaiting,
+        waitReason,
         isAwaitingApproval,
         activeModelName,
         canSwitchWorkflow,

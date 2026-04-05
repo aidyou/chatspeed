@@ -752,6 +752,7 @@ pub async fn workflow_start(
                     &session_id_for_spawn,
                     crate::workflow::react::types::GatewayPayload::State {
                         state: crate::workflow::react::types::WorkflowState::Error,
+                        wait_reason: None,
                     },
                 )
                 .await;
@@ -1001,6 +1002,7 @@ pub async fn workflow_approve_plan(
                     &session_id_for_spawn,
                     crate::workflow::react::types::GatewayPayload::State {
                         state: crate::workflow::react::types::WorkflowState::Error,
+                        wait_reason: None,
                     },
                 )
                 .await;
@@ -1043,10 +1045,11 @@ pub async fn workflow_signal(
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
-    let signal_type = serde_json::from_str::<serde_json::Value>(&signal)
-        .ok()
-        .and_then(|v| v["type"].as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "unknown".to_string());
+    let workflow_signal = crate::workflow::react::types::WorkflowSignal::parse(&signal);
+    let signal_type = workflow_signal
+        .as_ref()
+        .map(|s| s.type_name())
+        .unwrap_or("unknown");
     
     log::info!(
         "[Workflow][session={}][phase=signal] Signal received, type={}",
@@ -1065,7 +1068,7 @@ pub async fn workflow_signal(
         );
         
         // Route signal through manager
-        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
+        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type.to_string()) {
             log::warn!(
                 "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
                 session_id,
@@ -1178,6 +1181,68 @@ pub async fn workflow_signal(
                 .await?;
 
                 return Ok("Workflow resumed and confirm broadcast triggered".to_string());
+            } else if val["type"] == "continue" || val["type"] == "stop" {
+                let snapshot = {
+                    let store = state.read().map_err(|e| e.to_string())?;
+                    store
+                        .get_workflow_snapshot(&session_id)
+                        .map_err(|e| e.to_string())?
+                };
+
+                let status_lower = snapshot.workflow.status.to_lowercase();
+                if status_lower != "paused" {
+                    log::info!(
+                        "[Workflow] Session {} is not paused (status: {}), ignoring {} signal",
+                        session_id,
+                        snapshot.workflow.status,
+                        val["type"]
+                    );
+                    return Ok(format!("Workflow is not paused, ignoring {} signal", val["type"]));
+                }
+
+                log::info!(
+                    "[Workflow] Session {} is paused, resuming to process {} signal",
+                    session_id,
+                    val["type"]
+                );
+
+                workflow_start(
+                    app,
+                    state,
+                    chat_state,
+                    tsid_generator,
+                    gateway,
+                    factory,
+                    workflow_manager,
+                    session_id.clone(),
+                    snapshot.workflow.agent_id,
+                    None,
+                    None,
+                )
+                .await?;
+
+                let mut retries = 5;
+                let mut last_error = None;
+                while retries > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                        Ok(_) => {
+                            log::info!("[Workflow] {} signal injected successfully after retry", val["type"]);
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+                            retries -= 1;
+                            log::warn!("[Workflow] Failed to inject {} signal, retries left: {}", val["type"], retries);
+                        }
+                    }
+                }
+                if retries == 0 {
+                    let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
+                    return Err(format!("Failed to inject {} after resuming: {}", val["type"], err_msg));
+                }
+
+                return Ok(format!("Workflow resumed and {} processed", val["type"]));
             } else if val["type"] == "approval" {
                 let agent_id = {
                     let store = state.read().map_err(|e| e.to_string())?;

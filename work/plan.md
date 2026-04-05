@@ -1099,7 +1099,7 @@ pub enum WorkflowSignal {
 
 ### 11.2 数据库变更
 
-新增表：
+在 src-tauri/src/db/sql/migrations/v5.rs 新增表：
 
 ```sql
 CREATE TABLE workflow_events (

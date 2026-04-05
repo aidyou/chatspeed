@@ -9,6 +9,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const todoList = ref([]);
   const messageQueue = ref([]);
   const isRunning = ref(false);
+  const waitReason = ref(null); // Phase 3: wait_reason from backend
   const error = ref(null);
   const notification = ref({
     message: '',
@@ -178,6 +179,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
         'running'
       ].includes(status);
 
+      waitReason.value = snapshot.workflow.waitReason || null;
+
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
         if (m.metadata && typeof m.metadata === 'string') {
@@ -290,14 +293,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
-  const updateWorkflowStatus = async (workflowId, status) => {
+  const updateWorkflowStatus = async (workflowId, status, waitReasonValue = null) => {
     error.value = null;
     try {
+      // Always update waitReason, even when null (to clear previous waiting state)
+      waitReason.value = waitReasonValue;
+      
       // Avoid database update if it's an internal engine state transition that doesn't need persistence
       if (['thinking', 'executing', 'paused', 'awaiting_user', 'completed', 'error'].includes(status.toLowerCase())) {
         const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
         if (workflowIndex !== -1) {
           workflows.value[workflowIndex].status = status;
+          workflows.value[workflowIndex].waitReason = waitReasonValue;
         }
 
         // Update running state based on status
@@ -380,6 +387,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     todoList,
     messageQueue,
     isRunning,
+    waitReason,
     error,
     notification,
     autoApprovedTools,

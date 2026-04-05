@@ -51,6 +51,8 @@ pub enum GatewayPayload {
     },
     State {
         state: WorkflowState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        wait_reason: Option<WaitReason>,
     },
     Confirm {
         id: String,
@@ -133,6 +135,76 @@ pub enum WaitReason {
     Confirmation,
     UserInput,
     Approval,
+}
+
+/// Structured signal types for workflow control.
+/// Signals are parsed from JSON strings sent by the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkflowSignal {
+    /// User provides text input (for AwaitingUser state)
+    UserMessage { content: String },
+    /// User approves or rejects a tool call (for AwaitingApproval state)
+    /// Frontend legacy format uses "approval" as type and "id" as field.
+    #[serde(rename = "approval")]
+    ApprovalDecision {
+        #[serde(rename = "id")]
+        tool_call_id: String,
+        approved: bool,
+        approve_all: bool,
+    },
+    /// Resume execution (for Paused state)
+    Continue,
+    /// Cancel workflow execution (allowed in all waiting states)
+    Stop,
+    /// Re-broadcast pending confirmations to frontend
+    RebroadcastPending,
+    /// Remove a tool from auto-approve list
+    RemoveAutoApprovedTool { tool_name: String },
+    /// Remove a pattern from shell policy
+    RemoveShellPolicyItem { pattern: String },
+}
+
+impl WorkflowSignal {
+    /// Parse a JSON string into a WorkflowSignal.
+    /// Returns None if parsing fails or the signal type is unknown.
+    pub fn parse(json_str: &str) -> Option<Self> {
+        serde_json::from_str(json_str).ok()
+    }
+
+    /// Returns true if this signal is valid for the given wait reason.
+    /// Stop signal is always valid in any waiting state.
+    pub fn is_valid_for(&self, wait_reason: Option<&WaitReason>) -> bool {
+        match (self, wait_reason) {
+            // Stop is always valid
+            (WorkflowSignal::Stop, _) => true,
+            // RebroadcastPending, RemoveAutoApprovedTool, RemoveShellPolicyItem are always valid
+            (WorkflowSignal::RebroadcastPending, _) => true,
+            (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
+            (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
+            // UserMessage is valid for UserInput waiting
+            (WorkflowSignal::UserMessage { .. }, Some(WaitReason::UserInput)) => true,
+            // ApprovalDecision is valid for Approval waiting
+            (WorkflowSignal::ApprovalDecision { .. }, Some(WaitReason::Approval)) => true,
+            // Continue is valid for Confirmation waiting
+            (WorkflowSignal::Continue, Some(WaitReason::Confirmation)) => true,
+            // Everything else is invalid
+            _ => false,
+        }
+    }
+
+    /// Returns the signal type name for logging purposes.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            WorkflowSignal::UserMessage { .. } => "user_message",
+            WorkflowSignal::ApprovalDecision { .. } => "approval_decision",
+            WorkflowSignal::Continue => "continue",
+            WorkflowSignal::Stop => "stop",
+            WorkflowSignal::RebroadcastPending => "rebroadcast_pending",
+            WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
+            WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -282,5 +354,58 @@ mod tests {
         assert_eq!(deserialized.pending_tools.len(), 3);
         assert_eq!(deserialized.pending_tools[0].tool_call_id, "call_0");
         assert_eq!(deserialized.pending_tools[2].tool_name, "tool_2");
+    }
+
+    #[test]
+    fn test_workflow_signal_parse() {
+        let json = r#"{"type":"user_message","content":"hello"}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(matches!(signal, WorkflowSignal::UserMessage { content } if content == "hello"));
+
+        // Legacy frontend format: type="approval", field="id"
+        let json = r#"{"type":"approval","id":"call_123","approved":true,"approve_all":false}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(
+            matches!(signal, WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all } 
+            if tool_call_id == "call_123" && approved && !approve_all)
+        );
+
+        let json = r#"{"type":"stop"}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(matches!(signal, WorkflowSignal::Stop));
+    }
+
+    #[test]
+    fn test_workflow_signal_validation() {
+        // Stop is valid in all waiting states
+        let stop = WorkflowSignal::Stop;
+        assert!(stop.is_valid_for(None));
+        assert!(stop.is_valid_for(Some(&WaitReason::UserInput)));
+        assert!(stop.is_valid_for(Some(&WaitReason::Approval)));
+        assert!(stop.is_valid_for(Some(&WaitReason::Confirmation)));
+
+        // UserMessage is only valid for UserInput waiting
+        let user_msg = WorkflowSignal::UserMessage {
+            content: "test".to_string(),
+        };
+        assert!(user_msg.is_valid_for(Some(&WaitReason::UserInput)));
+        assert!(!user_msg.is_valid_for(Some(&WaitReason::Confirmation)));
+        assert!(!user_msg.is_valid_for(Some(&WaitReason::Approval)));
+
+        // ApprovalDecision is only valid for Approval waiting
+        let approval = WorkflowSignal::ApprovalDecision {
+            tool_call_id: "call_1".to_string(),
+            approved: true,
+            approve_all: false,
+        };
+        assert!(approval.is_valid_for(Some(&WaitReason::Approval)));
+        assert!(!approval.is_valid_for(Some(&WaitReason::UserInput)));
+        assert!(!approval.is_valid_for(Some(&WaitReason::Confirmation)));
+
+        // Continue is only valid for Confirmation waiting
+        let cont = WorkflowSignal::Continue;
+        assert!(cont.is_valid_for(Some(&WaitReason::Confirmation)));
+        assert!(!cont.is_valid_for(Some(&WaitReason::UserInput)));
+        assert!(!cont.is_valid_for(Some(&WaitReason::Approval)));
     }
 }
