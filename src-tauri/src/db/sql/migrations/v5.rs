@@ -68,4 +68,20 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "agents_v5_approval_level",
         "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'"
     ),
+    // Workflow snapshots table for ExecutionContext recovery
+    (
+        "workflow_snapshots",
+        "CREATE TABLE IF NOT EXISTS workflow_snapshots (
+            session_id TEXT PRIMARY KEY,
+            context_json TEXT NOT NULL,
+            version TEXT NOT NULL,
+            state TEXT,
+            wait_reason TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
+    (
+        "idx_workflow_snapshots_updated_at",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_updated_at ON workflow_snapshots(updated_at DESC)"
+    ),
 ];

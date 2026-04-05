@@ -616,8 +616,9 @@ impl ShellExecute {
         ))?;
 
         // Use tool_call_id from params (injected by workflow engine) or generate one
-        let tool_id = params[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID]
-            .as_str()
+        let tool_id = params
+            .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
+            .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
                 format!(

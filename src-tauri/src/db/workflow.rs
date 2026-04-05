@@ -3,6 +3,7 @@
 //! This module provides database operations for managing workflows and their messages.
 
 use crate::db::{MainStore, StoreError};
+use crate::workflow::react::types::ExecutionContext;
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -338,6 +339,90 @@ impl MainStore {
             );
             conn.execute(&query, params![session_id])?;
         }
+        Ok(())
+    }
+
+    // ExecutionContext Snapshot Operations
+
+    pub fn get_execution_context(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ExecutionContext>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match result {
+            Some(context_json) => {
+                let ctx: ExecutionContext = serde_json::from_str(&context_json)?;
+                log::info!(
+                    "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
+                    session_id,
+                    ctx.state,
+                    ctx.wait_reason,
+                    ctx.pending_tools.len()
+                );
+                Ok(Some(ctx))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let context_json = serde_json::to_string(ctx)?;
+        let state_str = ctx.state.to_string();
+        let wait_reason_str = ctx.wait_reason.as_ref().map(|wr| wr.to_string());
+
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_snapshots (session_id, context_json, version, state, wait_reason, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+            params![
+                ctx.session_id,
+                context_json,
+                ctx.version,
+                state_str,
+                wait_reason_str,
+            ],
+        )?;
+
+        log::info!(
+            "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
+            ctx.session_id,
+            ctx.state,
+            ctx.wait_reason,
+            ctx.pending_tools.len()
+        );
+
+        Ok(())
+    }
+
+    pub fn delete_execution_context(&self, session_id: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.execute(
+            "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+            params![session_id],
+        )?;
+
+        log::info!("[Workflow][session={}] snapshot.deleted", session_id);
+
         Ok(())
     }
 }

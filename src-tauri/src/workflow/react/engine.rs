@@ -30,7 +30,7 @@ use crate::workflow::react::{
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
     skills::{SkillManifest, SkillScanner},
-    types::{GatewayPayload, StepType, WorkflowState},
+    types::{ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason, WorkflowState},
 };
 
 /// Default maximum ReAct steps before the agent is forced to conclude.
@@ -178,6 +178,20 @@ impl WorkflowExecutor {
         sandbox_paths.push(std::env::temp_dir());
         if let Some(home) = dirs::home_dir() {
             sandbox_paths.push(home.join(".chatspeed"));
+        }
+
+        // Ensure sandbox directories exist before creating PathGuard
+        for path in &sandbox_paths {
+            if !path.exists() {
+                if let Err(e) = std::fs::create_dir_all(path) {
+                    log::warn!(
+                        "[Workflow][session={}][phase=init] Failed to create sandbox directory {:?}: {}",
+                        session_id,
+                        path,
+                        e
+                    );
+                }
+            }
         }
 
         let path_guard = Arc::new(RwLock::new(PathGuard::new(
@@ -350,10 +364,13 @@ impl WorkflowExecutor {
                 self.current_step = 0;
                 self.update_state(WorkflowState::Thinking).await?;
             } else if self.state == WorkflowState::Cancelled {
+                // Reset cancelled state to Thinking so workflow can resume execution
                 log::info!(
-                    "WorkflowExecutor {}: Workflow was cancelled, waiting for user to resume",
+                    "WorkflowExecutor {}: Resuming from cancelled state, resetting to Thinking",
                     self.session_id
                 );
+                self.current_step = 0;
+                self.update_state(WorkflowState::Thinking).await?;
             } else if self.state == WorkflowState::Paused {
                 log::info!(
                     "WorkflowExecutor {}: Workflow was paused, waiting for user to resume",
@@ -361,9 +378,40 @@ impl WorkflowExecutor {
                 );
             } else if self.state == WorkflowState::AwaitingUser {
                 log::info!(
-                    "WorkflowExecutor {}: Workflow is awaiting user input, waiting for user response",
+                    "WorkflowExecutor {}: Workflow is awaiting user input, restoring from snapshot",
                     self.session_id
                 );
+
+                // Try to restore from ExecutionContext snapshot
+                let snapshot_ctx = {
+                    let store = self
+                        .context
+                        .main_store
+                        .read()
+                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+
+                    store.get_execution_context(&self.session_id).ok().flatten()
+                };
+
+                if let Some(ctx) = snapshot_ctx {
+                    if ctx.wait_reason == Some(WaitReason::UserInput) {
+                        log::info!(
+                            "[Workflow][session={}][phase=restore] Restoring user_input waiting state from snapshot",
+                            self.session_id
+                        );
+                    } else {
+                        log::warn!(
+                            "[Workflow][session={}][phase=restore] Snapshot wait_reason mismatch: expected UserInput, got {:?}",
+                            self.session_id,
+                            ctx.wait_reason
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "[Workflow][session={}][phase=restore] snapshot.fallback_legacy - No snapshot found for AwaitingUser, continuing with DB state",
+                        self.session_id
+                    );
+                }
             } else {
                 self.current_step = last_msg.step_index as usize;
             }
@@ -374,93 +422,150 @@ impl WorkflowExecutor {
                     self.session_id
                 );
 
-                // 1. Find all 'tool' messages that are currently in an awaiting approval state
-                for msg in &self.context.messages {
-                    if msg.role == "tool" {
-                        if let Some(meta) = &msg.metadata {
-                            let summary =
-                                meta.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-                            // Match both localized and raw versions of the awaiting status
-                            let is_waiting = summary == "Awaiting approval"
-                                || summary == rust_i18n::t!("workflow.awaiting_approval");
+                // Try to restore from ExecutionContext snapshot first
+                let snapshot_ctx = {
+                    let store = self
+                        .context
+                        .main_store
+                        .read()
+                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
 
-                            if is_waiting {
-                                if let Some(id) = meta.get("tool_call_id").and_then(|v| v.as_str())
-                                {
-                                    // 2. Find the corresponding assistant message to restore original arguments
-                                    let tool_info = self.context.messages.iter().rev().find_map(|m| {
-                                        if m.role == "assistant" {
-                                            if let Some(m_meta) = &m.metadata {
-                                                // Try multiple formats: tool_calls, function_call, tools
-                                                if let Some(calls) = m_meta.get("tool_calls").and_then(|v| v.as_array()) {
-                                                    for call in calls {
-                                                        let call_id = call.get("id").and_then(|v| v.as_str());
+                    store.get_execution_context(&self.session_id).ok().flatten()
+                };
+
+                let restored_from_snapshot = if let Some(ctx) = snapshot_ctx {
+                    if !ctx.pending_tools.is_empty() {
+                        log::info!(
+                            "[Workflow][session={}][phase=restore] Restoring {} pending approvals from snapshot",
+                            self.session_id,
+                            ctx.pending_tools.len()
+                        );
+
+                        for tool in &ctx.pending_tools {
+                            let info_with_details = json!({
+                                "name": tool.tool_name.clone(),
+                                "arguments": tool.arguments.clone(),
+                                "details": tool.details.clone().unwrap_or_default()
+                            });
+                            self.pending_approvals.insert(tool.tool_call_id.clone(), info_with_details);
+
+                            let _ = self
+                                .gateway
+                                .send(
+                                    &self.session_id,
+                                    GatewayPayload::Confirm {
+                                        id: tool.tool_call_id.clone(),
+                                        action: tool.tool_name.clone(),
+                                        details: tool.details.clone().unwrap_or_default(),
+                                    },
+                                )
+                                .await;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // Fallback to transcript-based recovery if snapshot didn't work
+                if !restored_from_snapshot {
+                    log::warn!(
+                        "[Workflow][session={}][phase=restore] snapshot.fallback_legacy - No snapshot found, falling back to transcript parsing",
+                        self.session_id
+                    );
+
+                    // Find all 'tool' messages that are currently in an awaiting approval state
+                    for msg in &self.context.messages {
+                        if msg.role == "tool" {
+                            if let Some(meta) = &msg.metadata {
+                                let summary =
+                                    meta.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                                let is_waiting = summary == "Awaiting approval"
+                                    || summary == rust_i18n::t!("workflow.awaiting_approval");
+
+                                if is_waiting {
+                                    if let Some(id) = meta.get("tool_call_id").and_then(|v| v.as_str())
+                                    {
+                                        let tool_info = self.context.messages.iter().rev().find_map(|m| {
+                                            if m.role == "assistant" {
+                                                if let Some(m_meta) = &m.metadata {
+                                                    if let Some(calls) = m_meta.get("tool_calls").and_then(|v| v.as_array()) {
+                                                        for call in calls {
+                                                            let call_id = call.get("id").and_then(|v| v.as_str());
+                                                            if call_id == Some(id) {
+                                                                let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
+                                                                let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
+                                                                if let (Some(n), Some(a)) = (name, args) {
+                                                                    return Some(json!({ "name": n, "arguments": a }));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    if let Some(func_call) = m_meta.get("function_call").and_then(|v| v.as_object()) {
+                                                        let call_id = func_call.get("id").and_then(|v| v.as_str());
                                                         if call_id == Some(id) {
-                                                            let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
-                                                            let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
+                                                            let name = func_call.get("name").and_then(|v| v.as_str());
+                                                            let args = func_call.get("arguments");
                                                             if let (Some(n), Some(a)) = (name, args) {
                                                                 return Some(json!({ "name": n, "arguments": a }));
                                                             }
                                                         }
                                                     }
                                                 }
-                                                // Try function_call format
-                                                if let Some(func_call) = m_meta.get("function_call").and_then(|v| v.as_object()) {
-                                                    let call_id = func_call.get("id").and_then(|v| v.as_str());
-                                                    if call_id == Some(id) {
-                                                        let name = func_call.get("name").and_then(|v| v.as_str());
-                                                        let args = func_call.get("arguments");
-                                                        if let (Some(n), Some(a)) = (name, args) {
-                                                            return Some(json!({ "name": n, "arguments": a }));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            // Also check message content for tool calls
-                                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.message) {
-                                                if let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
-                                                    for call in calls {
-                                                        let call_id = call.get("id").and_then(|v| v.as_str());
-                                                        if call_id == Some(id) {
-                                                            let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
-                                                            let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
-                                                            if let (Some(n), Some(a)) = (name, args) {
-                                                                return Some(json!({ "name": n, "arguments": a }));
+                                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.message) {
+                                                    if let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+                                                        for call in calls {
+                                                            let call_id = call.get("id").and_then(|v| v.as_str());
+                                                            if call_id == Some(id) {
+                                                                let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
+                                                                let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
+                                                                if let (Some(n), Some(a)) = (name, args) {
+                                                                    return Some(json!({ "name": n, "arguments": a }));
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
-                                        }
-                                        None
-                                    });
-
-                                    if let Some(info) = tool_info {
-                                        log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
-                                        // Include details from the message for later request_confirm_broadcast
-                                        let info_with_details = json!({
-                                            "name": info["name"],
-                                            "arguments": info["arguments"],
-                                            "details": msg.message.clone()
+                                            None
                                         });
-                                        self.pending_approvals
-                                            .insert(id.to_string(), info_with_details);
 
-                                        // 3. Re-trigger the Gateway signal so the UI automatically displays the confirmation block
-                                        let _ = self
-                                            .gateway
-                                            .send(
-                                                &self.session_id,
-                                                GatewayPayload::Confirm {
-                                                    id: id.to_string(),
-                                                    action: info["name"]
-                                                        .as_str()
-                                                        .unwrap_or("unknown")
-                                                        .to_string(),
-                                                    details: msg.message.clone(), // Use preserved preview content (Diff/Summary)
-                                                },
-                                            )
-                                            .await;
+                                        if let Some(info) = tool_info {
+                                            log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
+                                            
+                                            // Parse arguments if it's a JSON string (OpenAI format)
+                                            let args_value = info["arguments"].clone();
+                                            let args_obj = if args_value.is_string() {
+                                                serde_json::from_str::<serde_json::Value>(args_value.as_str().unwrap_or("{}"))
+                                                    .unwrap_or_else(|_| json!({}))
+                                            } else {
+                                                args_value
+                                            };
+                                            
+                                            let info_with_details = json!({
+                                                "name": info["name"],
+                                                "arguments": args_obj,
+                                                "details": msg.message.clone()
+                                            });
+                                            self.pending_approvals.insert(id.to_string(), info_with_details);
+
+                                            let _ = self
+                                                .gateway
+                                                .send(
+                                                    &self.session_id,
+                                                    GatewayPayload::Confirm {
+                                                        id: id.to_string(),
+                                                        action: info["name"]
+                                                            .as_str()
+                                                            .unwrap_or("unknown")
+                                                            .to_string(),
+                                                        details: msg.message.clone(),
+                                                    },
+                                                )
+                                                .await;
+                                        }
                                     }
                                 }
                             }
@@ -1118,7 +1223,15 @@ impl WorkflowExecutor {
 
                         // 2. Execution: MCP tools use global, native tools use local
                         // Inject internal tool_call_id for streaming tools
-                        let mut enriched_args = tool_args.clone();
+                        // Ensure tool_args is an object (parse if it's a JSON string from fallback)
+                        let tool_args_obj = if tool_args.is_string() {
+                            serde_json::from_str::<serde_json::Value>(tool_args.as_str().unwrap_or("{}"))
+                                .unwrap_or_else(|_| tool_args.clone())
+                        } else {
+                            tool_args.clone()
+                        };
+                        
+                        let mut enriched_args = tool_args_obj.clone();
                         enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
                             serde_json::json!(signal_id);
 
@@ -2247,14 +2360,14 @@ impl WorkflowExecutor {
         new_state: WorkflowState,
     ) -> Result<(), WorkflowEngineError> {
         let old_state = self.state.clone();
-        
+
         log::info!(
             "[Workflow][session={}][phase=state] State transition: {} -> {}",
             self.session_id,
             old_state,
             new_state
         );
-        
+
         self.state = new_state.clone();
 
         // Cleanup pending approvals when transitioning away from approval-waiting states
@@ -2282,14 +2395,38 @@ impl WorkflowExecutor {
                 },
             )
             .await?;
-        let store_res = self
-            .context
-            .main_store
-            .write()
-            .map_err(|e| WorkflowEngineError::General(e.to_string()));
-        if let Ok(store) = store_res {
-            let _ = store.update_workflow_status(&self.session_id, &new_state.to_string());
+
+        {
+            let store_res = self
+                .context
+                .main_store
+                .write()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()));
+            if let Ok(store) = store_res {
+                let _ = store.update_workflow_status(&self.session_id, &new_state.to_string());
+            }
         }
+
+        // Save snapshot on waiting/terminal states
+        if matches!(
+            new_state,
+            WorkflowState::Paused
+                | WorkflowState::AwaitingUser
+                | WorkflowState::AwaitingApproval
+                | WorkflowState::AwaitingAutoApproval
+                | WorkflowState::Completed
+                | WorkflowState::Error
+                | WorkflowState::Cancelled
+        ) {
+            if let Err(e) = self.save_snapshot().await {
+                log::error!(
+                    "[Workflow][session={}][phase=snapshot] Failed to save: {}",
+                    self.session_id,
+                    e
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -2728,5 +2865,75 @@ impl WorkflowExecutor {
             let ai_model = store.config.get_ai_model_by_id(provider_id).ok()?;
             ai_model.models.into_iter().find(|m| m.id == model_name)
         }
+    }
+
+    pub fn export_execution_context(&self) -> ExecutionContext {
+        let state = RuntimeState::from(&self.state);
+
+        let wait_reason = match &self.state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => Some(WaitReason::Approval),
+            _ => None,
+        };
+
+        let pending_tools: Vec<PendingTool> = self
+            .pending_approvals
+            .iter()
+            .map(|entry| {
+                let value = entry.value();
+                PendingTool {
+                    tool_call_id: entry.key().clone(),
+                    tool_name: value
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    arguments: value.get("arguments").cloned().unwrap_or(json!({})),
+                    details: value.get("details").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                }
+            })
+            .collect();
+
+        ExecutionContext {
+            session_id: self.session_id.clone(),
+            state,
+            wait_reason,
+            current_step: self.current_step,
+            max_steps: self.max_steps,
+            pending_tools,
+            last_action_summary: self
+                .context
+                .messages
+                .last()
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|meta| meta.get("summary").and_then(|v| v.as_str()))
+                .map(|s| s.to_string()),
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+        }
+    }
+
+    pub async fn save_snapshot(&self) -> Result<(), WorkflowEngineError> {
+        let ctx = self.export_execution_context();
+
+        let store = self
+            .context
+            .main_store
+            .read()
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+
+        store
+            .upsert_execution_context(&ctx)
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+
+        log::info!(
+            "[Workflow][session={}][phase=snapshot] Saved: state={:?}, wait_reason={:?}, pending_tools={}",
+            self.session_id,
+            ctx.state,
+            ctx.wait_reason,
+            ctx.pending_tools.len()
+        );
+
+        Ok(())
     }
 }

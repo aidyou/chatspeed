@@ -95,3 +95,192 @@ pub enum GatewayPayload {
         message: String,
     },
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum RuntimeState {
+    Pending,
+    Running,
+    Waiting,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl From<&WorkflowState> for RuntimeState {
+    fn from(state: &WorkflowState) -> Self {
+        match state {
+            WorkflowState::Pending => RuntimeState::Pending,
+            WorkflowState::Thinking | WorkflowState::Executing | WorkflowState::Auditing => {
+                RuntimeState::Running
+            }
+            WorkflowState::Paused
+            | WorkflowState::AwaitingUser
+            | WorkflowState::AwaitingApproval
+            | WorkflowState::AwaitingAutoApproval => RuntimeState::Waiting,
+            WorkflowState::Completed => RuntimeState::Completed,
+            WorkflowState::Error => RuntimeState::Failed,
+            WorkflowState::Cancelled => RuntimeState::Cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WaitReason {
+    Confirmation,
+    UserInput,
+    Approval,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PendingTool {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionContext {
+    pub session_id: String,
+    pub state: RuntimeState,
+    pub wait_reason: Option<WaitReason>,
+    pub current_step: usize,
+    pub max_steps: usize,
+    pub pending_tools: Vec<PendingTool>,
+    pub last_action_summary: Option<String>,
+    pub version: String,
+}
+
+impl ExecutionContext {
+    pub const CURRENT_VERSION: &'static str = "1.0.0";
+
+    pub fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            state: RuntimeState::Pending,
+            wait_reason: None,
+            current_step: 0,
+            max_steps: 100,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            version: Self::CURRENT_VERSION.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_execution_context_new() {
+        let ctx = ExecutionContext::new("test-session".to_string());
+        assert_eq!(ctx.session_id, "test-session");
+        assert_eq!(ctx.state, RuntimeState::Pending);
+        assert!(ctx.wait_reason.is_none());
+        assert!(ctx.pending_tools.is_empty());
+        assert_eq!(ctx.version, "1.0.0");
+    }
+
+    #[test]
+    fn test_execution_context_serialization_roundtrip() {
+        let mut ctx = ExecutionContext::new("test-session".to_string());
+        ctx.state = RuntimeState::Waiting;
+        ctx.wait_reason = Some(WaitReason::Approval);
+        ctx.current_step = 5;
+        ctx.max_steps = 100;
+        ctx.pending_tools.push(PendingTool {
+            tool_call_id: "call_123".to_string(),
+            tool_name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "ls"}),
+            details: Some("List files".to_string()),
+        });
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: ExecutionContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(ctx, deserialized);
+    }
+
+    #[test]
+    fn test_pending_tool_roundtrip() {
+        let tool = PendingTool {
+            tool_call_id: "call_abc".to_string(),
+            tool_name: "write_file".to_string(),
+            arguments: serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
+            details: Some("Write test file".to_string()),
+        };
+
+        let json = serde_json::to_string(&tool).unwrap();
+        let deserialized: PendingTool = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(tool, deserialized);
+    }
+
+    #[test]
+    fn test_runtime_state_from_workflow_state() {
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Pending),
+            RuntimeState::Pending
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Thinking),
+            RuntimeState::Running
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Executing),
+            RuntimeState::Running
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Paused),
+            RuntimeState::Waiting
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::AwaitingUser),
+            RuntimeState::Waiting
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::AwaitingApproval),
+            RuntimeState::Waiting
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Completed),
+            RuntimeState::Completed
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Error),
+            RuntimeState::Failed
+        );
+        assert_eq!(
+            RuntimeState::from(&WorkflowState::Cancelled),
+            RuntimeState::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_execution_context_with_multiple_pending_tools() {
+        let mut ctx = ExecutionContext::new("multi-tool-session".to_string());
+        ctx.state = RuntimeState::Waiting;
+        ctx.wait_reason = Some(WaitReason::Approval);
+
+        for i in 0..3 {
+            ctx.pending_tools.push(PendingTool {
+                tool_call_id: format!("call_{}", i),
+                tool_name: format!("tool_{}", i),
+                arguments: serde_json::json!({"arg": i}),
+                details: Some(format!("Details for tool {}", i)),
+            });
+        }
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: ExecutionContext = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.pending_tools.len(), 3);
+        assert_eq!(deserialized.pending_tools[0].tool_call_id, "call_0");
+        assert_eq!(deserialized.pending_tools[2].tool_name, "tool_2");
+    }
+}
