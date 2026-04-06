@@ -25,7 +25,7 @@
     </div>
     <StatusNotifier />
     <div class="input">
-      <div v-if="(currentWorkflow?.status === 'paused' && currentWorkflow?.waitReason !== 'confirmation') || currentWorkflow?.status === 'awaiting_user' || currentWorkflow?.waitReason === 'user_input'" class="input-status-hint">
+      <div v-if="hasLiveSession && (waitReason === 'user_input' || (currentWorkflow?.status === 'paused' && waitReason !== 'confirmation'))" class="input-status-hint">
         <div class="hint-header">
           <cs name="talk" size="12px" />
           <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
@@ -205,6 +205,14 @@ const props = defineProps({
   isRunning: {
     type: Boolean,
     default: false
+  },
+  hasLiveSession: {
+    type: Boolean,
+    default: false
+  },
+  waitReason: {
+    type: String,
+    default: null
   },
   isAwaitingApproval: {
     type: Boolean,

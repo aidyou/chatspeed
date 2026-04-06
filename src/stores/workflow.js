@@ -9,7 +9,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const todoList = ref([]);
   const messageQueue = ref([]);
   const isRunning = ref(false);
-  const waitReason = ref(null); // Phase 3: wait_reason from backend
+  const waitReason = ref(null);
+  const hasLiveSession = ref(false);
   const error = ref(null);
   const notification = ref({
     message: '',
@@ -24,34 +25,48 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
 
-  // Phase 3: Semantic computed fields for UI control
-  // isActivelyRunning: backend has an active execution loop (thinking, executing, auditing, running)
+  const runningLikeStates = ['thinking', 'executing', 'auditing', 'running'];
+  const waitingLikeStates = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'];
+
   const isActivelyRunning = computed(() => {
-    if (!currentWorkflow.value) return false;
-    const status = currentWorkflow.value.status?.toLowerCase() || '';
-    return ['thinking', 'executing', 'auditing', 'running'].includes(status);
+    if (!hasLiveSession.value) return false;
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return runningLikeStates.includes(status);
   });
 
-  // isWaiting: workflow is paused waiting for external signal
+  const isLiveWaiting = computed(() => {
+    if (!hasLiveSession.value) return false;
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return waitingLikeStates.includes(status);
+  });
+
+  const isOrphanWaiting = computed(() => {
+    if (hasLiveSession.value) return false;
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return waitingLikeStates.includes(status);
+  });
+
   const isWaiting = computed(() => {
-    if (!currentWorkflow.value) return false;
-    const status = currentWorkflow.value.status?.toLowerCase() || '';
-    return ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status);
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return waitingLikeStates.includes(status);
   });
 
-  // canStop: user can send stop signal (active running or waiting states)
   const canStop = computed(() => {
-    return isActivelyRunning.value || isWaiting.value;
+    return hasLiveSession.value && (isActivelyRunning.value || isLiveWaiting.value);
   });
 
-  // canContinue: user can send continue signal (only confirmation/paused state)
-  // awaiting_user and awaiting_approval should NOT show Continue button
   const canContinue = computed(() => {
-    if (!currentWorkflow.value) return false;
-    const status = currentWorkflow.value.status?.toLowerCase() || '';
-    // Only 'paused' (confirmation) and non-pending/completed/error states can continue
-    // awaiting_user and awaiting_approval have specific wait reasons that need specific signals
-    return status === 'paused' && currentWorkflow.value.id;
+    if (!hasLiveSession.value) return false;
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return status === 'paused' && waitReason.value === 'confirmation';
+  });
+
+  const canApprovePending = computed(() => {
+    if (!hasLiveSession.value) return false;
+    if (waitReason.value !== 'approval') return false;
+    const messages = currentWorkflow.value?.messages || [];
+    const lastToolMessage = messages.slice(-2).find(m => m.role === 'tool');
+    return lastToolMessage?.metadata?.approval_status === 'pending';
   });
 
   /**
@@ -207,6 +222,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       ].includes(status);
 
       waitReason.value = snapshot.workflow.waitReason || null;
+      hasLiveSession.value = snapshot.hasLiveSession || false;
 
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
@@ -417,6 +433,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageQueue,
     isRunning,
     waitReason,
+    hasLiveSession,
     error,
     notification,
     autoApprovedTools,
@@ -424,9 +441,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     allowedShellCommands,
     currentWorkflow,
     isActivelyRunning,
+    isLiveWaiting,
+    isOrphanWaiting,
     isWaiting,
     canStop,
     canContinue,
+    canApprovePending,
     setNotification,
     setAutoApprovedTools,
     removeAutoApprovedTool,

@@ -56,21 +56,24 @@ export function useWorkflowCore({
     const workflows = computed(() => workflowStore.workflows)
     const isRunning = computed(() => workflowStore.isRunning)
     const waitReason = computed(() => workflowStore.waitReason)
+    const hasLiveSession = computed(() => workflowStore.hasLiveSession)
+    const isLiveWaiting = computed(() => workflowStore.isLiveWaiting)
+    const canStop = computed(() => workflowStore.canStop)
+    const canContinue = computed(() => workflowStore.canContinue)
     
     const isWaiting = computed(() => {
+        if (!hasLiveSession.value) return false
         const status = currentWorkflow.value?.status?.toLowerCase()
-        const result = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status || '')
-        return result
+        return ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status || '')
     })
     
     const isAwaitingApproval = computed(() => {
-        const status = currentWorkflow.value?.status
+        if (!hasLiveSession.value) return false
         if (waitReason.value === 'approval') {
-            console.log('[Workflow][isAwaitingApproval] Detected by wait_reason=approval')
             return true
         }
-        const result = status === 'awaiting_approval'
-        return result
+        const status = currentWorkflow.value?.status
+        return status === 'awaiting_approval'
     })
 
     const activeModelName = computed(() => {
@@ -306,25 +309,30 @@ export function useWorkflowCore({
             const lastToolMessage = lastMessages.find(m => m.role === 'tool')
             const hasPendingApproval = lastToolMessage?.metadata?.approval_status === 'pending'
             
-            console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval)
+            console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
             
-            if (status === 'awaiting_approval' && hasPendingApproval) {
-                console.log('[Workflow] Requesting confirm broadcast for workflow in awaiting_approval state with pending approval')
-                try {
-                    await invokeWrapper('workflow_signal', {
-                        sessionId: id,
-                        signal: JSON.stringify({ type: 'rebroadcast_pending' })
-                    })
-                    console.log('[Workflow] Rebroadcast pending request sent successfully')
-                } catch (e) {
-                    console.warn('[Workflow] Failed to request rebroadcast pending:', e)
+            // Only handle waiting states if there's a live session
+            // Orphan waiting states should not trigger dialogs automatically
+            if (workflowStore.hasLiveSession) {
+                if (status === 'awaiting_approval' && hasPendingApproval) {
+                    console.log('[Workflow] Requesting confirm broadcast for workflow in awaiting_approval state with pending approval')
+                    try {
+                        await invokeWrapper('workflow_signal', {
+                            sessionId: id,
+                            signal: JSON.stringify({ type: 'rebroadcast_pending' })
+                        })
+                        console.log('[Workflow] Rebroadcast pending request sent successfully')
+                    } catch (e) {
+                        console.warn('[Workflow] Failed to request rebroadcast pending:', e)
+                    }
+                } else if (status === 'paused' && workflowStore.waitReason === 'confirmation') {
+                    console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
+                    showConfirmationDialog()
+                } else {
+                    console.log('[Workflow] Not requesting confirm broadcast, status is:', status, 'hasPendingApproval:', hasPendingApproval)
                 }
-            } else if (status === 'paused' && workflowStore.waitReason === 'confirmation') {
-                // Confirmation waiting - show dialog for user to continue or stop
-                console.log('[Workflow] Workflow in confirmation waiting, showing dialog')
-                showConfirmationDialog()
             } else {
-                console.log('[Workflow] Not requesting confirm broadcast, status is:', status, 'hasPendingApproval:', hasPendingApproval)
+                console.log('[Workflow] Orphan waiting state detected (hasLiveSession=false), not showing dialogs. Status:', status)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
@@ -962,6 +970,10 @@ export function useWorkflowCore({
         isRunning,
         isWaiting,
         waitReason,
+        hasLiveSession,
+        isLiveWaiting,
+        canStop,
+        canContinue,
         isAwaitingApproval,
         activeModelName,
         canSwitchWorkflow,

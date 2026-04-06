@@ -381,13 +381,31 @@ pub async fn delete_workflow(
 #[tauri::command]
 pub async fn get_workflow_snapshot(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<Value, String> {
     let store = state.read().map_err(|e| e.to_string())?;
     let snapshot = store
         .get_workflow_snapshot(&session_id)
         .map_err(|e| e.to_string())?;
-    Ok(json!(snapshot))
+    
+    // Phase 0-3 UI State Reconciliation: Add hasLiveSession field
+    // This tells frontend whether there's an active executor in memory
+    let has_live_session = workflow_manager.has_session(&session_id);
+    
+    // Convert snapshot to JSON and inject hasLiveSession
+    let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
+    if let Some(obj) = snapshot_json.as_object_mut() {
+        obj.insert("hasLiveSession".to_string(), json!(has_live_session));
+    }
+    
+    log::debug!(
+        "[Workflow][session={}][command=get_workflow_snapshot] hasLiveSession={}",
+        session_id,
+        has_live_session
+    );
+    
+    Ok(snapshot_json)
 }
 
 #[tauri::command]

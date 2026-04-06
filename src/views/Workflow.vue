@@ -47,7 +47,8 @@
 
         <!-- Input Area -->
         <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
-          :is-awaiting-approval="isAwaitingApproval" :current-workflow="currentWorkflow"
+          :has-live-session="hasLiveSession" :wait-reason="waitReason" :is-awaiting-approval="isAwaitingApproval"
+          :current-workflow="currentWorkflow"
           :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :active-model-name="activeModelName"
           :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
           :agents="agentStore.agents" :active-ask-user="activeAskUser" :show-skill-suggestions="showSkillSuggestions"
@@ -288,6 +289,10 @@ const {
   workflows,
   isRunning,
   isAwaitingApproval,
+  hasLiveSession,
+  waitReason,
+  canStop,
+  canContinue,
   activeModelName,
   canSwitchWorkflow,
   selectWorkflow,
