@@ -5,6 +5,7 @@ pub mod error;
 pub mod events;
 pub mod gateway;
 pub mod intelligence;
+pub mod replay;
 pub mod interceptors;
 pub mod llm;
 pub mod loop_detector;
