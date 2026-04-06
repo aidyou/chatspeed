@@ -60,20 +60,11 @@ export function useWorkflowCore({
     const isLiveWaiting = computed(() => workflowStore.isLiveWaiting)
     const canStop = computed(() => workflowStore.canStop)
     const canContinue = computed(() => workflowStore.canContinue)
-    
-    const isWaiting = computed(() => {
-        if (!hasLiveSession.value) return false
-        const status = currentWorkflow.value?.status?.toLowerCase()
-        return ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status || '')
-    })
-    
+    const canApprovePlan = computed(() => workflowStore.canApprovePlan)
+    const isWaiting = computed(() => workflowStore.isWaiting)
+
     const isAwaitingApproval = computed(() => {
-        if (!hasLiveSession.value) return false
-        if (waitReason.value === 'approval') {
-            return true
-        }
-        const status = currentWorkflow.value?.status
-        return status === 'awaiting_approval'
+        return canApprovePlan.value
     })
 
     const activeModelName = computed(() => {
@@ -184,8 +175,10 @@ export function useWorkflowCore({
     watch(
         () => currentWorkflow.value?.status,
         (newStatus) => {
-            // If state is no longer Paused, we should hide any open approval dialog
-            if (newStatus !== 'paused' && approvalVisible.value) {
+            const statusLower = (newStatus || '').toLowerCase()
+            const isApprovalWaiting = statusLower === 'awaiting_approval' || waitReason.value === 'approval'
+            // Close approval dialog only after leaving approval waiting state.
+            if (!isApprovalWaiting && approvalVisible.value) {
                 approvalVisible.value = false
             }
         }
@@ -304,35 +297,39 @@ export function useWorkflowCore({
             await setupWorkflowEvents(id)
             
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
-            const messages = workflowStore.messages || []
-            const lastMessages = messages.slice(-2)
-            const lastToolMessage = lastMessages.find(m => m.role === 'tool')
-            const hasPendingApproval = lastToolMessage?.metadata?.approval_status === 'pending'
+            const pendingApprovalMessage = workflowStore.pendingApprovalMessage
+            const hasPendingApproval = !!pendingApprovalMessage
             
-            console.log('[Workflow] Checking status for confirm broadcast:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
+            console.log('[Workflow] Checking approval recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
             
-            // Only handle waiting states if there's a live session
-            // Orphan waiting states should not trigger dialogs automatically
-            if (workflowStore.hasLiveSession) {
-                if (status === 'awaiting_approval' && hasPendingApproval) {
-                    console.log('[Workflow] Requesting confirm broadcast for workflow in awaiting_approval state with pending approval')
+            if (status === 'awaiting_approval' && hasPendingApproval) {
+                if (workflowStore.hasLiveSession) {
+                    console.log('[Workflow] Requesting rebroadcast_pending for live awaiting_approval session')
                     try {
                         await invokeWrapper('workflow_signal', {
                             sessionId: id,
                             signal: JSON.stringify({ type: 'rebroadcast_pending' })
                         })
-                        console.log('[Workflow] Rebroadcast pending request sent successfully')
+                        console.log('[Workflow] rebroadcast_pending sent successfully')
                     } catch (e) {
-                        console.warn('[Workflow] Failed to request rebroadcast pending:', e)
+                        console.warn('[Workflow] rebroadcast_pending failed, fallback to local dialog reconstruction:', e)
+                        approvalRequestId.value = pendingApprovalMessage?.metadata?.tool_call_id || ''
+                        approvalAction.value = pendingApprovalMessage?.metadata?.tool_name || pendingApprovalMessage?.metadata?.title || 'Tool Approval'
+                        approvalDetails.value = pendingApprovalMessage?.message || ''
+                        approvalVisible.value = true
                     }
-                } else if (status === 'paused' && workflowStore.waitReason === 'confirmation') {
-                    console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
-                    showConfirmationDialog()
                 } else {
-                    console.log('[Workflow] Not requesting confirm broadcast, status is:', status, 'hasPendingApproval:', hasPendingApproval)
+                    console.log('[Workflow] Orphan awaiting_approval detected, reconstructing approval dialog from snapshot history')
+                    approvalRequestId.value = pendingApprovalMessage?.metadata?.tool_call_id || ''
+                    approvalAction.value = pendingApprovalMessage?.metadata?.tool_name || pendingApprovalMessage?.metadata?.title || 'Tool Approval'
+                    approvalDetails.value = pendingApprovalMessage?.message || ''
+                    approvalVisible.value = true
                 }
+            } else if (status === 'paused' && workflowStore.waitReason === 'confirmation' && workflowStore.hasLiveSession) {
+                console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
+                showConfirmationDialog()
             } else {
-                console.log('[Workflow] Orphan waiting state detected (hasLiveSession=false), not showing dialogs. Status:', status)
+                console.log('[Workflow] No approval dialog recovery needed. status:', status)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
@@ -974,6 +971,7 @@ export function useWorkflowCore({
         isLiveWaiting,
         canStop,
         canContinue,
+        canApprovePlan,
         isAwaitingApproval,
         activeModelName,
         canSwitchWorkflow,

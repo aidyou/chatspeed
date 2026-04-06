@@ -27,6 +27,27 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const runningLikeStates = ['thinking', 'executing', 'auditing', 'running'];
   const waitingLikeStates = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'];
+  const approvalWaitingStates = ['awaiting_approval', 'awaiting_auto_approval'];
+
+  const findLatestPendingApprovalMessage = (list = []) => {
+    const finalizedIds = new Set();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const msg = list[i];
+      if (msg?.role !== 'tool') continue;
+      const meta = msg.metadata || {};
+      const toolCallId = meta.tool_call_id;
+      const approvalStatus = meta.approval_status;
+      if (!toolCallId) continue;
+      if (approvalStatus === 'approved' || approvalStatus === 'rejected') {
+        finalizedIds.add(toolCallId);
+        continue;
+      }
+      if (approvalStatus === 'pending' && !finalizedIds.has(toolCallId)) {
+        return msg;
+      }
+    }
+    return null;
+  };
 
   const isActivelyRunning = computed(() => {
     if (!hasLiveSession.value) return false;
@@ -61,12 +82,22 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return status === 'paused' && waitReason.value === 'confirmation';
   });
 
+  const pendingApprovalMessage = computed(() => {
+    return findLatestPendingApprovalMessage(messages.value);
+  });
+
   const canApprovePending = computed(() => {
-    if (!hasLiveSession.value) return false;
-    if (waitReason.value !== 'approval') return false;
-    const messages = currentWorkflow.value?.messages || [];
-    const lastToolMessage = messages.slice(-2).find(m => m.role === 'tool');
-    return lastToolMessage?.metadata?.approval_status === 'pending';
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    const isApprovalWaiting = waitReason.value === 'approval' || approvalWaitingStates.includes(status);
+    if (!isApprovalWaiting) return false;
+    return !!pendingApprovalMessage.value;
+  });
+
+  const canApprovePlan = computed(() => {
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    const isApprovalWaiting = waitReason.value === 'approval' || approvalWaitingStates.includes(status);
+    if (!isApprovalWaiting) return false;
+    return !canApprovePending.value;
   });
 
   /**
@@ -210,19 +241,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // Set shell policy from parsed workflow data
       setShellPolicy(snapshot.workflow.shellPolicy || []);
 
-      // Reset isRunning based on workflow status (unified with updateWorkflowStatus)
       const status = snapshot.workflow.status?.toLowerCase() || 'pending';
-      // isRunning: only actively processing states, NOT waiting states
-      // This matches the definition in updateWorkflowStatus()
+      hasLiveSession.value = snapshot.hasLiveSession || false;
+      // isRunning means "actively processing with a live runtime session"
       isRunning.value = [
         'thinking',
         'executing',
         'auditing',
         'running'
-      ].includes(status);
+      ].includes(status) && hasLiveSession.value;
 
       waitReason.value = snapshot.workflow.waitReason || null;
-      hasLiveSession.value = snapshot.hasLiveSession || false;
 
       // Parse metadata for all messages in snapshot
       const parsedMessages = (snapshot.messages || []).map(m => {
@@ -357,14 +386,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
           workflows.value[workflowIndex].waitReason = waitReasonValue;
         }
 
-        // Update running state based on status
-        // Running states: still actively processing
+        // isRunning means "actively processing with a live runtime session"
         isRunning.value = [
           'thinking',
           'executing',
           'auditing',
           'running'
-        ].includes(statusLower);
+        ].includes(statusLower) && hasLiveSession.value;
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }
@@ -421,6 +449,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messages.value = [];
     todoList.value = [];
     isRunning.value = false;
+    waitReason.value = null;
+    hasLiveSession.value = false;
     autoApprovedTools.value = [];
     shellPolicy.value = [];
   };
@@ -446,7 +476,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isWaiting,
     canStop,
     canContinue,
+    pendingApprovalMessage,
     canApprovePending,
+    canApprovePlan,
     setNotification,
     setAutoApprovedTools,
     removeAutoApprovedTool,

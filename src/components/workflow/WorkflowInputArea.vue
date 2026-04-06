@@ -25,7 +25,7 @@
     </div>
     <StatusNotifier />
     <div class="input">
-      <div v-if="hasLiveSession && (waitReason === 'user_input' || (currentWorkflow?.status === 'paused' && waitReason !== 'confirmation'))" class="input-status-hint">
+      <div v-if="activeAskUser" class="input-status-hint">
         <div class="hint-header">
           <cs name="talk" size="12px" />
           <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
@@ -180,11 +180,11 @@
           </div>
         </div>
         <div class="icons">
-          <el-button v-if="isAwaitingApproval" size="small" round type="success" @click="$emit('approve-plan')">
+          <el-button v-if="canApprovePlan" size="small" round type="success" @click="$emit('approve-plan')">
             {{ $t('workflow.approvePlan') }}
           </el-button>
           <el-button
-            v-if="canContinue && !isAwaitingApproval && currentWorkflowId"
+            v-if="canContinue && currentWorkflowId"
             size="small" round type="primary" @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
@@ -213,10 +213,6 @@ const props = defineProps({
   waitReason: {
     type: String,
     default: null
-  },
-  isAwaitingApproval: {
-    type: Boolean,
-    default: false
   },
   currentWorkflow: {
     type: Object,
@@ -327,6 +323,7 @@ const allowedShellCommands = computed(() =>
 // Phase 3: Use semantic computed fields from store for UI control
 const canStop = computed(() => workflowStore.canStop)
 const canContinue = computed(() => workflowStore.canContinue)
+const canApprovePlan = computed(() => workflowStore.canApprovePlan)
 
 const removeAutoApprovedTool = async (toolName) => {
   try {

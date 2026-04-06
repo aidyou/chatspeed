@@ -47,7 +47,7 @@
 
         <!-- Input Area -->
         <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
-          :has-live-session="hasLiveSession" :wait-reason="waitReason" :is-awaiting-approval="isAwaitingApproval"
+          :has-live-session="hasLiveSession" :wait-reason="waitReason"
           :current-workflow="currentWorkflow"
           :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :active-model-name="activeModelName"
           :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
@@ -288,7 +288,6 @@ const {
   editWorkflowTitle,
   workflows,
   isRunning,
-  isAwaitingApproval,
   hasLiveSession,
   waitReason,
   canStop,
@@ -364,17 +363,39 @@ const filteredWorkflows = computed(() => {
   )
 })
 
+const isAskUserPromptMessage = (msg) => {
+  if (!msg || msg.role !== 'tool') return false
+  const meta = msg.metadata || {}
+  const toolName = (
+    meta.tool_name ||
+    meta.tool_call?.name ||
+    meta.tool_call?.function?.name ||
+    ''
+  ).toLowerCase()
+  const title = (meta.title || '').toLowerCase()
+  const summary = (meta.summary || '').toLowerCase()
+  return toolName === 'ask_user' || title === 'ask user' || summary.includes('waiting for user')
+}
+
+const hasUserResponseAfter = (messages, fromIndex) => {
+  for (let i = fromIndex + 1; i < messages.length; i++) {
+    const msg = messages[i]
+    if (msg?.role !== 'user') continue
+    const content = (msg.message || '').trim()
+    if (!content) continue
+    if (content.includes('<SYSTEM_REMINDER>')) continue
+    return true
+  }
+  return false
+}
+
 const activeAskUser = computed(() => {
-  const status = currentWorkflow.value?.status
-  const wReason = workflowStore.waitReason
-  if (status !== 'paused' && status !== 'awaiting_user' && wReason !== 'user_input') return null
-  const lastMsg = enhancedMessages.value[enhancedMessages.value.length - 1]
-  if (
-    lastMsg?.role === 'tool' &&
-    lastMsg.toolDisplay?.action === 'Ask User' &&
-    lastMsg.toolDisplay?.displayType === 'choice'
-  ) {
-    return parseChoiceContent(removeSystemReminder(lastMsg.message))
+  const rawMessages = workflowStore.messages || []
+  for (let i = rawMessages.length - 1; i >= 0; i--) {
+    const msg = rawMessages[i]
+    if (!isAskUserPromptMessage(msg)) continue
+    if (hasUserResponseAfter(rawMessages, i)) return null
+    return parseChoiceContent(removeSystemReminder(msg.message || ''))
   }
   return null
 })

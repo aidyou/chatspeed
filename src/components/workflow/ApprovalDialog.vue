@@ -54,43 +54,57 @@ const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject'
 
 const { t } = useI18n()
 
-const isEditAction = computed(() => props.action === 'edit_file' || props.action === 'write_file')
+const parseDetailsObject = (value) => {
+  if (!value || typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch (e) {
+    return null
+  }
+}
+
+const normalizedAction = computed(() => (props.action || '').toLowerCase().trim())
+
+const detailsObject = computed(() => parseDetailsObject(props.details))
+
+const isFileChangePayload = computed(() => {
+  const data = detailsObject.value
+  if (!data) return false
+  const hasPath = typeof data.file_path === 'string' || typeof data.path === 'string'
+  const hasEditFields =
+    data.old_string !== undefined ||
+    data.new_string !== undefined ||
+    data.content !== undefined
+  return hasPath && hasEditFields
+})
+
+const isEditAction = computed(() => {
+  if (normalizedAction.value.includes('edit_file') || normalizedAction.value.includes('write_file')) {
+    return true
+  }
+  return isFileChangePayload.value
+})
 
 const filePath = computed(() => {
   if (!isEditAction.value) return ''
-  try {
-    const data = JSON.parse(props.details)
-    return data.file_path || data.path || ''
-  } catch (e) {
-    return ''
-  }
+  const data = detailsObject.value
+  return data?.file_path || data?.path || ''
 })
 
 const diffMarkdown = computed(() => {
   if (!isEditAction.value) return ''
-  try {
-    const data = JSON.parse(props.details)
-    // edit_file has old_string and new_string
-    // write_file has only content (treat as new file)
-    let oldStr = ''
-    let newStr = ''
-    
-    if (data.old_string !== undefined || data.new_string !== undefined) {
-      // edit_file format
-      oldStr = data.old_string || ''
-      newStr = data.new_string || ''
-    } else if (data.content !== undefined) {
-      // write_file format - treat as creating new file from empty
-      oldStr = ''
-      newStr = data.content || ''
-    }
-    
-    const startLine = data.start_line || 1
+  const data = detailsObject.value
+  if (!data) return props.details
 
-    return `\`\`\`diff\n${generateDiff(oldStr, newStr, startLine)}\n\`\`\``
-  } catch (e) {
-    return props.details
-  }
+  // edit_file has old_string/new_string, write_file has content only
+  const oldStr = data.old_string ?? ''
+  const newStr = data.new_string ?? data.content ?? ''
+  const startLine = data.start_line || 1
+  const path = data.file_path || data.path || ''
+  const header = path ? `File: ${path}\n` : ''
+
+  return `${header}\`\`\`diff\n${generateDiff(oldStr, newStr, startLine)}\n\`\`\``
 })
 
 // Use diff library to generate proper line-by-line diff
