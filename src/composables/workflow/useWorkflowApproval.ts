@@ -37,6 +37,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
       const signal = JSON.stringify({
         type: 'approval',
         approved: true,
+        approve_all: false,
         id: approvalRequestId.value
       })
       await invokeWrapper('workflow_signal', {
@@ -111,6 +112,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
       const signal = JSON.stringify({
         type: 'approval',
         approved: false,
+        approve_all: false,
         id: approvalRequestId.value
       })
       await invokeWrapper('workflow_signal', {

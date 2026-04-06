@@ -203,12 +203,8 @@ export function useWorkflowCore({
                 const prevWaitReason = workflowStore.waitReason
                 workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
                 
-                console.log('[Workflow][state] State changed:', {
-                    from: prevState,
-                    to: payload.state,
-                    wait_reason: payload.wait_reason || null,
-                    prevWaitReason
-                })
+                const isWaiting = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(payload.state)
+                console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
 
                 // Check for confirmation waiting
                 if (payload.state === 'paused' && payload.wait_reason === 'confirmation') {
@@ -317,11 +313,11 @@ export function useWorkflowCore({
                 try {
                     await invokeWrapper('workflow_signal', {
                         sessionId: id,
-                        signal: JSON.stringify({ type: 'request_confirm_broadcast' })
+                        signal: JSON.stringify({ type: 'rebroadcast_pending' })
                     })
-                    console.log('[Workflow] Confirm broadcast request sent successfully')
+                    console.log('[Workflow] Rebroadcast pending request sent successfully')
                 } catch (e) {
-                    console.warn('[Workflow] Failed to request confirm broadcast:', e)
+                    console.warn('[Workflow] Failed to request rebroadcast pending:', e)
                 }
             } else if (status === 'paused' && workflowStore.waitReason === 'confirmation') {
                 // Confirmation waiting - show dialog for user to continue or stop

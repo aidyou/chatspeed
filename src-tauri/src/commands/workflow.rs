@@ -1113,17 +1113,44 @@ pub async fn workflow_signal(
         
         // Session not in manager - enter recovery logic
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
-            if val["type"] == "user_input" {
+            let signal_type = val["type"].as_str().unwrap_or("unknown");
+            
+            // Handle user_message signal (Phase 3 unified signal type)
+            // Also support legacy user_input for backward compatibility
+            if signal_type == "user_message" || signal_type == "user_input" {
                 if let Some(content) = val["content"].as_str() {
-                    log::info!("[Workflow] Session {} not active, resuming with new input", session_id);
-
-                    let agent_id = {
+                    let snapshot = {
                         let store = state.read().map_err(|e| e.to_string())?;
-                        let snapshot = store
+                        store
                             .get_workflow_snapshot(&session_id)
-                            .map_err(|e| e.to_string())?;
-                        snapshot.workflow.agent_id
+                            .map_err(|e| e.to_string())?
                     };
+                    
+                    let status_lower = snapshot.workflow.status.to_lowercase();
+                    
+                    // Only allow resumption for terminal/pending states
+                    let is_resumable = matches!(
+                        status_lower.as_str(),
+                        "pending" | "completed" | "cancelled" | "error" | "failed"
+                    );
+                    
+                    if !is_resumable {
+                        log::warn!(
+                            "[Workflow] Session {} is in '{}' state, cannot resume with user message",
+                            session_id,
+                            snapshot.workflow.status
+                        );
+                        return Err(format!(
+                            "Cannot resume: workflow is in '{}' state",
+                            snapshot.workflow.status
+                        ));
+                    }
+                    
+                    log::info!(
+                        "[Workflow] Session {} is in terminal/pending state ({}), resuming with new input",
+                        session_id,
+                        snapshot.workflow.status
+                    );
 
                     workflow_start(
                         app,
@@ -1134,7 +1161,7 @@ pub async fn workflow_signal(
                         factory,
                         workflow_manager,
                         session_id,
-                        agent_id,
+                        snapshot.workflow.agent_id,
                         Some(content.to_string()),
                         None,
                     )
@@ -1142,7 +1169,7 @@ pub async fn workflow_signal(
 
                     return Ok("Workflow resumed with input".to_string());
                 }
-            } else if val["type"] == "request_confirm_broadcast" {
+            } else if signal_type == "rebroadcast_pending" || signal_type == "request_confirm_broadcast" {
                 let snapshot = {
                     let store = state.read().map_err(|e| e.to_string())?;
                     store
@@ -1153,7 +1180,7 @@ pub async fn workflow_signal(
                 let status_lower = snapshot.workflow.status.to_lowercase();
                 if status_lower != "awaiting_approval" && status_lower != "awaitingapproval" {
                     log::info!(
-                        "[Workflow] Session {} is not awaiting approval (status: {}), skipping confirm broadcast",
+                        "[Workflow] Session {} is not awaiting approval (status: {}), skipping rebroadcast pending",
                         session_id,
                         snapshot.workflow.status
                     );
@@ -1161,7 +1188,7 @@ pub async fn workflow_signal(
                 }
 
                 log::info!(
-                    "[Workflow] Session {} requesting confirm broadcast. Resuming workflow.",
+                    "[Workflow] Session {} requesting rebroadcast pending. Resuming workflow.",
                     session_id
                 );
 
@@ -1180,7 +1207,7 @@ pub async fn workflow_signal(
                 )
                 .await?;
 
-                return Ok("Workflow resumed and confirm broadcast triggered".to_string());
+                return Ok("Workflow resumed and rebroadcast pending triggered".to_string());
             } else if val["type"] == "continue" || val["type"] == "stop" {
                 let snapshot = {
                     let store = state.read().map_err(|e| e.to_string())?;

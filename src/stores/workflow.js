@@ -24,6 +24,36 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
 
+  // Phase 3: Semantic computed fields for UI control
+  // isActivelyRunning: backend has an active execution loop (thinking, executing, auditing, running)
+  const isActivelyRunning = computed(() => {
+    if (!currentWorkflow.value) return false;
+    const status = currentWorkflow.value.status?.toLowerCase() || '';
+    return ['thinking', 'executing', 'auditing', 'running'].includes(status);
+  });
+
+  // isWaiting: workflow is paused waiting for external signal
+  const isWaiting = computed(() => {
+    if (!currentWorkflow.value) return false;
+    const status = currentWorkflow.value.status?.toLowerCase() || '';
+    return ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(status);
+  });
+
+  // canStop: user can send stop signal (active running or waiting states)
+  const canStop = computed(() => {
+    return isActivelyRunning.value || isWaiting.value;
+  });
+
+  // canContinue: user can send continue signal (only confirmation/paused state)
+  // awaiting_user and awaiting_approval should NOT show Continue button
+  const canContinue = computed(() => {
+    if (!currentWorkflow.value) return false;
+    const status = currentWorkflow.value.status?.toLowerCase() || '';
+    // Only 'paused' (confirmation) and non-pending/completed/error states can continue
+    // awaiting_user and awaiting_approval have specific wait reasons that need specific signals
+    return status === 'paused' && currentWorkflow.value.id;
+  });
+
   /**
    * Extract allowed shell commands from shellPolicy
    * Returns array of { pattern, description } for commands with decision "allow"
@@ -165,17 +195,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // Set shell policy from parsed workflow data
       setShellPolicy(snapshot.workflow.shellPolicy || []);
 
-      // Reset isRunning based on workflow status
+      // Reset isRunning based on workflow status (unified with updateWorkflowStatus)
       const status = snapshot.workflow.status?.toLowerCase() || 'pending';
-      // Running states: thinking, executing, auditing, awaiting_user, awaiting_approval, awaiting_auto_approval
+      // isRunning: only actively processing states, NOT waiting states
+      // This matches the definition in updateWorkflowStatus()
       isRunning.value = [
         'thinking',
         'executing',
         'auditing',
-        'awaiting_user',
-        'awaiting_approval',
-        'awaiting_auto_approval',
-        'paused',
         'running'
       ].includes(status);
 
@@ -299,8 +326,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // Always update waitReason, even when null (to clear previous waiting state)
       waitReason.value = waitReasonValue;
       
-      // Avoid database update if it's an internal engine state transition that doesn't need persistence
-      if (['thinking', 'executing', 'paused', 'awaiting_user', 'completed', 'error'].includes(status.toLowerCase())) {
+      // Local status update for all engine states
+      const statusLower = status.toLowerCase();
+      const localUpdateStates = [
+        'thinking', 'executing', 'auditing',
+        'paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval',
+        'completed', 'error', 'cancelled', 'failed'
+      ];
+      
+      if (localUpdateStates.includes(statusLower)) {
         const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
         if (workflowIndex !== -1) {
           workflows.value[workflowIndex].status = status;
@@ -308,18 +342,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
 
         // Update running state based on status
-        const s = status.toLowerCase();
-        // Running states: thinking, executing, auditing, awaiting_approval, awaiting_auto_approval
+        // Running states: still actively processing
         isRunning.value = [
           'thinking',
           'executing',
           'auditing',
-          'awaiting_user',
-          'awaiting_approval',
-          'awaiting_auto_approval',
-          'paused',
           'running'
-        ].includes(s);
+        ].includes(statusLower);
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }
@@ -394,6 +423,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     shellPolicy,
     allowedShellCommands,
     currentWorkflow,
+    isActivelyRunning,
+    isWaiting,
+    canStop,
+    canContinue,
     setNotification,
     setAutoApprovedTools,
     removeAutoApprovedTool,

@@ -1075,6 +1075,310 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     return Ok(());
                 }
 
+                // Handle structured WorkflowSignal
+                if let Some(signal) = workflow_signal {
+                    match signal {
+                        WorkflowSignal::RebroadcastPending => {
+                            log::info!(
+                                "WorkflowExecutor {}: Received RebroadcastPending signal",
+                                self.session_id
+                            );
+                            if self.state == WorkflowState::AwaitingApproval {
+                                let items: Vec<_> = self
+                                    .pending_approvals
+                                    .iter()
+                                    .map(|r| (r.key().clone(), r.value().clone()))
+                                    .collect();
+                                for (id, info) in items {
+                                    let details = info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
+                                    let _ = self
+                                        .gateway
+                                        .send(
+                                            &self.session_id,
+                                            GatewayPayload::Confirm {
+                                                id,
+                                                action: info["name"].as_str().unwrap_or("unknown").to_string(),
+                                                details: details.to_string(),
+                                            },
+                                        )
+                                        .await;
+                                }
+                            }
+                            continue;
+                        }
+                        WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all } => {
+                            if approved {
+                                // 1. Retrieve the stashed tool details from the server-side map
+                                let (tool_name, tool_args) = if let Some(stashed) = self.pending_approvals.get(&tool_call_id) {
+                                    let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
+                                    let args = stashed["arguments"].clone();
+                                    (name, args)
+                                } else {
+                                    log::warn!(
+                                        "WorkflowExecutor {}: Approval received for unknown ID: {}",
+                                        self.session_id,
+                                        tool_call_id
+                                    );
+                                    ("unknown".to_string(), serde_json::json!({}))
+                                };
+
+                                log::info!(
+                                    "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
+                                    self.session_id,
+                                    tool_name,
+                                    if approve_all { " (Approve All)" } else { "" },
+                                    tool_call_id
+                                );
+
+                                if approve_all {
+                                    self.auto_approve.insert(tool_name.to_string());
+
+                                    // Send update event to frontend
+                                    let tools = self.get_auto_approved_tools();
+                                    if let Err(e) = self
+                                        .gateway
+                                        .send(
+                                            &self.session_id,
+                                            GatewayPayload::AutoApprovedToolsUpdated {
+                                                tools: tools.clone(),
+                                            },
+                                        )
+                                        .await
+                                    {
+                                        log::error!(
+                                            "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                            self.session_id,
+                                            e
+                                        );
+                                    }
+
+                                    // Persist auto_approve list to database
+                                    if let Ok(store) = self.context.main_store.write() {
+                                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id)
+                                        {
+                                            let mut agent_config: serde_json::Value = snapshot
+                                                .workflow
+                                                .agent_config
+                                                .and_then(|s| serde_json::from_str(&s).ok())
+                                                .unwrap_or(serde_json::json!({}));
+
+                                            agent_config["auto_approve"] = serde_json::to_value(&tools)
+                                                .unwrap_or(serde_json::json!([]));
+
+                                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                                let _ = store.update_workflow_agent_config(
+                                                    &self.session_id,
+                                                    &config_str,
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    // Generate wildcard rule for bash commands and persist to workflow
+                                    if tool_name == "bash" {
+                                        if let Some(cmd) = tool_args.get("command").and_then(|v| v.as_str())
+                                        {
+                                            let wildcard_pattern = self.generate_wildcard_pattern(cmd);
+                                            log::info!(
+                                                "WorkflowExecutor {}: Generated wildcard pattern '{}' for command '{}'",
+                                                self.session_id, wildcard_pattern, cmd
+                                            );
+
+                                            // Update agent_config.shell_policy in database
+                                            if let Ok(store) = self.context.main_store.write() {
+                                                if let Ok(snapshot) =
+                                                    store.get_workflow_snapshot(&self.session_id)
+                                                {
+                                                    let mut agent_config: serde_json::Value = snapshot
+                                                        .workflow
+                                                        .agent_config
+                                                        .and_then(|s| serde_json::from_str(&s).ok())
+                                                        .unwrap_or(serde_json::json!({}));
+
+                                                    let shell_policy = agent_config
+                                                        .get("shell_policy")
+                                                        .and_then(|v| v.as_array())
+                                                        .cloned()
+                                                        .unwrap_or_default();
+
+                                                    // Add new wildcard rule
+                                                    let mut updated_policy = shell_policy;
+                                                    updated_policy.push(serde_json::json!({
+                                                        "pattern": wildcard_pattern,
+                                                        "decision": "allow"
+                                                    }));
+
+                                                    agent_config["shell_policy"] =
+                                                        serde_json::Value::Array(updated_policy.clone());
+
+                                                    // Persist to database
+                                                    if let Ok(config_str) =
+                                                        serde_json::to_string(&agent_config)
+                                                    {
+                                                        let _ = store.update_workflow_agent_config(
+                                                            &self.session_id,
+                                                            &config_str,
+                                                        );
+                                                    }
+
+                                                    // Update in-memory agent_config
+                                                    if let Ok(policy_rules) = serde_json::from_value::<
+                                                        Vec<crate::tools::ShellPolicyRule>,
+                                                    >(
+                                                        serde_json::Value::Array(updated_policy),
+                                                    ) {
+                                                        self.agent_config.shell_policy = Some(
+                                                            serde_json::to_string(&policy_rules)
+                                                                .unwrap_or_default(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 2. Execution: MCP tools use global, native tools use local
+                                // Inject internal tool_call_id for streaming tools
+                                // Ensure tool_args is an object (parse if it's a JSON string from fallback)
+                                let tool_args_obj = if tool_args.is_string() {
+                                    serde_json::from_str::<serde_json::Value>(
+                                        tool_args.as_str().unwrap_or("{}"),
+                                    )
+                                    .unwrap_or_else(|_| tool_args.clone())
+                                } else {
+                                    tool_args.clone()
+                                };
+
+                                let mut enriched_args = tool_args_obj.clone();
+                                enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+                                    serde_json::json!(tool_call_id);
+
+                                let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                                    self.global_tool_manager
+                                        .tool_call(&tool_name, enriched_args)
+                                        .await
+                                } else {
+                                    self.tool_manager.tool_call(&tool_name, enriched_args).await
+                                };
+
+                                let tool_call_obj = serde_json::json!({
+                                    "id": tool_call_id,
+                                    "name": tool_name,
+                                    "arguments": tool_args
+                                });
+
+                                // 3. Post-processing and Notification
+                                let reinforced = self
+                                    .post_process_tool_result(
+                                        &tool_name,
+                                        &tool_args,
+                                        &tool_call_obj,
+                                        result,
+                                    )
+                                    .await?;
+
+                                // Mark as approved since this went through user approval
+                                self.add_message_and_notify_internal(
+                                    "tool".to_string(),
+                                    reinforced.content,
+                                    None,
+                                    None,
+                                    Some(StepType::Observe),
+                                    reinforced.is_error,
+                                    reinforced.error_type.clone(),
+                                    Some(serde_json::json!({
+                                        "tool_call_id": tool_call_id,
+                                        "tool_name": tool_name,
+                                        "title": reinforced.title,
+                                        "summary": reinforced.summary,
+                                        "is_error": reinforced.is_error,
+                                        "error_type": reinforced.error_type,
+                                        "display_type": reinforced.display_type,
+                                        "approval_status": "approved"
+                                    })),
+                                )
+                                .await?;
+
+                                self.pending_approvals.remove(&tool_call_id);
+                                self.update_state(WorkflowState::Thinking).await?;
+                            } else {
+                                let tool_name = if let Some(stashed) = self.pending_approvals.get(&tool_call_id) {
+                                    stashed["name"].as_str().unwrap_or("unknown").to_string()
+                                } else {
+                                    "unknown".to_string()
+                                };
+
+                                log::info!(
+                                    "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
+                                    self.session_id,
+                                    tool_name,
+                                    tool_call_id
+                                );
+
+                                let pretty_title = ObservationReinforcer::generate_title(&tool_name, &serde_json::json!({}), None, None);
+                                let observation = format!(
+                                    "<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
+                                    tool_name
+                                );
+
+                                self.add_message_and_notify_internal(
+                                    "user".to_string(),
+                                    observation,
+                                    None,
+                                    None,
+                                    Some(StepType::Observe),
+                                    true,
+                                    Some("UserRejected".to_string()),
+                                    Some(serde_json::json!({
+                                        "tool_call_id": tool_call_id,
+                                        "tool_name": tool_name,
+                                        "title": pretty_title,
+                                        "summary": "User rejected",
+                                        "is_error": true,
+                                        "error_type": "UserRejected",
+                                        "approval_status": "rejected"
+                                    })),
+                                )
+                                .await?;
+
+                                self.pending_approvals.remove(&tool_call_id);
+                                self.update_state(WorkflowState::Thinking).await?;
+                            }
+                            continue;
+                        }
+                        WorkflowSignal::Continue => {
+                            log::info!(
+                                "[Workflow][session={}][phase=wait][event=signal_received] Continue signal accepted for wait_reason {:?}",
+                                self.session_id,
+                                wait_reason_enum
+                            );
+                            self.current_step = 0;
+                            self.max_steps += DEFAULT_MAX_STEPS;
+                            self.update_state(WorkflowState::Thinking).await?;
+                            continue;
+                        }
+                        WorkflowSignal::UserMessage { content } => {
+                            self.add_message_and_notify_internal(
+                                "user".to_string(),
+                                content,
+                                None,
+                                None,
+                                None,
+                                false,
+                                None,
+                                None,
+                            )
+                            .await?;
+                            self.update_state(WorkflowState::Thinking).await?;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Legacy fallback for request_confirm_broadcast
+                // Legacy fallback for request_confirm_broadcast (old signal name)
                 if signal_json["type"] == "request_confirm_broadcast" {
                     log::info!(
                         "WorkflowExecutor {}: Received request to re-broadcast pending confirmations",
@@ -1108,6 +1412,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     continue;
                 }
 
+                // Legacy fallback for approval (old JSON format)
                 if signal_json["type"] == "approval" {
                     let approved = signal_json["approved"].as_bool().unwrap_or(false);
                     let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);

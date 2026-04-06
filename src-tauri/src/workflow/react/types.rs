@@ -151,6 +151,7 @@ pub enum WorkflowSignal {
         #[serde(rename = "id")]
         tool_call_id: String,
         approved: bool,
+        #[serde(default)]
         approve_all: bool,
     },
     /// Resume execution (for Paused state)

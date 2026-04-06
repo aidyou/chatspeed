@@ -173,8 +173,8 @@
             </el-popover>
 
             <el-tooltip :content="$t('workflow.newWorkflow')" :hide-after="0" :enterable="false" placement="top">
-              <label @click="$emit('create-new-workflow')" :class="{ disabled: isRunning }">
-                <cs name="new-chat" class="small" :class="{ disabled: isRunning }" />
+              <label @click="$emit('create-new-workflow')" :class="{ disabled: canStop }">
+                <cs name="new-chat" class="small" :class="{ disabled: canStop }" />
               </label>
             </el-tooltip>
           </div>
@@ -184,11 +184,11 @@
             {{ $t('workflow.approvePlan') }}
           </el-button>
           <el-button
-            v-if="!isRunning && !isAwaitingApproval && currentWorkflowId && currentWorkflow?.status !== 'pending' && currentWorkflow?.status !== 'completed' && currentWorkflow?.status !== 'error'"
+            v-if="canContinue && !isAwaitingApproval && currentWorkflowId"
             size="small" round type="primary" @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
-          <cs name="stop" @click="$emit('stop')" v-if="isRunning" />
+          <cs name="stop" @click="$emit('stop')" v-if="canStop" />
           <cs name="send" @click="$emit('send-message')" :class="{ disabled: !canSendMessage }" />
         </div>
       </div>
@@ -315,6 +315,10 @@ const autoApprovedTools = computed(() =>
 const allowedShellCommands = computed(() =>
   [...workflowStore.allowedShellCommands].sort((a, b) => a.pattern.localeCompare(b.pattern))
 )
+
+// Phase 3: Use semantic computed fields from store for UI control
+const canStop = computed(() => workflowStore.canStop)
+const canContinue = computed(() => workflowStore.canContinue)
 
 const removeAutoApprovedTool = async (toolName) => {
   try {
