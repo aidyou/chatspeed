@@ -6,6 +6,7 @@ use crate::tools::{
 };
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, WorkflowState};
@@ -443,7 +444,19 @@ impl WorkflowExecutor {
 
         self.update_state(WorkflowState::AwaitingApproval).await?;
 
-        // 3. Notify frontend to show the confirmation prompt
+        let event = WorkflowEvent::approval_requested(
+            self.session_id.clone(),
+            id.to_string(),
+            name.to_string(),
+        );
+        if let Err(e) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - error={}",
+                self.session_id,
+                e
+            );
+        }
+
         self.gateway
             .send(
                 &self.session_id,

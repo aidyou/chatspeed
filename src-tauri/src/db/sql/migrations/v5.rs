@@ -84,4 +84,20 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "idx_workflow_snapshots_updated_at",
         "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_updated_at ON workflow_snapshots(updated_at DESC)"
     ),
+    // Workflow events table for structured event auditing
+    (
+        "workflow_events",
+        "CREATE TABLE IF NOT EXISTS workflow_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_version TEXT NOT NULL,
+            event_data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
+    (
+        "idx_workflow_events_session_id_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_events_session_id_id ON workflow_events(session_id, id)"
+    ),
 ];

@@ -2,6 +2,7 @@ pub mod compression;
 pub mod context;
 pub mod engine;
 pub mod error;
+pub mod events;
 pub mod gateway;
 pub mod intelligence;
 pub mod interceptors;

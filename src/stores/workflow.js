@@ -345,6 +345,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isRunning.value = running;
   };
 
+  const setHasLiveSession = (live) => {
+    hasLiveSession.value = !!live;
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    isRunning.value = [
+      'thinking',
+      'executing',
+      'auditing',
+      'running'
+    ].includes(status) && hasLiveSession.value;
+  };
+
   const addMessage = (message) => {
     // Note: metadata is already an object from Rust (serde_json::Value)
     // No need to parse, just ensure it's not null/undefined
@@ -494,6 +505,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     addMessage,
     addMessageToQueue,
     setRunning,
+    setHasLiveSession,
     updateWorkflowStatus,
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,

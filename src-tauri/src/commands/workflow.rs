@@ -1770,3 +1770,14 @@ pub async fn remove_shell_policy_item(
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn get_workflow_events(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .list_workflow_events(&session_id)
+        .map_err(|e| e.to_string())
+}

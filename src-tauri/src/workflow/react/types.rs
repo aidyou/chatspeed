@@ -225,6 +225,8 @@ pub struct ExecutionContext {
     pub max_steps: usize,
     pub pending_tools: Vec<PendingTool>,
     pub last_action_summary: Option<String>,
+    #[serde(default)]
+    pub last_event_id: Option<i64>,
     pub version: String,
 }
 
@@ -240,6 +242,7 @@ impl ExecutionContext {
             max_steps: 100,
             pending_tools: Vec::new(),
             last_action_summary: None,
+            last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
         }
     }
@@ -256,6 +259,7 @@ mod tests {
         assert_eq!(ctx.state, RuntimeState::Pending);
         assert!(ctx.wait_reason.is_none());
         assert!(ctx.pending_tools.is_empty());
+        assert!(ctx.last_event_id.is_none());
         assert_eq!(ctx.version, "1.0.0");
     }
 

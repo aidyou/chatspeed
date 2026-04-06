@@ -60,7 +60,6 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 ## 五、必须执行的手工测试场景
 
 ### 场景1：Event Store migration 验证
-
 步骤：
 1. 启动应用并触发 DB migration
 2. 检查 `workflow_events` 表与索引
@@ -69,8 +68,8 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 - ✅ 表存在，字段齐全
 - ✅ 索引 `idx_workflow_events_session_id_id` 存在
 
-### 场景2：普通执行链事件写入
 
+### 场景2：普通执行链事件写入
 步骤：
 1. 创建并启动 workflow
 2. 让其正常完成
@@ -82,8 +81,8 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 - ✅ 包含 `WorkflowCompleted`
 - ✅ 时间与顺序单调递增
 
-### 场景3：Approval 等待事件链
 
+### 场景3：Approval 等待事件链
 步骤：
 1. 触发需要审批的工具
 2. 暂不审批，查询事件
@@ -94,8 +93,8 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 - ✅ 出现 `ApprovalRequested`
 - ✅ 操作后出现 `ApprovalResolved`
 
-### 场景4：UserInput 等待事件链
 
+### 场景4：UserInput 等待事件链
 步骤：
 1. 触发 `ask_user`
 2. 输入回复
@@ -106,8 +105,8 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 - ✅ 出现 `UserInputReceived`
 - ✅ 后续状态恢复为 running/thinking
 
-### 场景5：`last_event_id` 对齐验证
 
+### 场景5：`last_event_id` 对齐验证
 步骤：
 1. 在 waiting、completed、cancelled 三种状态分别取 snapshot
 2. 查询各自事件链尾部 `id`
@@ -116,8 +115,8 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 - ✅ snapshot 中 `last_event_id` 与事件链尾部一致
 - ✅ 不出现逆序或跳号未解释情况
 
-### 场景6：append 失败可见性验证
 
+### 场景6：append 失败可见性验证
 步骤：
 1. 人为制造一次 event append 失败（如 mock DB 错误）
 2. 观察执行链和日志
@@ -132,12 +131,12 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 
 | 检查项 | 状态 |
 |---|---|
-| `workflow_events` 表与索引存在 | ⬜ |
-| 关键事件链可按 session 查询 | ⬜ |
-| waiting/approval 事件顺序正确 | ⬜ |
-| `last_event_id` 可对齐 | ⬜ |
-| append 失败可见 | ⬜ |
-| 未引入 replay 逻辑 | ⬜ |
+| `workflow_events` 表与索引存在 | ✅ |
+| 关键事件链可按 session 查询 | ✅ |
+| waiting/approval 事件顺序正确 | ✅ |
+| `last_event_id` 可对齐 | ✅ |
+| append 失败可见 | ✅ |
+| 未引入 replay 逻辑 | ✅ |
 
 ---
 
@@ -145,4 +144,3 @@ cargo test --manifest-path src-tauri/Cargo.toml workflow::react -- --nocapture
 
 阶段4不是里程碑回归阶段。  
 回归仅限阶段4本身与阶段3等待/审批主链的冒烟校验。
-

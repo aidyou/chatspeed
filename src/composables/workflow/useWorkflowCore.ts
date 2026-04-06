@@ -194,6 +194,11 @@ export function useWorkflowCore({
         unlistenWorkflowEvents.value = await listen(eventName, (event) => {
             const payload = event.payload
 
+            // Any event from this channel means the session is live on backend.
+            if (workflowStore.currentWorkflowId === sessionId) {
+                workflowStore.setHasLiveSession(true)
+            }
+
             if (payload.type === 'state') {
                 const prevState = workflowStore.currentWorkflow?.status
                 const prevWaitReason = workflowStore.waitReason
@@ -201,6 +206,11 @@ export function useWorkflowCore({
                 
                 const isWaiting = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(payload.state)
                 console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
+
+                const terminalStates = ['completed', 'cancelled', 'error', 'failed']
+                if (terminalStates.includes((payload.state || '').toLowerCase())) {
+                    workflowStore.setHasLiveSession(false)
+                }
 
                 // Check for confirmation waiting
                 if (payload.state === 'paused' && payload.wait_reason === 'confirmation') {
@@ -581,6 +591,23 @@ export function useWorkflowCore({
                         planningMode: planningMode.value
                     })
                 } catch (error) {
+                    const errorText = String(error)
+                    // Recovery path: session is already active in manager, route as user_message signal.
+                    if (errorText.includes('Session already exists')) {
+                        try {
+                            workflowStore.setHasLiveSession(true)
+                            await invokeWrapper('workflow_signal', {
+                                sessionId: currentWorkflowId.value,
+                                signal: JSON.stringify({
+                                    type: 'user_message',
+                                    content: message
+                                })
+                            })
+                            return
+                        } catch (signalError) {
+                            console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)
+                        }
+                    }
                     console.error('Failed to resume workflow:', error)
                     showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
                 }
@@ -691,6 +718,7 @@ export function useWorkflowCore({
             // Optimistic update: Immediately set running to false to toggle the UI button.
             // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
             workflowStore.setRunning(false)
+            workflowStore.setHasLiveSession(false)
 
             // Clear any pending retry status or AI notifications
             clearRetryTimer()

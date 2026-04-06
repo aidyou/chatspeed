@@ -276,6 +276,7 @@ pub async fn run() -> crate::error::Result<()> {
             workflow_signal,
             workflow_start,
             workflow_stop,
+            get_workflow_events,
 
             // dev tools
             test_scrape,

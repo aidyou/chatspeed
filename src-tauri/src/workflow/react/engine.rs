@@ -19,6 +19,7 @@ use crate::workflow::react::{
     compression::ContextCompressor,
     context::ContextManager,
     error::WorkflowEngineError,
+    events::WorkflowEvent,
     gateway::Gateway,
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
@@ -615,6 +616,21 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 });
             }
         }
+
+        if self.state == WorkflowState::Pending {
+            let event = WorkflowEvent::workflow_started(
+                self.session_id.clone(),
+                self.agent_config.id.clone(),
+            );
+            if let Err(e) = self.append_event(&event) {
+                log::error!(
+                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                    self.session_id,
+                    e
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1107,6 +1123,20 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             continue;
                         }
                         WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all } => {
+                            let event = WorkflowEvent::approval_resolved(
+                                self.session_id.clone(),
+                                tool_call_id.clone(),
+                                approved,
+                                approve_all,
+                            );
+                            if let Err(e) = self.append_event(&event) {
+                                log::error!(
+                                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                                    self.session_id,
+                                    e
+                                );
+                            }
+
                             if approved {
                                 // 1. Retrieve the stashed tool details from the server-side map
                                 let (tool_name, tool_args) = if let Some(stashed) = self.pending_approvals.get(&tool_call_id) {
@@ -1359,6 +1389,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             continue;
                         }
                         WorkflowSignal::UserMessage { content } => {
+                            let user_content = content.clone();
                             self.add_message_and_notify_internal(
                                 "user".to_string(),
                                 content,
@@ -1370,6 +1401,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                 None,
                             )
                             .await?;
+                            let event = WorkflowEvent::user_input_received(
+                                self.session_id.clone(),
+                                user_content,
+                            );
+                            if let Err(e) = self.append_event(&event) {
+                                log::error!(
+                                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                                    self.session_id,
+                                    e
+                                );
+                            }
                             self.update_state(WorkflowState::Thinking).await?;
                             continue;
                         }
@@ -1705,6 +1747,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                 self.update_state(WorkflowState::Thinking).await?;
                             }
                             WorkflowSignal::UserMessage { content } => {
+                                let user_content = content.clone();
                                 self.add_message_and_notify_internal(
                                     "user".to_string(),
                                     content,
@@ -1716,6 +1759,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                     None,
                                 )
                                 .await?;
+                                let event = WorkflowEvent::user_input_received(
+                                    self.session_id.clone(),
+                                    user_content,
+                                );
+                                if let Err(e) = self.append_event(&event) {
+                                    log::error!(
+                                        "[Workflow][session={}] workflow.event.append_failed - error={}",
+                                        self.session_id,
+                                        e
+                                    );
+                                }
                                 self.update_state(WorkflowState::Thinking).await?;
                             }
                             _ => {}
@@ -2707,6 +2761,22 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             new_state
         );
 
+        // Write StateChanged event if state actually changed
+        if old_state != new_state {
+            let event = WorkflowEvent::state_changed(
+                self.session_id.clone(),
+                old_state.to_string(),
+                new_state.to_string(),
+            );
+            if let Err(e) = self.append_event(&event) {
+                log::error!(
+                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                    self.session_id,
+                    e
+                );
+            }
+        }
+
         self.state = new_state.clone();
 
         // Cleanup pending approvals when transitioning away from approval-waiting states
@@ -2735,6 +2805,74 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             }
             _ => None,
         };
+
+        if old_state != new_state {
+            // Write WaitEntered event only when entering waiting state.
+            if wait_reason.is_some() {
+                let pending_tools: Vec<serde_json::Value> = self
+                    .pending_approvals
+                    .iter()
+                    .map(|entry| {
+                        let info = entry.value();
+                        serde_json::json!({
+                            "tool_call_id": entry.key(),
+                            "tool_name": info["name"].as_str().unwrap_or("unknown"),
+                        })
+                    })
+                    .collect();
+
+                let event = WorkflowEvent::wait_entered(
+                    self.session_id.clone(),
+                    wait_reason.as_ref().unwrap().to_string(),
+                    pending_tools,
+                );
+                if let Err(e) = self.append_event(&event) {
+                    log::error!(
+                        "[Workflow][session={}] workflow.event.append_failed - error={}",
+                        self.session_id,
+                        e
+                    );
+                }
+            }
+
+            // Write terminal events only on actual state transition.
+            match &new_state {
+                WorkflowState::Completed => {
+                    let event = WorkflowEvent::workflow_completed(self.session_id.clone(), None);
+                    if let Err(e) = self.append_event(&event) {
+                        log::error!(
+                            "[Workflow][session={}] workflow.event.append_failed - error={}",
+                            self.session_id,
+                            e
+                        );
+                    }
+                }
+                WorkflowState::Cancelled => {
+                    let event = WorkflowEvent::workflow_cancelled(self.session_id.clone());
+                    if let Err(e) = self.append_event(&event) {
+                        log::error!(
+                            "[Workflow][session={}] workflow.event.append_failed - error={}",
+                            self.session_id,
+                            e
+                        );
+                    }
+                }
+                WorkflowState::Error => {
+                    let event = WorkflowEvent::workflow_failed(
+                        self.session_id.clone(),
+                        "Workflow encountered an error".to_string(),
+                    );
+                    if let Err(e) = self.append_event(&event) {
+                        log::error!(
+                            "[Workflow][session={}] workflow.event.append_failed - error={}",
+                            self.session_id,
+                            e
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
 
         self.gateway
             .send(
@@ -2777,6 +2915,18 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             }
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn append_event(&self, event: &WorkflowEvent) -> Result<(), WorkflowEngineError> {
+        let store = self
+            .context
+            .main_store
+            .read()
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        store
+            .append_workflow_event(event)
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
         Ok(())
     }
 
@@ -3264,12 +3414,13 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 .and_then(|m| m.metadata.as_ref())
                 .and_then(|meta| meta.get("summary").and_then(|v| v.as_str()))
                 .map(|s| s.to_string()),
+            last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
         }
     }
 
     pub async fn save_snapshot(&self) -> Result<(), WorkflowEngineError> {
-        let ctx = self.export_execution_context();
+        let mut ctx = self.export_execution_context();
 
         let store = self
             .context
@@ -3277,16 +3428,21 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             .read()
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
 
+        ctx.last_event_id = store
+            .get_last_event_id(&self.session_id)
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+
         store
             .upsert_execution_context(&ctx)
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
 
         log::info!(
-            "[Workflow][session={}][phase=snapshot] Saved: state={:?}, wait_reason={:?}, pending_tools={}",
+            "[Workflow][session={}][phase=snapshot] Saved: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
             self.session_id,
             ctx.state,
             ctx.wait_reason,
-            ctx.pending_tools.len()
+            ctx.pending_tools.len(),
+            ctx.last_event_id
         );
 
         Ok(())
