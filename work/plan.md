@@ -1386,6 +1386,30 @@ Reducer 只负责重建：
 - UI 中断不影响 DB 恢复数据。
 - DB 延迟不会直接拖死 executor。
 
+### 13.7 防偏离补充（执行约束）
+
+#### 13.7.1 主链接入判据（必须）
+
+以下三项必须同时成立，才算“接入 dispatcher 主链”：
+
+1. 运行时路径中可追踪到 `engine -> dispatcher -> sinks` 的真实调用链（非测试代码）。
+2. UI sink 故障时，DB sink 仍持续写入事件/快照。
+3. DB sink 慢速时，executor 主循环吞吐不出现级联阻塞。
+
+#### 13.7.2 禁止伪完成
+
+- 只新增 `dispatcher.rs/sinks.rs` 但 `engine` 未真正改为 dispatcher 发射，不算完成。
+- 仅有模块单测通过，不算完成；必须有入口级集成测试覆盖 executor 实际分发。
+- 仅日志打印 lag/dropped 而无可断言计数读取接口，不算完成。
+
+#### 13.7.3 最小验收证据模板
+
+至少提供：
+
+1. 一组“UI sink 报错 + DB sink 正常写入”的日志样本。
+2. 一组“DB sink 注入延迟 + workflow 最终完成”的日志样本。
+3. 一条终态事件（completed/failed/cancelled）进入 DB 的断言输出。
+
 ---
 
 ## 13A. 第六阶段详细执行清单
@@ -1423,6 +1447,16 @@ Reducer 只负责重建：
 
 - executor 输出与具体 sink 解耦
 
+### 13A.6 允许修改文件最小闭环（补充）
+
+为防止“模块新增但主链未接入”，阶段6建议最小闭环文件集合为：
+
+- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)（主链接入点，必改）
+- [src-tauri/src/workflow/react/gateway.rs](src-tauri/src/workflow/react/gateway.rs)
+- `src-tauri/src/workflow/react/dispatcher.rs`
+- `src-tauri/src/workflow/react/sinks.rs`
+- 与 sink 指标读取相关的状态/命令暴露文件（如 `commands/workflow.rs`，按实际实现补齐）
+
 ---
 
 ## 14. 阶段 7：单层子任务 Call 模型
@@ -1447,6 +1481,28 @@ Reducer 只负责重建：
 - 父任务可等待子任务
 - 子任务完成后父任务自动恢复
 - 恢复后仍能知道父任务在等哪个子任务
+
+### 14.6 防偏离补充（执行约束）
+
+#### 14.6.1 主链接入判据（必须）
+
+1. 父任务进入 `waiting + child_task` 必须由运行时状态机真实驱动，而非仅 UI 投影。
+2. 子任务完成/失败/取消三条路径都能触发父任务收敛（恢复或失败决策）。
+3. 重启恢复后，`waiting_on_task_id` 与 `child_sessions` 可从持久化结构重建。
+
+#### 14.6.2 禁止伪完成
+
+- 仅创建子任务 ID 但父任务未真正进入 waiting 态，不算完成。
+- 仅成功路径可恢复、失败/取消路径悬挂，不算完成。
+- 仅子任务模块单测通过，不算完成；必须有父子联动集成测试。
+
+#### 14.6.3 最小验收证据模板
+
+至少提供：
+
+1. 父任务进入 waiting 的状态与字段快照证据。
+2. 子任务 completed/failed/cancelled 三分支各一条恢复结果证据。
+3. 重启后父任务仍定位到同一 `waiting_on_task_id` 的证据。
 
 ### 14.5 阶段 7 之后可接入的扩展：审核 Gate
 
@@ -1503,6 +1559,16 @@ Reducer 只负责重建：
 
 - `Call` 模型稳定可恢复
 
+### 14A.6 允许修改文件最小闭环（补充）
+
+为防止“只改 orchestrator，未打通恢复链”，阶段7建议最小闭环文件集合为：
+
+- [src-tauri/src/workflow/react/orchestrator.rs](src-tauri/src/workflow/react/orchestrator.rs)
+- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
+- [src-tauri/src/db/workflow.rs](src-tauri/src/db/workflow.rs)
+- [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)（若涉及恢复与会话映射）
+- 相关命令入口文件（按实际实现补齐）
+
 ---
 
 ## 15. 阶段 8：Handoff 与焦点代理模型
@@ -1528,6 +1594,28 @@ Reducer 只负责重建：
 
 - 焦点代理切换后用户输入路由正确
 - 恢复后焦点代理不丢失
+
+### 15.5 防偏离补充（执行约束）
+
+#### 15.5.1 主链接入判据（必须）
+
+1. 输入路由由后端运行时按 `focused_agent_id` 决策，前端仅展示，不参与裁决。
+2. 自动归还与强制回主控都经过同一状态机出口，避免双路径行为分叉。
+3. 恢复后 `focused_agent_id`、`running_agent_id`、`handoff_stack` 三者一致。
+
+#### 15.5.2 禁止伪完成
+
+- 只做 UI 焦点显示切换，不算 handoff 完成。
+- 仅正常归还可用，异常强制回主控不可用，不算完成。
+- 仅内存态可用、重启丢失焦点，不算完成。
+
+#### 15.5.3 最小验收证据模板
+
+至少提供：
+
+1. handoff enter/route/return/force_return 各一条日志样本。
+2. 一组“handoff 活跃时输入路由到焦点代理”的断言输出。
+3. 一组重启恢复后焦点与路由一致的证据。
 
 ---
 
@@ -1564,6 +1652,16 @@ Reducer 只负责重建：
 
 - 控制权转移稳定且可恢复
 
+### 15A.6 允许修改文件最小闭环（补充）
+
+为防止“只改前端路由判断”，阶段8建议最小闭环文件集合为：
+
+- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
+- [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)
+- [src/composables/workflow/useWorkflowCore.ts](src/composables/workflow/useWorkflowCore.ts)
+- 存储 `focused_agent_id/handoff_stack` 的持久化读写文件（按实际实现补齐）
+- 命令层输入路由入口文件（按实际实现补齐）
+
 ---
 
 ## 16. 阶段 9：任务账本与高级 UI
@@ -1581,6 +1679,28 @@ Reducer 只负责重建：
 
 - UI 增强不影响内核正确性
 - 即使 UI 展示异常，workflow 仍可继续运行和恢复
+
+### 16.4 防偏离补充（执行约束）
+
+#### 16.4.1 主链接入判据（必须）
+
+1. 任务账本展示字段全部来源于结构化状态/事件（可追踪字段来源）。
+2. UI 异常路径必须被错误边界或降级逻辑捕获，不向执行内核回写错误状态。
+3. 多会话切换时，任务面板数据与 session 强绑定，不串台。
+
+#### 16.4.2 禁止伪完成
+
+- 任何 transcript 文本推断任务态的逻辑进入主路径，视为未完成。
+- 仅视觉展示可用、数据来源不可追溯，不算完成。
+- UI 异常导致 workflow 控制命令异常/中断，不算完成。
+
+#### 16.4.3 最小验收证据模板
+
+至少提供：
+
+1. TaskItem/Inspector 字段映射测试输出。
+2. 一条“注入 transcript 噪声但任务态不变”的测试证据。
+3. 一条“UI 渲染异常但后端执行持续推进”的证据。
 
 ---
 
@@ -1615,6 +1735,16 @@ Reducer 只负责重建：
 ### 16B.5 完成定义
 
 - UI 增强建立在稳定内核之上
+
+### 16B.6 允许修改文件最小闭环（补充）
+
+为防止“UI 改造反向污染内核”，阶段9建议最小闭环文件集合为：
+
+- `src/components/workflow/*`
+- `src/composables/workflow/*`
+- `src/stores/workflow.js`
+- 与 task ledger 数据结构暴露相关的后端定义文件
+- 明确禁止改动核心执行状态机语义文件（除非单独立项）
 
 ---
 

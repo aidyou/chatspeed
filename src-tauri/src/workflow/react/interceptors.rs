@@ -265,8 +265,6 @@ impl WorkflowExecutor {
             }
         }
 
-        self.update_state(WorkflowState::Completed).await?;
-
         Ok(Some(ReinforcedResult {
             content: "Finished".into(),
             title: "Finish Task".to_string(),

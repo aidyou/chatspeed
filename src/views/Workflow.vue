@@ -400,9 +400,8 @@ const activeAskUser = computed(() => {
   return null
 })
 
-const sendUserChoice = async (option) => {
+const sendUserChoice = (option) => {
   inputMessage.value = option
-  onSendMessage()
 }
 
 const onPin = () => {

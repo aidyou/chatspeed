@@ -300,7 +300,7 @@ pub fn restore_execution_context(
             Ok(s) => s,
             Err(e) => {
                 log::error!(
-                    "[Workflow][session={}] restore.failed - cannot acquire store lock: {}",
+                    "[Workflow][session={}] workflow.restore.failed - cannot acquire store lock: {}",
                     session_id,
                     e
                 );
@@ -319,7 +319,7 @@ pub fn restore_execution_context(
         Ok(Some(ctx)) => {
             if ctx.version == ExecutionContext::CURRENT_VERSION {
                 log::info!(
-                    "[Workflow][session={}] restore.snapshot_hit - state={:?}, wait_reason={:?}",
+                    "[Workflow][session={}] workflow.restore.snapshot_hit - state={:?}, wait_reason={:?}",
                     session_id,
                     ctx.state,
                     ctx.wait_reason
@@ -327,26 +327,38 @@ pub fn restore_execution_context(
                 RecoveryResult::SnapshotHit { context: ctx }
             } else {
                 log::info!(
-                    "[Workflow][session={}] restore.snapshot_version_mismatch - expected={}, got={}, falling back to replay",
+                    "[Workflow][session={}] workflow.restore.snapshot_version_mismatch - expected={}, got={}, falling back to replay",
                     session_id,
                     ExecutionContext::CURRENT_VERSION,
                     ctx.version
+                );
+                log::info!(
+                    "[Workflow][session={}] workflow.restore.replay_fallback - entering event replay",
+                    session_id
                 );
                 replay_from_events(main_store, session_id)
             }
         }
         Ok(None) => {
             log::info!(
-                "[Workflow][session={}] restore.snapshot_miss - falling back to replay",
+                "[Workflow][session={}] workflow.restore.snapshot_miss - falling back to replay",
+                session_id
+            );
+            log::info!(
+                "[Workflow][session={}] workflow.restore.replay_fallback - entering event replay",
                 session_id
             );
             replay_from_events(main_store, session_id)
         }
         Err(e) => {
             log::error!(
-                "[Workflow][session={}] restore.snapshot_read_failed - error={}, falling back to replay",
+                "[Workflow][session={}] workflow.restore.snapshot_read_failed - error={}, falling back to replay",
                 session_id,
                 e
+            );
+            log::info!(
+                "[Workflow][session={}] workflow.restore.replay_fallback - entering event replay",
+                session_id
             );
             replay_from_events(main_store, session_id)
         }
@@ -358,7 +370,7 @@ fn replay_from_events(
     session_id: &str,
 ) -> RecoveryResult {
     log::info!(
-        "[Workflow][session={}] replay.start - beginning event replay",
+        "[Workflow][session={}] workflow.replay.start - beginning event replay",
         session_id
     );
 
@@ -367,7 +379,7 @@ fn replay_from_events(
             Ok(s) => s,
             Err(e) => {
                 log::error!(
-                    "[Workflow][session={}] replay.failed - cannot acquire store lock: {}",
+                    "[Workflow][session={}] workflow.replay.failed - cannot acquire store lock: {}",
                     session_id,
                     e
                 );
@@ -384,7 +396,7 @@ fn replay_from_events(
             Ok(events) => events,
             Err(e) => {
                 log::error!(
-                    "[Workflow][session={}] replay.failed - cannot load events: {}",
+                    "[Workflow][session={}] workflow.replay.failed - cannot load events: {}",
                     session_id,
                     e
                 );
@@ -400,7 +412,7 @@ fn replay_from_events(
 
     if events.is_empty() {
         log::warn!(
-            "[Workflow][session={}] replay.no_events - no events found for replay",
+            "[Workflow][session={}] workflow.replay.no_events - no events found for replay",
             session_id
         );
         return RecoveryResult::SafeFailed {
@@ -415,7 +427,7 @@ fn replay_from_events(
     for event in &events {
         if let Err(e) = reducer.apply_event(event) {
             log::error!(
-                "[Workflow][session={}] replay.failed - error applying event {}: {}",
+                "[Workflow][session={}] workflow.replay.failed - error applying event {}: {}",
                 session_id,
                 event.id,
                 e
@@ -430,7 +442,7 @@ fn replay_from_events(
     let context = reducer.build();
 
     log::info!(
-        "[Workflow][session={}] replay.done - state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
+        "[Workflow][session={}] workflow.replay.done - state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
         session_id,
         context.state,
         context.wait_reason,

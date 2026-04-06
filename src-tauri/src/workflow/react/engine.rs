@@ -97,6 +97,10 @@ pub struct WorkflowExecutor {
     pub(crate) loop_detector: LoopDetector,
     /// Memory cache for tools awaiting user approval.
     pub(crate) pending_approvals: Arc<dashmap::DashMap<String, serde_json::Value>>,
+    /// Flag indicating recovery failed - session is in safe-failed read-only state.
+    pub(crate) recovery_failed: bool,
+    /// Error message if recovery failed.
+    pub(crate) recovery_error: Option<String>,
 }
 
 #[async_trait]
@@ -301,6 +305,8 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             },
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
+            recovery_failed: false,
+            recovery_error: None,
         };
 
         // Initialize reasoning flag by piercing proxy if necessary
@@ -380,207 +386,81 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     "WorkflowExecutor {}: Workflow was paused, waiting for user to resume",
                     self.session_id
                 );
-            } else if self.state == WorkflowState::AwaitingUser {
-                log::info!(
-                    "WorkflowExecutor {}: Workflow is awaiting user input, restoring from snapshot",
-                    self.session_id
+            } else if self.state == WorkflowState::AwaitingUser
+                || self.state == WorkflowState::AwaitingApproval {
+                // Use the new recovery mechanism for AwaitingUser and AwaitingApproval states
+                let recovery_result = crate::workflow::react::replay::restore_execution_context(
+                    self.context.main_store.clone(),
+                    &self.session_id,
                 );
 
-                // Try to restore from ExecutionContext snapshot
-                let snapshot_ctx = {
-                    let store = self
-                        .context
-                        .main_store
-                        .read()
-                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-
-                    store.get_execution_context(&self.session_id).ok().flatten()
-                };
-
-                if let Some(ctx) = snapshot_ctx {
-                    if ctx.wait_reason == Some(WaitReason::UserInput) {
+                match recovery_result {
+                    crate::workflow::react::replay::RecoveryResult::SnapshotHit { context }
+                    | crate::workflow::react::replay::RecoveryResult::ReplayFallback { context } => {
                         log::info!(
-                            "[Workflow][session={}][phase=restore] Restoring user_input waiting state from snapshot",
-                            self.session_id
-                        );
-                    } else {
-                        log::warn!(
-                            "[Workflow][session={}][phase=restore] Snapshot wait_reason mismatch: expected UserInput, got {:?}",
+                            "[Workflow][session={}][phase=restore] Restoring from recovery result: state={:?}, wait_reason={:?}, pending_tools={}",
                             self.session_id,
-                            ctx.wait_reason
+                            context.state,
+                            context.wait_reason,
+                            context.pending_tools.len()
                         );
-                    }
-                } else {
-                    log::warn!(
-                        "[Workflow][session={}][phase=restore] snapshot.fallback_legacy - No snapshot found for AwaitingUser, continuing with DB state",
-                        self.session_id
-                    );
-                }
-            } else {
-                self.current_step = last_msg.step_index as usize;
-            }
+                        
+                        if self.state == WorkflowState::AwaitingApproval && context.pending_tools.is_empty() {
+                            log::warn!(
+                                "[Workflow][session={}][phase=restore] Recovery returned empty pending_tools for AwaitingApproval state",
+                                self.session_id
+                            );
+                        } else {
+                            for tool in &context.pending_tools {
+                                let info_with_details = json!({
+                                    "name": tool.tool_name.clone(),
+                                    "arguments": tool.arguments.clone(),
+                                    "details": tool.details.clone().unwrap_or_default()
+                                });
+                                self.pending_approvals
+                                    .insert(tool.tool_call_id.clone(), info_with_details);
 
-            if self.state == WorkflowState::AwaitingApproval {
-                log::info!(
-                    "WorkflowExecutor {}: Re-broadcasting pending approvals to UI",
-                    self.session_id
-                );
-
-                // Try to restore from ExecutionContext snapshot first
-                let snapshot_ctx = {
-                    let store = self
-                        .context
-                        .main_store
-                        .read()
-                        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-
-                    store.get_execution_context(&self.session_id).ok().flatten()
-                };
-
-                let restored_from_snapshot = if let Some(ctx) = snapshot_ctx {
-                    if !ctx.pending_tools.is_empty() {
-                        log::info!(
-                            "[Workflow][session={}][phase=restore] Restoring {} pending approvals from snapshot",
-                            self.session_id,
-                            ctx.pending_tools.len()
-                        );
-
-                        for tool in &ctx.pending_tools {
-                            let info_with_details = json!({
-                                "name": tool.tool_name.clone(),
-                                "arguments": tool.arguments.clone(),
-                                "details": tool.details.clone().unwrap_or_default()
-                            });
-                            self.pending_approvals
-                                .insert(tool.tool_call_id.clone(), info_with_details);
-
-                            let _ = self
-                                .gateway
-                                .send(
-                                    &self.session_id,
-                                    GatewayPayload::Confirm {
-                                        id: tool.tool_call_id.clone(),
-                                        action: tool.tool_name.clone(),
-                                        details: tool.details.clone().unwrap_or_default(),
-                                    },
-                                )
-                                .await;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                // Fallback to transcript-based recovery if snapshot didn't work
-                if !restored_from_snapshot {
-                    log::warn!(
-                        "[Workflow][session={}][phase=restore] snapshot.fallback_legacy - No snapshot found, falling back to transcript parsing",
-                        self.session_id
-                    );
-
-                    // Find all 'tool' messages that are currently in an awaiting approval state
-                    for msg in &self.context.messages {
-                        if msg.role == "tool" {
-                            if let Some(meta) = &msg.metadata {
-                                let summary =
-                                    meta.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-                                let is_waiting = summary == "Awaiting approval"
-                                    || summary == rust_i18n::t!("workflow.awaiting_approval");
-
-                                if is_waiting {
-                                    if let Some(id) =
-                                        meta.get("tool_call_id").and_then(|v| v.as_str())
-                                    {
-                                        let tool_info = self.context.messages.iter().rev().find_map(|m| {
-                                            if m.role == "assistant" {
-                                                if let Some(m_meta) = &m.metadata {
-                                                    if let Some(calls) = m_meta.get("tool_calls").and_then(|v| v.as_array()) {
-                                                        for call in calls {
-                                                            let call_id = call.get("id").and_then(|v| v.as_str());
-                                                            if call_id == Some(id) {
-                                                                let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
-                                                                let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
-                                                                if let (Some(n), Some(a)) = (name, args) {
-                                                                    return Some(json!({ "name": n, "arguments": a }));
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    if let Some(func_call) = m_meta.get("function_call").and_then(|v| v.as_object()) {
-                                                        let call_id = func_call.get("id").and_then(|v| v.as_str());
-                                                        if call_id == Some(id) {
-                                                            let name = func_call.get("name").and_then(|v| v.as_str());
-                                                            let args = func_call.get("arguments");
-                                                            if let (Some(n), Some(a)) = (name, args) {
-                                                                return Some(json!({ "name": n, "arguments": a }));
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.message) {
-                                                    if let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
-                                                        for call in calls {
-                                                            let call_id = call.get("id").and_then(|v| v.as_str());
-                                                            if call_id == Some(id) {
-                                                                let name = call.get("name").or_else(|| call.get("function").and_then(|f| f.get("name"))).and_then(|v| v.as_str());
-                                                                let args = call.get("arguments").or_else(|| call.get("function").and_then(|f| f.get("arguments")));
-                                                                if let (Some(n), Some(a)) = (name, args) {
-                                                                    return Some(json!({ "name": n, "arguments": a }));
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            None
-                                        });
-
-                                        if let Some(info) = tool_info {
-                                            log::info!("WorkflowExecutor {}: Restored and Re-notifying UI for tool: {} (ID: {})", self.session_id, info["name"], id);
-
-                                            // Parse arguments if it's a JSON string (OpenAI format)
-                                            let args_value = info["arguments"].clone();
-                                            let args_obj = if args_value.is_string() {
-                                                serde_json::from_str::<serde_json::Value>(
-                                                    args_value.as_str().unwrap_or("{}"),
-                                                )
-                                                .unwrap_or_else(|_| json!({}))
-                                            } else {
-                                                args_value
-                                            };
-
-                                            let info_with_details = json!({
-                                                "name": info["name"],
-                                                "arguments": args_obj,
-                                                "details": msg.message.clone()
-                                            });
-                                            self.pending_approvals
-                                                .insert(id.to_string(), info_with_details);
-
-                                            let _ = self
-                                                .gateway
-                                                .send(
-                                                    &self.session_id,
-                                                    GatewayPayload::Confirm {
-                                                        id: id.to_string(),
-                                                        action: info["name"]
-                                                            .as_str()
-                                                            .unwrap_or("unknown")
-                                                            .to_string(),
-                                                        details: msg.message.clone(),
-                                                    },
-                                                )
-                                                .await;
-                                        }
-                                    }
-                                }
+                                let _ = self
+                                    .gateway
+                                    .send(
+                                        &self.session_id,
+                                        GatewayPayload::Confirm {
+                                            id: tool.tool_call_id.clone(),
+                                            action: tool.tool_name.clone(),
+                                            details: tool.details.clone().unwrap_or_default(),
+                                        },
+                                    )
+                                    .await;
                             }
                         }
                     }
+                    crate::workflow::react::replay::RecoveryResult::SafeFailed { session_id: _, error } => {
+                        log::error!(
+                            "[Workflow][session={}][phase=restore] Recovery failed: {}",
+                            self.session_id,
+                            error
+                        );
+                        self.recovery_failed = true;
+                        self.recovery_error = Some(error.to_string());
+                        
+                        // Enter safe-failed state (use Error state as safe-failed)
+                        self.state = WorkflowState::Error;
+                        let _ = self
+                            .gateway
+                            .send(
+                                &self.session_id,
+                                GatewayPayload::Error {
+                                    message: format!(
+                                        "Workflow recovery failed: {}. Session is in read-only safe mode.",
+                                        error
+                                    ),
+                                },
+                            )
+                            .await;
+                    }
                 }
+            } else {
+                self.current_step = last_msg.step_index as usize;
             }
         }
 
@@ -948,6 +828,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
     }
 
     pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
+        // P0-2: Guard - do not continue execution in safe-failed state
+        if self.recovery_failed {
+            log::error!(
+                "[Workflow][session={}][phase=run_loop] Cannot run loop - session is in safe-failed recovery state",
+                self.session_id
+            );
+            return Err(WorkflowEngineError::General(
+                "Cannot run workflow: session is in safe-failed recovery state".to_string(),
+            ));
+        }
+
         let mut signal_rx = self
             .signal_rx
             .take()
@@ -2183,10 +2074,19 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 self.consecutive_no_tool_calls = 0;
             }
 
-            if results
-                .iter()
-                .any(|r| r.1.title == "Finish Task" && !r.1.is_error)
-            {
+            let has_successful_finish_task = results.iter().any(|(_, reinforced, original_call)| {
+                if reinforced.is_error {
+                    return false;
+                }
+                let tool_name = original_call
+                    .get("name")
+                    .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                tool_name == TOOL_FINISH_TASK
+            });
+
+            if has_successful_finish_task {
                 self.update_state(WorkflowState::Completed).await?;
                 break;
             }
@@ -2351,6 +2251,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         ),
         WorkflowEngineError,
     > {
+        // P0-2: Guard against tool execution in safe-failed state
+        if self.recovery_failed {
+            log::error!(
+                "[Workflow][session={}][phase=execute_tools] Blocked tool execution - session is in safe-failed recovery state",
+                self.session_id
+            );
+            return Err(WorkflowEngineError::General(
+                "Cannot execute tools: session is in safe-failed recovery state".to_string(),
+            ));
+        }
+
         let mut tool_calls = vec![];
 
         // --- 1. Parse Tool Calls from JSON ---
@@ -3446,5 +3357,102 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         );
 
         Ok(())
+    }
+}
+
+// ==================== Integration Tests for Recovery Flow ====================
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::db::MainStore;
+    use crate::workflow::react::replay::{RecoveryResult, RecoveryError};
+    use tempfile::tempdir;
+    use std::sync::Arc;
+
+    fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
+        let dir = tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("engine_recovery_test.db");
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[test]
+    fn test_recovery_result_safe_failed_is_not_success() {
+        let safe_failed = RecoveryResult::SafeFailed {
+            session_id: "test".to_string(),
+            error: RecoveryError::ReplayFailed {
+                reason: "test failure".to_string(),
+            },
+        };
+        assert!(!safe_failed.is_success());
+    }
+
+    #[test]
+    fn test_recovery_result_snapshot_hit_is_success() {
+        let ctx = ExecutionContext::new("test".to_string());
+        let snapshot_hit = RecoveryResult::SnapshotHit { context: ctx };
+        assert!(snapshot_hit.is_success());
+    }
+
+    #[test]
+    fn test_recovery_result_replay_fallback_is_success() {
+        let ctx = ExecutionContext::new("test".to_string());
+        let replay_fallback = RecoveryResult::ReplayFallback { context: ctx };
+        assert!(replay_fallback.is_success());
+    }
+
+    #[test]
+    fn test_safe_failed_result_has_no_context() {
+        let safe_failed = RecoveryResult::SafeFailed {
+            session_id: "test".to_string(),
+            error: RecoveryError::ReplayFailed {
+                reason: "test failure".to_string(),
+            },
+        };
+        assert!(safe_failed.context().is_none());
+        assert!(safe_failed.into_context().is_none());
+    }
+
+    #[test]
+    fn test_replay_failed_produces_safe_failed_result() {
+        let store = create_test_store();
+        let session_id = "replay-failed-test";
+
+        {
+            let s = store.read().unwrap();
+            let conn = s.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data, created_at)
+                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                rusqlite::params![
+                    session_id,
+                    "state_changed",
+                    "1.0.0",
+                    r#"{"from_state": "pending"}"#
+                ],
+            )
+            .unwrap();
+        }
+
+        let result = crate::workflow::react::replay::restore_execution_context(store.clone(), session_id);
+
+        match result {
+            RecoveryResult::SafeFailed { session_id: sid, error } => {
+                assert_eq!(sid, session_id);
+                match error {
+                    RecoveryError::MissingEventData { .. } => {}
+                    _ => panic!("Expected MissingEventData error"),
+                }
+            }
+            _ => panic!("Expected SafeFailed, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_workflow_state_error_transitions_correctly() {
+        let state = WorkflowState::Error;
+        let runtime_state = RuntimeState::from(&state);
+        assert_eq!(runtime_state, RuntimeState::Failed);
     }
 }

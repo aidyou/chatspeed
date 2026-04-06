@@ -363,10 +363,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
       message.metadata = {};
     }
 
-    const index = messages.value.findIndex(m =>
-      (message.id && m.id === message.id) ||
-      (m.stepIndex === message.stepIndex && m.role === message.role && m.stepType === message.stepType && m.message === message.message)
-    );
+    // Prefer stable identifiers for de-duplication.
+    // Fallback text-based matching is intentionally avoided because short fixed
+    // tool outputs (for example finish_task => "Finished") can collide across turns.
+    const incomingToolCallId = message.metadata?.tool_call_id;
+    const index = messages.value.findIndex((m) => {
+      if (message.id && m.id === message.id) return true;
+      if (incomingToolCallId && m.metadata?.tool_call_id === incomingToolCallId) return true;
+      return false;
+    });
 
     if (index !== -1) {
       // Update existing message

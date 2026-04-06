@@ -1146,10 +1146,13 @@ pub async fn workflow_signal(
                     
                     let status_lower = snapshot.workflow.status.to_lowercase();
                     
-                    // Only allow resumption for terminal/pending states
+                    // Allow resumption for terminal/pending states and awaiting_user.
+                    // This covers orphan awaiting_user sessions (e.g. after refresh/restart)
+                    // where manager session is missing but user input should still resume workflow.
                     let is_resumable = matches!(
                         status_lower.as_str(),
                         "pending" | "completed" | "cancelled" | "error" | "failed"
+                            | "awaiting_user"
                     );
                     
                     if !is_resumable {
@@ -1165,7 +1168,7 @@ pub async fn workflow_signal(
                     }
                     
                     log::info!(
-                        "[Workflow] Session {} is in terminal/pending state ({}), resuming with new input",
+                        "[Workflow] Session {} is in resumable state ({}), resuming with new input",
                         session_id,
                         snapshot.workflow.status
                     );
