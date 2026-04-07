@@ -457,6 +457,10 @@ export function useWorkflowCore({
                         userQuery: prompt
                     })
 
+                    // Ensure event listener is attached before starting runtime,
+                    // otherwise early UI events (e.g. approval confirm) can be missed.
+                    await setupWorkflowEvents(currentWorkflowId.value)
+
                     // Trigger engine
                     console.log('Calling workflow_start backend command...')
                     await invokeWrapper('workflow_start', {
@@ -983,7 +987,9 @@ export function useWorkflowCore({
 
             // 7. Load and select the new workflow
             await workflowStore.loadWorkflows()
-            await workflowStore.selectWorkflow(newWorkflowId)
+            // IMPORTANT: use core-level selectWorkflow to bind event listener and
+            // recover any waiting UI state from live session/snapshot.
+            await selectWorkflow(newWorkflowId)
 
             console.log('Created empty workflow:', newWorkflowId)
         } catch (error) {
