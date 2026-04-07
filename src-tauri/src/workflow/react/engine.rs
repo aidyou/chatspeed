@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
@@ -32,6 +32,7 @@ use crate::workflow::react::{
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
     skills::{SkillManifest, SkillScanner},
+    signals::{parse_runtime_signal, take_stashed_user_messages, RuntimeSignal, SignalType},
     sinks::{DBSink, Sink, TauriSink},
     types::{
         ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason,
@@ -105,6 +106,8 @@ pub struct WorkflowExecutor {
     pub(crate) recovery_error: Option<String>,
     /// Optional dispatcher for event distribution (Phase 6)
     pub dispatcher: Option<Arc<Dispatcher>>,
+    /// Buffered user messages received during non-waiting execution stages.
+    pub queued_user_messages: VecDeque<(String, String)>,
 }
 
 #[async_trait]
@@ -312,6 +315,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             recovery_failed: false,
             recovery_error: None,
             dispatcher: None,
+            queued_user_messages: VecDeque::new(),
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -910,9 +914,16 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             && self.state != WorkflowState::Error
             && self.state != WorkflowState::Cancelled
         {
-            // Check stop signal at loop start
-            if self.check_stop_signal(&mut signal_rx).await? {
-                break;
+            // IMPORTANT: Do NOT pre-drain user_message while already in waiting states.
+            // Waiting states must resume only through the unified wait branch below.
+            let is_waiting_state = self.state == WorkflowState::Paused
+                || self.state == WorkflowState::AwaitingUser
+                || self.state == WorkflowState::AwaitingApproval;
+            if !is_waiting_state {
+                // Check stop/config/user-message queue signals at loop start (non-waiting only)
+                if self.check_stop_signal(&mut signal_rx).await? {
+                    break;
+                }
             }
 
             // Handle Paused, AwaitingUser or AwaitingApproval state - wait for user signal
@@ -965,6 +976,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
                 let signal_type = signal_json["type"].as_str().unwrap_or("unknown");
+                let signal_type_enum = SignalType::from_str(signal_type);
                 log::info!(
                     "[Workflow][session={}][phase=wait] Signal received, type={}, wait_reason={:?}",
                     self.session_id,
@@ -984,7 +996,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 );
 
                 // Handle remove_auto_approved_tool signal
-                if signal_json["type"] == "remove_auto_approved_tool" {
+                if signal_type_enum == Some(SignalType::RemoveAutoApprovedTool) {
                     if let Some(tool_name) = signal_json["tool_name"].as_str() {
                         self.remove_auto_approved_tool(tool_name);
 
@@ -1005,7 +1017,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 }
 
                 // Handle remove_shell_policy_item signal
-                if signal_json["type"] == "remove_shell_policy_item" {
+                if signal_type_enum == Some(SignalType::RemoveShellPolicyItem) {
                     if let Some(pattern) = signal_json["pattern"].as_str() {
                         if let Some(updated_policy) = self.remove_shell_policy_item(pattern).await {
                             // Send update event to frontend
@@ -1026,7 +1038,45 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     continue;
                 }
 
-                if signal_json["type"] == "stop" {
+                // Accept runtime config updates in waiting states to avoid noisy unknown-signal warnings.
+                if signal_type_enum == Some(SignalType::UpdateFinalAudit) {
+                    let audit = signal_json
+                        .get("finalAudit")
+                        .and_then(|v| v.as_bool())
+                        .or_else(|| signal_json.get("audit").and_then(|v| v.as_bool()));
+                    if let Some(audit) = audit {
+                        log::info!(
+                            "WorkflowExecutor {}: Updating final audit to {} while waiting",
+                            self.session_id,
+                            audit
+                        );
+                        self.agent_config.final_audit = Some(audit);
+                    }
+                    continue;
+                }
+
+                if signal_type_enum == Some(SignalType::UpdateApprovalLevel) {
+                    let level_str = signal_json
+                        .get("approvalLevel")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| signal_json.get("level").and_then(|v| v.as_str()));
+                    if let Some(level_str) = level_str {
+                        log::info!(
+                            "WorkflowExecutor {}: Updating approval level to {} while waiting",
+                            self.session_id,
+                            level_str
+                        );
+                        use std::str::FromStr;
+                        if let Ok(level) =
+                            crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
+                        {
+                            self.policy.approval_level = level;
+                        }
+                    }
+                    continue;
+                }
+
+                if signal_type_enum == Some(SignalType::Stop) {
                     log::info!(
                         "[Workflow][session={}][phase=wait][event=stop] Stop signal received in waiting state",
                         self.session_id
@@ -1360,7 +1410,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
                 // Legacy fallback for request_confirm_broadcast
                 // Legacy fallback for request_confirm_broadcast (old signal name)
-                if signal_json["type"] == "request_confirm_broadcast" {
+                if signal_type_enum == Some(SignalType::LegacyRequestConfirmBroadcast) {
                     log::info!(
                         "WorkflowExecutor {}: Received request to re-broadcast pending confirmations",
                         self.session_id
@@ -1390,7 +1440,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 }
 
                 // Legacy fallback for approval (old JSON format)
-                if signal_json["type"] == "approval" {
+                if signal_type_enum == Some(SignalType::Approval) {
                     let approved = signal_json["approved"].as_bool().unwrap_or(false);
                     let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
                     let signal_id = signal_json["id"].as_str().unwrap_or("unknown");
@@ -1997,6 +2047,16 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 }
             }
 
+            // Stop has higher priority than persisting a new assistant tool-call turn.
+            // This closes the race window where stop arrives right after LLM returns.
+            if self.check_stop_signal(&mut signal_rx).await? {
+                log::info!(
+                    "[Workflow][session={}][phase=run_loop] Stop detected after LLM response; skipping assistant message commit",
+                    self.session_id
+                );
+                break;
+            }
+
             let compressed_signal = self
                 .add_message_and_notify_internal(
                     "assistant".to_string(),
@@ -2074,6 +2134,13 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     .await?;
             }
 
+            // Flush user messages queued during active execution after Observe stage completes.
+            let queued_applied = self.flush_queued_user_messages().await?;
+            if queued_applied {
+                self.current_step = 0;
+                self.consecutive_no_tool_calls = 0;
+            }
+
             if results.is_empty() {
                 self.consecutive_no_tool_calls += 1;
                 log::warn!(
@@ -2104,6 +2171,10 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         None,
                     )
                     .await?;
+                if self.flush_queued_user_messages().await? {
+                    self.current_step = 0;
+                    self.consecutive_no_tool_calls = 0;
+                }
                 if self.consecutive_no_tool_calls >= 3 {
                     self.consecutive_no_tool_calls = 0;
                 }
@@ -2179,10 +2250,18 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         }
 
         // === Memory Analysis After Workflow Completion ===
-        // Analyze user inputs and update memories if needed
-        if let Err(e) = self.analyze_and_update_memories().await {
-            log::warn!("Memory analysis failed: {}", e);
-            // Don't fail the workflow if memory analysis fails
+        // Run only for successful completion to avoid extra model calls after stop/cancel.
+        if self.state == WorkflowState::Completed {
+            if let Err(e) = self.analyze_and_update_memories().await {
+                log::warn!("Memory analysis failed: {}", e);
+                // Don't fail the workflow if memory analysis fails
+            }
+        } else {
+            log::info!(
+                "[Workflow][session={}][phase=memory] Skip memory analysis for terminal state={}",
+                self.session_id,
+                self.state
+            );
         }
 
         self.signal_rx = Some(signal_rx);
@@ -2868,6 +2947,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         error_type: Option<String>,
         mut metadata: Option<serde_json::Value>,
     ) -> Result<bool, WorkflowEngineError> {
+        // Cancellation is terminal for runtime output. Drop late assistant/tool writes
+        // to avoid phantom last-turn messages after user clicks Stop.
+        if self.state == WorkflowState::Cancelled && (role == "assistant" || role == "tool") {
+            log::info!(
+                "[Workflow][session={}][phase=message] Dropping late '{}' message because session is cancelled",
+                self.session_id,
+                role
+            );
+            return Ok(false);
+        }
+
         // --- 1. Content Normalization (Handle mixed Text + JSON responses) ---
         if role == "assistant" {
             let trimmed = content.trim();
@@ -3040,42 +3130,28 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
     ) -> Result<bool, WorkflowEngineError> {
         while let Ok(s) = rx.try_recv() {
             let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
-            if sig_json["type"] == "stop" || s.contains("stop") {
-                log::info!(
-                    "WorkflowExecutor {}: Stop signal detected, cancelling workflow",
-                    self.session_id
-                );
-                self.update_state(WorkflowState::Cancelled).await?;
-                return Ok(true);
-            } else if sig_json["type"] == "user_input" {
-                let user_input = sig_json["content"].as_str().unwrap_or("").to_string();
+            let sig_type_str = sig_json["type"].as_str().unwrap_or_default();
+            let sig_type_enum = SignalType::from_str(sig_type_str);
+            match parse_runtime_signal(&s) {
+                RuntimeSignal::Stop => {
+                    log::info!(
+                        "WorkflowExecutor {}: Stop signal detected, cancelling workflow",
+                        self.session_id
+                    );
+                    self.update_state(WorkflowState::Cancelled).await?;
+                    return Ok(true);
+                }
+                RuntimeSignal::UserMessage(content) => {
+                    log::info!(
+                        "[Workflow][session={}][phase=signal] Queueing user message during active execution",
+                        self.session_id
+                    );
+                    self.enqueue_user_message(content).await?;
+                }
+                RuntimeSignal::Other => {}
+            }
 
-                // 1. Reset counters for the NEW sub-task
-                log::info!(
-                    "WorkflowExecutor {}: Resetting step budget for new user input",
-                    self.session_id
-                );
-                self.current_step = 0;
-                self.consecutive_no_tool_calls = 0;
-
-                // 2. Combine user input with the system reminder for a cleaner UI and consistent context
-                let combined_content = format!(
-                    "{}\n\n<SYSTEM_REMINDER>To ensure sufficient reasoning depth for your follow-up request, the task step budget has been reset. Current step: 0.</SYSTEM_REMINDER>",
-                    user_input
-                );
-
-                self.add_message_and_notify_internal(
-                    "user".to_string(),
-                    combined_content,
-                    None,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                )
-                .await?;
-            } else if sig_json["type"] == "update_allowed_paths" {
+            if sig_type_enum == Some(SignalType::UpdateAllowedPaths) {
                 if let Some(paths_arr) = sig_json.get("paths").and_then(|v| v.as_array()) {
                     let mut unique_paths = HashSet::new();
                     let paths: Vec<PathBuf> = paths_arr
@@ -3111,7 +3187,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         guard.update_allowed_roots(paths);
                     }
                 }
-            } else if sig_json["type"] == "update_model_config" {
+            } else if sig_type_enum == Some(SignalType::UpdateModelConfig) {
                 // Update model configuration for the running workflow
                 if let Some(configs) = sig_json.get("configs") {
                     log::info!(
@@ -3140,8 +3216,12 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         self.agent_config.models = Some(models);
                     }
                 }
-            } else if sig_json["type"] == "update_approval_level" {
-                if let Some(level_str) = sig_json.get("level").and_then(|v| v.as_str()) {
+            } else if sig_type_enum == Some(SignalType::UpdateApprovalLevel) {
+                let level_str = sig_json
+                    .get("approvalLevel")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| sig_json.get("level").and_then(|v| v.as_str()));
+                if let Some(level_str) = level_str {
                     log::info!(
                         "WorkflowExecutor {}: Updating approval level to {}",
                         self.session_id,
@@ -3171,8 +3251,12 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         }
                     }
                 }
-            } else if sig_json["type"] == "update_final_audit" {
-                if let Some(audit) = sig_json.get("audit").and_then(|v| v.as_bool()) {
+            } else if sig_type_enum == Some(SignalType::UpdateFinalAudit) {
+                let audit = sig_json
+                    .get("finalAudit")
+                    .and_then(|v| v.as_bool())
+                    .or_else(|| sig_json.get("audit").and_then(|v| v.as_bool()));
+                if let Some(audit) = audit {
                     log::info!(
                         "WorkflowExecutor {}: Updating final audit to {}",
                         self.session_id,
@@ -3197,7 +3281,76 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 }
             }
         }
+
+        // Also drain user messages stashed by temporary signal consumers (e.g. LLM retry backoff).
+        for (queued_id, content) in take_stashed_user_messages(&self.session_id) {
+            self.queued_user_messages.push_back((queued_id, content));
+        }
+
         Ok(false)
+    }
+
+    async fn enqueue_user_message(&mut self, content: String) -> Result<(), WorkflowEngineError> {
+        let queued_id = self
+            .tsid_generator
+            .generate()
+            .unwrap_or_else(|_| format!("queued_{}", crate::ccproxy::get_tool_id()));
+
+        self.queued_user_messages
+            .push_back((queued_id.clone(), content.clone()));
+
+        // Immediate frontend ack: show user message instantly with queued status.
+        self.dispatch_ui_payload(GatewayPayload::Message {
+            role: "user".to_string(),
+            content,
+            reasoning: None,
+            step_type: None,
+            step_index: self.current_step as i32,
+            is_error: false,
+            error_type: None,
+            metadata: Some(serde_json::json!({
+                "queued_user_message_id": queued_id,
+                "queue_status": "queued"
+            })),
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    async fn flush_queued_user_messages(&mut self) -> Result<bool, WorkflowEngineError> {
+        if self.queued_user_messages.is_empty() {
+            return Ok(false);
+        }
+
+        let mut applied = false;
+        while let Some((queued_id, user_content)) = self.queued_user_messages.pop_front() {
+            self.add_message_and_notify_internal(
+                "user".to_string(),
+                user_content.clone(),
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(serde_json::json!({
+                    "queued_user_message_id": queued_id,
+                    "queue_status": "applied"
+                })),
+            )
+            .await?;
+            let event = WorkflowEvent::user_input_received(self.session_id.clone(), user_content);
+            if let Err(e) = self.append_event(&event) {
+                log::error!(
+                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                    self.session_id,
+                    e
+                );
+            }
+            applied = true;
+        }
+
+        Ok(applied)
     }
 
     async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {

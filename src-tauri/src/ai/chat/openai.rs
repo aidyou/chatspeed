@@ -565,6 +565,10 @@ impl AiChatTrait for OpenAIChat {
         metadata: Option<ChatMetadata>,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
     ) -> Result<String, AiError> {
+        // Always reset stop flag at the beginning of each chat request.
+        // Stop should cancel only the currently in-flight request, not future turns.
+        self.set_stop_flag(false).await;
+
         let mut final_model = model.to_string();
         let mut proxy_group: Option<String> = None;
 

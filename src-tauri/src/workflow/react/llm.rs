@@ -10,6 +10,7 @@ use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::skills::SkillManifest;
+use crate::workflow::react::signals::{parse_runtime_signal, stash_user_message, RuntimeSignal};
 use crate::workflow::react::types::GatewayPayload;
 
 use std::collections::HashMap;
@@ -113,9 +114,6 @@ impl LlmProcessor {
         let mut last_error = None;
 
         while retry_count <= max_retries {
-            // Check for immediate stop signal before each call
-            self.check_signal(signal_rx).await?;
-
             let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
             let session_id_for_rx = self.session_id.clone();
             let gateway_for_rx = gateway.clone();
@@ -402,13 +400,35 @@ impl LlmProcessor {
                             _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
                             sig = signal_rx.recv() => {
                                 if let Some(sig_str) = sig {
-                                    let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-                                    if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                                        log::info!(
-                                            "WorkflowExecutor {}: Stop signal received during retry backoff",
-                                            self.session_id
-                                        );
-                                        return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                                    match parse_runtime_signal(&sig_str) {
+                                        RuntimeSignal::Stop => {
+                                            log::info!(
+                                                "WorkflowExecutor {}: Stop signal received during retry backoff",
+                                                self.session_id
+                                            );
+                                            return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                                        }
+                                        RuntimeSignal::UserMessage(content) => {
+                                            let queued_id = format!("queued_{}", crate::ccproxy::get_tool_id());
+                                            stash_user_message(&self.session_id, queued_id.clone(), content.clone());
+                                            let _ = gateway.send(
+                                                &self.session_id,
+                                                GatewayPayload::Message {
+                                                    role: "user".to_string(),
+                                                    content,
+                                                    reasoning: None,
+                                                    step_type: None,
+                                                    step_index: current_step as i32,
+                                                    is_error: false,
+                                                    error_type: None,
+                                                    metadata: Some(serde_json::json!({
+                                                        "queued_user_message_id": queued_id,
+                                                        "queue_status": "queued"
+                                                    })),
+                                                },
+                                            ).await;
+                                        }
+                                        RuntimeSignal::Other => {}
                                     }
                                 }
                             }
@@ -423,23 +443,6 @@ impl LlmProcessor {
 
         Err(last_error
             .unwrap_or_else(|| WorkflowEngineError::General("Max retries exceeded".to_string())))
-    }
-
-    async fn check_signal(
-        &self,
-        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
-    ) -> Result<(), WorkflowEngineError> {
-        while let Ok(sig_str) = signal_rx.try_recv() {
-            let sig_json: serde_json::Value = serde_json::from_str(&sig_str).unwrap_or_default();
-            if sig_json["type"] == "stop" || sig_str.to_lowercase().contains("stop") {
-                log::info!(
-                    "WorkflowExecutor {}: Stop signal received in LLM processor",
-                    self.session_id
-                );
-                return Err(WorkflowEngineError::General("STOP_SIGNAL".into()));
-            }
-        }
-        Ok(())
     }
 
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {

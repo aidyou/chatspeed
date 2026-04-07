@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
+import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
 
 /**
  * Composable for managing authorized paths
@@ -86,7 +87,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
             // Immediately notify executor to update path_guard in memory
             await invokeWrapper('workflow_signal', {
               sessionId: currentWorkflowId.value,
-              signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+              signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
             })
           }
         } else {
@@ -110,7 +111,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
       // Immediately notify executor
       await invokeWrapper('workflow_signal', {
         sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+        signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
       })
     } else {
       // No workflow yet - remove from pendingPaths
@@ -130,7 +131,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
         // Immediately notify executor to update path_guard in memory
         await invokeWrapper('workflow_signal', {
           sessionId: currentWorkflowId.value,
-          signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+          signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
         })
       }
     } else {
@@ -151,7 +152,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
       // Immediately notify executor
       await invokeWrapper('workflow_signal', {
         sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({ type: 'update_allowed_paths', paths: newPaths })
+        signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
       })
     } else {
       // No workflow yet - remove from pendingPaths

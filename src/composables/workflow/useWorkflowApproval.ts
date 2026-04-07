@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 import { useWorkflowStore } from '@/stores/workflow'
+import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
 
 /**
  * Composable for managing approval dialog logic
@@ -35,7 +36,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalLoading.value = true
     try {
       const signal = JSON.stringify({
-        type: 'approval',
+        type: SIGNAL_TYPES.APPROVAL,
         approved: true,
         approve_all: false,
         id: approvalRequestId.value
@@ -73,7 +74,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalLoading.value = true
     try {
       const signal = JSON.stringify({
-        type: 'approval',
+        type: SIGNAL_TYPES.APPROVAL,
         approved: true,
         approve_all: true,
         id: approvalRequestId.value
@@ -110,7 +111,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalLoading.value = true
     try {
       const signal = JSON.stringify({
-        type: 'approval',
+        type: SIGNAL_TYPES.APPROVAL,
         approved: false,
         approve_all: false,
         id: approvalRequestId.value

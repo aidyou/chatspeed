@@ -7,6 +7,13 @@ import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { useModelStore } from '@/stores/model'
 import { ElMessageBox } from 'element-plus'
+import {
+    SIGNAL_TYPES,
+    TERMINAL_STATUSES,
+    WAITING_STATUSES,
+    WORKFLOW_STATUSES,
+    WORKFLOW_WAIT_REASONS
+} from '@/composables/workflow/signalTypes'
 
 /**wo
  * Composable for core workflow operations
@@ -116,6 +123,17 @@ export function useWorkflowCore({
         // continue to run on the server.
         return true
     })
+    const signalMapping: Record<string, string> = {
+        finalAudit: SIGNAL_TYPES.UPDATE_FINAL_AUDIT,
+        approvalLevel: SIGNAL_TYPES.UPDATE_APPROVAL_LEVEL
+    }
+
+    const toSignalType = (key) => {
+        if (signalMapping[key]) return signalMapping[key]
+        const snake = key.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`)
+        return `update_${snake}`
+    }
+    const isSyncingWorkflowConfig = ref(false)
 
     // Unified function to update workflow config
     const updateWorkflowConfig = async (key, value) => {
@@ -143,12 +161,13 @@ export function useWorkflowCore({
 
             // 2. Signal engine if workflow is active (skip for awaiting_approval to avoid race with request_confirm_broadcast)
             const status = currentWorkflow.value?.status
-            if (status && ['thinking', 'executing', 'paused', 'awaiting_user'].includes(status)) {
+            if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER].includes(status)) {
                 try {
+                    const signalType = toSignalType(key)
                     await invokeWrapper('workflow_signal', {
                         sessionId: currentWorkflowId.value,
                         signal: JSON.stringify({
-                            type: `update_${key}`,
+                            type: signalType,
                             [key]: value
                         })
                     })
@@ -176,7 +195,7 @@ export function useWorkflowCore({
         () => currentWorkflow.value?.status,
         (newStatus) => {
             const statusLower = (newStatus || '').toLowerCase()
-            const isApprovalWaiting = statusLower === 'awaiting_approval' || waitReason.value === 'approval'
+            const isApprovalWaiting = statusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
             // Close approval dialog only after leaving approval waiting state.
             if (!isApprovalWaiting && approvalVisible.value) {
                 approvalVisible.value = false
@@ -204,22 +223,21 @@ export function useWorkflowCore({
                 const prevWaitReason = workflowStore.waitReason
                 workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
                 
-                const isWaiting = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'].includes(payload.state)
+                const isWaiting = WAITING_STATUSES.includes(payload.state)
                 console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
 
-                const terminalStates = ['completed', 'cancelled', 'error', 'failed']
-                if (terminalStates.includes((payload.state || '').toLowerCase())) {
+                if (TERMINAL_STATUSES.includes((payload.state || '').toLowerCase())) {
                     workflowStore.setHasLiveSession(false)
                 }
 
                 // Check for confirmation waiting
-                if (payload.state === 'paused' && payload.wait_reason === 'confirmation') {
+                if (payload.state === WORKFLOW_STATUSES.PAUSED && payload.wait_reason === WORKFLOW_WAIT_REASONS.CONFIRMATION) {
                     showConfirmationDialog()
                 }
 
                 // If we move out of Thinking/Executing, reset the parser
                 // Use a small timeout to allow final rendering of streaming buffers
-                if (payload.state !== 'thinking' && payload.state !== 'executing') {
+                if (payload.state !== WORKFLOW_STATUSES.THINKING && payload.state !== WORKFLOW_STATUSES.EXECUTING) {
                     setTimeout(() => {
                         resetChatState()
                     }, 500)
@@ -312,13 +330,13 @@ export function useWorkflowCore({
             
             console.log('[Workflow] Checking approval recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
             
-            if (status === 'awaiting_approval' && hasPendingApproval) {
+            if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL && hasPendingApproval) {
                 if (workflowStore.hasLiveSession) {
                     console.log('[Workflow] Requesting rebroadcast_pending for live awaiting_approval session')
                     try {
                         await invokeWrapper('workflow_signal', {
                             sessionId: id,
-                            signal: JSON.stringify({ type: 'rebroadcast_pending' })
+                            signal: JSON.stringify({ type: SIGNAL_TYPES.REBROADCAST_PENDING })
                         })
                         console.log('[Workflow] rebroadcast_pending sent successfully')
                     } catch (e) {
@@ -335,7 +353,7 @@ export function useWorkflowCore({
                     approvalDetails.value = pendingApprovalMessage?.message || ''
                     approvalVisible.value = true
                 }
-            } else if (status === 'paused' && workflowStore.waitReason === 'confirmation' && workflowStore.hasLiveSession) {
+            } else if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
                 console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
                 showConfirmationDialog()
             } else {
@@ -346,6 +364,7 @@ export function useWorkflowCore({
             const config = workflowStore.currentWorkflow.agentConfig || {}
 
             // finalAuditMode
+            isSyncingWorkflowConfig.value = true
             if (config.finalAudit !== undefined && config.finalAudit !== null) {
                 finalAuditMode.value = config.finalAudit ? 'on' : 'off'
             } else if (selectedAgent.value?.finalAudit) {
@@ -353,8 +372,10 @@ export function useWorkflowCore({
             } else {
                 finalAuditMode.value = 'off'
             }
+            isSyncingWorkflowConfig.value = false
 
             // approvalLevel
+            isSyncingWorkflowConfig.value = true
             if (config.approvalLevel) {
                 approvalLevel.value = config.approvalLevel
             } else if (selectedAgent.value?.approvalLevel) {
@@ -362,6 +383,7 @@ export function useWorkflowCore({
             } else {
                 approvalLevel.value = 'default'
             }
+            isSyncingWorkflowConfig.value = false
         }
 
         // Scroll to bottom after switching workflow (force scroll)
@@ -381,7 +403,7 @@ export function useWorkflowCore({
             closeOnPressEscape: false
         }).then(async () => {
             console.log('[Workflow] User chose to continue')
-            const signal = JSON.stringify({ type: 'continue' })
+            const signal = JSON.stringify({ type: SIGNAL_TYPES.CONTINUE })
             try {
                 await invokeWrapper('workflow_signal', {
                     sessionId: currentWorkflowId.value,
@@ -398,7 +420,7 @@ export function useWorkflowCore({
             resetChatState()
             workflowStore.setNotification('', 'info')
             
-            const signal = JSON.stringify({ type: 'stop' })
+            const signal = JSON.stringify({ type: SIGNAL_TYPES.STOP })
             try {
                 await invokeWrapper('workflow_signal', {
                     sessionId: currentWorkflowId.value,
@@ -553,15 +575,17 @@ export function useWorkflowCore({
                 // Just send signal to the running loop
                 try {
                     const signal = JSON.stringify({
-                        type: 'user_message',
+                        type: SIGNAL_TYPES.USER_MESSAGE,
                         content: message
                     })
 
                     // Optimistic update only for states that accept user_input signal
                     // Do NOT update for approval waiting - backend will reject user_input signal
-                    const shouldOptimisticUpdate = waitReason.value === 'user_input' || waitReason.value === 'confirmation'
+                    const shouldOptimisticUpdate =
+                        waitReason.value === WORKFLOW_WAIT_REASONS.USER_INPUT ||
+                        waitReason.value === WORKFLOW_WAIT_REASONS.CONFIRMATION
                     if (shouldOptimisticUpdate) {
-                        workflowStore.updateWorkflowStatus(currentWorkflowId.value, 'thinking')
+                        workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.THINKING)
                     }
 
                     const res = await invokeWrapper('workflow_signal', {
@@ -571,7 +595,7 @@ export function useWorkflowCore({
                     console.log('Signal sent successfully:', res)
                     
                     // Log rejection for approval waiting (backend should reject)
-                    if (waitReason.value === 'approval') {
+                    if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) {
                         console.log('[Workflow][phase=signal] user_input signal sent during approval waiting - backend should reject')
                     }
                 } catch (error) {
@@ -599,7 +623,7 @@ export function useWorkflowCore({
                             await invokeWrapper('workflow_signal', {
                                 sessionId: currentWorkflowId.value,
                                 signal: JSON.stringify({
-                                    type: 'user_message',
+                                    type: SIGNAL_TYPES.USER_MESSAGE,
                                     content: message
                                 })
                             })
@@ -775,12 +799,12 @@ export function useWorkflowCore({
 
                 // Signal the engine to update runtime config (only if workflow is active)
                 const status = currentWorkflow.value?.status
-                if (status && ['thinking', 'executing', 'paused', 'awaiting_user', 'awaiting_approval'].includes(status)) {
+                if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER, WORKFLOW_STATUSES.AWAITING_APPROVAL].includes(status)) {
                     try {
                         await invokeWrapper('workflow_signal', {
                             sessionId: currentWorkflowId.value,
                             signal: JSON.stringify({
-                                type: 'update_model_config',
+                                type: SIGNAL_TYPES.UPDATE_MODEL_CONFIG,
                                 configs: configs
                             })
                         })
@@ -975,11 +999,13 @@ export function useWorkflowCore({
 
     // Watch for approval level changes
     watch(approvalLevel, async (newVal) => {
+        if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('approvalLevel', newVal)
     })
 
     // Watch for final audit mode changes
     watch(finalAuditMode, async (newVal) => {
+        if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('finalAudit', newVal === 'on')
     })
 

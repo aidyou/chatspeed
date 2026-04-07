@@ -1,6 +1,16 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
+import {
+  APPROVAL_WAITING_STATUSES,
+  BLOCKING_WAIT_REASONS,
+  RESUMABLE_STATUSES,
+  RUNNING_STATUSES,
+  TERMINAL_STATUSES,
+  WAITING_STATUSES,
+  WORKFLOW_STATUSES,
+  WORKFLOW_WAIT_REASONS
+} from '@/composables/workflow/signalTypes';
 
 export const useWorkflowStore = defineStore('workflow', () => {
   const workflows = ref([]);
@@ -25,9 +35,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
 
-  const runningLikeStates = ['thinking', 'executing', 'auditing', 'running'];
-  const waitingLikeStates = ['paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval'];
-  const approvalWaitingStates = ['awaiting_approval', 'awaiting_auto_approval'];
+  const runningLikeStates = [...RUNNING_STATUSES];
+  const waitingLikeStates = [...WAITING_STATUSES];
+  const approvalWaitingStates = [...APPROVAL_WAITING_STATUSES];
 
   const findLatestPendingApprovalMessage = (list = []) => {
     const finalizedIds = new Set();
@@ -77,9 +87,23 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   const canContinue = computed(() => {
-    if (!hasLiveSession.value) return false;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    return status === 'paused' && waitReason.value === 'confirmation';
+    // Continue is only for resumable interrupted states.
+    // It must NOT be shown for completed workflows or wait states requiring user input/confirmation.
+    if (
+      [
+        WORKFLOW_STATUSES.COMPLETED,
+        WORKFLOW_STATUSES.AWAITING_USER,
+        WORKFLOW_STATUSES.AWAITING_APPROVAL,
+        WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL
+      ].includes(status)
+    ) {
+      return false;
+    }
+    if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) {
+      return false;
+    }
+    return RESUMABLE_STATUSES.includes(status);
   });
 
   const pendingApprovalMessage = computed(() => {
@@ -88,14 +112,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const canApprovePending = computed(() => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    const isApprovalWaiting = waitReason.value === 'approval' || approvalWaitingStates.includes(status);
+    const isApprovalWaiting =
+      waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
     if (!isApprovalWaiting) return false;
     return !!pendingApprovalMessage.value;
   });
 
   const canApprovePlan = computed(() => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    const isApprovalWaiting = waitReason.value === 'approval' || approvalWaitingStates.includes(status);
+    const isApprovalWaiting =
+      waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
     if (!isApprovalWaiting) return false;
     return !canApprovePending.value;
   });
@@ -241,15 +267,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // Set shell policy from parsed workflow data
       setShellPolicy(snapshot.workflow.shellPolicy || []);
 
-      const status = snapshot.workflow.status?.toLowerCase() || 'pending';
+      const status = snapshot.workflow.status?.toLowerCase() || WORKFLOW_STATUSES.PENDING;
       hasLiveSession.value = snapshot.hasLiveSession || false;
       // isRunning means "actively processing with a live runtime session"
-      isRunning.value = [
-        'thinking',
-        'executing',
-        'auditing',
-        'running'
-      ].includes(status) && hasLiveSession.value;
+      isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
 
       waitReason.value = snapshot.workflow.waitReason || null;
 
@@ -348,12 +369,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const setHasLiveSession = (live) => {
     hasLiveSession.value = !!live;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    isRunning.value = [
-      'thinking',
-      'executing',
-      'auditing',
-      'running'
-    ].includes(status) && hasLiveSession.value;
+    isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
   };
 
   const addMessage = (message) => {
@@ -367,9 +383,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // Fallback text-based matching is intentionally avoided because short fixed
     // tool outputs (for example finish_task => "Finished") can collide across turns.
     const incomingToolCallId = message.metadata?.tool_call_id;
+    const incomingQueuedUserMessageId = message.metadata?.queued_user_message_id;
     const index = messages.value.findIndex((m) => {
       if (message.id && m.id === message.id) return true;
       if (incomingToolCallId && m.metadata?.tool_call_id === incomingToolCallId) return true;
+      if (
+        incomingQueuedUserMessageId &&
+        m.metadata?.queued_user_message_id === incomingQueuedUserMessageId
+      ) {
+        return true;
+      }
       return false;
     });
 
@@ -390,9 +413,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // Local status update for all engine states
       const statusLower = status.toLowerCase();
       const localUpdateStates = [
-        'thinking', 'executing', 'auditing',
-        'paused', 'awaiting_user', 'awaiting_approval', 'awaiting_auto_approval',
-        'completed', 'error', 'cancelled', 'failed'
+        ...RUNNING_STATUSES,
+        ...WAITING_STATUSES,
+        ...TERMINAL_STATUSES
       ];
       
       if (localUpdateStates.includes(statusLower)) {
@@ -403,12 +426,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         }
 
         // isRunning means "actively processing with a live runtime session"
-        isRunning.value = [
-          'thinking',
-          'executing',
-          'auditing',
-          'running'
-        ].includes(statusLower) && hasLiveSession.value;
+        isRunning.value = RUNNING_STATUSES.includes(statusLower) && hasLiveSession.value;
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }

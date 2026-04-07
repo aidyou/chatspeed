@@ -345,9 +345,10 @@ impl MainStore {
             .query_row(
                 "SELECT todo_list FROM workflows WHERE id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
 
         Ok(todo_list_str
             .and_then(|s| serde_json::from_str(&s).ok())

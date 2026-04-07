@@ -5,6 +5,7 @@ use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
+use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::StepType;
 use chrono::{DateTime, Local};
 use glob::glob;
@@ -317,7 +318,9 @@ pub async fn create_workflow(
                             }
                         }
                         if let Some(ctx) = m.context_size {
-                            m.context_size = Some(ctx.min(100));
+                            // Keep inherited context window in a sane range instead of
+                            // accidentally shrinking it to <=100.
+                            m.context_size = Some(ctx.clamp(1024, 2_000_000));
                         }
                     }
                 }
@@ -1133,10 +1136,17 @@ pub async fn workflow_signal(
         // Session not in manager - enter recovery logic
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
             let signal_type = val["type"].as_str().unwrap_or("unknown");
+            let signal_type_enum = SignalType::from_str(signal_type);
+            let normalized_signal_type = signal_type_enum
+                .map(|s| s.as_str())
+                .unwrap_or(signal_type);
             
             // Handle user_message signal (Phase 3 unified signal type)
             // Also support legacy user_input for backward compatibility
-            if signal_type == "user_message" || signal_type == "user_input" {
+            if matches!(
+                signal_type_enum,
+                Some(SignalType::UserMessage | SignalType::LegacyUserInput)
+            ) {
                 if let Some(content) = val["content"].as_str() {
                     let snapshot = {
                         let store = state.read().map_err(|e| e.to_string())?;
@@ -1169,9 +1179,10 @@ pub async fn workflow_signal(
                     }
                     
                     log::info!(
-                        "[Workflow] Session {} is in resumable state ({}), resuming with new input",
+                        "[Workflow] Session {} is in resumable state ({}), resuming with signal={}",
                         session_id,
-                        snapshot.workflow.status
+                        snapshot.workflow.status,
+                        normalized_signal_type
                     );
 
                     workflow_start(
@@ -1361,9 +1372,26 @@ pub async fn workflow_signal(
 
 #[tauri::command]
 pub async fn workflow_stop(
+    chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     session_id: String,
 ) -> Result<(), String> {
+    // 1) Best-effort immediate stream interruption for the in-flight model call.
+    // Workflow runtime uses OpenAI protocol wrapper with chat_id=session_id.
+    {
+        let mut chats = chat_state.chats.lock().await;
+        if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
+            if let Some(chat) = protocol_chats.get_mut(&session_id) {
+                chat.set_stop_flag(true).await;
+                log::info!(
+                    "[Workflow][session={}][phase=stop] Set chat stop_flag=true for immediate stream interruption",
+                    session_id
+                );
+            }
+        }
+    }
+
+    // 2) Keep unified workflow-level stop signal for state machine cancellation.
     let gateway_arc = gateway.inner().clone();
     gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())

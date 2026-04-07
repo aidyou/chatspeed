@@ -20,6 +20,7 @@ pub mod policy;
 pub mod prompts;
 pub mod runners;
 pub mod security;
+pub mod signals;
 pub mod sinks;
 pub mod skills;
 pub mod agents_md;
