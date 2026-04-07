@@ -371,7 +371,7 @@ mod tests {
         let json = r#"{"type":"approval","id":"call_123","approved":true,"approve_all":false}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(
-            matches!(signal, WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all } 
+            matches!(signal, WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all }
             if tool_call_id == "call_123" && approved && !approve_all)
         );
 

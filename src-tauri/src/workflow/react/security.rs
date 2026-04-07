@@ -94,7 +94,10 @@ impl PathGuard {
     }
 
     pub fn workspace_roots(&self) -> Vec<PathBuf> {
-        self.workspace_roots.iter().map(|(r, _)| r.clone()).collect()
+        self.workspace_roots
+            .iter()
+            .map(|(r, _)| r.clone())
+            .collect()
     }
 
     pub fn get_primary_root(&self) -> Option<&std::path::Path> {

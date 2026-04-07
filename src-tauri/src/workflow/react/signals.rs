@@ -25,9 +25,7 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
         signal_type_enum,
         Some(SignalType::UserMessage | SignalType::LegacyUserInput)
     ) {
-        return RuntimeSignal::UserMessage(
-            parsed["content"].as_str().unwrap_or("").to_string(),
-        );
+        return RuntimeSignal::UserMessage(parsed["content"].as_str().unwrap_or("").to_string());
     }
 
     RuntimeSignal::Other

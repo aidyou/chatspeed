@@ -9,8 +9,8 @@ use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::security::PathGuard;
-use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::signals::{parse_runtime_signal, stash_user_message, RuntimeSignal};
+use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
 
 use std::collections::HashMap;
@@ -753,8 +753,10 @@ impl LlmProcessor {
         } else {
             (vec![], None)
         };
-        
-        let cwd = cwd.or_else(|| allowed_roots.first().cloned()).unwrap_or_default();
+
+        let cwd = cwd
+            .or_else(|| allowed_roots.first().cloned())
+            .unwrap_or_default();
 
         let is_git = if !cwd.as_os_str().is_empty() {
             std::process::Command::new("git")

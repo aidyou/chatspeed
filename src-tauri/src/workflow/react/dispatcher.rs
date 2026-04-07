@@ -31,18 +31,11 @@ pub enum DispatchEvent {
         payload: GatewayPayload,
     },
     /// Audit event to be persisted to the database
-    Audit {
-        event: WorkflowEvent,
-    },
+    Audit { event: WorkflowEvent },
     /// Snapshot to be persisted to the database
-    Snapshot {
-        context: ExecutionContext,
-    },
+    Snapshot { context: ExecutionContext },
     /// Terminal event (completed/failed/cancelled) - must reach DB sink
-    Terminal {
-        session_id: String,
-        state: String,
-    },
+    Terminal { session_id: String, state: String },
 }
 
 /// Wrapper for events with metadata for tracking and metrics.
@@ -316,8 +309,11 @@ impl Dispatcher {
         session_id: String,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
-        self.dispatch(DispatchEvent::Ui { session_id, payload })
-            .await
+        self.dispatch(DispatchEvent::Ui {
+            session_id,
+            payload,
+        })
+        .await
     }
 
     /// Dispatch an audit event (convenience method).
@@ -394,7 +390,8 @@ mod tests {
     #[async_trait::async_trait]
     impl Sink for MockSink {
         async fn accept(&self, _envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
-            self.count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if self.should_fail {
                 Err(WorkflowEngineError::General("mock failure".to_string()))
             } else {
@@ -449,10 +446,7 @@ mod tests {
         let ok_sink = Arc::new(MockSink::new("ok", count_ok.clone()));
 
         let dispatcher = Dispatcher::new(
-            vec![
-                failing_sink as Arc<dyn Sink>,
-                ok_sink as Arc<dyn Sink>,
-            ],
+            vec![failing_sink as Arc<dyn Sink>, ok_sink as Arc<dyn Sink>],
             DispatcherConfig::default(),
         );
 
@@ -519,10 +513,7 @@ mod tests {
         let db_sink = Arc::new(MockSink::new("db", db_count.clone()));
 
         let dispatcher = Dispatcher::new(
-            vec![
-                failing_ui_sink as Arc<dyn Sink>,
-                db_sink as Arc<dyn Sink>,
-            ],
+            vec![failing_ui_sink as Arc<dyn Sink>, db_sink as Arc<dyn Sink>],
             DispatcherConfig::default(),
         );
 
@@ -531,11 +522,20 @@ mod tests {
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        assert!(db_count.load(Ordering::Relaxed) >= 1, "DB sink should receive event even when UI sink fails");
-        assert!(ui_count.load(Ordering::Relaxed) >= 1, "UI sink should be called even though it fails");
+        assert!(
+            db_count.load(Ordering::Relaxed) >= 1,
+            "DB sink should receive event even when UI sink fails"
+        );
+        assert!(
+            ui_count.load(Ordering::Relaxed) >= 1,
+            "UI sink should be called even though it fails"
+        );
 
         let metrics = dispatcher.metrics();
-        assert!(metrics.total_failed >= 1, "Metrics should show UI sink failure");
+        assert!(
+            metrics.total_failed >= 1,
+            "Metrics should show UI sink failure"
+        );
     }
 
     #[tokio::test]
@@ -545,7 +545,7 @@ mod tests {
 
         let slow_sink_called = Arc::new(AtomicBool::new(false));
         let slow_sink_done = Arc::new(AtomicBool::new(false));
-        
+
         struct SlowSink {
             called: Arc<AtomicBool>,
             done: Arc<AtomicBool>,
@@ -586,8 +586,11 @@ mod tests {
             .unwrap();
         let dispatch_time = start.elapsed();
 
-        assert!(dispatch_time < std::time::Duration::from_millis(100), 
-            "dispatch() should return quickly (<100ms), not wait for slow sink (500ms). Took {:?}", dispatch_time);
+        assert!(
+            dispatch_time < std::time::Duration::from_millis(100),
+            "dispatch() should return quickly (<100ms), not wait for slow sink (500ms). Took {:?}",
+            dispatch_time
+        );
 
         for _ in 0..20 {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -595,11 +598,15 @@ mod tests {
                 break;
             }
         }
-        
-        assert!(slow_sink_called.load(AtomicOrdering::Relaxed), 
-            "Slow sink should have been called");
-        assert!(!slow_sink_done.load(AtomicOrdering::Relaxed), 
-            "Slow sink should not have finished yet since dispatch is non-blocking");
+
+        assert!(
+            slow_sink_called.load(AtomicOrdering::Relaxed),
+            "Slow sink should have been called"
+        );
+        assert!(
+            !slow_sink_done.load(AtomicOrdering::Relaxed),
+            "Slow sink should not have finished yet since dispatch is non-blocking"
+        );
     }
 
     #[tokio::test]
@@ -607,23 +614,33 @@ mod tests {
         let db_count = Arc::new(AtomicUsize::new(0));
         let db_sink = Arc::new(MockSink::new("db", db_count.clone()));
 
-        let dispatcher = Dispatcher::new(
-            vec![db_sink as Arc<dyn Sink>],
-            DispatcherConfig::default(),
-        );
+        let dispatcher =
+            Dispatcher::new(vec![db_sink as Arc<dyn Sink>], DispatcherConfig::default());
 
-        dispatcher.dispatch_terminal("test-session".to_string(), "completed".to_string()).await.unwrap();
+        dispatcher
+            .dispatch_terminal("test-session".to_string(), "completed".to_string())
+            .await
+            .unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        assert!(db_count.load(Ordering::Relaxed) >= 1, "DB sink should receive terminal event");
+        assert!(
+            db_count.load(Ordering::Relaxed) >= 1,
+            "DB sink should receive terminal event"
+        );
 
         db_count.store(0, Ordering::Relaxed);
 
-        dispatcher.dispatch_terminal("test-session-2".to_string(), "failed".to_string()).await.unwrap();
+        dispatcher
+            .dispatch_terminal("test-session-2".to_string(), "failed".to_string())
+            .await
+            .unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        assert!(db_count.load(Ordering::Relaxed) >= 1, "DB sink should receive failed terminal event");
+        assert!(
+            db_count.load(Ordering::Relaxed) >= 1,
+            "DB sink should receive failed terminal event"
+        );
     }
 }

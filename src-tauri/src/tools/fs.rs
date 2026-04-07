@@ -265,13 +265,16 @@ impl ToolDefinition for EditFile {
         let old_str_win = old_str_unix.replace("\n", "\r\n");
         let new_str_win = new_str_unix.replace("\n", "\r\n");
 
-        // Strategy: 
+        // Strategy:
         // A. If the Windows variant matches, use it (preserves \r\n)
         // B. If the Unix variant matches, use it (preserves \n)
         // C. If neither matches, try normalization as a fallback
         let mut start_line = 0;
         if raw_content.contains(&old_str_win) {
-            let matches: Vec<usize> = raw_content.match_indices(&old_str_win).map(|(i, _)| i).collect();
+            let matches: Vec<usize> = raw_content
+                .match_indices(&old_str_win)
+                .map(|(i, _)| i)
+                .collect();
             if !replace_all && matches.len() > 1 {
                 return Err(ToolError::ExecutionFailed(format!(
                     "The old_string is not unique (found {} matches with Windows line endings). \
@@ -279,7 +282,7 @@ impl ToolDefinition for EditFile {
                     matches.len()
                 )));
             }
-            
+
             start_line = raw_content[..matches[0]].lines().count();
             final_content = if replace_all {
                 raw_content.replace(&old_str_win, &new_str_win)
@@ -288,7 +291,10 @@ impl ToolDefinition for EditFile {
             };
             match_found = true;
         } else if raw_content.contains(old_str_unix) {
-            let matches: Vec<usize> = raw_content.match_indices(old_str_unix).map(|(i, _)| i).collect();
+            let matches: Vec<usize> = raw_content
+                .match_indices(old_str_unix)
+                .map(|(i, _)| i)
+                .collect();
             if !replace_all && matches.len() > 1 {
                 return Err(ToolError::ExecutionFailed(format!(
                     "The old_string is not unique (found {} matches with Unix line endings). \
@@ -296,7 +302,7 @@ impl ToolDefinition for EditFile {
                     matches.len()
                 )));
             }
-            
+
             start_line = raw_content[..matches[0]].lines().count();
             final_content = if replace_all {
                 raw_content.replace(old_str_unix, new_str_unix)
@@ -310,7 +316,10 @@ impl ToolDefinition for EditFile {
             // D. Extreme Fallback: Normalization (Handles mixed endings within the matched block)
             let normalized_file = raw_content.replace("\r\n", "\n");
             if normalized_file.contains(old_str_unix) {
-                let matches: Vec<usize> = normalized_file.match_indices(old_str_unix).map(|(i, _)| i).collect();
+                let matches: Vec<usize> = normalized_file
+                    .match_indices(old_str_unix)
+                    .map(|(i, _)| i)
+                    .collect();
                 if !replace_all && matches.len() > 1 {
                     return Err(ToolError::ExecutionFailed(format!(
                         "The old_string is not unique (found {} matches after normalization). \
@@ -318,17 +327,21 @@ impl ToolDefinition for EditFile {
                         matches.len()
                     )));
                 }
-                
+
                 start_line = normalized_file[..matches[0]].lines().count();
                 let replaced_normalized = if replace_all {
                     normalized_file.replace(old_str_unix, new_str_unix)
                 } else {
                     normalized_file.replacen(old_str_unix, new_str_unix, 1)
                 };
-                
+
                 // Restore style based on majority
                 let use_win = raw_content.contains("\r\n");
-                final_content = if use_win { replaced_normalized.replace("\n", "\r\n") } else { replaced_normalized };
+                final_content = if use_win {
+                    replaced_normalized.replace("\n", "\r\n")
+                } else {
+                    replaced_normalized
+                };
                 match_found = true;
             }
         }
@@ -343,10 +356,7 @@ impl ToolDefinition for EditFile {
         }
 
         fs::write(path_str, final_content).map_err(|e| {
-            ToolError::IoError(format!(
-                "Edit write failed: {}. Check file permissions.",
-                e
-            ))
+            ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e))
         })?;
 
         let result_json = json!({
@@ -591,7 +601,10 @@ mod tests {
         });
 
         let result = tool.call(params).await.unwrap();
-        assert!(result.content.unwrap().contains("File overwritten successfully"));
+        assert!(result
+            .content
+            .unwrap()
+            .contains("File overwritten successfully"));
 
         // Verify backup was created (look for .bak extension with timestamp)
         let dir = Path::new(&path).parent().unwrap();

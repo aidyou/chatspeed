@@ -31,9 +31,9 @@ use crate::workflow::react::{
     orchestrator::SubAgentFactory,
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
-    skills::{SkillManifest, SkillScanner},
     signals::{parse_runtime_signal, take_stashed_user_messages, RuntimeSignal, SignalType},
     sinks::{DBSink, Sink, TauriSink},
+    skills::{SkillManifest, SkillScanner},
     types::{
         ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason,
         WorkflowSignal, WorkflowState,
@@ -216,7 +216,7 @@ impl WorkflowExecutor {
         )));
         let path_guard_clone = path_guard.clone();
 
-let max_contexts = agent_config.max_contexts.unwrap_or(128000);
+        let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         let max_steps = if policy.phase == ExecutionPhase::Planning {
             10
         } else {
@@ -349,7 +349,10 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         self.dispatcher = Some(dispatcher);
     }
 
-    async fn dispatch_ui_payload(&self, payload: GatewayPayload) -> Result<(), WorkflowEngineError> {
+    async fn dispatch_ui_payload(
+        &self,
+        payload: GatewayPayload,
+    ) -> Result<(), WorkflowEngineError> {
         if let Some(ref dispatcher) = self.dispatcher {
             if let Err(e) = dispatcher
                 .dispatch_ui(self.session_id.clone(), payload.clone())
@@ -461,7 +464,8 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                     self.session_id
                 );
             } else if self.state == WorkflowState::AwaitingUser
-                || self.state == WorkflowState::AwaitingApproval {
+                || self.state == WorkflowState::AwaitingApproval
+            {
                 // Use the new recovery mechanism for AwaitingUser and AwaitingApproval states
                 let recovery_result = crate::workflow::react::replay::restore_execution_context(
                     self.context.main_store.clone(),
@@ -478,8 +482,10 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             context.wait_reason,
                             context.pending_tools.len()
                         );
-                        
-                        if self.state == WorkflowState::AwaitingApproval && context.pending_tools.is_empty() {
+
+                        if self.state == WorkflowState::AwaitingApproval
+                            && context.pending_tools.is_empty()
+                        {
                             log::warn!(
                                 "[Workflow][session={}][phase=restore] Recovery returned empty pending_tools for AwaitingApproval state",
                                 self.session_id
@@ -504,7 +510,10 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             }
                         }
                     }
-                    crate::workflow::react::replay::RecoveryResult::SafeFailed { session_id: _, error } => {
+                    crate::workflow::react::replay::RecoveryResult::SafeFailed {
+                        session_id: _,
+                        error,
+                    } => {
                         log::error!(
                             "[Workflow][session={}][phase=restore] Recovery failed: {}",
                             self.session_id,
@@ -512,7 +521,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         );
                         self.recovery_failed = true;
                         self.recovery_error = Some(error.to_string());
-                        
+
                         // Enter safe-failed state (use Error state as safe-failed)
                         self.state = WorkflowState::Error;
                         let _ = self
@@ -1101,11 +1110,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                     .map(|r| (r.key().clone(), r.value().clone()))
                                     .collect();
                                 for (id, info) in items {
-                                    let details = info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
+                                    let details = info
+                                        .get("details")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("{}");
                                     let _ = self
                                         .dispatch_ui_payload(GatewayPayload::Confirm {
                                             id,
-                                            action: info["name"].as_str().unwrap_or("unknown").to_string(),
+                                            action: info["name"]
+                                                .as_str()
+                                                .unwrap_or("unknown")
+                                                .to_string(),
                                             details: details.to_string(),
                                         })
                                         .await;
@@ -1113,7 +1128,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             }
                             continue;
                         }
-                        WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all } => {
+                        WorkflowSignal::ApprovalDecision {
+                            tool_call_id,
+                            approved,
+                            approve_all,
+                        } => {
                             let event = WorkflowEvent::approval_resolved(
                                 self.session_id.clone(),
                                 tool_call_id.clone(),
@@ -1130,8 +1149,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
                             if approved {
                                 // 1. Retrieve the stashed tool details from the server-side map
-                                let (tool_name, tool_args) = if let Some(stashed) = self.pending_approvals.get(&tool_call_id) {
-                                    let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
+                                let (tool_name, tool_args) = if let Some(stashed) =
+                                    self.pending_approvals.get(&tool_call_id)
+                                {
+                                    let name =
+                                        stashed["name"].as_str().unwrap_or("unknown").to_string();
                                     let args = stashed["arguments"].clone();
                                     (name, args)
                                 } else {
@@ -1173,7 +1195,8 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
                                     // Persist auto_approve list to database
                                     if let Ok(store) = self.context.main_store.write() {
-                                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id)
+                                        if let Ok(snapshot) =
+                                            store.get_workflow_snapshot(&self.session_id)
                                         {
                                             let mut agent_config: serde_json::Value = snapshot
                                                 .workflow
@@ -1181,10 +1204,13 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                                 .and_then(|s| serde_json::from_str(&s).ok())
                                                 .unwrap_or(serde_json::json!({}));
 
-                                            agent_config["auto_approve"] = serde_json::to_value(&tools)
-                                                .unwrap_or(serde_json::json!([]));
+                                            agent_config["auto_approve"] =
+                                                serde_json::to_value(&tools)
+                                                    .unwrap_or(serde_json::json!([]));
 
-                                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                            if let Ok(config_str) =
+                                                serde_json::to_string(&agent_config)
+                                            {
                                                 let _ = store.update_workflow_agent_config(
                                                     &self.session_id,
                                                     &config_str,
@@ -1195,9 +1221,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
                                     // Generate wildcard rule for bash commands and persist to workflow
                                     if tool_name == "bash" {
-                                        if let Some(cmd) = tool_args.get("command").and_then(|v| v.as_str())
+                                        if let Some(cmd) =
+                                            tool_args.get("command").and_then(|v| v.as_str())
                                         {
-                                            let wildcard_pattern = self.generate_wildcard_pattern(cmd);
+                                            let wildcard_pattern =
+                                                self.generate_wildcard_pattern(cmd);
                                             log::info!(
                                                 "WorkflowExecutor {}: Generated wildcard pattern '{}' for command '{}'",
                                                 self.session_id, wildcard_pattern, cmd
@@ -1208,11 +1236,14 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                                 if let Ok(snapshot) =
                                                     store.get_workflow_snapshot(&self.session_id)
                                                 {
-                                                    let mut agent_config: serde_json::Value = snapshot
-                                                        .workflow
-                                                        .agent_config
-                                                        .and_then(|s| serde_json::from_str(&s).ok())
-                                                        .unwrap_or(serde_json::json!({}));
+                                                    let mut agent_config: serde_json::Value =
+                                                        snapshot
+                                                            .workflow
+                                                            .agent_config
+                                                            .and_then(|s| {
+                                                                serde_json::from_str(&s).ok()
+                                                            })
+                                                            .unwrap_or(serde_json::json!({}));
 
                                                     let shell_policy = agent_config
                                                         .get("shell_policy")
@@ -1228,7 +1259,9 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                                     }));
 
                                                     agent_config["shell_policy"] =
-                                                        serde_json::Value::Array(updated_policy.clone());
+                                                        serde_json::Value::Array(
+                                                            updated_policy.clone(),
+                                                        );
 
                                                     // Persist to database
                                                     if let Ok(config_str) =
@@ -1273,13 +1306,14 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                 enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
                                     serde_json::json!(tool_call_id);
 
-                                let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                                    self.global_tool_manager
-                                        .tool_call(&tool_name, enriched_args)
-                                        .await
-                                } else {
-                                    self.tool_manager.tool_call(&tool_name, enriched_args).await
-                                };
+                                let result =
+                                    if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                                        self.global_tool_manager
+                                            .tool_call(&tool_name, enriched_args)
+                                            .await
+                                    } else {
+                                        self.tool_manager.tool_call(&tool_name, enriched_args).await
+                                    };
 
                                 let tool_call_obj = serde_json::json!({
                                     "id": tool_call_id,
@@ -1322,7 +1356,9 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                 self.pending_approvals.remove(&tool_call_id);
                                 self.update_state(WorkflowState::Thinking).await?;
                             } else {
-                                let tool_name = if let Some(stashed) = self.pending_approvals.get(&tool_call_id) {
+                                let tool_name = if let Some(stashed) =
+                                    self.pending_approvals.get(&tool_call_id)
+                                {
                                     stashed["name"].as_str().unwrap_or("unknown").to_string()
                                 } else {
                                     "unknown".to_string()
@@ -1335,7 +1371,12 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                     tool_call_id
                                 );
 
-                                let pretty_title = ObservationReinforcer::generate_title(&tool_name, &serde_json::json!({}), None, None);
+                                let pretty_title = ObservationReinforcer::generate_title(
+                                    &tool_name,
+                                    &serde_json::json!({}),
+                                    None,
+                                    None,
+                                );
                                 let observation = format!(
                                     "<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
                                     tool_name
@@ -1427,10 +1468,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             let _ = self
                                 .dispatch_ui_payload(GatewayPayload::Confirm {
                                     id,
-                                    action: info["name"]
-                                        .as_str()
-                                        .unwrap_or("unknown")
-                                        .to_string(),
+                                    action: info["name"].as_str().unwrap_or("unknown").to_string(),
                                     details: details.to_string(),
                                 })
                                 .await;
@@ -2185,17 +2223,18 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 self.consecutive_no_tool_calls = 0;
             }
 
-            let has_successful_finish_task = results.iter().any(|(_, reinforced, original_call)| {
-                if reinforced.is_error {
-                    return false;
-                }
-                let tool_name = original_call
-                    .get("name")
-                    .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                tool_name == TOOL_FINISH_TASK
-            });
+            let has_successful_finish_task =
+                results.iter().any(|(_, reinforced, original_call)| {
+                    if reinforced.is_error {
+                        return false;
+                    }
+                    let tool_name = original_call
+                        .get("name")
+                        .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    tool_name == TOOL_FINISH_TASK
+                });
 
             if has_successful_finish_task {
                 self.update_state(WorkflowState::Completed).await?;
@@ -2853,11 +2892,13 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             match &new_state {
                 WorkflowState::Completed => {
                     let event = WorkflowEvent::workflow_completed(self.session_id.clone(), None);
-                    self.dispatch_terminal_with_fallback("completed", &event).await;
+                    self.dispatch_terminal_with_fallback("completed", &event)
+                        .await;
                 }
                 WorkflowState::Cancelled => {
                     let event = WorkflowEvent::workflow_cancelled(self.session_id.clone());
-                    self.dispatch_terminal_with_fallback("cancelled", &event).await;
+                    self.dispatch_terminal_with_fallback("cancelled", &event)
+                        .await;
                 }
                 WorkflowState::Error => {
                     let event = WorkflowEvent::workflow_failed(
@@ -2912,9 +2953,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
     pub(crate) fn append_event(&self, event: &WorkflowEvent) -> Result<(), WorkflowEngineError> {
         if let Some(ref dispatcher) = self.dispatcher {
-            if let Err(e) = dispatcher.dispatch_now(crate::workflow::react::dispatcher::DispatchEvent::Audit {
-                event: event.clone(),
-            }) {
+            if let Err(e) =
+                dispatcher.dispatch_now(crate::workflow::react::dispatcher::DispatchEvent::Audit {
+                    event: event.clone(),
+                })
+            {
                 log::warn!(
                     "[Workflow][session={}][phase=dispatcher] audit dispatch failed: {}, falling back to direct DB write",
                     self.session_id,
@@ -3562,9 +3605,9 @@ impl Drop for WorkflowExecutor {
 mod recovery_tests {
     use super::*;
     use crate::db::MainStore;
-    use crate::workflow::react::replay::{RecoveryResult, RecoveryError};
-    use tempfile::tempdir;
+    use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
         let dir = tempdir().expect("failed to create temp dir");
@@ -3631,10 +3674,14 @@ mod recovery_tests {
             .unwrap();
         }
 
-        let result = crate::workflow::react::replay::restore_execution_context(store.clone(), session_id);
+        let result =
+            crate::workflow::react::replay::restore_execution_context(store.clone(), session_id);
 
         match result {
-            RecoveryResult::SafeFailed { session_id: sid, error } => {
+            RecoveryResult::SafeFailed {
+                session_id: sid,
+                error,
+            } => {
                 assert_eq!(sid, session_id);
                 match error {
                     RecoveryError::MissingEventData { .. } => {}

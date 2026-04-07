@@ -40,7 +40,10 @@ impl TauriSink {
 impl Sink for TauriSink {
     async fn accept(&self, envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
         match envelope.event {
-            DispatchEvent::Ui { session_id, payload } => {
+            DispatchEvent::Ui {
+                session_id,
+                payload,
+            } => {
                 self.gateway.send(&session_id, payload).await?;
                 Ok(())
             }
@@ -62,7 +65,7 @@ impl Sink for TauriSink {
                     .await?;
                 Ok(())
             }
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 
@@ -82,20 +85,18 @@ impl DBSink {
     }
 
     fn append_event_sync(&self, event: &WorkflowEvent) -> Result<i64, WorkflowEngineError> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string())))?;
+        let store = self.store.read().map_err(|e| {
+            WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
+        })?;
         store
             .append_workflow_event(event)
             .map_err(WorkflowEngineError::Db)
     }
 
     fn upsert_context_sync(&self, ctx: &ExecutionContext) -> Result<(), WorkflowEngineError> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string())))?;
+        let store = self.store.read().map_err(|e| {
+            WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
+        })?;
         store
             .upsert_execution_context(ctx)
             .map_err(WorkflowEngineError::Db)
@@ -126,10 +127,9 @@ impl Sink for DBSink {
             }
             DispatchEvent::Terminal { session_id, state } => {
                 let event = match state.as_str() {
-                    "completed" => Some(WorkflowEvent::workflow_completed(
-                        session_id.clone(),
-                        None,
-                    )),
+                    "completed" => {
+                        Some(WorkflowEvent::workflow_completed(session_id.clone(), None))
+                    }
                     "error" | "failed" => Some(WorkflowEvent::workflow_failed(
                         session_id.clone(),
                         "terminal state".to_string(),
@@ -148,7 +148,7 @@ impl Sink for DBSink {
                 }
                 Ok(())
             }
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 
@@ -260,7 +260,8 @@ mod tests {
         let store = create_test_store();
         let sink = DBSink::new(store.clone());
 
-        let event = WorkflowEvent::workflow_started("test-session".to_string(), "agent-1".to_string());
+        let event =
+            WorkflowEvent::workflow_started("test-session".to_string(), "agent-1".to_string());
 
         let envelope = EventEnvelope::new(DispatchEvent::Audit { event });
         sink.accept(envelope).await.unwrap();
@@ -331,7 +332,8 @@ mod tests {
         });
         let sink = TauriSink::new(gateway);
 
-        let event = WorkflowEvent::workflow_started("test-session".to_string(), "agent-1".to_string());
+        let event =
+            WorkflowEvent::workflow_started("test-session".to_string(), "agent-1".to_string());
         let envelope = EventEnvelope::new(DispatchEvent::Audit { event });
         sink.accept(envelope).await.unwrap();
 
