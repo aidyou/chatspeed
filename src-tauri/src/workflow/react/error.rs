@@ -28,4 +28,10 @@ pub enum WorkflowEngineError {
 
     #[error("General error: {0}")]
     General(String),
+
+    #[error("Dispatcher channel full")]
+    DispatcherChannelFull,
+
+    #[error("Dispatcher closed")]
+    DispatcherClosed,
 }

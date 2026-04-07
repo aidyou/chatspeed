@@ -1,5 +1,6 @@
 pub mod compression;
 pub mod context;
+pub mod dispatcher;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -19,6 +20,7 @@ pub mod policy;
 pub mod prompts;
 pub mod runners;
 pub mod security;
+pub mod sinks;
 pub mod skills;
 pub mod agents_md;
 pub mod types;

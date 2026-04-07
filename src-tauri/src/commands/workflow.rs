@@ -4,6 +4,7 @@ use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::types::StepType;
 use chrono::{DateTime, Local};
 use glob::glob;
@@ -1783,4 +1784,12 @@ pub async fn get_workflow_events(
     store
         .list_workflow_events(&session_id)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workflow_dispatcher_metrics(
+    session_id: String,
+) -> Result<DispatcherMetricsSnapshot, String> {
+    Dispatcher::metrics_for_session(&session_id)
+        .ok_or_else(|| format!("No dispatcher metrics found for session {}", session_id))
 }

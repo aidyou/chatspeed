@@ -18,6 +18,7 @@ use crate::tools::{
 use crate::workflow::react::{
     compression::ContextCompressor,
     context::ContextManager,
+    dispatcher::{Dispatcher, DispatcherConfig},
     error::WorkflowEngineError,
     events::WorkflowEvent,
     gateway::Gateway,
@@ -31,6 +32,7 @@ use crate::workflow::react::{
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
     skills::{SkillManifest, SkillScanner},
+    sinks::{DBSink, Sink, TauriSink},
     types::{
         ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason,
         WorkflowSignal, WorkflowState,
@@ -101,6 +103,8 @@ pub struct WorkflowExecutor {
     pub(crate) recovery_failed: bool,
     /// Error message if recovery failed.
     pub(crate) recovery_error: Option<String>,
+    /// Optional dispatcher for event distribution (Phase 6)
+    pub dispatcher: Option<Arc<Dispatcher>>,
 }
 
 #[async_trait]
@@ -248,14 +252,14 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             session_id,
             context: ContextManager::new(
                 session_id_clone,
-                main_store,
+                main_store.clone(),
                 max_contexts as usize,
                 tsid_generator.clone(),
             ),
             tool_manager: Arc::new(ToolManager::new()),
             global_tool_manager,
             chat_state,
-            gateway,
+            gateway: gateway.clone(),
             sub_agent_factory,
             compressor: ContextCompressor::new(
                 chat_state_clone,
@@ -307,7 +311,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             pending_approvals: Arc::new(dashmap::DashMap::new()),
             recovery_failed: false,
             recovery_error: None,
+            dispatcher: None,
         };
+
+        // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
+        let sinks: Vec<Arc<dyn Sink>> = vec![
+            Arc::new(TauriSink::new(gateway.clone())) as Arc<dyn Sink>,
+            Arc::new(DBSink::new(main_store.clone())) as Arc<dyn Sink>,
+        ];
+        let dispatcher = Arc::new(Dispatcher::new(sinks, DispatcherConfig::default()));
+        Dispatcher::register_session_dispatcher(executor.session_id.clone(), dispatcher.clone());
+        executor.dispatcher = Some(dispatcher);
 
         // Initialize reasoning flag by piercing proxy if necessary
         let actual_config =
@@ -324,6 +338,62 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         }
 
         executor
+    }
+
+    pub fn set_dispatcher(&mut self, dispatcher: Arc<Dispatcher>) {
+        Dispatcher::register_session_dispatcher(self.session_id.clone(), dispatcher.clone());
+        self.dispatcher = Some(dispatcher);
+    }
+
+    async fn dispatch_ui_payload(&self, payload: GatewayPayload) -> Result<(), WorkflowEngineError> {
+        if let Some(ref dispatcher) = self.dispatcher {
+            if let Err(e) = dispatcher
+                .dispatch_ui(self.session_id.clone(), payload.clone())
+                .await
+            {
+                log::warn!(
+                    "[Workflow][session={}][phase=dispatcher] UI dispatch failed: {}, falling back to gateway",
+                    self.session_id,
+                    e
+                );
+                self.gateway.send(&self.session_id, payload).await?;
+            }
+            Ok(())
+        } else {
+            self.gateway.send(&self.session_id, payload).await
+        }
+    }
+
+    async fn dispatch_terminal_with_fallback(
+        &self,
+        terminal_state: &str,
+        fallback_event: &WorkflowEvent,
+    ) {
+        if let Some(ref dispatcher) = self.dispatcher {
+            if let Err(e) = dispatcher
+                .dispatch_terminal(self.session_id.clone(), terminal_state.to_string())
+                .await
+            {
+                log::warn!(
+                    "[Workflow][session={}] dispatcher.terminal failed: {}",
+                    self.session_id,
+                    e
+                );
+                if let Err(e2) = self.append_event(fallback_event) {
+                    log::error!(
+                        "[Workflow][session={}] workflow.event.append_failed - error={}",
+                        self.session_id,
+                        e2
+                    );
+                }
+            }
+        } else if let Err(e) = self.append_event(fallback_event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - error={}",
+                self.session_id,
+                e
+            );
+        }
     }
 
     pub(crate) async fn init_internal(&mut self) -> Result<(), WorkflowEngineError> {
@@ -421,15 +491,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                     .insert(tool.tool_call_id.clone(), info_with_details);
 
                                 let _ = self
-                                    .gateway
-                                    .send(
-                                        &self.session_id,
-                                        GatewayPayload::Confirm {
-                                            id: tool.tool_call_id.clone(),
-                                            action: tool.tool_name.clone(),
-                                            details: tool.details.clone().unwrap_or_default(),
-                                        },
-                                    )
+                                    .dispatch_ui_payload(GatewayPayload::Confirm {
+                                        id: tool.tool_call_id.clone(),
+                                        action: tool.tool_name.clone(),
+                                        details: tool.details.clone().unwrap_or_default(),
+                                    })
                                     .await;
                             }
                         }
@@ -446,16 +512,12 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         // Enter safe-failed state (use Error state as safe-failed)
                         self.state = WorkflowState::Error;
                         let _ = self
-                            .gateway
-                            .send(
-                                &self.session_id,
-                                GatewayPayload::Error {
-                                    message: format!(
-                                        "Workflow recovery failed: {}. Session is in read-only safe mode.",
-                                        error
-                                    ),
-                                },
-                            )
+                            .dispatch_ui_payload(GatewayPayload::Error {
+                                message: format!(
+                                    "Workflow recovery failed: {}. Session is in read-only safe mode.",
+                                    error
+                                ),
+                            })
                             .await;
                     }
                 }
@@ -929,11 +991,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         // Send update event to frontend
                         let tools = self.get_auto_approved_tools();
                         if let Err(e) = self
-                            .gateway
-                            .send(
-                                &self.session_id,
-                                GatewayPayload::AutoApprovedToolsUpdated { tools },
-                            )
+                            .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
                             .await
                         {
                             log::error!(
@@ -952,13 +1010,9 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                         if let Some(updated_policy) = self.remove_shell_policy_item(pattern).await {
                             // Send update event to frontend
                             if let Err(e) = self
-                                .gateway
-                                .send(
-                                    &self.session_id,
-                                    GatewayPayload::ShellPolicyUpdated {
-                                        policy: updated_policy,
-                                    },
-                                )
+                                .dispatch_ui_payload(GatewayPayload::ShellPolicyUpdated {
+                                    policy: updated_policy,
+                                })
                                 .await
                             {
                                 log::error!(
@@ -999,15 +1053,11 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                 for (id, info) in items {
                                     let details = info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
                                     let _ = self
-                                        .gateway
-                                        .send(
-                                            &self.session_id,
-                                            GatewayPayload::Confirm {
-                                                id,
-                                                action: info["name"].as_str().unwrap_or("unknown").to_string(),
-                                                details: details.to_string(),
-                                            },
-                                        )
+                                        .dispatch_ui_payload(GatewayPayload::Confirm {
+                                            id,
+                                            action: info["name"].as_str().unwrap_or("unknown").to_string(),
+                                            details: details.to_string(),
+                                        })
                                         .await;
                                 }
                             }
@@ -1057,9 +1107,7 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                                     // Send update event to frontend
                                     let tools = self.get_auto_approved_tools();
                                     if let Err(e) = self
-                                        .gateway
-                                        .send(
-                                            &self.session_id,
+                                        .dispatch_ui_payload(
                                             GatewayPayload::AutoApprovedToolsUpdated {
                                                 tools: tools.clone(),
                                             },
@@ -1327,18 +1375,14 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             let details =
                                 info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
                             let _ = self
-                                .gateway
-                                .send(
-                                    &self.session_id,
-                                    GatewayPayload::Confirm {
-                                        id,
-                                        action: info["name"]
-                                            .as_str()
-                                            .unwrap_or("unknown")
-                                            .to_string(),
-                                        details: details.to_string(),
-                                    },
-                                )
+                                .dispatch_ui_payload(GatewayPayload::Confirm {
+                                    id,
+                                    action: info["name"]
+                                        .as_str()
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                    details: details.to_string(),
+                                })
                                 .await;
                         }
                     }
@@ -1388,13 +1432,9 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                             // Send update event to frontend
                             let tools = self.get_auto_approved_tools();
                             if let Err(e) = self
-                                .gateway
-                                .send(
-                                    &self.session_id,
-                                    GatewayPayload::AutoApprovedToolsUpdated {
-                                        tools: tools.clone(),
-                                    },
-                                )
+                                .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated {
+                                    tools: tools.clone(),
+                                })
                                 .await
                             {
                                 log::error!(
@@ -2099,48 +2139,32 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             // Cooldown: at least 3 steps since last compression to prevent infinite loops
             if needs_compression && self.current_step > self.last_compression_step + 3 {
                 // Notify frontend: compression starting
-                self.gateway
-                    .send(
-                        &self.session_id,
-                        GatewayPayload::CompressionStatus {
-                            is_compressing: true,
-                            message: t!("workflow.compression_in_progress").to_string(),
-                        },
-                    )
-                    .await?;
+                self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                    is_compressing: true,
+                    message: t!("workflow.compression_in_progress").to_string(),
+                })
+                .await?;
 
-                self.gateway
-                    .send(
-                        &self.session_id,
-                        GatewayPayload::Notification {
-                            message: t!("workflow.compression_in_progress").to_string(),
-                            category: Some("info".to_string()),
-                        },
-                    )
-                    .await?;
+                self.dispatch_ui_payload(GatewayPayload::Notification {
+                    message: t!("workflow.compression_in_progress").to_string(),
+                    category: Some("info".to_string()),
+                })
+                .await?;
 
                 let compression_result = self.compressor.compress(&self.context.messages).await;
 
                 // Notify frontend: compression ended
-                self.gateway
-                    .send(
-                        &self.session_id,
-                        GatewayPayload::CompressionStatus {
-                            is_compressing: false,
-                            message: String::new(),
-                        },
-                    )
-                    .await?;
+                self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                    is_compressing: false,
+                    message: String::new(),
+                })
+                .await?;
 
-                self.gateway
-                    .send(
-                        &self.session_id,
-                        GatewayPayload::Notification {
-                            message: String::new(),
-                            category: Some("info".to_string()),
-                        },
-                    )
-                    .await?;
+                self.dispatch_ui_payload(GatewayPayload::Notification {
+                    message: String::new(),
+                    category: Some("info".to_string()),
+                })
+                .await?;
 
                 if let Ok(summary) = compression_result {
                     let _ = self
@@ -2750,50 +2774,28 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             match &new_state {
                 WorkflowState::Completed => {
                     let event = WorkflowEvent::workflow_completed(self.session_id.clone(), None);
-                    if let Err(e) = self.append_event(&event) {
-                        log::error!(
-                            "[Workflow][session={}] workflow.event.append_failed - error={}",
-                            self.session_id,
-                            e
-                        );
-                    }
+                    self.dispatch_terminal_with_fallback("completed", &event).await;
                 }
                 WorkflowState::Cancelled => {
                     let event = WorkflowEvent::workflow_cancelled(self.session_id.clone());
-                    if let Err(e) = self.append_event(&event) {
-                        log::error!(
-                            "[Workflow][session={}] workflow.event.append_failed - error={}",
-                            self.session_id,
-                            e
-                        );
-                    }
+                    self.dispatch_terminal_with_fallback("cancelled", &event).await;
                 }
                 WorkflowState::Error => {
                     let event = WorkflowEvent::workflow_failed(
                         self.session_id.clone(),
                         "Workflow encountered an error".to_string(),
                     );
-                    if let Err(e) = self.append_event(&event) {
-                        log::error!(
-                            "[Workflow][session={}] workflow.event.append_failed - error={}",
-                            self.session_id,
-                            e
-                        );
-                    }
+                    self.dispatch_terminal_with_fallback("error", &event).await;
                 }
                 _ => {}
             }
         }
 
-        self.gateway
-            .send(
-                &self.session_id,
-                GatewayPayload::State {
-                    state: new_state.clone(),
-                    wait_reason,
-                },
-            )
-            .await?;
+        self.dispatch_ui_payload(GatewayPayload::State {
+            state: new_state.clone(),
+            wait_reason,
+        })
+        .await?;
 
         {
             let store_res = self
@@ -2830,6 +2832,20 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
     }
 
     pub(crate) fn append_event(&self, event: &WorkflowEvent) -> Result<(), WorkflowEngineError> {
+        if let Some(ref dispatcher) = self.dispatcher {
+            if let Err(e) = dispatcher.dispatch_now(crate::workflow::react::dispatcher::DispatchEvent::Audit {
+                event: event.clone(),
+            }) {
+                log::warn!(
+                    "[Workflow][session={}][phase=dispatcher] audit dispatch failed: {}, falling back to direct DB write",
+                    self.session_id,
+                    e
+                );
+            } else {
+                return Ok(());
+            }
+        }
+
         let store = self
             .context
             .main_store
@@ -2941,21 +2957,17 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
             )
             .await?;
 
-        self.gateway
-            .send(
-                &self.session_id,
-                GatewayPayload::Message {
-                    role: role.clone(),
-                    content: content.clone(),
-                    reasoning,
-                    step_type,
-                    step_index: self.current_step as i32,
-                    is_error,
-                    error_type: error_type.clone(),
-                    metadata,
-                },
-            )
-            .await?;
+        self.dispatch_ui_payload(GatewayPayload::Message {
+            role: role.clone(),
+            content: content.clone(),
+            reasoning,
+            step_type,
+            step_index: self.current_step as i32,
+            is_error,
+            error_type: error_type.clone(),
+            metadata,
+        })
+        .await?;
 
         // Summary messages should not trigger compression - they are the result of compression
         let is_summary = msg
@@ -3197,14 +3209,10 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
                 .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
             store.get_todo_list_for_workflow(&self.session_id)?
         };
-        self.gateway
-            .send(
-                &self.session_id,
-                GatewayPayload::SyncTodo {
-                    todo_list: json!(todos),
-                },
-            )
-            .await?;
+        self.dispatch_ui_payload(GatewayPayload::SyncTodo {
+            todo_list: json!(todos),
+        })
+        .await?;
         Ok(())
     }
 
@@ -3332,20 +3340,34 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
 
     pub async fn save_snapshot(&self) -> Result<(), WorkflowEngineError> {
         let mut ctx = self.export_execution_context();
+        self.fill_snapshot_last_event_id(&mut ctx)?;
 
-        let store = self
-            .context
-            .main_store
-            .read()
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-
-        ctx.last_event_id = store
-            .get_last_event_id(&self.session_id)
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-
-        store
-            .upsert_execution_context(&ctx)
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        if let Some(ref dispatcher) = self.dispatcher {
+            if let Err(e) = dispatcher.dispatch_snapshot(ctx.clone()).await {
+                log::warn!(
+                    "[Workflow][session={}][phase=dispatcher] snapshot dispatch failed: {}, falling back to direct DB write",
+                    self.session_id,
+                    e
+                );
+                let store = self
+                    .context
+                    .main_store
+                    .read()
+                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+                store
+                    .upsert_execution_context(&ctx)
+                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            }
+        } else {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            store
+                .upsert_execution_context(&ctx)
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        }
 
         log::info!(
             "[Workflow][session={}][phase=snapshot] Saved: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
@@ -3357,6 +3379,27 @@ let max_contexts = agent_config.max_contexts.unwrap_or(128000);
         );
 
         Ok(())
+    }
+
+    fn fill_snapshot_last_event_id(
+        &self,
+        ctx: &mut ExecutionContext,
+    ) -> Result<(), WorkflowEngineError> {
+        let store = self
+            .context
+            .main_store
+            .read()
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        ctx.last_event_id = store
+            .get_last_event_id(&self.session_id)
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        Ok(())
+    }
+}
+
+impl Drop for WorkflowExecutor {
+    fn drop(&mut self) {
+        Dispatcher::unregister_session_dispatcher(&self.session_id);
     }
 }
 
