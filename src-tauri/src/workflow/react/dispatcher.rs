@@ -243,40 +243,30 @@ impl Dispatcher {
                 let queue_depth = channel_capacity.saturating_sub(rx.capacity()) as u64;
                 metrics_clone.set_queue_depth(queue_depth);
 
-                let sinks_clone = sinks.clone();
-                let envelope_clone = envelope.clone();
-                let metrics_for_task = metrics_clone.clone();
+                for sink in sinks.iter() {
+                    let sink_name = sink.name().to_string();
+                    let sink_metrics = metrics_clone
+                        .per_sink
+                        .entry(sink_name.clone())
+                        .or_insert_with(|| Arc::new(SinkMetrics::default()))
+                        .clone();
+                    sink_metrics.inflight.fetch_add(1, Ordering::Relaxed);
+                    let started = Instant::now();
 
-                tokio::spawn(async move {
-                    for sink in sinks_clone.iter() {
-                        let sink_name = sink.name().to_string();
-                        let sink_metrics = metrics_for_task
-                            .per_sink
-                            .entry(sink_name.clone())
-                            .or_insert_with(|| Arc::new(SinkMetrics::default()))
-                            .clone();
-                        sink_metrics.inflight.fetch_add(1, Ordering::Relaxed);
-                        let started = Instant::now();
-
-                        if let Err(e) = sink.accept(envelope_clone.clone()).await {
-                            log::error!(
-                                "[Dispatcher] sink '{}' failed: {}",
-                                sink.name(),
-                                e
-                            );
-                            metrics_for_task.increment_failed();
-                            sink_metrics.failed.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            sink_metrics.processed.fetch_add(1, Ordering::Relaxed);
-                        }
-
-                        let elapsed_ms = started.elapsed().as_millis() as u64;
-                        sink_metrics
-                            .total_latency_ms
-                            .fetch_add(elapsed_ms, Ordering::Relaxed);
-                        sink_metrics.inflight.fetch_sub(1, Ordering::Relaxed);
+                    if let Err(e) = sink.accept(envelope.clone()).await {
+                        log::error!("[Dispatcher] sink '{}' failed: {}", sink.name(), e);
+                        metrics_clone.increment_failed();
+                        sink_metrics.failed.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        sink_metrics.processed.fetch_add(1, Ordering::Relaxed);
                     }
-                });
+
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    sink_metrics
+                        .total_latency_ms
+                        .fetch_add(elapsed_ms, Ordering::Relaxed);
+                    sink_metrics.inflight.fetch_sub(1, Ordering::Relaxed);
+                }
 
                 metrics_clone.increment_dispatched();
             }
