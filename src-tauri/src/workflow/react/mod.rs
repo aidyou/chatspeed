@@ -1,3 +1,7 @@
+pub mod agents_md;
+pub mod child_tasks;
+#[cfg(test)]
+pub mod child_tasks_tests;
 pub mod compression;
 pub mod context;
 pub mod dispatcher;
@@ -6,7 +10,6 @@ pub mod error;
 pub mod events;
 pub mod gateway;
 pub mod intelligence;
-pub mod replay;
 pub mod interceptors;
 pub mod llm;
 pub mod loop_detector;
@@ -18,10 +21,10 @@ pub mod orchestrator;
 pub mod planners;
 pub mod policy;
 pub mod prompts;
+pub mod replay;
 pub mod runners;
 pub mod security;
 pub mod signals;
 pub mod sinks;
 pub mod skills;
-pub mod agents_md;
 pub mod types;

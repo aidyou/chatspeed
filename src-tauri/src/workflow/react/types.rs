@@ -13,6 +13,7 @@ pub enum WorkflowState {
     AwaitingUser,
     AwaitingApproval,
     AwaitingAutoApproval,
+    AwaitingChildTask,
     Completed,
     Error,
     Cancelled,
@@ -120,7 +121,8 @@ impl From<&WorkflowState> for RuntimeState {
             WorkflowState::Paused
             | WorkflowState::AwaitingUser
             | WorkflowState::AwaitingApproval
-            | WorkflowState::AwaitingAutoApproval => RuntimeState::Waiting,
+            | WorkflowState::AwaitingAutoApproval
+            | WorkflowState::AwaitingChildTask => RuntimeState::Waiting,
             WorkflowState::Completed => RuntimeState::Completed,
             WorkflowState::Error => RuntimeState::Failed,
             WorkflowState::Cancelled => RuntimeState::Cancelled,
@@ -135,6 +137,7 @@ pub enum WaitReason {
     Confirmation,
     UserInput,
     Approval,
+    ChildTask,
 }
 
 /// Structured signal types for workflow control.
@@ -164,6 +167,11 @@ pub enum WorkflowSignal {
     RemoveAutoApprovedTool { tool_name: String },
     /// Remove a pattern from shell policy
     RemoveShellPolicyItem { pattern: String },
+    /// Child task completed (for ChildTask waiting state)
+    ChildTaskComplete {
+        child_task_id: String,
+        result: serde_json::Value,
+    },
 }
 
 impl WorkflowSignal {
@@ -189,6 +197,8 @@ impl WorkflowSignal {
             (WorkflowSignal::ApprovalDecision { .. }, Some(WaitReason::Approval)) => true,
             // Continue is valid for Confirmation waiting
             (WorkflowSignal::Continue, Some(WaitReason::Confirmation)) => true,
+            // ChildTaskComplete is valid for ChildTask waiting
+            (WorkflowSignal::ChildTaskComplete { .. }, Some(WaitReason::ChildTask)) => true,
             // Everything else is invalid
             _ => false,
         }
@@ -204,6 +214,7 @@ impl WorkflowSignal {
             WorkflowSignal::RebroadcastPending => "rebroadcast_pending",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
+            WorkflowSignal::ChildTaskComplete { .. } => "child_task_complete",
         }
     }
 }
@@ -228,10 +239,14 @@ pub struct ExecutionContext {
     #[serde(default)]
     pub last_event_id: Option<i64>,
     pub version: String,
+    #[serde(default)]
+    pub waiting_on_task_id: Option<String>,
+    #[serde(default)]
+    pub child_sessions: Vec<String>,
 }
 
 impl ExecutionContext {
-    pub const CURRENT_VERSION: &'static str = "1.0.0";
+    pub const CURRENT_VERSION: &'static str = "1.1.0";
 
     pub fn new(session_id: String) -> Self {
         Self {
@@ -244,6 +259,8 @@ impl ExecutionContext {
             last_action_summary: None,
             last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
+            waiting_on_task_id: None,
+            child_sessions: Vec::new(),
         }
     }
 }
@@ -260,7 +277,9 @@ mod tests {
         assert!(ctx.wait_reason.is_none());
         assert!(ctx.pending_tools.is_empty());
         assert!(ctx.last_event_id.is_none());
-        assert_eq!(ctx.version, "1.0.0");
+        assert_eq!(ctx.version, "1.1.0");
+        assert!(ctx.waiting_on_task_id.is_none());
+        assert!(ctx.child_sessions.is_empty());
     }
 
     #[test]

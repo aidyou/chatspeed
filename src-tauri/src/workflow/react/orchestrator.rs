@@ -2,6 +2,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
+use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
@@ -135,6 +136,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 pub struct TaskTool {
     executor_factory: Arc<dyn SubAgentFactory>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    parent_session_id: Option<String>,
 }
 
 impl TaskTool {
@@ -145,7 +147,13 @@ impl TaskTool {
         Self {
             executor_factory: factory,
             tsid_generator,
+            parent_session_id: None,
         }
+    }
+
+    pub fn with_parent_session(mut self, parent_session_id: String) -> Self {
+        self.parent_session_id = Some(parent_session_id);
+        self
     }
 }
 
@@ -195,6 +203,10 @@ impl ToolDefinition for TaskTool {
                     "run_in_background": {
                         "type": "boolean",
                         "description": "Set to true to run this agent in the background. The tool result will include a task_id - use task_output tool to check on output."
+                    },
+                    "call_mode": {
+                        "type": "boolean",
+                        "description": "Phase 7: Set to true to use Call model where parent workflow waits for child task completion. Parent enters waiting state until child completes."
                     }
                 },
                 "required": ["description", "prompt", "subagent_type"]
@@ -212,6 +224,8 @@ impl ToolDefinition for TaskTool {
             .ok_or(ToolError::InvalidParams("prompt is required".to_string()))?;
         let subagent_type = params["subagent_type"].as_str().unwrap_or("General");
         let run_in_background = params["run_in_background"].as_bool().unwrap_or(false);
+        // Phase 7: Call mode - parent waits for child task completion
+        let call_mode = params["call_mode"].as_bool().unwrap_or(false);
 
         // Use TSID for unique time-sorted IDs
         let task_id = format!(
@@ -256,7 +270,71 @@ impl ToolDefinition for TaskTool {
             }).to_string()), None));
         }
 
-        // Blocking mode: Wait for completion
+        // Phase 7: Call mode - register child task and return waiting status
+        if call_mode {
+            if let Some(ref parent_id) = self.parent_session_id {
+                // Register child task with parent
+                get_child_task_registry()
+                    .register_child_task(task_id.clone(), parent_id.clone());
+                
+                // Store child task in background tasks
+                let exec_clone = sub_executor.clone();
+                BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
+
+                // Spawn child task and notify parent on completion
+                let parent_id = parent_id.clone();
+                let task_id_clone = task_id.clone();
+                tokio::spawn(async move {
+                    let mut guard = exec_clone.lock().await;
+                    let result = guard.run_loop().await;
+                    
+                    // Child task completed - notify parent
+                    let completion_result = match result {
+                        Ok(_) => {
+                            // Extract result from messages
+                            let messages = guard.messages();
+                            let mut summary = None;
+                            for msg in messages.iter().rev() {
+                                if msg.role == "assistant" {
+                                    summary = Some(msg.message.clone());
+                                    break;
+                                }
+                            }
+                            json!({
+                                "status": "completed",
+                                "task_id": task_id_clone,
+                                "summary": summary.unwrap_or_default()
+                            })
+                        }
+                        Err(e) => {
+                            json!({
+                                "status": "failed",
+                                "task_id": task_id_clone,
+                                "error": e.to_string()
+                            })
+                        }
+                    };
+
+                    // Send ChildTaskComplete signal to parent
+                    let _ = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+                        &parent_id,
+                        json!({
+                            "type": "child_task_complete",
+                            "child_task_id": task_id_clone,
+                            "result": completion_result
+                        }).to_string()
+                    );
+                });
+
+                return Ok(ToolCallResult::success(Some(json!({
+                    "status": "waiting",
+                    "task_id": task_id,
+                    "message": format!("Task '{}' has been spawned. Parent workflow will wait for completion.", description)
+                }).to_string()), None));
+            }
+        }
+
+        // Legacy blocking mode: Wait for completion
         {
             let mut guard = sub_executor.lock().await;
             guard.run_loop().await.map_err(|e| {

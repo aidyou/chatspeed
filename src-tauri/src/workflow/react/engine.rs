@@ -108,6 +108,8 @@ pub struct WorkflowExecutor {
     pub dispatcher: Option<Arc<Dispatcher>>,
     /// Buffered user messages received during non-waiting execution stages.
     pub queued_user_messages: VecDeque<(String, String)>,
+    /// Phase 7: ID of child task this session is waiting for (Call model)
+    pub child_task_id: Option<String>,
 }
 
 #[async_trait]
@@ -316,6 +318,7 @@ impl WorkflowExecutor {
             recovery_error: None,
             dispatcher: None,
             queued_user_messages: VecDeque::new(),
+            child_task_id: None,
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -708,7 +711,8 @@ impl WorkflowExecutor {
                     crate::workflow::react::orchestrator::TaskTool::new(
                         self.sub_agent_factory.clone(),
                         self.tsid_generator.clone(),
-                    ),
+                    )
+                    .with_parent_session(self.session_id.clone()),
                 ))
                 .await?;
             }
@@ -935,15 +939,17 @@ impl WorkflowExecutor {
                 }
             }
 
-            // Handle Paused, AwaitingUser or AwaitingApproval state - wait for user signal
+            // Handle waiting states - wait for appropriate signal
             if self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingChildTask
             {
                 let wait_reason_enum = match &self.state {
                     WorkflowState::Paused => Some(WaitReason::Confirmation),
                     WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
                     WorkflowState::AwaitingApproval => Some(WaitReason::Approval),
+                    WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
                     _ => None,
                 };
 
@@ -1443,6 +1449,46 @@ impl WorkflowExecutor {
                                 );
                             }
                             self.update_state(WorkflowState::Thinking).await?;
+                            continue;
+                        }
+                        WorkflowSignal::ChildTaskComplete { child_task_id, result } => {
+                            log::info!(
+                                "[Workflow][session={}][phase=wait][event=child_task_complete] Child task {} completed with result {:?}",
+                                self.session_id,
+                                child_task_id,
+                                result
+                            );
+                            
+                            // Verify this is the expected child task
+                            if self.child_task_id.as_ref() == Some(&child_task_id) {
+                                // Add child task result as assistant message
+                                let result_content = result.get("summary")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("Child task completed");
+                                
+                                self.add_message_and_notify_internal(
+                                    "assistant".to_string(),
+                                    format!("Child task {} result: {}", child_task_id, result_content),
+                                    None,
+                                    None,
+                                    None,
+                                    false,
+                                    None,
+                                    Some(json!({"child_task_id": child_task_id, "result": result})),
+                                )
+                                .await?;
+                                
+                                // Clear waiting state and resume
+                                self.child_task_id = None;
+                                self.update_state(WorkflowState::Thinking).await?;
+                            } else {
+                                log::warn!(
+                                    "[Workflow][session={}][phase=wait][event=child_task_mismatch] Received completion for unexpected child task {}. Expected: {:?}",
+                                    self.session_id,
+                                    child_task_id,
+                                    self.child_task_id
+                                );
+                            }
                             continue;
                         }
                         _ => {}
@@ -3531,6 +3577,8 @@ impl WorkflowExecutor {
                 .map(|s| s.to_string()),
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_task_id: None,
+            child_sessions: Vec::new(),
         }
     }
 

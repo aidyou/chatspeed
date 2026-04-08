@@ -256,6 +256,8 @@ impl EventReducer {
             last_action_summary: self.last_action_summary,
             last_event_id: self.last_event_id,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_task_id: None,
+            child_sessions: Vec::new(),
         }
     }
 }

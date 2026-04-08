@@ -249,6 +249,32 @@ impl Default for WorkflowManager {
     }
 }
 
+lazy_static::lazy_static! {
+    static ref GLOBAL_SIGNAL_TX: std::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>> = 
+        std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+impl WorkflowManager {
+    pub fn register_session_signal_tx(session_id: String, tx: tokio::sync::mpsc::Sender<String>) {
+        let mut map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        map.insert(session_id, tx);
+    }
+
+    pub fn unregister_session_signal_tx(session_id: &str) {
+        let mut map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        map.remove(session_id);
+    }
+
+    pub fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
+        let map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        if let Some(tx) = map.get(session_id) {
+            tx.try_send(signal).map_err(|e| e.to_string())
+        } else {
+            Err(format!("Session {} signal channel not found", session_id))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
