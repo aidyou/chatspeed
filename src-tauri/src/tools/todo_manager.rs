@@ -428,7 +428,7 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert!(res.content.unwrap().contains("ID: 1"));
+        assert!(res.content.unwrap().contains("IDs: 1"));
 
         // 2. Test List
         let list_tool = TodoListTool {

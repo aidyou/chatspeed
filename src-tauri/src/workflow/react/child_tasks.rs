@@ -80,6 +80,48 @@ pub enum TaskCallResult {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildTaskResolution {
+    pub child_task_id: String,
+    pub status: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+pub fn resolve_child_task_completion(
+    expected_child_task_id: &mut Option<String>,
+    child_sessions: &mut Vec<String>,
+    incoming_child_task_id: &str,
+    result: &Value,
+) -> Option<ChildTaskResolution> {
+    if expected_child_task_id.as_deref() != Some(incoming_child_task_id) {
+        return None;
+    }
+
+    let status = result
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("completed")
+        .to_string();
+    let content = result
+        .get("summary")
+        .and_then(|s| s.as_str())
+        .or_else(|| result.get("error").and_then(|e| e.as_str()))
+        .unwrap_or("Child task completed")
+        .to_string();
+    let is_error = matches!(status.as_str(), "failed" | "cancelled");
+
+    child_sessions.retain(|id| id != incoming_child_task_id);
+    *expected_child_task_id = None;
+
+    Some(ChildTaskResolution {
+        child_task_id: incoming_child_task_id.to_string(),
+        status,
+        content,
+        is_error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +166,97 @@ mod tests {
         assert_eq!(parent_1_children.len(), 2);
         assert!(parent_1_children.contains(&"child_1".to_string()));
         assert!(parent_1_children.contains(&"child_2".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_child_task_completion_completed() {
+        let mut waiting_on = Some("child_1".to_string());
+        let mut child_sessions = vec!["child_1".to_string(), "child_2".to_string()];
+
+        let resolution = resolve_child_task_completion(
+            &mut waiting_on,
+            &mut child_sessions,
+            "child_1",
+            &serde_json::json!({
+                "status": "completed",
+                "summary": "done"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(resolution.status, "completed");
+        assert_eq!(resolution.content, "done");
+        assert!(!resolution.is_error);
+        assert_eq!(waiting_on, None);
+        assert_eq!(child_sessions, vec!["child_2".to_string()]);
+    }
+
+    #[test]
+    fn test_resolve_child_task_completion_failed() {
+        let mut waiting_on = Some("child_1".to_string());
+        let mut child_sessions = vec!["child_1".to_string()];
+
+        let resolution = resolve_child_task_completion(
+            &mut waiting_on,
+            &mut child_sessions,
+            "child_1",
+            &serde_json::json!({
+                "status": "failed",
+                "error": "boom"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(resolution.status, "failed");
+        assert_eq!(resolution.content, "boom");
+        assert!(resolution.is_error);
+        assert_eq!(waiting_on, None);
+        assert!(child_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_child_task_completion_cancelled() {
+        let mut waiting_on = Some("child_1".to_string());
+        let mut child_sessions = vec!["child_1".to_string()];
+
+        let resolution = resolve_child_task_completion(
+            &mut waiting_on,
+            &mut child_sessions,
+            "child_1",
+            &serde_json::json!({
+                "status": "cancelled",
+                "error": "user cancelled"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(resolution.status, "cancelled");
+        assert_eq!(resolution.content, "user cancelled");
+        assert!(resolution.is_error);
+        assert_eq!(waiting_on, None);
+        assert!(child_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_child_task_completion_ignores_mismatch() {
+        let mut waiting_on = Some("child_1".to_string());
+        let mut child_sessions = vec!["child_1".to_string(), "child_2".to_string()];
+
+        let resolution = resolve_child_task_completion(
+            &mut waiting_on,
+            &mut child_sessions,
+            "child_2",
+            &serde_json::json!({
+                "status": "completed",
+                "summary": "done"
+            }),
+        );
+
+        assert!(resolution.is_none());
+        assert_eq!(waiting_on, Some("child_1".to_string()));
+        assert_eq!(
+            child_sessions,
+            vec!["child_1".to_string(), "child_2".to_string()]
+        );
     }
 }

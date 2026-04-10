@@ -5,8 +5,11 @@ use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
 use crate::workflow::react::signals::SignalType;
-use crate::workflow::react::types::{StepType, WorkflowState};
+use crate::workflow::react::types::{
+    ExecutionContext, RuntimeState, StepType, WaitReason, WorkflowSignal, WorkflowState,
+};
 use chrono::{DateTime, Local};
 use glob::glob;
 use regex::Regex;
@@ -395,27 +398,27 @@ pub async fn get_workflow_snapshot(
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<Value, String> {
+    let main_store = state.inner().clone();
     let snapshot = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = main_store.read().map_err(|e| e.to_string())?;
         store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
     };
+    let execution_context = restore_context_for_signal(main_store, &session_id);
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
     // zombie runtime sessions after a turn has already finished.
-    let has_live_session = has_reconciled_live_session(
-        &workflow_manager.inner().clone(),
-        &session_id,
-        "snapshot",
-    )
-    .await;
+    let has_live_session =
+        has_reconciled_live_session(&workflow_manager.inner().clone(), &session_id, "snapshot")
+            .await;
 
     // Convert snapshot to JSON and inject hasLiveSession
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     if let Some(obj) = snapshot_json.as_object_mut() {
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
+        obj.insert("executionContext".to_string(), json!(execution_context));
     }
 
     log::debug!(
@@ -512,6 +515,22 @@ async fn has_reconciled_live_session(
     };
 
     let executor_state = executor_guard.state();
+    let managed_status = match executor_state {
+        WorkflowState::Paused
+        | WorkflowState::AwaitingUser
+        | WorkflowState::AwaitingApproval
+        | WorkflowState::AwaitingAutoApproval
+        | WorkflowState::AwaitingChildTask => ManagedSessionStatus::Waiting,
+        WorkflowState::Completed => ManagedSessionStatus::Completed,
+        WorkflowState::Error => ManagedSessionStatus::Failed,
+        WorkflowState::Cancelled => ManagedSessionStatus::Cancelled,
+        WorkflowState::Pending
+        | WorkflowState::Thinking
+        | WorkflowState::Executing
+        | WorkflowState::Auditing => ManagedSessionStatus::Active,
+    };
+    let _ = workflow_manager.update_session_status(session_id, managed_status);
+
     if matches!(
         executor_state,
         WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
@@ -527,6 +546,51 @@ async fn has_reconciled_live_session(
     }
 
     true
+}
+
+fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
+    match status.to_lowercase().as_str() {
+        "paused" => Some(WaitReason::Confirmation),
+        "awaiting_user" => Some(WaitReason::UserInput),
+        "awaiting_approval" | "awaitingapproval" | "awaiting_auto_approval" => {
+            Some(WaitReason::Approval)
+        }
+        "awaiting_child_task" => Some(WaitReason::ChildTask),
+        _ => None,
+    }
+}
+
+fn restore_context_for_signal(
+    store: Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+) -> Option<ExecutionContext> {
+    match restore_execution_context(store, session_id) {
+        RecoveryResult::SnapshotHit { context } | RecoveryResult::ReplayFallback { context } => {
+            Some(context)
+        }
+        RecoveryResult::SafeFailed { error, .. } => {
+            log::warn!(
+                "[Workflow][session={}][phase=signal] Recovery context unavailable: {}",
+                session_id,
+                error
+            );
+            None
+        }
+    }
+}
+
+fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) -> bool {
+    match ctx {
+        Some(context) => match context.state {
+            RuntimeState::Pending
+            | RuntimeState::Completed
+            | RuntimeState::Failed
+            | RuntimeState::Cancelled => true,
+            RuntimeState::Waiting => context.wait_reason == Some(WaitReason::UserInput),
+            RuntimeState::Running => false,
+        },
+        None => false,
+    }
 }
 
 #[tauri::command]
@@ -814,6 +878,8 @@ pub async fn workflow_start(
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                let _ = manager_for_spawn
+                    .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 log::info!(
                     "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
@@ -828,6 +894,8 @@ pub async fn workflow_start(
                 session_id_for_spawn,
                 e
             );
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
 
             // Notify UI about the fatal crash
             let _ = gateway_for_spawn
@@ -858,6 +926,10 @@ pub async fn workflow_start(
                     },
                 )
                 .await;
+        }
+        if matches!(guard.state(), WorkflowState::Completed) {
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
         manager_for_spawn.remove_session(&session_id_for_spawn);
@@ -1064,6 +1136,8 @@ pub async fn workflow_approve_plan(
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                let _ = manager_for_spawn
+                    .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 log::info!(
                     "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
@@ -1078,6 +1152,8 @@ pub async fn workflow_approve_plan(
                 session_id_for_spawn,
                 e
             );
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
 
             // Notify UI about the fatal crash
             let _ = gateway_for_spawn
@@ -1108,6 +1184,10 @@ pub async fn workflow_approve_plan(
                     },
                 )
                 .await;
+        }
+        if matches!(guard.state(), WorkflowState::Completed) {
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
         }
         manager_for_spawn.remove_session(&session_id_for_spawn);
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
@@ -1148,6 +1228,14 @@ pub async fn workflow_signal(
 
     let workflow_manager_arc = workflow_manager.inner().clone();
     let gateway_arc = gateway.inner().clone();
+    let main_store_arc = state.inner().clone();
+    let workflow_snapshot = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+    let recovery_context = restore_context_for_signal(main_store_arc, &session_id);
 
     // Phase 1: Check manager first (primary path)
     if has_reconciled_live_session(&workflow_manager_arc, &session_id, "signal").await {
@@ -1204,8 +1292,11 @@ pub async fn workflow_signal(
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
             let signal_type = val["type"].as_str().unwrap_or("unknown");
             let signal_type_enum = SignalType::from_str(signal_type);
-            let normalized_signal_type =
-                signal_type_enum.map(|s| s.as_str()).unwrap_or(signal_type);
+            let workflow_signal = WorkflowSignal::parse(&signal);
+            let effective_wait_reason = recovery_context
+                .as_ref()
+                .and_then(|ctx| ctx.wait_reason.clone())
+                .or_else(|| legacy_wait_reason_from_status(&workflow_snapshot.workflow.status));
 
             // Handle user_message signal (Phase 3 unified signal type)
             // Also support legacy user_input for backward compatibility
@@ -1214,45 +1305,39 @@ pub async fn workflow_signal(
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             ) {
                 if let Some(content) = val["content"].as_str() {
-                    let snapshot = {
-                        let store = state.read().map_err(|e| e.to_string())?;
-                        store
-                            .get_workflow_snapshot(&session_id)
-                            .map_err(|e| e.to_string())?
-                    };
-
-                    let status_lower = snapshot.workflow.status.to_lowercase();
-
-                    // Allow resumption for terminal/pending states and awaiting_user.
-                    // This covers orphan awaiting_user sessions (e.g. after refresh/restart)
-                    // where manager session is missing but user input should still resume workflow.
-                    let is_resumable = matches!(
-                        status_lower.as_str(),
-                        "pending"
-                            | "completed"
-                            | "cancelled"
-                            | "error"
-                            | "failed"
-                            | "awaiting_user"
-                    );
+                    let status_lower = workflow_snapshot.workflow.status.to_lowercase();
+                    let is_resumable =
+                        is_resumable_from_context_for_user_message(recovery_context.as_ref())
+                            || matches!(
+                                status_lower.as_str(),
+                                "pending"
+                                    | "completed"
+                                    | "cancelled"
+                                    | "error"
+                                    | "failed"
+                                    | "awaiting_user"
+                            );
 
                     if !is_resumable {
                         log::warn!(
-                            "[Workflow] Session {} is in '{}' state, cannot resume with user message",
+                            "[Workflow][session={}][phase=signal] Cannot resume with user message: runtime_state={:?}, wait_reason={:?}, status={}",
                             session_id,
-                            snapshot.workflow.status
+                            recovery_context.as_ref().map(|ctx| &ctx.state),
+                            effective_wait_reason,
+                            workflow_snapshot.workflow.status
                         );
                         return Err(format!(
                             "Cannot resume: workflow is in '{}' state",
-                            snapshot.workflow.status
+                            workflow_snapshot.workflow.status
                         ));
                     }
 
                     log::info!(
-                        "[Workflow] Session {} is in resumable state ({}), resuming with signal={}",
+                        "[Workflow][session={}][phase=signal] Resuming orphan session with user message, runtime_state={:?}, wait_reason={:?}, status={}",
                         session_id,
-                        snapshot.workflow.status,
-                        normalized_signal_type
+                        recovery_context.as_ref().map(|ctx| &ctx.state),
+                        effective_wait_reason,
+                        workflow_snapshot.workflow.status
                     );
 
                     workflow_start(
@@ -1264,7 +1349,7 @@ pub async fn workflow_signal(
                         factory,
                         workflow_manager,
                         session_id,
-                        snapshot.workflow.agent_id,
+                        workflow_snapshot.workflow.agent_id.clone(),
                         Some(content.to_string()),
                         None,
                     )
@@ -1275,19 +1360,17 @@ pub async fn workflow_signal(
             } else if signal_type == "rebroadcast_pending"
                 || signal_type == "request_confirm_broadcast"
             {
-                let snapshot = {
-                    let store = state.read().map_err(|e| e.to_string())?;
-                    store
-                        .get_workflow_snapshot(&session_id)
-                        .map_err(|e| e.to_string())?
-                };
-
-                let status_lower = snapshot.workflow.status.to_lowercase();
-                if status_lower != "awaiting_approval" && status_lower != "awaitingapproval" {
+                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
+                let can_rebroadcast = effective_wait_reason == Some(WaitReason::Approval)
+                    || status_lower == "awaiting_approval"
+                    || status_lower == "awaitingapproval";
+                if !can_rebroadcast {
                     log::info!(
-                        "[Workflow] Session {} is not awaiting approval (status: {}), skipping rebroadcast pending",
+                        "[Workflow][session={}][phase=signal] Session is not awaiting approval, skipping rebroadcast_pending. runtime_state={:?}, wait_reason={:?}, status={}",
                         session_id,
-                        snapshot.workflow.status
+                        recovery_context.as_ref().map(|ctx| &ctx.state),
+                        effective_wait_reason,
+                        workflow_snapshot.workflow.status
                     );
                     return Ok("Workflow is not awaiting approval".to_string());
                 }
@@ -1306,32 +1389,32 @@ pub async fn workflow_signal(
                     factory,
                     workflow_manager,
                     session_id.clone(),
-                    snapshot.workflow.agent_id,
+                    workflow_snapshot.workflow.agent_id.clone(),
                     None,
                     None,
                 )
                 .await?;
 
                 return Ok("Workflow resumed and rebroadcast pending triggered".to_string());
-            } else if val["type"] == "continue" || val["type"] == "stop" {
-                let snapshot = {
-                    let store = state.read().map_err(|e| e.to_string())?;
-                    store
-                        .get_workflow_snapshot(&session_id)
-                        .map_err(|e| e.to_string())?
-                };
-
-                let status_lower = snapshot.workflow.status.to_lowercase();
-                if status_lower != "paused" {
+            } else if matches!(
+                workflow_signal,
+                Some(WorkflowSignal::Continue | WorkflowSignal::Stop)
+            ) {
+                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
+                let can_resume = effective_wait_reason == Some(WaitReason::Confirmation)
+                    || status_lower == "paused";
+                if !can_resume {
                     log::info!(
-                        "[Workflow] Session {} is not paused (status: {}), ignoring {} signal",
+                        "[Workflow][session={}][phase=signal] Session is not confirmation-waiting, ignoring {}. runtime_state={:?}, wait_reason={:?}, status={}",
                         session_id,
-                        snapshot.workflow.status,
-                        val["type"]
+                        signal_type,
+                        recovery_context.as_ref().map(|ctx| &ctx.state),
+                        effective_wait_reason,
+                        workflow_snapshot.workflow.status
                     );
                     return Ok(format!(
                         "Workflow is not paused, ignoring {} signal",
-                        val["type"]
+                        signal_type
                     ));
                 }
 
@@ -1350,7 +1433,7 @@ pub async fn workflow_signal(
                     factory,
                     workflow_manager,
                     session_id.clone(),
-                    snapshot.workflow.agent_id,
+                    workflow_snapshot.workflow.agent_id.clone(),
                     None,
                     None,
                 )
@@ -1364,7 +1447,7 @@ pub async fn workflow_signal(
                         Ok(_) => {
                             log::info!(
                                 "[Workflow] {} signal injected successfully after retry",
-                                val["type"]
+                                signal_type
                             );
                             break;
                         }
@@ -1373,7 +1456,7 @@ pub async fn workflow_signal(
                             retries -= 1;
                             log::warn!(
                                 "[Workflow] Failed to inject {} signal, retries left: {}",
-                                val["type"],
+                                signal_type,
                                 retries
                             );
                         }
@@ -1385,26 +1468,25 @@ pub async fn workflow_signal(
                         .unwrap_or_else(|| "Unknown error".into());
                     return Err(format!(
                         "Failed to inject {} after resuming: {}",
-                        val["type"], err_msg
+                        signal_type, err_msg
                     ));
                 }
 
-                return Ok(format!("Workflow resumed and {} processed", val["type"]));
-            } else if val["type"] == "approval" {
-                let agent_id = {
-                    let store = state.read().map_err(|e| e.to_string())?;
-                    let snapshot = store
-                        .get_workflow_snapshot(&session_id)
-                        .map_err(|e| e.to_string())?;
-
-                    if snapshot.workflow.status != "awaiting_approval" {
-                        return Err(format!(
-                            "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
-                            snapshot.workflow.status
-                        ));
-                    }
-                    snapshot.workflow.agent_id
-                };
+                return Ok(format!("Workflow resumed and {} processed", signal_type));
+            } else if matches!(
+                workflow_signal,
+                Some(WorkflowSignal::ApprovalDecision { .. })
+            ) {
+                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
+                let can_resume = effective_wait_reason == Some(WaitReason::Approval)
+                    || status_lower == "awaiting_approval"
+                    || status_lower == "awaitingapproval";
+                if !can_resume {
+                    return Err(format!(
+                        "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
+                        workflow_snapshot.workflow.status
+                    ));
+                }
 
                 log::info!(
                     "[Workflow] Session {} is awaiting approval but not active. Auto-resuming workflow to process approval.",
@@ -1420,7 +1502,7 @@ pub async fn workflow_signal(
                     factory,
                     workflow_manager,
                     session_id.clone(),
-                    agent_id,
+                    workflow_snapshot.workflow.agent_id.clone(),
                     None,
                     None,
                 )
@@ -1458,6 +1540,59 @@ pub async fn workflow_signal(
                 }
 
                 return Ok("Workflow resumed and approval processed".to_string());
+            } else if matches!(
+                workflow_signal,
+                Some(WorkflowSignal::ChildTaskComplete { .. })
+            ) {
+                if effective_wait_reason != Some(WaitReason::ChildTask) {
+                    return Err(format!(
+                        "Cannot process child task completion: Workflow is in '{}' state.",
+                        workflow_snapshot.workflow.status
+                    ));
+                }
+
+                workflow_start(
+                    app,
+                    state,
+                    chat_state,
+                    tsid_generator,
+                    gateway,
+                    factory,
+                    workflow_manager,
+                    session_id.clone(),
+                    workflow_snapshot.workflow.agent_id.clone(),
+                    None,
+                    None,
+                )
+                .await?;
+
+                let mut retries = 5;
+                let mut last_error = None;
+                while retries > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                        Ok(_) => break,
+                        Err(e) => {
+                            last_error = Some(e);
+                            retries -= 1;
+                            log::warn!(
+                                "[Workflow] Failed to inject child_task_complete signal, retries left: {}",
+                                retries
+                            );
+                        }
+                    }
+                }
+                if retries == 0 {
+                    let err_msg = last_error
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "Unknown error".into());
+                    return Err(format!(
+                        "Failed to inject child_task_complete after resuming: {}",
+                        err_msg
+                    ));
+                }
+
+                return Ok("Workflow resumed and child task completion processed".to_string());
             }
         }
         Err(format!(
@@ -1956,4 +2091,56 @@ pub async fn get_workflow_dispatcher_metrics(
 ) -> Result<DispatcherMetricsSnapshot, String> {
     Dispatcher::metrics_for_session(&session_id)
         .ok_or_else(|| format!("No dispatcher metrics found for session {}", session_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_wait_reason_from_status() {
+        assert_eq!(
+            legacy_wait_reason_from_status("awaiting_approval"),
+            Some(WaitReason::Approval)
+        );
+        assert_eq!(
+            legacy_wait_reason_from_status("awaiting_user"),
+            Some(WaitReason::UserInput)
+        );
+        assert_eq!(
+            legacy_wait_reason_from_status("paused"),
+            Some(WaitReason::Confirmation)
+        );
+        assert_eq!(
+            legacy_wait_reason_from_status("awaiting_child_task"),
+            Some(WaitReason::ChildTask)
+        );
+        assert_eq!(legacy_wait_reason_from_status("thinking"), None);
+    }
+
+    #[test]
+    fn test_is_resumable_from_context_for_user_message() {
+        let mut waiting_for_user = ExecutionContext::new("session-1".to_string());
+        waiting_for_user.state = RuntimeState::Waiting;
+        waiting_for_user.wait_reason = Some(WaitReason::UserInput);
+        assert!(is_resumable_from_context_for_user_message(Some(
+            &waiting_for_user
+        )));
+
+        let mut waiting_for_approval = ExecutionContext::new("session-2".to_string());
+        waiting_for_approval.state = RuntimeState::Waiting;
+        waiting_for_approval.wait_reason = Some(WaitReason::Approval);
+        assert!(!is_resumable_from_context_for_user_message(Some(
+            &waiting_for_approval
+        )));
+
+        let mut completed = ExecutionContext::new("session-3".to_string());
+        completed.state = RuntimeState::Completed;
+        assert!(is_resumable_from_context_for_user_message(Some(&completed)));
+
+        let mut running = ExecutionContext::new("session-4".to_string());
+        running.state = RuntimeState::Running;
+        assert!(!is_resumable_from_context_for_user_message(Some(&running)));
+        assert!(!is_resumable_from_context_for_user_message(None));
+    }
 }

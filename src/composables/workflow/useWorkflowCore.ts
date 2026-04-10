@@ -331,8 +331,8 @@ export function useWorkflowCore({
             await setupWorkflowEvents(id)
             
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
-            const pendingApprovalMessage = workflowStore.pendingApprovalMessage
-            const hasPendingApproval = !!pendingApprovalMessage
+            const pendingApprovalRequest = workflowStore.pendingApprovalRequest
+            const hasPendingApproval = !!pendingApprovalRequest
             
             console.log('[Workflow] Checking approval recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
             
@@ -347,16 +347,16 @@ export function useWorkflowCore({
                         console.log('[Workflow] rebroadcast_pending sent successfully')
                     } catch (e) {
                         console.warn('[Workflow] rebroadcast_pending failed, fallback to local dialog reconstruction:', e)
-                        approvalRequestId.value = pendingApprovalMessage?.metadata?.tool_call_id || ''
-                        approvalAction.value = pendingApprovalMessage?.metadata?.tool_name || pendingApprovalMessage?.metadata?.title || 'Tool Approval'
-                        approvalDetails.value = pendingApprovalMessage?.message || ''
+                        approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
+                        approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
+                        approvalDetails.value = pendingApprovalRequest?.details || ''
                         approvalVisible.value = true
                     }
                 } else {
-                    console.log('[Workflow] Orphan awaiting_approval detected, reconstructing approval dialog from snapshot history')
-                    approvalRequestId.value = pendingApprovalMessage?.metadata?.tool_call_id || ''
-                    approvalAction.value = pendingApprovalMessage?.metadata?.tool_name || pendingApprovalMessage?.metadata?.title || 'Tool Approval'
-                    approvalDetails.value = pendingApprovalMessage?.message || ''
+                    console.log('[Workflow] Orphan awaiting_approval detected, reconstructing approval dialog from structured snapshot data')
+                    approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
+                    approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
+                    approvalDetails.value = pendingApprovalRequest?.details || ''
                     approvalVisible.value = true
                 }
             } else if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {

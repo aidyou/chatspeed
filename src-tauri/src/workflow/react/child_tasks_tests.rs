@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use crate::db::MainStore;
-use crate::workflow::react::child_tasks::{get_child_task_registry, ChildTaskRegistry};
+use crate::workflow::react::child_tasks::{
+    get_child_task_registry, resolve_child_task_completion, ChildTaskRegistry,
+};
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
 use std::sync::Arc;
@@ -31,15 +33,71 @@ fn test_p0_parent_task_enters_waiting_on_task_id() {
 
 #[test]
 fn test_p0_child_task_completion_triggers_parent_resume() {
-    let registry = ChildTaskRegistry::new();
+    let mut waiting_on = Some("child_1".to_string());
+    let mut child_sessions = vec!["child_1".to_string()];
 
-    registry.register_child_task("child_1".to_string(), "parent_1".to_string());
+    let resolution = resolve_child_task_completion(
+        &mut waiting_on,
+        &mut child_sessions,
+        "child_1",
+        &serde_json::json!({
+            "status": "completed",
+            "summary": "child done"
+        }),
+    )
+    .unwrap();
 
-    let parent_info = registry.get_parent_info("child_1").unwrap();
-    assert_eq!(parent_info.parent_session_id, "parent_1");
+    assert_eq!(resolution.status, "completed");
+    assert_eq!(resolution.content, "child done");
+    assert!(!resolution.is_error);
+    assert_eq!(waiting_on, None);
+    assert!(child_sessions.is_empty());
+}
 
-    registry.unregister_child_task("child_1");
-    assert!(!registry.is_child_task("child_1"));
+#[test]
+fn test_p0_child_task_failure_triggers_parent_convergence() {
+    let mut waiting_on = Some("child_1".to_string());
+    let mut child_sessions = vec!["child_1".to_string()];
+
+    let resolution = resolve_child_task_completion(
+        &mut waiting_on,
+        &mut child_sessions,
+        "child_1",
+        &serde_json::json!({
+            "status": "failed",
+            "error": "tool failed"
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(resolution.status, "failed");
+    assert_eq!(resolution.content, "tool failed");
+    assert!(resolution.is_error);
+    assert_eq!(waiting_on, None);
+    assert!(child_sessions.is_empty());
+}
+
+#[test]
+fn test_p0_child_task_cancelled_triggers_parent_convergence() {
+    let mut waiting_on = Some("child_1".to_string());
+    let mut child_sessions = vec!["child_1".to_string()];
+
+    let resolution = resolve_child_task_completion(
+        &mut waiting_on,
+        &mut child_sessions,
+        "child_1",
+        &serde_json::json!({
+            "status": "cancelled",
+            "error": "cancelled"
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(resolution.status, "cancelled");
+    assert_eq!(resolution.content, "cancelled");
+    assert!(resolution.is_error);
+    assert_eq!(waiting_on, None);
+    assert!(child_sessions.is_empty());
 }
 
 #[test]

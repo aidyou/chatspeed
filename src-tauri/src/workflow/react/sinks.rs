@@ -15,6 +15,12 @@ use super::gateway::Gateway;
 use super::types::{ExecutionContext, GatewayPayload};
 use crate::db::MainStore;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkDeliveryGuarantee {
+    Reliable,
+    BestEffort,
+}
+
 /// A sink receives events from the dispatcher and handles them appropriately.
 #[async_trait]
 pub trait Sink: Send + Sync {
@@ -23,6 +29,11 @@ pub trait Sink: Send + Sync {
 
     /// Return the name of this sink for logging purposes.
     fn name(&self) -> &str;
+
+    /// Delivery semantics for this sink.
+    fn delivery_guarantee(&self) -> SinkDeliveryGuarantee {
+        SinkDeliveryGuarantee::BestEffort
+    }
 }
 
 /// Sink that forwards UI events to the frontend via Tauri gateway.
@@ -154,6 +165,10 @@ impl Sink for DBSink {
 
     fn name(&self) -> &str {
         "DBSink"
+    }
+
+    fn delivery_guarantee(&self) -> SinkDeliveryGuarantee {
+        SinkDeliveryGuarantee::Reliable
     }
 }
 

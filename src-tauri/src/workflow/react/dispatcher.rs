@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use super::error::WorkflowEngineError;
 use super::events::WorkflowEvent;
 use super::sinks::Sink;
+use super::sinks::SinkDeliveryGuarantee;
 use super::types::{ExecutionContext, GatewayPayload};
 
 /// Categories of events that can be dispatched to sinks.
@@ -81,8 +82,12 @@ pub struct DispatcherMetrics {
 
 #[derive(Debug, Default)]
 pub struct SinkMetrics {
+    /// Approximate queue depth for this sink
+    pub queue_depth: AtomicU64,
     /// Number of events currently being processed by this sink
     pub inflight: AtomicU64,
+    /// Number of events dropped for this sink
+    pub dropped: AtomicU64,
     /// Number of events successfully processed
     pub processed: AtomicU64,
     /// Number of events failed
@@ -130,7 +135,9 @@ impl DispatcherMetrics {
                 };
                 SinkMetricsSnapshot {
                     sink_name: name,
+                    queue_depth: metrics.queue_depth.load(Ordering::Relaxed),
                     inflight: metrics.inflight.load(Ordering::Relaxed),
+                    dropped: metrics.dropped.load(Ordering::Relaxed),
                     processed,
                     failed,
                     avg_latency_ms,
@@ -160,7 +167,9 @@ pub struct DispatcherMetricsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SinkMetricsSnapshot {
     pub sink_name: String,
+    pub queue_depth: u64,
     pub inflight: u64,
+    pub dropped: u64,
     pub processed: u64,
     pub failed: u64,
     pub avg_latency_ms: f64,
@@ -171,6 +180,8 @@ pub struct SinkMetricsSnapshot {
 pub struct DispatcherConfig {
     /// Maximum channel capacity for the dispatcher
     pub channel_capacity: usize,
+    /// Maximum channel capacity per sink worker
+    pub sink_channel_capacity: usize,
     /// Enable logging of lag warnings
     pub log_lag_warnings: bool,
     /// Threshold in milliseconds for lag warning
@@ -181,6 +192,7 @@ impl Default for DispatcherConfig {
     fn default() -> Self {
         Self {
             channel_capacity: 1000,
+            sink_channel_capacity: 1000,
             log_lag_warnings: true,
             lag_warning_threshold_ms: 500,
         }
@@ -202,6 +214,14 @@ pub struct Dispatcher {
     sequence_counter: AtomicU64,
 }
 
+struct SinkTarget {
+    name: String,
+    tx: mpsc::Sender<EventEnvelope>,
+    metrics: Arc<SinkMetrics>,
+    delivery_guarantee: SinkDeliveryGuarantee,
+    channel_capacity: usize,
+}
+
 lazy_static::lazy_static! {
     static ref DISPATCHER_REGISTRY: DashMap<String, Arc<Dispatcher>> = DashMap::new();
 }
@@ -214,6 +234,71 @@ impl Dispatcher {
     pub fn new(sinks: Vec<Arc<dyn Sink>>, config: DispatcherConfig) -> Self {
         let metrics = Arc::new(DispatcherMetrics::new());
         let (tx, mut rx) = mpsc::channel::<EventEnvelope>(config.channel_capacity);
+        let mut sink_targets = Vec::new();
+
+        for sink in sinks {
+            let sink_name = sink.name().to_string();
+            let sink_metrics = metrics
+                .per_sink
+                .entry(sink_name.clone())
+                .or_insert_with(|| Arc::new(SinkMetrics::default()))
+                .clone();
+            let (sink_tx, mut sink_rx) =
+                mpsc::channel::<EventEnvelope>(config.sink_channel_capacity);
+            let sink_clone = sink.clone();
+            let sink_metrics_clone = sink_metrics.clone();
+            let dispatcher_metrics = metrics.clone();
+            let lag_threshold_ms = config.lag_warning_threshold_ms;
+            let log_lag_warnings = config.log_lag_warnings;
+
+            tokio::spawn(async move {
+                while let Some(envelope) = sink_rx.recv().await {
+                    if log_lag_warnings {
+                        let elapsed = envelope.created_at.elapsed().as_millis() as u64;
+                        if elapsed > lag_threshold_ms {
+                            log::warn!(
+                                "[Dispatcher] sink lag detected - sink={}, elapsed={}ms, event_type={:?}",
+                                sink_clone.name(),
+                                elapsed,
+                                envelope.event
+                            );
+                        }
+                    }
+
+                    sink_metrics_clone.inflight.fetch_add(1, Ordering::Relaxed);
+                    let started = Instant::now();
+
+                    if let Err(e) = sink_clone.accept(envelope).await {
+                        log::error!("[Dispatcher] sink '{}' failed: {}", sink_clone.name(), e);
+                        dispatcher_metrics.increment_failed();
+                        sink_metrics_clone.failed.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        sink_metrics_clone.processed.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    sink_metrics_clone
+                        .total_latency_ms
+                        .fetch_add(elapsed_ms, Ordering::Relaxed);
+                    sink_metrics_clone.inflight.fetch_sub(1, Ordering::Relaxed);
+                    let remaining_depth = config
+                        .sink_channel_capacity
+                        .saturating_sub(sink_rx.capacity())
+                        as u64;
+                    sink_metrics_clone
+                        .queue_depth
+                        .store(remaining_depth, Ordering::Relaxed);
+                }
+            });
+
+            sink_targets.push(SinkTarget {
+                name: sink_name,
+                tx: sink_tx,
+                metrics: sink_metrics,
+                delivery_guarantee: sink.delivery_guarantee(),
+                channel_capacity: config.sink_channel_capacity,
+            });
+        }
 
         let metrics_clone = metrics.clone();
         let log_lag_warnings = config.log_lag_warnings;
@@ -236,29 +321,56 @@ impl Dispatcher {
                 let queue_depth = channel_capacity.saturating_sub(rx.capacity()) as u64;
                 metrics_clone.set_queue_depth(queue_depth);
 
-                for sink in sinks.iter() {
-                    let sink_name = sink.name().to_string();
-                    let sink_metrics = metrics_clone
-                        .per_sink
-                        .entry(sink_name.clone())
-                        .or_insert_with(|| Arc::new(SinkMetrics::default()))
-                        .clone();
-                    sink_metrics.inflight.fetch_add(1, Ordering::Relaxed);
-                    let started = Instant::now();
+                for sink_target in &sink_targets {
+                    let send_result = match sink_target.delivery_guarantee {
+                        SinkDeliveryGuarantee::Reliable => sink_target
+                            .tx
+                            .send(envelope.clone())
+                            .await
+                            .map_err(|_| WorkflowEngineError::DispatcherClosed),
+                        SinkDeliveryGuarantee::BestEffort => sink_target
+                            .tx
+                            .try_send(envelope.clone())
+                            .map_err(|err| match err {
+                                mpsc::error::TrySendError::Full(_) => {
+                                    WorkflowEngineError::DispatcherChannelFull
+                                }
+                                mpsc::error::TrySendError::Closed(_) => {
+                                    WorkflowEngineError::DispatcherClosed
+                                }
+                            }),
+                    };
 
-                    if let Err(e) = sink.accept(envelope.clone()).await {
-                        log::error!("[Dispatcher] sink '{}' failed: {}", sink.name(), e);
-                        metrics_clone.increment_failed();
-                        sink_metrics.failed.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        sink_metrics.processed.fetch_add(1, Ordering::Relaxed);
+                    match send_result {
+                        Ok(()) => {
+                            let sink_depth = sink_target
+                                .channel_capacity
+                                .saturating_sub(sink_target.tx.capacity())
+                                as u64;
+                            sink_target
+                                .metrics
+                                .queue_depth
+                                .store(sink_depth, Ordering::Relaxed);
+                        }
+                        Err(WorkflowEngineError::DispatcherChannelFull) => {
+                            metrics_clone.increment_dropped();
+                            sink_target.metrics.dropped.fetch_add(1, Ordering::Relaxed);
+                            log::warn!(
+                                "[Dispatcher] sink queue full, event dropped - sink={}, event_type={:?}",
+                                sink_target.name,
+                                envelope.event
+                            );
+                        }
+                        Err(e) => {
+                            metrics_clone.increment_failed();
+                            sink_target.metrics.failed.fetch_add(1, Ordering::Relaxed);
+                            log::error!(
+                                "[Dispatcher] failed to enqueue event for sink '{}' - {}",
+                                sink_target.name,
+                                e
+                            );
+                        }
                     }
-
-                    let elapsed_ms = started.elapsed().as_millis() as u64;
-                    sink_metrics
-                        .total_latency_ms
-                        .fetch_add(elapsed_ms, Ordering::Relaxed);
-                    sink_metrics.inflight.fetch_sub(1, Ordering::Relaxed);
                 }
 
                 metrics_clone.increment_dispatched();
@@ -367,6 +479,8 @@ mod tests {
         name: String,
         count: Arc<AtomicUsize>,
         should_fail: bool,
+        delay_ms: u64,
+        delivery_guarantee: SinkDeliveryGuarantee,
     }
 
     impl MockSink {
@@ -375,6 +489,8 @@ mod tests {
                 name: name.to_string(),
                 count,
                 should_fail: false,
+                delay_ms: 0,
+                delivery_guarantee: SinkDeliveryGuarantee::BestEffort,
             }
         }
 
@@ -383,6 +499,28 @@ mod tests {
                 name: name.to_string(),
                 count,
                 should_fail: true,
+                delay_ms: 0,
+                delivery_guarantee: SinkDeliveryGuarantee::BestEffort,
+            }
+        }
+
+        fn with_delay(name: &str, count: Arc<AtomicUsize>, delay_ms: u64) -> Self {
+            Self {
+                name: name.to_string(),
+                count,
+                should_fail: false,
+                delay_ms,
+                delivery_guarantee: SinkDeliveryGuarantee::BestEffort,
+            }
+        }
+
+        fn reliable(name: &str, count: Arc<AtomicUsize>, delay_ms: u64) -> Self {
+            Self {
+                name: name.to_string(),
+                count,
+                should_fail: false,
+                delay_ms,
+                delivery_guarantee: SinkDeliveryGuarantee::Reliable,
             }
         }
     }
@@ -392,6 +530,9 @@ mod tests {
         async fn accept(&self, _envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
             self.count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if self.delay_ms > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(self.delay_ms)).await;
+            }
             if self.should_fail {
                 Err(WorkflowEngineError::General("mock failure".to_string()))
             } else {
@@ -401,6 +542,10 @@ mod tests {
 
         fn name(&self) -> &str {
             &self.name
+        }
+
+        fn delivery_guarantee(&self) -> SinkDeliveryGuarantee {
+            self.delivery_guarantee
         }
     }
 
@@ -475,11 +620,12 @@ mod tests {
     #[tokio::test]
     async fn test_dispatcher_drops_when_channel_full() {
         let count = Arc::new(AtomicUsize::new(0));
-        let sink = Arc::new(MockSink::new("slow", count.clone()));
+        let sink = Arc::new(MockSink::with_delay("slow", count.clone(), 200));
 
         // Very small channel capacity
         let config = DispatcherConfig {
-            channel_capacity: 1,
+            channel_capacity: 32,
+            sink_channel_capacity: 1,
             ..Default::default()
         };
 
@@ -496,12 +642,19 @@ mod tests {
                     },
                 )
                 .await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
         let metrics = dispatcher.metrics();
         assert!(metrics.total_dropped > 0 || metrics.total_dispatched > 0);
+        let sink_metrics = metrics
+            .per_sink
+            .iter()
+            .find(|m| m.sink_name == "slow")
+            .expect("slow sink metrics should exist");
+        assert!(sink_metrics.dropped > 0 || sink_metrics.processed > 0);
     }
 
     #[tokio::test]
@@ -641,6 +794,64 @@ mod tests {
         assert!(
             db_count.load(Ordering::Relaxed) >= 1,
             "DB sink should receive failed terminal event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reliable_sink_isolated_from_best_effort_drops() {
+        let ui_count = Arc::new(AtomicUsize::new(0));
+        let db_count = Arc::new(AtomicUsize::new(0));
+
+        let best_effort_ui = Arc::new(MockSink::with_delay("ui", ui_count.clone(), 200));
+        let reliable_db = Arc::new(MockSink::reliable("db", db_count.clone(), 200));
+
+        let dispatcher = Dispatcher::new(
+            vec![
+                best_effort_ui as Arc<dyn Sink>,
+                reliable_db as Arc<dyn Sink>,
+            ],
+            DispatcherConfig {
+                channel_capacity: 32,
+                sink_channel_capacity: 1,
+                ..Default::default()
+            },
+        );
+
+        for i in 0..20 {
+            let _ = dispatcher
+                .dispatch_ui(
+                    format!("session-{}", i),
+                    GatewayPayload::State {
+                        state: super::super::types::WorkflowState::Thinking,
+                        wait_reason: None,
+                    },
+                )
+                .await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+
+        let metrics = dispatcher.metrics();
+        let ui_metrics = metrics
+            .per_sink
+            .iter()
+            .find(|m| m.sink_name == "ui")
+            .expect("ui sink metrics should exist");
+        let db_metrics = metrics
+            .per_sink
+            .iter()
+            .find(|m| m.sink_name == "db")
+            .expect("db sink metrics should exist");
+
+        assert!(
+            ui_metrics.dropped > 0,
+            "best-effort UI sink should drop when saturated"
+        );
+        assert_eq!(db_metrics.dropped, 0, "reliable DB sink should not drop");
+        assert!(
+            db_metrics.processed > 0,
+            "reliable DB sink should continue processing events"
         );
     }
 }

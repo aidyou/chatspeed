@@ -39,6 +39,30 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const waitingLikeStates = [...WAITING_STATUSES];
   const approvalWaitingStates = [...APPROVAL_WAITING_STATUSES];
 
+  const normalizeExecutionContext = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return null;
+    return {
+      ...ctx,
+      waitReason: ctx.waitReason ?? ctx.wait_reason ?? null,
+      pendingTools: ctx.pendingTools ?? ctx.pending_tools ?? [],
+      waitingOnTaskId: ctx.waitingOnTaskId ?? ctx.waiting_on_task_id ?? null,
+      childSessions: ctx.childSessions ?? ctx.child_sessions ?? []
+    };
+  };
+
+  const getStructuredPendingApproval = (ctx) => {
+    const normalized = normalizeExecutionContext(ctx);
+    if (!normalized) return null;
+    if (normalized.waitReason !== WORKFLOW_WAIT_REASONS.APPROVAL) return null;
+    const pendingTool = normalized.pendingTools.find(tool => tool?.tool_call_id || tool?.toolCallId);
+    if (!pendingTool) return null;
+    return {
+      toolCallId: pendingTool.toolCallId ?? pendingTool.tool_call_id ?? '',
+      toolName: pendingTool.toolName ?? pendingTool.tool_name ?? '',
+      details: pendingTool.details ?? ''
+    };
+  };
+
   const findLatestPendingApprovalMessage = (list = []) => {
     const finalizedIds = new Set();
     for (let i = list.length - 1; i >= 0; i--) {
@@ -110,12 +134,25 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return findLatestPendingApprovalMessage(messages.value);
   });
 
+  const pendingApprovalRequest = computed(() => {
+    const structured = getStructuredPendingApproval(currentWorkflow.value?.executionContext);
+    if (structured) return structured;
+
+    const legacy = pendingApprovalMessage.value;
+    if (!legacy) return null;
+    return {
+      toolCallId: legacy?.metadata?.tool_call_id || '',
+      toolName: legacy?.metadata?.tool_name || legacy?.metadata?.title || 'Tool Approval',
+      details: legacy?.message || ''
+    };
+  });
+
   const canApprovePending = computed(() => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
     const isApprovalWaiting =
       waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
     if (!isApprovalWaiting) return false;
-    return !!pendingApprovalMessage.value;
+    return !!pendingApprovalRequest.value;
   });
 
   const canApprovePlan = computed(() => {
@@ -306,6 +343,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       // Parse workflow data (agentConfig, allowedPaths, shellPolicy)
       _parseWorkflowData(snapshot.workflow);
+      snapshot.workflow.executionContext = normalizeExecutionContext(snapshot.executionContext);
 
       // Set shell policy from parsed workflow data
       setShellPolicy(snapshot.workflow.shellPolicy || []);
@@ -554,6 +592,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     canStop,
     canContinue,
     pendingApprovalMessage,
+    pendingApprovalRequest,
     canApprovePending,
     canApprovePlan,
     setNotification,

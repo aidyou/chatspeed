@@ -1504,37 +1504,31 @@ impl WorkflowExecutor {
                                 result
                             );
 
-                            // Verify this is the expected child task
-                            if self.child_task_id.as_ref() == Some(&child_task_id) {
-                                // Add child task result as assistant message
-                                let result_status = result
-                                    .get("status")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("completed");
-                                let result_content = result
-                                    .get("summary")
-                                    .and_then(|s| s.as_str())
-                                    .or_else(|| result.get("error").and_then(|e| e.as_str()))
-                                    .unwrap_or("Child task completed");
-
+                            if let Some(resolution) =
+                                crate::workflow::react::child_tasks::resolve_child_task_completion(
+                                    &mut self.child_task_id,
+                                    &mut self.child_sessions,
+                                    &child_task_id,
+                                    &result,
+                                )
+                            {
                                 self.add_message_and_notify_internal(
                                     "assistant".to_string(),
                                     format!(
                                         "Child task {} {}: {}",
-                                        child_task_id, result_status, result_content
+                                        resolution.child_task_id,
+                                        resolution.status,
+                                        resolution.content
                                     ),
                                     None,
                                     None,
                                     None,
-                                    false,
-                                    None,
+                                    resolution.is_error,
+                                    resolution.is_error.then(|| "ChildTaskFailed".to_string()),
                                     Some(json!({"child_task_id": child_task_id, "result": result})),
                                 )
                                 .await?;
 
-                                // Clear waiting state and resume
-                                self.child_sessions.retain(|id| id != &child_task_id);
-                                self.child_task_id = None;
                                 self.update_state(WorkflowState::Thinking).await?;
                             } else {
                                 log::warn!(
@@ -3401,7 +3395,8 @@ impl WorkflowExecutor {
                     level_str
                 );
                 use std::str::FromStr;
-                if let Ok(level) = crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
+                if let Ok(level) =
+                    crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
                 {
                     self.policy.approval_level = level;
                     if let Ok(store) = self.context.main_store.write() {
@@ -3413,8 +3408,8 @@ impl WorkflowExecutor {
                                 .unwrap_or(serde_json::json!({}));
                             agent_config["approval_level"] = serde_json::json!(level_str);
                             if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ =
-                                    store.update_workflow_agent_config(&self.session_id, &config_str);
+                                let _ = store
+                                    .update_workflow_agent_config(&self.session_id, &config_str);
                             }
                         }
                     }
