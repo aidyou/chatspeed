@@ -44,11 +44,12 @@
 
       <div class="input-footer">
         <div class="footer-left">
-          <div class="selector-wrap" :class="{ disabled: currentWorkflowId }">
+          <div class="selector-wrap" :class="{ disabled: !canEditAgent }">
             <AgentSelector :model-value="selectedAgent" :agent="currentWorkflow?.agentId
+              && !canEditAgent
               ? agents.find(a => a.id === currentWorkflow.agentId)
               : null
-              " :disabled="!!currentWorkflowId" />
+              " :disabled="!canEditAgent" @update:model-value="$emit('update-selected-agent', $event)" />
           </div>
           <div class="selector-wrap model-selector-trigger" @click="$emit('open-model-selector')">
             <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
@@ -226,6 +227,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  canEditAgent: {
+    type: Boolean,
+    default: true
+  },
   activeModelName: {
     type: String,
     default: 'Select Model'
@@ -304,6 +309,7 @@ defineEmits([
   'toggle-planning-mode',
   'toggle-final-audit-mode',
   'update-approval-level',
+  'update-selected-agent',
   'create-new-workflow',
   'open-model-selector'
 ])
@@ -356,6 +362,8 @@ const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 const canSendMessage = computed(
   () => inputMessage.value.trim() !== '' && props.selectedAgent
 )
+
+const canEditAgent = computed(() => props.canEditAgent)
 
 defineExpose({
   inputRef,

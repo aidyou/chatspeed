@@ -150,7 +150,7 @@
     "about": "关于",
     "agent": "智能体",
     "assistant": "桌面助手",
-    "workflow": "工作流",
+    "chat": "聊天",
     "mcp": "MCP",
     "model": "AI引擎",
     "note": "智记",
@@ -159,7 +159,8 @@
     "quit": "退出",
     "scraperTest": "爬虫测试",
     "setting": "设置",
-    "skill": "技能"
+    "skill": "技能",
+    "workflow": "工作流"
   },
   "note": {
     "searchNotePlaceholder": "搜索智记"
@@ -200,11 +201,16 @@
       "name": "智能体名称",
       "nameRequired": "请输入智能体名称",
       "noAgents": "未找到智能体",
+      "parentAgent": "所属主智能体",
+      "parentAgentRequired": "请选择所属主智能体",
       "planModel": "规划模型",
       "planningMode": "规划模式",
       "planningPrompt": "规划提示词",
       "planningPromptPlaceholder": "留空则使用系统默认规划逻辑。若要自定义，请引导模型输出清晰的任务列表。",
       "reorderFailed": "智能体排序失败：{error}",
+      "role": "智能体类型",
+      "roleChild": "子智能体",
+      "rolePrimary": "主智能体",
       "saveFailed": "智能体保存失败：{error}",
       "security": "安全策略",
       "selectAutoApproveTools": "选择自动批准工具",

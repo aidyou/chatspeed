@@ -170,10 +170,7 @@ mod tests {
     // Test that all tools return ToolCallResult with expected structure
     #[tokio::test]
     async fn test_tool_result_structure() {
-        let tools: Vec<Box<dyn ToolDefinition>> = vec![
-            Box::new(AskUser),
-            Box::new(FinishTask),
-        ];
+        let tools: Vec<Box<dyn ToolDefinition>> = vec![Box::new(AskUser), Box::new(FinishTask)];
 
         for tool in tools {
             let params = json!({});

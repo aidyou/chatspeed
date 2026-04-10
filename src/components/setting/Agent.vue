@@ -61,25 +61,34 @@
           <el-form-item :label="$t('settings.agent.name')" prop="name">
             <el-input v-model="agentForm.name" />
           </el-form-item>
+          <el-form-item :label="$t('settings.agent.role')" prop="role">
+            <el-select v-model="agentForm.role" style="width: 100%">
+              <el-option v-for="option in AGENT_ROLE_OPTIONS" :key="option.value" :label="$t(option.labelKey)"
+                :value="option.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.parentAgent')"
+            prop="parentAgentId">
+            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable>
+              <el-option v-for="agent in primaryAgentOptions" :key="agent.id" :label="agent.name" :value="agent.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
             <el-input v-model="agentForm.description" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
             <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" />
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.planningPrompt')" prop="planningPrompt">
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.planningPrompt')" prop="planningPrompt">
             <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5"
               :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.agent.finalAudit')" prop="finalAudit">
-            <el-switch v-model="agentForm.finalAudit" />
           </el-form-item>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
           <div class="models-layout">
             <el-row :gutter="12">
-              <el-col :span="12" v-for="role in modelRoles" :key="role.key">
+              <el-col :span="modelRoles.length === 1 ? 24 : 12" v-for="role in modelRoles" :key="role.key">
                 <div class="model-item-compact">
                   <div class="header">
                     <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
@@ -241,6 +250,7 @@ import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
+import { AGENT_ROLE, AGENT_ROLE_OPTIONS } from '@/constants/agent'
 
 const { t } = useI18n()
 
@@ -256,11 +266,17 @@ const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
 
-const modelRoles = [
+const allModelRoles = [
   { key: 'plan' },
-  { key: 'act' },
-  { key: 'vision' }
+  { key: 'act' }
 ]
+
+const modelRoles = computed(() => {
+  if (agentForm.value.role === AGENT_ROLE.CHILD) {
+    return allModelRoles.filter(role => role.key === 'act')
+  }
+  return allModelRoles
+})
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CORE_MANAGEMENT_TOOLS = ['task', 'task_output', 'task_stop', 'todo_create', 'todo_list', 'todo_update', 'todo_get', 'skill', 'ask_user', 'finish_task', 'submit_plan']
@@ -268,6 +284,8 @@ const CORE_MANAGEMENT_TOOLS = ['task', 'task_output', 'task_stop', 'todo_create'
 const defaultFormData = {
   name: '',
   description: '',
+  role: AGENT_ROLE.PRIMARY,
+  parentAgentId: null,
   systemPrompt: '',
   planningPrompt: '',
   availableTools: [],
@@ -276,18 +294,16 @@ const defaultFormData = {
   allowedPaths: [],
   planModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
   actModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-  visionModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
   maxContexts: 128000,
-  finalAudit: false,
   approvalLevel: 'default'
 }
 
 const agentForm = ref({ ...defaultFormData })
 
 // Model config temporary state
-const modelModes = reactive({ plan: 'provider', act: 'provider', vision: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '', vision: '' })
-const proxyAliases = reactive({ plan: '', act: '', vision: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '' })
+const proxyAliases = reactive({ plan: '', act: '' })
 
 // Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {
@@ -313,6 +329,12 @@ const toolNameMap = computed(() => {
     map[tool.id] = tool.name
   })
   return map
+})
+
+const primaryAgentOptions = computed(() => {
+  return agents.value.filter(agent =>
+    (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY && agent.id !== editId.value
+  )
 })
 
 // Function to sort tool IDs by their names
@@ -537,7 +559,16 @@ const importDefaultShellPolicies = () => {
 
 const agentRules = {
   name: [{ required: true, message: t('settings.agent.nameRequired') }],
-  systemPrompt: [{ required: true, message: t('settings.agent.systemPromptRequired') }]
+  systemPrompt: [{ required: true, message: t('settings.agent.systemPromptRequired') }],
+  parentAgentId: [{
+    validator: (_rule, value, callback) => {
+      if (agentForm.value.role === AGENT_ROLE.CHILD && !value) {
+        callback(new Error(t('settings.agent.parentAgentRequired')))
+        return
+      }
+      callback()
+    }
+  }]
 }
 
 const getModelList = key => {
@@ -599,10 +630,9 @@ const editAgent = async id => {
       if (agentData.models) {
         try {
           const modelsObj = JSON.parse(agentData.models)
-          modelRoles.forEach(role => {
+          allModelRoles.forEach(role => {
             if (modelsObj[role.key]) {
               agentForm.value[role.key + 'Model'] = modelsObj[role.key]
-              // Ensure temperature exists
               if (agentForm.value[role.key + 'Model'].temperature === undefined) {
                 agentForm.value[role.key + 'Model'].temperature = -0.1
               }
@@ -654,16 +684,18 @@ const editAgent = async id => {
         agentForm.value.allowedPaths = []
       }
 
-      modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
+      allModelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
   } else {
     editId.value = null
     agentForm.value = { ...defaultFormData }
-    modelRoles.forEach(role => modelModes[role.key] = 'provider')
+    allModelRoles.forEach(role => modelModes[role.key] = 'provider')
     agentForm.value.availableTools = availableTools.value.map(tool => tool.id)
     agentForm.value.autoApprove = availableTools.value.filter(tool => READ_ONLY_TOOLS.includes(tool.id)).map(tool => tool.id)
     agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
     agentForm.value.allowedPaths = []
+    agentForm.value.role = AGENT_ROLE.PRIMARY
+    agentForm.value.parentAgentId = null
   }
 
   agentDialogVisible.value = true
@@ -678,7 +710,7 @@ const copyAgent = async id => {
     if (agentData.models) {
       try {
         const modelsObj = JSON.parse(agentData.models)
-        modelRoles.forEach(role => { if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key] })
+        allModelRoles.forEach(role => { if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key] })
       } catch (e) { console.error(e) }
     }
 
@@ -724,7 +756,11 @@ const copyAgent = async id => {
       agentForm.value.allowedPaths = []
     }
 
-    modelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
+    if (!agentForm.value.parentAgentId && agentForm.value.role === AGENT_ROLE.CHILD && primaryAgentOptions.value.length > 0) {
+      agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
+    }
+
+    allModelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     agentDialogVisible.value = true
   } catch (error) { showMessage(t('settings.agent.fetchFailed'), 'error') }
 }
@@ -742,12 +778,23 @@ const updateAgent = () => {
       }
 
       // 2. Prepare models
-      modelRoles.forEach(role => {
+      allModelRoles.forEach(role => {
         if (modelModes[role.key] === 'proxy') {
           finalForm[role.key + 'Model'].id = 0
           finalForm[role.key + 'Model'].model = `${proxyGroups[role.key]}@${proxyAliases[role.key]}`
         }
       })
+
+      if (finalForm.role === AGENT_ROLE.CHILD) {
+        finalForm.planningPrompt = ''
+        finalForm.planModel = { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 }
+      }
+
+      if (finalForm.role !== AGENT_ROLE.CHILD) {
+        finalForm.parentAgentId = null
+      }
+
+      finalForm.finalAudit = false
 
       try {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })
@@ -788,6 +835,17 @@ const onAgentDialogClose = () => {
 onMounted(() => {
   modelStore.updateModelStore()
   proxyGroupStore.getList()
+})
+
+watch(() => agentForm.value.role, (role) => {
+  if (role !== AGENT_ROLE.CHILD) {
+    agentForm.value.parentAgentId = null
+    return
+  }
+
+  if (!agentForm.value.parentAgentId && primaryAgentOptions.value.length > 0) {
+    agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
+  }
 })
 </script>
 

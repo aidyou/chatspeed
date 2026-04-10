@@ -92,6 +92,10 @@ pub struct Agent {
     pub name: String,
     /// Description of the agent
     pub description: Option<String>,
+    /// Agent role in the hierarchy (`primary` or `child`)
+    pub role: Option<String>,
+    /// Parent agent ID when this agent is a child agent
+    pub parent_agent_id: Option<String>,
     /// System prompt for the agent
     pub system_prompt: String,
     /// Prompt for the planning phase
@@ -125,6 +129,8 @@ impl Agent {
         id: String,
         name: String,
         description: Option<String>,
+        role: Option<String>,
+        parent_agent_id: Option<String>,
         system_prompt: String,
         planning_prompt: Option<String>,
         available_tools: Option<String>,
@@ -140,6 +146,8 @@ impl Agent {
             id,
             name,
             description,
+            role,
+            parent_agent_id,
             system_prompt,
             planning_prompt,
             available_tools,
@@ -209,6 +217,12 @@ impl From<&Row<'_>> for Agent {
             id: row.get("id").unwrap_or_default(),
             name: row.get("name").unwrap_or_default(),
             description: row.get("description").ok(),
+            role: row
+                .get::<_, String>("role")
+                .ok()
+                .or_else(|| row.get::<_, String>("agent_type").ok())
+                .or_else(|| Some("primary".to_string())),
+            parent_agent_id: row.get("parent_agent_id").ok(),
             system_prompt: row.get("system_prompt").unwrap_or_default(),
             planning_prompt: row.get("planning_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
@@ -263,12 +277,14 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 agent.id,
                 agent.name,
                 agent.description,
+                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
+                agent.parent_agent_id,
                 agent.system_prompt,
                 agent.planning_prompt,
                 available_tools_json,
@@ -323,21 +339,25 @@ impl MainStore {
             "UPDATE agents SET
                 name = ?1,
                 description = ?2,
-                system_prompt = ?3,
-                planning_prompt = ?4,
-                available_tools = ?5,
-                auto_approve = ?6,
-                models = ?7,
-                shell_policy = ?8,
-                allowed_paths = ?9,
-                final_audit = ?10,
-                approval_level = ?11,
-                max_contexts = ?12,
+                role = ?3,
+                parent_agent_id = ?4,
+                system_prompt = ?5,
+                planning_prompt = ?6,
+                available_tools = ?7,
+                auto_approve = ?8,
+                models = ?9,
+                shell_policy = ?10,
+                allowed_paths = ?11,
+                final_audit = ?12,
+                approval_level = ?13,
+                max_contexts = ?14,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?13",
+             WHERE id = ?15",
             params![
                 agent.name,
                 agent.description,
+                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
+                agent.parent_agent_id,
                 agent.system_prompt,
                 agent.planning_prompt,
                 available_tools_json,
@@ -366,7 +386,10 @@ impl MainStore {
         let tx = conn.transaction()?;
 
         // Delete the agent
-        tx.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM agents WHERE id = ?1 OR parent_agent_id = ?1",
+            params![id],
+        )?;
 
         tx.commit()?;
 
@@ -396,10 +419,60 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        let mut stmt = conn.prepare("SELECT * FROM agents ORDER BY name")?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             ORDER BY
+                CASE COALESCE(role, agent_type, 'primary')
+                    WHEN 'primary' THEN 0
+                    ELSE 1
+                END,
+                COALESCE(parent_agent_id, id),
+                name",
+        )?;
 
         let agents = stmt
             .query_map(params![], |row| Ok(Agent::from(row)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(agents)
+    }
+
+    /// Gets all primary agents.
+    pub fn get_primary_agents(&self) -> Result<Vec<Agent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             WHERE COALESCE(role, agent_type, 'primary') = 'primary'
+             ORDER BY name",
+        )?;
+
+        let agents = stmt
+            .query_map(params![], |row| Ok(Agent::from(row)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(agents)
+    }
+
+    /// Gets child agents owned by the specified primary agent.
+    pub fn get_child_agents(&self, parent_agent_id: &str) -> Result<Vec<Agent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             WHERE COALESCE(role, agent_type, 'primary') = 'child'
+               AND parent_agent_id = ?1
+             ORDER BY name",
+        )?;
+
+        let agents = stmt
+            .query_map(params![parent_agent_id], |row| Ok(Agent::from(row)))?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(agents)

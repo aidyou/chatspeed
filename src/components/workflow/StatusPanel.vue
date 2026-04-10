@@ -628,12 +628,6 @@ const constrainPosition = () => {
   savePosition()
 }
 
-const onKeyDown = (e) => {
-  if (e.key === 'Escape' && !isCollapsed.value) {
-    isCollapsed.value = true
-  }
-}
-
 onMounted(() => {
   restorePosition()
 
@@ -670,12 +664,10 @@ onMounted(() => {
     constrainPosition()
   }
 
-  document.addEventListener('keydown', onKeyDown)
   window.addEventListener('resize', constrainPosition)
 })
 
 onUnmounted(() => {
-  document.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('resize', constrainPosition)
 })
 

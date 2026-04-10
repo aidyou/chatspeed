@@ -47,8 +47,11 @@ pub trait SensitiveDataFilter {
     /// # Returns
     /// A `Result` containing a vector of `FilterCandidate`s if successful,
     /// or a `SensitiveError` if an error occurs.
-    fn filter(&self, text: &str, language: &str)
-        -> std::result::Result<Vec<FilterCandidate>, SensitiveError>;
+    fn filter(
+        &self,
+        text: &str,
+        language: &str,
+    ) -> std::result::Result<Vec<FilterCandidate>, SensitiveError>;
 
     /// Returns the priority of the filter.
     /// Lower values have higher priority.
@@ -84,29 +87,29 @@ mod tests {
         // Test with Unicode characters (multi-byte)
         let text = "Hello 世界 🌍";
         // "Hello " = 6 bytes, "世" = 3 bytes, "界" = 3 bytes, " 🌍" = 4 bytes (space + emoji)
-        
+
         // Start of string
         assert_eq!(adjust_to_char_boundary(text, 0), 0);
-        
+
         // Middle of ASCII part
         assert_eq!(adjust_to_char_boundary(text, 3), 3);
-        
+
         // Boundary at start of Chinese character
         assert_eq!(adjust_to_char_boundary(text, 6), 6); // Before "世"
-        
+
         // Middle of Chinese character (should adjust to start)
         assert_eq!(adjust_to_char_boundary(text, 7), 6); // Middle of "世"
         assert_eq!(adjust_to_char_boundary(text, 8), 6); // Middle of "世"
-        
+
         // Boundary between Chinese characters
         assert_eq!(adjust_to_char_boundary(text, 9), 9); // Between "世" and "界"
-        
+
         // Middle of emoji (4 bytes, starts at byte 13)
         assert_eq!(adjust_to_char_boundary(text, 13), 13); // Start of 🌍
         assert_eq!(adjust_to_char_boundary(text, 14), 13); // Middle of 🌍
         assert_eq!(adjust_to_char_boundary(text, 15), 13); // Middle of 🌍
         assert_eq!(adjust_to_char_boundary(text, 16), 13); // Middle of 🌍
-        
+
         // End of string
         assert_eq!(adjust_to_char_boundary(text, 17), 17); // End
         assert_eq!(adjust_to_char_boundary(text, 20), 17); // Beyond end
@@ -117,7 +120,7 @@ mod tests {
         // Test with mixed Unicode characters
         let text = "a©b😀c";
         // a=1, ©=2, b=1, 😀=4, c=1
-        
+
         assert_eq!(adjust_to_char_boundary(text, 0), 0); // a
         assert_eq!(adjust_to_char_boundary(text, 1), 1); // Between a and ©
         assert_eq!(adjust_to_char_boundary(text, 2), 1); // Middle of ©
@@ -134,16 +137,16 @@ mod tests {
     fn test_adjust_to_char_boundary_edge_cases() {
         // Test various edge cases
         let text = "test";
-        
+
         // Index 0
         assert_eq!(adjust_to_char_boundary(text, 0), 0);
-        
+
         // Index at string length
         assert_eq!(adjust_to_char_boundary(text, 4), 4);
-        
+
         // Index beyond string length
         assert_eq!(adjust_to_char_boundary(text, 10), 4);
-        
+
         // Very large index
         assert_eq!(adjust_to_char_boundary(text, usize::MAX), 4);
     }
@@ -152,7 +155,7 @@ mod tests {
     fn test_adjust_to_char_boundary_surrogate_pairs() {
         // Test with characters that might have surrogate pairs
         let text = "𐍈test"; // 𐍈 is 4 bytes in UTF-8
-        
+
         assert_eq!(adjust_to_char_boundary(text, 0), 0);
         assert_eq!(adjust_to_char_boundary(text, 1), 0); // Middle of 𐍈
         assert_eq!(adjust_to_char_boundary(text, 2), 0); // Middle of 𐍈
@@ -170,7 +173,7 @@ mod tests {
             filter_type: "TestFilter",
             confidence: 0.85,
         };
-        
+
         // Just ensure it doesn't panic when formatting
         let debug_output = format!("{:?}", candidate);
         assert!(debug_output.contains("TestFilter"));
@@ -180,28 +183,32 @@ mod tests {
     #[test]
     fn test_trait_default_implementations() {
         // Test default implementations of SensitiveDataFilter trait
-        
+
         struct TestFilter;
-        
+
         impl SensitiveDataFilter for TestFilter {
             fn filter_type(&self) -> &'static str {
                 "TestFilter"
             }
-            
+
             fn supported_languages(&self) -> Vec<&'static str> {
                 vec!["en"]
             }
-            
-            fn filter(&self, _text: &str, _language: &str) -> Result<Vec<FilterCandidate>, SensitiveError> {
+
+            fn filter(
+                &self,
+                _text: &str,
+                _language: &str,
+            ) -> Result<Vec<FilterCandidate>, SensitiveError> {
                 Ok(vec![])
             }
         }
-        
+
         let filter = TestFilter;
-        
+
         // Test default produced_types
         assert_eq!(filter.produced_types(), vec!["TestFilter"]);
-        
+
         // Test default priority
         assert_eq!(filter.priority(), 100);
     }

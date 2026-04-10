@@ -12,12 +12,11 @@ pub struct MobileFilter {
 impl MobileFilter {
     /// Creates a new `MobileFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"1[3-9]\d{9}"#).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
+        let regex =
+            Regex::new(r#"1[3-9]\d{9}"#).map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_mobile_regex".to_string(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
         Ok(Self { regex })
     }
 }

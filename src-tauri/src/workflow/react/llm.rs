@@ -20,12 +20,14 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
-    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT,
+    CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
+    PLANNING_MODE_PROMPT,
 };
 
 pub struct LlmProcessor {
     pub session_id: String,
     pub agent_config: Agent,
+    pub child_agents: Vec<Agent>,
     pub available_skills: HashMap<String, SkillManifest>,
     pub path_guard: Arc<RwLock<PathGuard>>,
     pub active_provider_id: i64,
@@ -41,6 +43,7 @@ impl LlmProcessor {
     pub fn new(
         session_id: String,
         agent_config: Agent,
+        child_agents: Vec<Agent>,
         available_skills: HashMap<String, SkillManifest>,
         path_guard: Arc<RwLock<PathGuard>>,
         _chat_state: Arc<ChatState>,
@@ -55,6 +58,7 @@ impl LlmProcessor {
         Self {
             session_id,
             agent_config,
+            child_agents,
             available_skills,
             path_guard,
             active_provider_id,
@@ -573,6 +577,28 @@ impl LlmProcessor {
                 "<AGENT_SPECIFIC_INSTRUCTIONS>\n{}\n</AGENT_SPECIFIC_INSTRUCTIONS>",
                 self.agent_config.system_prompt
             ));
+        }
+
+        // 2.1 Sub Agents
+        if !self.child_agents.is_empty() {
+            let child_agent_lines = self
+                .child_agents
+                .iter()
+                .map(|child| {
+                    let description = child
+                        .description
+                        .as_deref()
+                        .unwrap_or("No description provided");
+                    format!(
+                        "- Name: {}\n  child_agent_id: {}\n  Description: {}",
+                        child.name, child.id, description
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            system_parts
+                .push(CHILD_AGENT_DIRECTORY_PROMPT.replace("{{child_agents}}", &child_agent_lines));
         }
 
         // 3. Drafting for non-reasoning models

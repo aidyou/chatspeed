@@ -58,6 +58,42 @@ fn execute_migration_sql(
     Ok(())
 }
 
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+
+    for column_name in columns {
+        if column_name? == column {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn ensure_v5_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "agents", "role")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'primary'",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "parent_agent_id")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN parent_agent_id TEXT REFERENCES agents(id)",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)",
+        [],
+    )?;
+
+    Ok(())
+}
+
 /// Gets the current database version
 pub fn get_db_version(conn: &Connection) -> Result<i32, StoreError> {
     let result: Result<i32, rusqlite::Error> = conn.query_row(
@@ -98,6 +134,9 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             "Database is already up to date at version {}.",
             current_version
         );
+        if current_version >= 5 {
+            ensure_v5_agent_hierarchy_columns(conn)?;
+        }
         return Ok(());
     }
 
@@ -128,6 +167,9 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     let final_version = get_db_version(conn)?;
+    if final_version >= 5 {
+        ensure_v5_agent_hierarchy_columns(conn)?;
+    }
     log::info!(
         "All migrations applied. Database is now at version {}.",
         final_version

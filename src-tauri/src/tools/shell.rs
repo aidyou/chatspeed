@@ -48,7 +48,9 @@ impl<'de> serde::Deserialize<'de> for ShellDecision {
                 };
                 Ok(ShellDecision::Deny(reason))
             }
-            _ => Ok(ShellDecision::Review("Unknown decision, requires review".to_string())),
+            _ => Ok(ShellDecision::Review(
+                "Unknown decision, requires review".to_string(),
+            )),
         }
     }
 }
@@ -562,7 +564,9 @@ impl ToolDefinition for ShellExecute {
 
         // Use streaming execution if gateway is configured
         if self.gateway.is_some() && self.session_id.is_some() {
-            return self.call_with_streaming(command_str, timeout_ms, params.clone()).await;
+            return self
+                .call_with_streaming(command_str, timeout_ms, params.clone())
+                .await;
         }
 
         // Fallback to standard execution
@@ -605,7 +609,12 @@ impl ToolDefinition for ShellExecute {
 
 impl ShellExecute {
     /// Execute command with real-time output streaming to frontend
-    async fn call_with_streaming(&self, command_str: &str, timeout_ms: u64, params: Value) -> NativeToolResult {
+    async fn call_with_streaming(
+        &self,
+        command_str: &str,
+        timeout_ms: u64,
+        params: Value,
+    ) -> NativeToolResult {
         use std::process::Stdio;
 
         let gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(

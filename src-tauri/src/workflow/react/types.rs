@@ -163,6 +163,20 @@ pub enum WorkflowSignal {
     Stop,
     /// Re-broadcast pending confirmations to frontend
     RebroadcastPending,
+    /// Update runtime final audit configuration
+    UpdateFinalAudit {
+        #[serde(alias = "finalAudit", alias = "audit")]
+        final_audit: bool,
+    },
+    /// Update runtime approval level configuration
+    UpdateApprovalLevel {
+        #[serde(alias = "approvalLevel", alias = "level")]
+        approval_level: String,
+    },
+    /// Update runtime allowed paths configuration
+    UpdateAllowedPaths { paths: Vec<String> },
+    /// Update runtime model configuration
+    UpdateModelConfig { configs: serde_json::Value },
     /// Remove a tool from auto-approve list
     RemoveAutoApprovedTool { tool_name: String },
     /// Remove a pattern from shell policy
@@ -187,8 +201,12 @@ impl WorkflowSignal {
         match (self, wait_reason) {
             // Stop is always valid
             (WorkflowSignal::Stop, _) => true,
-            // RebroadcastPending, RemoveAutoApprovedTool, RemoveShellPolicyItem are always valid
+            // Runtime config/control signals are valid regardless of current waiting reason
             (WorkflowSignal::RebroadcastPending, _) => true,
+            (WorkflowSignal::UpdateFinalAudit { .. }, _) => true,
+            (WorkflowSignal::UpdateApprovalLevel { .. }, _) => true,
+            (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
+            (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
             // UserMessage is valid for UserInput waiting
@@ -212,6 +230,10 @@ impl WorkflowSignal {
             WorkflowSignal::Continue => "continue",
             WorkflowSignal::Stop => "stop",
             WorkflowSignal::RebroadcastPending => "rebroadcast_pending",
+            WorkflowSignal::UpdateFinalAudit { .. } => "update_final_audit",
+            WorkflowSignal::UpdateApprovalLevel { .. } => "update_approval_level",
+            WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
+            WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
             WorkflowSignal::ChildTaskComplete { .. } => "child_task_complete",
@@ -407,6 +429,7 @@ mod tests {
         assert!(stop.is_valid_for(Some(&WaitReason::UserInput)));
         assert!(stop.is_valid_for(Some(&WaitReason::Approval)));
         assert!(stop.is_valid_for(Some(&WaitReason::Confirmation)));
+        assert!(stop.is_valid_for(Some(&WaitReason::ChildTask)));
 
         // UserMessage is only valid for UserInput waiting
         let user_msg = WorkflowSignal::UserMessage {
@@ -431,5 +454,24 @@ mod tests {
         assert!(cont.is_valid_for(Some(&WaitReason::Confirmation)));
         assert!(!cont.is_valid_for(Some(&WaitReason::UserInput)));
         assert!(!cont.is_valid_for(Some(&WaitReason::Approval)));
+
+        let child_complete = WorkflowSignal::ChildTaskComplete {
+            child_task_id: "child_1".to_string(),
+            result: serde_json::json!({"status": "completed"}),
+        };
+        assert!(child_complete.is_valid_for(Some(&WaitReason::ChildTask)));
+        assert!(!child_complete.is_valid_for(Some(&WaitReason::Approval)));
+
+        let update_paths = WorkflowSignal::UpdateAllowedPaths {
+            paths: vec!["/tmp/project".to_string()],
+        };
+        assert!(update_paths.is_valid_for(Some(&WaitReason::UserInput)));
+        assert!(update_paths.is_valid_for(Some(&WaitReason::Approval)));
+
+        let update_models = WorkflowSignal::UpdateModelConfig {
+            configs: serde_json::json!({"act": "model-a"}),
+        };
+        assert!(update_models.is_valid_for(Some(&WaitReason::Confirmation)));
+        assert!(update_models.is_valid_for(None));
     }
 }

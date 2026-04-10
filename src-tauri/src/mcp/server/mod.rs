@@ -8,4 +8,3 @@ pub mod persistent_session;
 mod standalone;
 
 pub use standalone::create_http_service;
-

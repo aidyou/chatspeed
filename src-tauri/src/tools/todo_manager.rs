@@ -389,6 +389,8 @@ mod tests {
                 agent_id.clone(),
                 "Test Agent".to_string(),
                 None,
+                Some("primary".to_string()),
+                None,
                 "System prompt".to_string(),
                 None,
                 None,

@@ -14,10 +14,12 @@ impl IpAddressFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let ipv4_pattern = r#"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"#;
         let ipv6_pattern = r#"(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}"#;
-        let regex = Regex::new(&format!(r#"\b(?:{}|{})\b"#, ipv4_pattern, ipv6_pattern))
-            .map_err(|e| SensitiveError::RegexCompilationFailed {
-                pattern: "ip_address_regex".to_string(),
-                message: e.to_string(),
+        let regex =
+            Regex::new(&format!(r#"\b(?:{}|{})\b"#, ipv4_pattern, ipv6_pattern)).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "ip_address_regex".to_string(),
+                    message: e.to_string(),
+                }
             })?;
         Ok(Self { regex })
     }

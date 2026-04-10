@@ -23,7 +23,9 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
-        <el-tooltip placement="bottom" v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />
@@ -98,8 +100,9 @@ const props = defineProps({
 })
 
 const availableMenus = [
+  { name: 'chat', icon: 'skill-chat-square' },
   'assistant',
-  { name: 'workflow', icon: "skill-plan3" },
+  { name: 'workflow', icon: 'skill-plan3' },
   'note',
   'divider',
   'setting',
@@ -245,6 +248,9 @@ const handleCommand = async command => {
   console.log(command)
   try {
     switch (command) {
+      case 'main':
+        await invoke('show_window', { windowLabel: 'main' })
+        break
       case 'note':
         await invoke('open_note_window')
         break

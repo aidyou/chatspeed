@@ -35,10 +35,7 @@ impl TsidGenerator {
     /// Creates a new synchronous generator.
     pub fn new(node_id: u64) -> Result<Self, String> {
         if node_id >= (1 << NODE_BITS) {
-            return Err(format!(
-                "nodeID must be between 0-{}",
-                (1 << NODE_BITS) - 1
-            ));
+            return Err(format!("nodeID must be between 0-{}", (1 << NODE_BITS) - 1));
         }
 
         let current_ms = SystemTime::now()
@@ -68,11 +65,8 @@ impl TsidGenerator {
 
         for _ in 0..MAX_RETRIES {
             let now = SystemTime::now();
-            let current_ms = now
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-                - TSID_EPOCH as i64;
+            let current_ms =
+                now.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64 - TSID_EPOCH as i64;
 
             if current_ms > state.last_time_ms {
                 state.last_time_ms = current_ms;
@@ -105,7 +99,6 @@ impl TsidGenerator {
         Ok(crockford_base32_encode(&tsid_bytes))
     }
 }
-
 
 /// Crockford Base32 character table
 /// Excludes easily confused characters (I, L, O, U)
@@ -203,7 +196,11 @@ mod tests {
         let sort_start = std::time::Instant::now();
         let mut sorted_ids = generated_ids.clone();
         sorted_ids.sort_unstable();
-        println!("Sorting {}M IDs in {:?}", count / 1_000_000, sort_start.elapsed());
+        println!(
+            "Sorting {}M IDs in {:?}",
+            count / 1_000_000,
+            sort_start.elapsed()
+        );
 
         let check_start = std::time::Instant::now();
         for i in 0..count {
@@ -214,7 +211,11 @@ mod tests {
                 );
             }
         }
-        println!("Verifying order of {}M IDs in {:?}", count / 1_000_000, check_start.elapsed());
+        println!(
+            "Verifying order of {}M IDs in {:?}",
+            count / 1_000_000,
+            check_start.elapsed()
+        );
     }
 
     #[test]

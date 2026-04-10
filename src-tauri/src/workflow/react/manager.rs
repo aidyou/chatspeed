@@ -1,8 +1,8 @@
 use dashmap::DashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 use crate::workflow::react::engine::ReActExecutor;
 
@@ -39,7 +39,7 @@ impl ManagedSession {
             updated_at_ms: now,
         }
     }
-    
+
     pub fn touch(&mut self) {
         self.updated_at_ms = chrono::Utc::now().timestamp_millis();
     }
@@ -49,13 +49,17 @@ impl ManagedSession {
 pub enum WorkflowManagerError {
     #[error("Session already exists: {session_id}")]
     SessionAlreadyExists { session_id: String },
-    
+
     #[error("Session not found: {session_id}")]
     SessionNotFound { session_id: String },
-    
+
     #[error("Invalid session state for {session_id}: expected {expected}, got {actual}")]
-    InvalidState { session_id: String, expected: String, actual: String },
-    
+    InvalidState {
+        session_id: String,
+        expected: String,
+        actual: String,
+    },
+
     #[error("Signal rejected for session {session_id}: {reason}")]
     SignalRejected { session_id: String, reason: String },
 }
@@ -100,7 +104,7 @@ impl WorkflowManager {
 
     pub fn remove_session(&self, session_id: &str) -> Option<ManagedSession> {
         let removed = self.sessions.remove(session_id);
-        
+
         if let Some((_, session)) = removed {
             log::info!(
                 "[WorkflowManager][session={}][event=session_removed] Session removed, was in status {:?}",
@@ -119,7 +123,7 @@ impl WorkflowManager {
 
     pub fn has_session(&self, session_id: &str) -> bool {
         let exists = self.sessions.contains_key(session_id);
-        
+
         if exists {
             log::debug!(
                 "[WorkflowManager][session={}][event=session_lookup_hit] Session exists",
@@ -131,7 +135,7 @@ impl WorkflowManager {
                 session_id
             );
         }
-        
+
         exists
     }
 
@@ -139,28 +143,21 @@ impl WorkflowManager {
         self.sessions.get(session_id).map(|s| s.status.clone())
     }
 
-    pub fn get_executor(
-        &self,
-        session_id: &str,
-    ) -> Option<Arc<Mutex<dyn ReActExecutor>>> {
+    pub fn get_executor(&self, session_id: &str) -> Option<Arc<Mutex<dyn ReActExecutor>>> {
         self.sessions.get(session_id).map(|s| s.executor.clone())
     }
 
-    pub fn update_session_status(
-        &self,
-        session_id: &str,
-        status: ManagedSessionStatus,
-    ) -> bool {
+    pub fn update_session_status(&self, session_id: &str, status: ManagedSessionStatus) -> bool {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.status = status.clone();
             session.touch();
-            
+
             log::info!(
                 "[WorkflowManager][session={}][event=status_updated] Status updated to {:?}",
                 session_id,
                 status
             );
-            
+
             true
         } else {
             log::debug!(
@@ -177,7 +174,7 @@ impl WorkflowManager {
         signal_type: &str,
     ) -> Result<(), WorkflowManagerError> {
         let session = self.sessions.get(session_id);
-        
+
         if let Some(session) = session {
             match session.status {
                 ManagedSessionStatus::Active | ManagedSessionStatus::Waiting => {
@@ -235,7 +232,10 @@ impl WorkflowManager {
     }
 
     pub fn get_all_session_ids(&self) -> Vec<String> {
-        self.sessions.iter().map(|entry| entry.key().clone()).collect()
+        self.sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     pub fn session_count(&self) -> usize {
@@ -250,7 +250,7 @@ impl Default for WorkflowManager {
 }
 
 lazy_static::lazy_static! {
-    static ref GLOBAL_SIGNAL_TX: std::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>> = 
+    static ref GLOBAL_SIGNAL_TX: std::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>> =
         std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
@@ -278,9 +278,9 @@ impl WorkflowManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::react::types::WorkflowState;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::types::StepType;
+    use crate::workflow::react::types::WorkflowState;
 
     struct MockExecutor {
         session_id: String,
@@ -343,14 +343,14 @@ mod tests {
     fn test_register_session() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
+
         let result = manager.register_session(
             "test-session-1".to_string(),
             executor.clone(),
             ManagedSessionStatus::Active,
         );
         assert!(result.is_ok());
-        
+
         let result = manager.register_session(
             "test-session-1".to_string(),
             executor,
@@ -363,16 +363,18 @@ mod tests {
     fn test_remove_session() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
-        manager.register_session(
-            "test-session-1".to_string(),
-            executor,
-            ManagedSessionStatus::Active,
-        ).unwrap();
-        
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Active,
+            )
+            .unwrap();
+
         let removed = manager.remove_session("test-session-1");
         assert!(removed.is_some());
-        
+
         assert!(!manager.has_session("test-session-1"));
     }
 
@@ -380,15 +382,17 @@ mod tests {
     fn test_has_session() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
+
         assert!(!manager.has_session("non-existent"));
-        
-        manager.register_session(
-            "test-session-1".to_string(),
-            executor,
-            ManagedSessionStatus::Active,
-        ).unwrap();
-        
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Active,
+            )
+            .unwrap();
+
         assert!(manager.has_session("test-session-1"));
     }
 
@@ -396,15 +400,17 @@ mod tests {
     fn test_get_session_status() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
+
         assert!(manager.get_session_status("non-existent").is_none());
-        
-        manager.register_session(
-            "test-session-1".to_string(),
-            executor,
-            ManagedSessionStatus::Active,
-        ).unwrap();
-        
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Active,
+            )
+            .unwrap();
+
         assert_eq!(
             manager.get_session_status("test-session-1"),
             Some(ManagedSessionStatus::Active)
@@ -415,19 +421,19 @@ mod tests {
     fn test_update_session_status() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
-        manager.register_session(
-            "test-session-1".to_string(),
-            executor,
-            ManagedSessionStatus::Active,
-        ).unwrap();
-        
-        let updated = manager.update_session_status(
-            "test-session-1",
-            ManagedSessionStatus::Waiting,
-        );
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Active,
+            )
+            .unwrap();
+
+        let updated =
+            manager.update_session_status("test-session-1", ManagedSessionStatus::Waiting);
         assert!(updated);
-        
+
         assert_eq!(
             manager.get_session_status("test-session-1"),
             Some(ManagedSessionStatus::Waiting)
@@ -438,21 +444,23 @@ mod tests {
     fn test_route_signal() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
-        
+
         let result = manager.route_signal("non-existent", "user_input");
         assert!(result.is_err());
-        
-        manager.register_session(
-            "test-session-1".to_string(),
-            executor,
-            ManagedSessionStatus::Active,
-        ).unwrap();
-        
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Active,
+            )
+            .unwrap();
+
         let result = manager.route_signal("test-session-1", "user_input");
         assert!(result.is_ok());
-        
+
         manager.update_session_status("test-session-1", ManagedSessionStatus::Completed);
-        
+
         let result = manager.route_signal("test-session-1", "user_input");
         assert!(result.is_err());
     }

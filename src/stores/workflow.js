@@ -170,6 +170,37 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const patchToolMessage = (toolId, patcher) => {
+    if (!toolId) return;
+    const index = messages.value.findIndex(
+      (m) => m?.metadata?.tool_call_id === toolId
+    );
+    if (index === -1) return;
+
+    const existing = messages.value[index];
+    const existingMeta = existing.metadata || {};
+    const next = patcher(existing, existingMeta);
+    if (!next) return;
+    messages.value[index] = next;
+  };
+
+  /**
+   * Mark a pending approval tool as approved and running before the final result arrives.
+   * This collapses duplicate pending UI and gives tool_stream a live target to update.
+   */
+  const markToolApprovedRunning = (toolId) => {
+    patchToolMessage(toolId, (existing, meta) => ({
+      ...existing,
+      metadata: {
+        ...meta,
+        approval_status: 'approved',
+        summary: meta.summary && meta.summary !== 'Awaiting approval'
+          ? meta.summary
+          : 'Executing...'
+      }
+    }));
+  };
+
   /**
    * Append a line to tool stream output, keeping max 100 lines
    */
@@ -182,6 +213,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // Keep only latest 100 lines
     if (lines.length > 100) {
       lines.splice(0, lines.length - 100)
+    }
+
+    const summaryLine = typeof line === 'string' ? line.trim() : ''
+    if (summaryLine) {
+      patchToolMessage(toolId, (existing, meta) => ({
+        ...existing,
+        metadata: {
+          ...meta,
+          approval_status: meta.approval_status === 'pending' ? 'approved' : meta.approval_status,
+          summary: summaryLine
+        }
+      }))
     }
   }
 
@@ -518,6 +561,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     removeAutoApprovedTool,
     setShellPolicy,
     removeShellPolicyItem,
+    markToolApprovedRunning,
     appendToolStream,
     clearToolStream,
     getToolStream,

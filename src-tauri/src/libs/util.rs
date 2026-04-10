@@ -44,7 +44,7 @@ pub fn format_json_str(jstr: &str) -> String {
     // However, for tool calling, AI usually produces compact JSON or JSON with newlines for formatting.
     // If the JSON is already valid, serde_json handles it fine.
     // The previous aggressive replace('\n', "") was likely to fix raw newlines in strings.
-    
+
     let formatted = jstr
         .trim_start_matches("```json")
         .trim_start_matches(|c: char| c == '`' || c.is_whitespace())

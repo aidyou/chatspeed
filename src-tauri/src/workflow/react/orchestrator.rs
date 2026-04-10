@@ -1,6 +1,6 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::db::MainStore;
+use crate::db::{Agent, MainStore};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::engine::ReActExecutor;
@@ -137,6 +137,7 @@ pub struct TaskTool {
     executor_factory: Arc<dyn SubAgentFactory>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     parent_session_id: Option<String>,
+    child_agents: Vec<Agent>,
 }
 
 impl TaskTool {
@@ -148,11 +149,17 @@ impl TaskTool {
             executor_factory: factory,
             tsid_generator,
             parent_session_id: None,
+            child_agents: Vec::new(),
         }
     }
 
     pub fn with_parent_session(mut self, parent_session_id: String) -> Self {
         self.parent_session_id = Some(parent_session_id);
+        self
+    }
+
+    pub fn with_child_agents(mut self, child_agents: Vec<Agent>) -> Self {
+        self.child_agents = child_agents;
         self
     }
 }
@@ -164,18 +171,13 @@ impl ToolDefinition for TaskTool {
     }
 
     fn description(&self) -> &str {
-        "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
-        The Task tool launches specialized agents (subprocesses) that autonomously handle complex tasks. \
-        Each agent type has specific capabilities and tools available to it.\n\n\
-        Available agent types:\n\
-        - Programming: Expert in code generation, debugging, and refactoring. Specialist for code modification and technical implementation.\n\
-        - Writing: Expert in content creation, documentation, and translation.\n\
-        - Browsing: Fast agent specialized for exploring codebases, web research and information gathering. Use this when you need to quickly find files by patterns, search code for keywords, or answer questions about the codebase.\n\
-        - Vision: Specialized in analyzing images, visual UI elements, and screenshots.\n\
-        - Planning: Strategic architect for designing multi-stage implementation plans. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.\n\
-        - General: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.\n\n\
-        When calling this agent, the tool will return a task_id if 'run_in_background' is set to true. \
-        You can use the 'task_output' tool to check the progress or get the final result of a background agent."
+        "Launch one of the pre-configured child agents owned by the current primary agent. \
+        Each child agent has its own prompt, model setup, and tool permissions. \
+        Use the child_agent_id that best matches the requested task. \
+        The prompt must contain a clear objective, the exact scope to investigate or implement, relevant constraints, \
+        and the expected output format or success criteria. \
+        If the child agent must return structured findings, explicitly state which facts, files, risks, or conclusions must be included. \
+        Use execution_mode='call' when the parent must wait for the child result, or execution_mode='background' when the child should continue asynchronously and be inspected later with task_output."
     }
 
     fn category(&self) -> ToolCategory {
@@ -187,29 +189,55 @@ impl ToolDefinition for TaskTool {
     }
 
     fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        let child_agent_ids: Vec<String> = self
+            .child_agents
+            .iter()
+            .map(|agent| agent.id.clone())
+            .collect();
+        let child_agent_descriptions = self
+            .child_agents
+            .iter()
+            .map(|agent| {
+                let description = agent
+                    .description
+                    .as_deref()
+                    .unwrap_or("No description provided");
+                format!("{}: {} ({})", agent.id, agent.name, description)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
         MCPToolDeclaration {
             name: self.name().to_string(),
-            description: self.description().to_string(),
+            description: if child_agent_descriptions.is_empty() {
+                format!(
+                    "{}\n\nNo child agents are currently configured for this primary agent.",
+                    self.description()
+                )
+            } else {
+                format!(
+                    "{}\n\nAvailable child agents:\n{}",
+                    self.description(),
+                    child_agent_descriptions
+                )
+            },
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "description": { "type": "string", "description": "A short (3-5 word) description of the task" },
-                    "prompt": { "type": "string", "description": "The task for the agent to perform" },
-                    "subagent_type": {
+                    "prompt": { "type": "string", "description": "A complete delegation brief for the child agent. Include the objective, exact scope, constraints, relevant context, and what the final output must contain." },
+                    "child_agent_id": {
                         "type": "string",
-                        "enum": ["Programming", "Writing", "Browsing", "Vision", "Planning", "General"],
-                        "description": "The type of specialized agent to use for this task"
+                        "enum": child_agent_ids,
+                        "description": "The pre-configured child agent to execute this task"
                     },
-                    "run_in_background": {
-                        "type": "boolean",
-                        "description": "Set to true to run this agent in the background. The tool result will include a task_id - use task_output tool to check on output."
-                    },
-                    "call_mode": {
-                        "type": "boolean",
-                        "description": "Phase 7: Set to true to use Call model where parent workflow waits for child task completion. Parent enters waiting state until child completes."
+                    "execution_mode": {
+                        "type": "string",
+                        "enum": ["call", "background"],
+                        "description": "Execution mode for the child agent. Use 'call' to wait for child completion and resume the parent workflow with the child result. Use 'background' to continue asynchronously and inspect the child later via task_output."
                     }
                 },
-                "required": ["description", "prompt", "subagent_type"]
+                "required": ["description", "prompt", "child_agent_id"]
             }),
             output_schema: None,
             disabled: false,
@@ -222,15 +250,37 @@ impl ToolDefinition for TaskTool {
         let prompt = params["prompt"]
             .as_str()
             .ok_or(ToolError::InvalidParams("prompt is required".to_string()))?;
-        let subagent_type = params["subagent_type"].as_str().unwrap_or("General");
-        let run_in_background = params["run_in_background"].as_bool().unwrap_or(false);
-        // Phase 7: Call mode - parent waits for child task completion
-        let call_mode = params["call_mode"].as_bool().unwrap_or(false);
+        let child_agent_id = params["child_agent_id"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "child_agent_id is required".to_string(),
+            ))?;
+        let execution_mode = params["execution_mode"].as_str().unwrap_or("call");
+        if !matches!(execution_mode, "call" | "background") {
+            return Err(ToolError::InvalidParams(
+                format!(
+                    "execution_mode must be either 'call' or 'background', got '{}'",
+                    execution_mode
+                ),
+            ));
+        }
+
+        let child_agent = self
+            .child_agents
+            .iter()
+            .find(|agent| agent.id == child_agent_id)
+            .cloned()
+            .ok_or_else(|| {
+                ToolError::InvalidParams(format!(
+                    "child_agent_id '{}' is not available to the current agent",
+                    child_agent_id
+                ))
+            })?;
 
         // Use TSID for unique time-sorted IDs
         let task_id = format!(
             "task_{}_{}",
-            subagent_type.to_lowercase(),
+            child_agent.name.to_lowercase().replace(' ', "_"),
             self.tsid_generator
                 .generate()
                 .map_err(|e| ToolError::ExecutionFailed(e))?
@@ -238,7 +288,7 @@ impl ToolDefinition for TaskTool {
 
         let sub_executor = self
             .executor_factory
-            .create_executor("default_sub_agent", &task_id, prompt, subagent_type)
+            .create_executor(&child_agent.id, &task_id, prompt, &child_agent.name)
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to create sub-executor: {}", e))
@@ -252,7 +302,7 @@ impl ToolDefinition for TaskTool {
                 .map_err(|e| ToolError::ExecutionFailed(format!("Sub-agent init failed: {}", e)))?;
         }
 
-        if run_in_background {
+        if execution_mode == "background" {
             let exec_clone = sub_executor.clone();
             BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
 
@@ -267,148 +317,93 @@ impl ToolDefinition for TaskTool {
                 "task_id": task_id,
                 "status": "Running",
                 "message": format!("Task '{}' has been started in the background. Use 'task_output' with the task_id to retrieve results later.", description)
-            }).to_string()), None));
+            }).to_string()), Some(json!({
+                "task_id": task_id,
+                "status": "running",
+                "mode": "background"
+            }))));
         }
 
-        // Phase 7: Call mode - register child task and return waiting status
-        if call_mode {
-            if let Some(ref parent_id) = self.parent_session_id {
-                // Register child task with parent
-                get_child_task_registry()
-                    .register_child_task(task_id.clone(), parent_id.clone());
-                
-                // Store child task in background tasks
-                let exec_clone = sub_executor.clone();
-                BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
+        let parent_id = self.parent_session_id.as_ref().ok_or_else(|| {
+            ToolError::ExecutionFailed(
+                "task execution_mode='call' requires an active parent session".to_string(),
+            )
+        })?;
 
-                // Spawn child task and notify parent on completion
-                let parent_id = parent_id.clone();
-                let task_id_clone = task_id.clone();
-                tokio::spawn(async move {
-                    let mut guard = exec_clone.lock().await;
-                    let result = guard.run_loop().await;
-                    
-                    // Child task completed - notify parent
-                    let completion_result = match result {
-                        Ok(_) => {
-                            // Extract result from messages
-                            let messages = guard.messages();
-                            let mut summary = None;
-                            for msg in messages.iter().rev() {
-                                if msg.role == "assistant" {
-                                    summary = Some(msg.message.clone());
-                                    break;
-                                }
-                            }
-                            json!({
-                                "status": "completed",
-                                "task_id": task_id_clone,
-                                "summary": summary.unwrap_or_default()
-                            })
-                        }
-                        Err(e) => {
-                            json!({
-                                "status": "failed",
-                                "task_id": task_id_clone,
-                                "error": e.to_string()
-                            })
-                        }
-                    };
+        get_child_task_registry().register_child_task(task_id.clone(), parent_id.clone());
 
-                    // Send ChildTaskComplete signal to parent
-                    let _ = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
-                        &parent_id,
-                        json!({
-                            "type": "child_task_complete",
-                            "child_task_id": task_id_clone,
-                            "result": completion_result
-                        }).to_string()
-                    );
-                });
+        let exec_clone = sub_executor.clone();
+        BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
 
-                return Ok(ToolCallResult::success(Some(json!({
-                    "status": "waiting",
-                    "task_id": task_id,
-                    "message": format!("Task '{}' has been spawned. Parent workflow will wait for completion.", description)
-                }).to_string()), None));
-            }
-        }
+        let parent_id = parent_id.clone();
+        let task_id_clone = task_id.clone();
+        tokio::spawn(async move {
+            let mut guard = exec_clone.lock().await;
+            let result = guard.run_loop().await;
+            let final_state = guard.state();
 
-        // Legacy blocking mode: Wait for completion
-        {
-            let mut guard = sub_executor.lock().await;
-            guard.run_loop().await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Sub-agent execution failed: {}", e))
-            })?;
-
-            // 1. Look for 'finish_task' in assistant messages first
-            let messages = guard.messages();
-            for msg in messages.iter().rev() {
-                if msg.role == "assistant" {
-                    let cleaned = crate::libs::util::format_json_str(&msg.message);
-                    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
-                        if let Some(tool) = json_val.get("tool") {
-                            if tool["name"] == "finish_task" {
-                                if let Some(summary) =
-                                    tool["arguments"].get("summary").and_then(|v| v.as_str())
-                                {
-                                    return Ok(ToolCallResult::success(
-                                        Some(summary.to_string()),
-                                        None,
-                                    ));
-                                }
-                            }
-                        } else if let Some(tool_calls) =
-                            json_val.get("tool_calls").and_then(|v| v.as_array())
-                        {
-                            for call in tool_calls {
-                                let func = call
-                                    .get("function")
-                                    .cloned()
-                                    .unwrap_or_else(|| call.clone());
-                                if func["name"] == "finish_task" {
-                                    let args_raw = func
-                                        .get("arguments")
-                                        .cloned()
-                                        .or_else(|| func.get("input").cloned())
-                                        .unwrap_or(serde_json::json!({}));
-                                    let args = if args_raw.is_string() {
-                                        serde_json::from_str(args_raw.as_str().unwrap())
-                                            .unwrap_or_default()
-                                    } else {
-                                        args_raw
-                                    };
-                                    if let Some(summary) =
-                                        args.get("summary").and_then(|v| v.as_str())
-                                    {
-                                        return Ok(ToolCallResult::success(
-                                            Some(summary.to_string()),
-                                            None,
-                                        ));
-                                    }
-                                }
-                            }
+            let completion_result = match result {
+                Ok(_) => {
+                    let messages = guard.messages();
+                    let mut summary = None;
+                    for msg in messages.iter().rev() {
+                        if msg.role == "assistant" {
+                            summary = Some(msg.message.clone());
+                            break;
                         }
                     }
+                    let status = if final_state
+                        == crate::workflow::react::types::WorkflowState::Cancelled
+                    {
+                        "cancelled"
+                    } else {
+                        "completed"
+                    };
+                    json!({
+                        "status": status,
+                        "task_id": task_id_clone,
+                        "summary": summary.unwrap_or_default()
+                    })
                 }
-            }
+                Err(e) => {
+                    let status = if matches!(e, WorkflowEngineError::Cancelled(_))
+                        || final_state == crate::workflow::react::types::WorkflowState::Cancelled
+                    {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    };
+                    json!({
+                        "status": status,
+                        "task_id": task_id_clone,
+                        "error": e.to_string()
+                    })
+                }
+            };
 
-            // 2. Fallback: last assistant message content
-            let last_assistant_msg = messages
-                .into_iter()
-                .rev()
-                .find(|m| m.role == "assistant")
-                .ok_or_else(|| {
-                    ToolError::ExecutionFailed(
-                        "Sub-agent finished but provided no answer".to_string(),
-                    )
-                })?;
+            let _ = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+                &parent_id,
+                json!({
+                    "type": "child_task_complete",
+                    "child_task_id": task_id_clone,
+                    "result": completion_result
+                })
+                .to_string(),
+            );
 
-            Ok(ToolCallResult::success(
-                Some(last_assistant_msg.message.clone()),
-                None,
-            ))
-        }
+            get_child_task_registry().unregister_child_task(&task_id_clone);
+            BACKGROUND_TASKS.remove(&task_id_clone);
+        });
+
+        Ok(ToolCallResult::success(Some(json!({
+            "status": "waiting",
+            "task_id": task_id,
+            "message": format!("Task '{}' has been spawned. Parent workflow will wait for completion.", description)
+        }).to_string()), Some(json!({
+            "status": "waiting",
+            "task_id": task_id,
+            "mode": "call"
+        }))))
     }
 }
 

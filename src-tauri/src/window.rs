@@ -922,7 +922,7 @@ fn create_window_internal(
         .map_err(|e| format!("Failed to create window '{}': {}", label, e))
 }
 
-pub fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
+pub fn create_main_window(app: &tauri::AppHandle, visible: bool) -> Result<WebviewWindow, String> {
     create_window_internal(
         app,
         "main",
@@ -930,7 +930,7 @@ pub fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, Strin
         "/",
         (600.0, 700.0),
         (450.0, 600.0),
-        true,
+        visible,
         false,
         false,
     )

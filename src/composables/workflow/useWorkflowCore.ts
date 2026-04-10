@@ -193,11 +193,17 @@ export function useWorkflowCore({
     // Watch for state changes to handle UI side effects
     watch(
         () => currentWorkflow.value?.status,
-        (newStatus) => {
+        (newStatus, oldStatus) => {
             const statusLower = (newStatus || '').toLowerCase()
             const isApprovalWaiting = statusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
-            // Close approval dialog only after leaving approval waiting state.
-            if (!isApprovalWaiting && approvalVisible.value) {
+            const previousStatusLower = (oldStatus || '').toLowerCase()
+            const wasApprovalWaiting =
+                previousStatusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL ||
+                waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
+
+            // Close approval dialog only when the workflow is actually leaving
+            // approval waiting, not during the confirm -> awaiting_approval race.
+            if (wasApprovalWaiting && !isApprovalWaiting && approvalVisible.value) {
                 approvalVisible.value = false
             }
         }

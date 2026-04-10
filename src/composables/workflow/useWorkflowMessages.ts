@@ -123,9 +123,23 @@ export function useWorkflowMessages() {
                                 }
                             }
                             const { icon, toolType, action, target } = formatToolTitle(name, args)
-                            return { id: call.id, icon, toolType, action, target }
+                            const state = toolStates.get(call.id)
+                            const isRejected = !!state?.isFinal && !!state?.isRejected
+                            return {
+                                id: call.id,
+                                icon,
+                                toolType,
+                                action,
+                                target,
+                                isRejected,
+                                summary: isRejected ? 'User rejected' : 'Executing...'
+                            }
                         })
-                        .filter((call) => !toolStates.has(call.id) || !toolStates.get(call.id).isFinal)
+                        .filter((call) => {
+                            const state = toolStates.get(call.id)
+                            if (!state) return true
+                            return state.isRejected
+                        })
                 }
 
                 return {
@@ -143,6 +157,7 @@ export function useWorkflowMessages() {
                     const name =
                         m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
                     if (name === 'answer_user' || name === 'finish_task') return false
+                    if (m.metadata?.approval_status === 'rejected') return false
                     return true
                 }
                 if (m.role === 'assistant') {

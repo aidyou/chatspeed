@@ -50,6 +50,18 @@ The `<think>` block is a scratchpad for internal reasoning and does not replace 
 </THINKING_INSTRUCTION>
 "#;
 
+pub const CHILD_AGENT_DIRECTORY_PROMPT: &str = r#"<CHILD_AGENT_DIRECTORY>
+You have access to the following pre-configured child agents through the `task` tool.
+Use a child agent when the work benefits from delegation, such as repository scanning, focused implementation, specialized analysis, or parallel background execution.
+When delegating, choose the child agent whose description best matches the sub-task and call it by the exact `child_agent_id`.
+Only use the listed child agents. Do not invent new child agent IDs.
+Your `task.prompt` must be a complete delegation brief. It must clearly state the objective, exact scope, relevant context, constraints, and what the final output must contain.
+If you need the child result before continuing, use `execution_mode="call"`. If the child can work asynchronously and be checked later, use `execution_mode="background"`.
+
+Available child agents:
+{{child_agents}}
+</CHILD_AGENT_DIRECTORY>"#;
+
 /// Context Compression Prompt
 /// Used by the ContextCompressor to summarize long histories into state snapshots.
 pub const CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a high-performance context compressor.

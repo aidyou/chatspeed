@@ -105,11 +105,15 @@
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
             <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
               <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending"
-                :class="[call.toolType || 'tool-system', 'status-running']">
-                <div class="tool-line title-wrap">
+                :class="[call.toolType || 'tool-system', call.isRejected ? 'status-error' : 'status-running']">
+                <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
                   <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
                   <span class="tool-name">{{ call.action }}</span>
                   <span class="tool-target">{{ call.target }}</span>
+                </div>
+                <div class="tool-line summary">
+                  <span class="corner-icon">⎿</span>
+                  <span class="summary-text">{{ call.summary }}</span>
                 </div>
               </div>
             </div>

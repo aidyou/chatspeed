@@ -336,6 +336,18 @@ impl MainStore {
         Ok(())
     }
 
+    pub fn update_workflow_agent_id(&self, id: &str, agent_id: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        conn.execute(
+            "UPDATE workflows SET agent_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![agent_id, id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_todo_list_for_workflow(&self, id: &str) -> Result<Vec<Value>, StoreError> {
         let conn = self
             .conn
@@ -428,16 +440,20 @@ impl MainStore {
         let context_json = serde_json::to_string(ctx)?;
         let state_str = ctx.state.to_string();
         let wait_reason_str = ctx.wait_reason.as_ref().map(|wr| wr.to_string());
+        let child_sessions_json = serde_json::to_string(&ctx.child_sessions)?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO workflow_snapshots (session_id, context_json, version, state, wait_reason, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+            "INSERT OR REPLACE INTO workflow_snapshots
+             (session_id, context_json, version, state, wait_reason, waiting_on_task_id, child_sessions, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
             params![
                 ctx.session_id,
                 context_json,
                 ctx.version,
                 state_str,
                 wait_reason_str,
+                ctx.waiting_on_task_id.clone(),
+                child_sessions_json,
             ],
         )?;
 

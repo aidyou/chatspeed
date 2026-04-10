@@ -485,7 +485,8 @@ pub async fn chat_completion(
 
     // Prepare messages with system context
     let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
-    let prepared_messages = prepare_messages_with_system_context(filtered_messages, has_tools, mcp_summaries);
+    let prepared_messages =
+        prepare_messages_with_system_context(filtered_messages, has_tools, mcp_summaries);
 
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", prepared_messages.len());

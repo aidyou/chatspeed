@@ -556,8 +556,14 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn save_workflow_window_position(&mut self, pos: MainWindowPosition) -> Result<(), StoreError> {
-        self.set_config(crate::constants::CFG_WORKFLOW_WINDOW_POSITION, &serde_json::json!(pos))?;
+    pub fn save_workflow_window_position(
+        &mut self,
+        pos: MainWindowPosition,
+    ) -> Result<(), StoreError> {
+        self.set_config(
+            crate::constants::CFG_WORKFLOW_WINDOW_POSITION,
+            &serde_json::json!(pos),
+        )?;
         Ok(())
     }
 

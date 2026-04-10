@@ -26,9 +26,19 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
     "C:\\Program Files (x86)",
 ];
 
+struct GitignoreScope {
+    base_dir: PathBuf,
+    matcher: Gitignore,
+}
+
+struct AuthorizedRoot {
+    path: PathBuf,
+    gitignore_scopes: Vec<GitignoreScope>,
+}
+
 pub struct PathGuard {
-    workspace_roots: Vec<(PathBuf, Option<Gitignore>)>,
-    sandbox_roots: Vec<(PathBuf, Option<Gitignore>)>,
+    workspace_roots: Vec<AuthorizedRoot>,
+    sandbox_roots: Vec<AuthorizedRoot>,
     skill_roots: Vec<PathBuf>,
     primary_root: Option<PathBuf>,
 }
@@ -45,7 +55,7 @@ impl PathGuard {
             .into_iter()
             .filter_map(|p| p.canonicalize().ok().or_else(|| Some(p)))
             .collect();
-        let primary_root = workspace_roots.first().map(|(p, _)| p.clone());
+        let primary_root = workspace_roots.first().map(|root| root.path.clone());
 
         Self {
             workspace_roots,
@@ -55,7 +65,7 @@ impl PathGuard {
         }
     }
 
-    fn process_roots(paths: Vec<PathBuf>) -> Vec<(PathBuf, Option<Gitignore>)> {
+    fn process_roots(paths: Vec<PathBuf>) -> Vec<AuthorizedRoot> {
         let mut roots_with_ignore = Vec::new();
         for p in paths {
             // Try to canonicalize, but fallback to original if it fails but exists
@@ -71,7 +81,7 @@ impl PathGuard {
                 }
             };
 
-            let mut builder = GitignoreBuilder::new(&root);
+            let mut gitignore_scopes = Vec::new();
             // Scan for .gitignore up to 3 levels deep to avoid massive stalls
             for entry in walkdir::WalkDir::new(&root)
                 .max_depth(3)
@@ -84,11 +94,28 @@ impl PathGuard {
                 .filter_map(|e| e.ok())
             {
                 if entry.file_name() == ".gitignore" {
-                    let _ = builder.add(entry.path());
+                    let Some(base_dir) = entry.path().parent().map(Path::to_path_buf) else {
+                        continue;
+                    };
+                    let mut builder = GitignoreBuilder::new(&base_dir);
+                    if builder.add(entry.path()).is_some() {
+                        continue;
+                    }
+                    if let Ok(matcher) = builder.build() {
+                        gitignore_scopes.push(GitignoreScope { base_dir, matcher });
+                    }
                 }
             }
-            let gitignore = builder.build().ok();
-            roots_with_ignore.push((root, gitignore));
+            gitignore_scopes.sort_by(|a, b| {
+                b.base_dir
+                    .components()
+                    .count()
+                    .cmp(&a.base_dir.components().count())
+            });
+            roots_with_ignore.push(AuthorizedRoot {
+                path: root,
+                gitignore_scopes,
+            });
         }
         roots_with_ignore
     }
@@ -96,7 +123,7 @@ impl PathGuard {
     pub fn workspace_roots(&self) -> Vec<PathBuf> {
         self.workspace_roots
             .iter()
-            .map(|(r, _)| r.clone())
+            .map(|root| root.path.clone())
             .collect()
     }
 
@@ -122,11 +149,11 @@ impl PathGuard {
         }
         self.workspace_roots
             .iter()
-            .any(|(root, _)| root == &physical_path)
+            .any(|root| root.path == physical_path)
             || self
                 .sandbox_roots
                 .iter()
-                .any(|(root, _)| root == &physical_path)
+                .any(|root| root.path == physical_path)
     }
 
     pub fn is_within_skill_root(&self, path: &Path) -> bool {
@@ -144,7 +171,7 @@ impl PathGuard {
     pub fn update_allowed_roots(&mut self, workspace_paths: Vec<PathBuf>) {
         let processed = Self::process_roots(workspace_paths);
         self.workspace_roots = processed;
-        self.primary_root = self.workspace_roots.first().map(|(p, _)| p.clone());
+        self.primary_root = self.workspace_roots.first().map(|root| root.path.clone());
     }
 
     fn normalize_path(path: &Path) -> PathBuf {
@@ -207,9 +234,9 @@ impl PathGuard {
         }
 
         // 1. Check Sandbox (Always OK for everything)
-        for (root, gitignore) in &self.sandbox_roots {
-            if final_path.starts_with(root) {
-                self.check_gitignore(root, gitignore, &final_path)?;
+        for root in &self.sandbox_roots {
+            if final_path.starts_with(&root.path) {
+                self.check_gitignore(root, &final_path)?;
                 return Ok(final_path);
             }
         }
@@ -229,8 +256,8 @@ impl PathGuard {
         }
 
         // 3. Check Workspace
-        for (root, gitignore) in &self.workspace_roots {
-            if final_path.starts_with(root) {
+        for root in &self.workspace_roots {
+            if final_path.starts_with(&root.path) {
                 if is_planning_phase && is_write {
                     return Err(WorkflowEngineError::Security(format!(
                         "Planning Mode Restriction: Write denied to workspace {:?}",
@@ -244,7 +271,7 @@ impl PathGuard {
                         final_path
                     )));
                 }
-                self.check_gitignore(root, gitignore, &final_path)?;
+                self.check_gitignore(root, &final_path)?;
                 return Ok(final_path);
             }
         }
@@ -257,12 +284,14 @@ impl PathGuard {
 
     fn check_gitignore(
         &self,
-        root: &Path,
-        gitignore: &Option<Gitignore>,
+        root: &AuthorizedRoot,
         path: &Path,
     ) -> Result<(), WorkflowEngineError> {
-        if let Some(gi) = gitignore {
-            if let Ok(rel_path) = path.strip_prefix(root) {
+        for scope in &root.gitignore_scopes {
+            if !path.starts_with(&scope.base_dir) {
+                continue;
+            }
+            if let Ok(rel_path) = path.strip_prefix(&scope.base_dir) {
                 let mut current_p = PathBuf::new();
                 let components: Vec<_> = rel_path.components().collect();
                 for (i, comp) in components.iter().enumerate() {
@@ -273,7 +302,7 @@ impl PathGuard {
                         } else {
                             path.is_dir()
                         };
-                        if gi.matched(&current_p, is_dir).is_ignore() {
+                        if scope.matcher.matched(&current_p, is_dir).is_ignore() {
                             return Err(WorkflowEngineError::Security(format!(
                                 "Path Denied: {:?} is ignored by .gitignore",
                                 path
@@ -347,6 +376,25 @@ mod tests {
         let guard = PathGuard::new(vec![root_path.clone()], vec![], vec![]);
         assert!(guard
             .validate(&root_path.join("ignored.txt"), false, false, false)
+            .is_err());
+    }
+
+    #[test]
+    fn test_path_guard_nested_gitignore_does_not_hide_project_root() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let project_path = root_path.join("downloadClient");
+        let src_path = project_path.join("src");
+        fs::create_dir(&project_path).unwrap();
+        fs::create_dir(&src_path).unwrap();
+        fs::write(project_path.join(".gitignore"), "bin\nobj\n").unwrap();
+
+        let guard = PathGuard::new(vec![root_path.clone()], vec![], vec![]);
+
+        assert!(guard.validate(&project_path, false, false, false).is_ok());
+        assert!(guard.validate(&src_path, false, false, false).is_ok());
+        assert!(guard
+            .validate(&project_path.join("bin"), false, false, false)
             .is_err());
     }
 

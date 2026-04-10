@@ -68,6 +68,20 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "agents_v5_approval_level",
         "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'"
     ),
+    // Add role column to agents for primary/child hierarchy
+    (
+        "agents_v5_role",
+        "ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'primary'"
+    ),
+    // Add parent_agent_id column to agents for parent-child ownership
+    (
+        "agents_v5_parent_agent_id",
+        "ALTER TABLE agents ADD COLUMN parent_agent_id TEXT REFERENCES agents(id)"
+    ),
+    (
+        "idx_agents_parent_agent_id",
+        "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)"
+    ),
     // Workflow snapshots table for ExecutionContext recovery
     (
         "workflow_snapshots",

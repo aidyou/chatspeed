@@ -82,7 +82,7 @@ impl ToolDefinition for Glob {
             if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                 // Get relative path for matching
                 let rel_path = path.strip_prefix(base_path).unwrap_or(path);
-                
+
                 if glob_matcher.is_match(rel_path) {
                     results.push(path.to_string_lossy().to_string());
                     if results.len() >= MAX_RESULTS {

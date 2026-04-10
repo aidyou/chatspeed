@@ -264,6 +264,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_final_audit,
             update_workflow_approval_level,
             update_workflow_agent_config,
+            update_workflow_agent_id,
             get_auto_approved_tools,
             remove_auto_approved_tool,
             remove_shell_policy_item,
@@ -724,8 +725,8 @@ pub async fn run() -> crate::error::Result<()> {
             // For any future windows, ensure `"create": false` is set in the configuration and
             // initialize them manually here or via specific logic after backend readiness is guaranteed.
 
-            // 1. Main Window (Visible)
-            match window::create_main_window(&app.handle()) {
+            // 1. Main Window (Hidden by default)
+            match window::create_main_window(&app.handle(), false) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create main window: {}", e); }
             }
@@ -736,8 +737,8 @@ pub async fn run() -> crate::error::Result<()> {
                 Err(e) => { log::error!("Failed to create assistant window: {}", e); }
             }
 
-            // 3. Workflow Window (Hidden)
-            match window::create_workflow_window(&app.handle(), false) {
+            // 3. Workflow Window (Visible by default)
+            match window::create_workflow_window(&app.handle(), true) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create workflow window: {}", e); }
             }

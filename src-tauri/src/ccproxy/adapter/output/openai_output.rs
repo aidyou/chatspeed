@@ -285,7 +285,11 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 });
                 Ok(vec![Event::default().data(data.to_string())])
             }
-            UnifiedStreamChunk::ToolUseDelta { id: _, delta, index } => {
+            UnifiedStreamChunk::ToolUseDelta {
+                id: _,
+                delta,
+                index,
+            } => {
                 let message_id = if let Ok(status) = sse_status.read() {
                     status.message_id.clone()
                 } else {

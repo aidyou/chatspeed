@@ -1,8 +1,9 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
+import { AGENT_ROLE } from '@/constants/agent';
 import { sendSyncState } from '@/libs/sync';
 
 /**
@@ -15,13 +16,11 @@ import { sendSyncState } from '@/libs/sync';
  * @property {string[]} autoApprove - A list of tool IDs that are auto-approved.
  * @property {Object} planModel - The model used for planning.
  * @property {Object} actModel - The model used for acting.
- * @property {Object} visionModel - The model used for vision tasks.
  * @property {Object} codingModel - The model used for coding tasks.
  * @property {Object} copywritingModel - The model used for writing tasks.
  * @property {Object} browsingModel - The model used for browsing tasks.
  * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
- * @property {boolean} finalAudit - Whether the agent requires final audit.
  * @property {string} approvalLevel - Approval level (default, smart, full).
  */
 
@@ -41,20 +40,16 @@ const _transformFromBackend = (backendAgent) => {
   // Tauri IPC auto-serializes Rust structs to JS objects
   let models = {
     plan: { ...defaultModel },
-    act: { ...defaultModel },
-    vision: { ...defaultModel }
+    act: { ...defaultModel }
   };
 
   if (backendAgent.models) {
-    // models is already an object { plan: {...}, act: {...}, vision: {...} }
+    // models is already an object { plan: {...}, act: {...} }
     if (backendAgent.models.plan) {
       models.plan = { ...defaultModel, ...backendAgent.models.plan };
     }
     if (backendAgent.models.act) {
       models.act = { ...defaultModel, ...backendAgent.models.act };
-    }
-    if (backendAgent.models.vision) {
-      models.vision = { ...defaultModel, ...backendAgent.models.vision };
     }
   }
 
@@ -62,6 +57,8 @@ const _transformFromBackend = (backendAgent) => {
     id: backendAgent.id,
     name: backendAgent.name,
     description: backendAgent.description,
+    role: backendAgent.role || AGENT_ROLE.PRIMARY,
+    parentAgentId: backendAgent.parent_agent_id || null,
     systemPrompt: backendAgent.system_prompt,
     planningPrompt: backendAgent.planning_prompt,
 
@@ -72,15 +69,12 @@ const _transformFromBackend = (backendAgent) => {
     // Models are already objects
     planModel: models.plan,
     actModel: models.act,
-    visionModel: models.vision,
-
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
 
     models: backendAgent.models || null,
     maxContexts: backendAgent.max_contexts || 128000,
-    finalAudit: !!backendAgent.final_audit,
     approvalLevel: backendAgent.approval_level || 'default'
   };
 };
@@ -107,14 +101,15 @@ const _transformToBackend = (frontendAgent) => {
 
   const modelsObj = {
     plan: buildModelConfig(frontendAgent.planModel),
-    act: buildModelConfig(frontendAgent.actModel),
-    vision: buildModelConfig(frontendAgent.visionModel)
+    act: buildModelConfig(frontendAgent.actModel)
   };
 
   return {
     id: frontendAgent.id || '',
     name: frontendAgent.name.trim(),
     description: frontendAgent.description?.trim() || '',
+    role: frontendAgent.role || AGENT_ROLE.PRIMARY,
+    parent_agent_id: frontendAgent.role === AGENT_ROLE.CHILD ? (frontendAgent.parentAgentId || null) : null,
     system_prompt: frontendAgent.systemPrompt.trim(),
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
     // JSON strings
@@ -125,7 +120,8 @@ const _transformToBackend = (frontendAgent) => {
     // Struct object
     models: modelsObj,
     max_contexts: frontendAgent.maxContexts,
-    final_audit: !!frontendAgent.finalAudit,
+    // Final audit is kept in backend for compatibility, but it is no longer configurable in the UI.
+    final_audit: false,
     approval_level: frontendAgent.approvalLevel || 'default'
   };
 };
@@ -256,6 +252,8 @@ export const useAgentStore = defineStore('agent', () => {
 
   return {
     agents,
+    primaryAgents: computed(() => agents.value.filter(agent => (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY)),
+    childAgents: computed(() => agents.value.filter(agent => agent.role === AGENT_ROLE.CHILD)),
     availableTools,
     loading,
     error,

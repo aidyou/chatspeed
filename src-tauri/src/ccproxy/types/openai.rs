@@ -17,9 +17,9 @@ pub struct UnifiedChatMessage {
     pub name: Option<String>, // Name of the tool, if applicable
 
     // Added for custom reasoning content
-    // TODO: Investigate which models (e.g. Claude 3.7, DeepSeek R1) require or support returning 
-    // reasoning_content in message history to maintain CoT continuity, and which models will 
-    // error out if this extra field is present. Consider a fallback mechanism to prepend 
+    // TODO: Investigate which models (e.g. Claude 3.7, DeepSeek R1) require or support returning
+    // reasoning_content in message history to maintain CoT continuity, and which models will
+    // error out if this extra field is present. Consider a fallback mechanism to prepend
     // reasoning to 'content' for unsupported models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,

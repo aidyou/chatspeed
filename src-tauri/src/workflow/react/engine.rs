@@ -110,6 +110,8 @@ pub struct WorkflowExecutor {
     pub queued_user_messages: VecDeque<(String, String)>,
     /// Phase 7: ID of child task this session is waiting for (Call model)
     pub child_task_id: Option<String>,
+    /// Phase 7: All child task session IDs created by this parent session.
+    pub child_sessions: Vec<String>,
 }
 
 #[async_trait]
@@ -253,6 +255,12 @@ impl WorkflowExecutor {
             (initial_provider_id, initial_model_name.clone())
         };
 
+        let child_agents_for_llm = main_store
+            .read()
+            .ok()
+            .and_then(|store| store.get_child_agents(&agent_config.id).ok())
+            .unwrap_or_default();
+
         let mut executor = Self {
             session_id,
             context: ContextManager::new(
@@ -276,6 +284,7 @@ impl WorkflowExecutor {
             llm_processor: LlmProcessor::new(
                 session_id_clone2,
                 agent_config.clone(),
+                child_agents_for_llm,
                 HashMap::new(),
                 path_guard_clone,
                 chat_state_clone2,
@@ -319,6 +328,7 @@ impl WorkflowExecutor {
             dispatcher: None,
             queued_user_messages: VecDeque::new(),
             child_task_id: None,
+            child_sessions: Vec::new(),
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -468,6 +478,7 @@ impl WorkflowExecutor {
                 );
             } else if self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingChildTask
             {
                 // Use the new recovery mechanism for AwaitingUser and AwaitingApproval states
                 let recovery_result = crate::workflow::react::replay::restore_execution_context(
@@ -485,6 +496,9 @@ impl WorkflowExecutor {
                             context.wait_reason,
                             context.pending_tools.len()
                         );
+
+                        self.child_task_id = context.waiting_on_task_id.clone();
+                        self.child_sessions = context.child_sessions.clone();
 
                         if self.state == WorkflowState::AwaitingApproval
                             && context.pending_tools.is_empty()
@@ -511,6 +525,15 @@ impl WorkflowExecutor {
                                     })
                                     .await;
                             }
+                        }
+
+                        if self.state == WorkflowState::AwaitingChildTask {
+                            log::info!(
+                                "[Workflow][session={}][phase=restore] Restored child-task waiting: waiting_on_task_id={:?}, child_sessions={}",
+                                self.session_id,
+                                self.child_task_id,
+                                self.child_sessions.len()
+                            );
                         }
                     }
                     crate::workflow::react::replay::RecoveryResult::SafeFailed {
@@ -707,14 +730,25 @@ impl WorkflowExecutor {
             // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
             // if the current executor is NOT itself a sub-agent.
             if self.subagent_type.is_none() {
-                tm.register_tool(Arc::new(
-                    crate::workflow::react::orchestrator::TaskTool::new(
-                        self.sub_agent_factory.clone(),
-                        self.tsid_generator.clone(),
-                    )
-                    .with_parent_session(self.session_id.clone()),
-                ))
-                .await?;
+                let child_agents = self
+                    .context
+                    .main_store
+                    .read()
+                    .ok()
+                    .and_then(|store| store.get_child_agents(&self.agent_config.id).ok())
+                    .unwrap_or_default();
+
+                if !child_agents.is_empty() {
+                    tm.register_tool(Arc::new(
+                        crate::workflow::react::orchestrator::TaskTool::new(
+                            self.sub_agent_factory.clone(),
+                            self.tsid_generator.clone(),
+                        )
+                        .with_parent_session(self.session_id.clone())
+                        .with_child_agents(child_agents),
+                    ))
+                    .await?;
+                }
             }
 
             tm.register_tool(Arc::new(
@@ -931,7 +965,8 @@ impl WorkflowExecutor {
             // Waiting states must resume only through the unified wait branch below.
             let is_waiting_state = self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingUser
-                || self.state == WorkflowState::AwaitingApproval;
+                || self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingChildTask;
             if !is_waiting_state {
                 // Check stop/config/user-message queue signals at loop start (non-waiting only)
                 if self.check_stop_signal(&mut signal_rx).await? {
@@ -1009,6 +1044,13 @@ impl WorkflowExecutor {
                     signal_json.get("content").is_some(),
                     signal_json.get("content").and_then(|c| c.as_str()).unwrap_or("<none>")
                 );
+
+                if self
+                    .handle_runtime_config_signal(&signal_json, signal_type_enum)
+                    .await?
+                {
+                    continue;
+                }
 
                 // Handle remove_auto_approved_tool signal
                 if signal_type_enum == Some(SignalType::RemoveAutoApprovedTool) {
@@ -1451,24 +1493,36 @@ impl WorkflowExecutor {
                             self.update_state(WorkflowState::Thinking).await?;
                             continue;
                         }
-                        WorkflowSignal::ChildTaskComplete { child_task_id, result } => {
+                        WorkflowSignal::ChildTaskComplete {
+                            child_task_id,
+                            result,
+                        } => {
                             log::info!(
                                 "[Workflow][session={}][phase=wait][event=child_task_complete] Child task {} completed with result {:?}",
                                 self.session_id,
                                 child_task_id,
                                 result
                             );
-                            
+
                             // Verify this is the expected child task
                             if self.child_task_id.as_ref() == Some(&child_task_id) {
                                 // Add child task result as assistant message
-                                let result_content = result.get("summary")
+                                let result_status = result
+                                    .get("status")
                                     .and_then(|s| s.as_str())
+                                    .unwrap_or("completed");
+                                let result_content = result
+                                    .get("summary")
+                                    .and_then(|s| s.as_str())
+                                    .or_else(|| result.get("error").and_then(|e| e.as_str()))
                                     .unwrap_or("Child task completed");
-                                
+
                                 self.add_message_and_notify_internal(
                                     "assistant".to_string(),
-                                    format!("Child task {} result: {}", child_task_id, result_content),
+                                    format!(
+                                        "Child task {} {}: {}",
+                                        child_task_id, result_status, result_content
+                                    ),
                                     None,
                                     None,
                                     None,
@@ -1477,8 +1531,9 @@ impl WorkflowExecutor {
                                     Some(json!({"child_task_id": child_task_id, "result": result})),
                                 )
                                 .await?;
-                                
+
                                 // Clear waiting state and resume
+                                self.child_sessions.retain(|id| id != &child_task_id);
                                 self.child_task_id = None;
                                 self.update_state(WorkflowState::Thinking).await?;
                             } else {
@@ -2530,6 +2585,7 @@ impl WorkflowExecutor {
             if self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
+                || self.state == WorkflowState::AwaitingChildTask
             {
                 log::info!(
                     "WorkflowExecutor {}: Postponing tool '{}' due to Turn-Level block (Causality)",
@@ -2558,7 +2614,7 @@ impl WorkflowExecutor {
                 }
                 Ok(None) => {
                     // Safe to proceed to physical execution!
-                    if name.starts_with("todo_") {
+                    if name.starts_with("todo_") || name == crate::tools::TOOL_TASK {
                         has_todo_call = true;
                         sequential_execution_queue.push((id, name, args, call));
                     } else {
@@ -2637,6 +2693,14 @@ impl WorkflowExecutor {
                 .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;
             result_map.insert(id, (reinforced, call));
+
+            if self.state == WorkflowState::AwaitingChildTask
+                || self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingUser
+                || self.state == WorkflowState::Paused
+            {
+                break;
+            }
         }
 
         // --- 4. Stage 3: Protocol Finalization ---
@@ -2660,6 +2724,39 @@ impl WorkflowExecutor {
         tool_call: &serde_json::Value,
         result: Result<serde_json::Value, crate::tools::ToolError>,
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
+        if name == crate::tools::TOOL_TASK {
+            if let Ok(val) = &result {
+                let structured = val.get("structured_content");
+                let status = structured
+                    .and_then(|s| s.get("status"))
+                    .and_then(|s| s.as_str());
+
+                if status == Some("waiting") {
+                    let child_task_id = structured
+                        .and_then(|s| s.get("task_id"))
+                        .and_then(|s| s.as_str())
+                        .or_else(|| val.get("content").and_then(|c| c.as_str()))
+                        .and_then(|content| {
+                            serde_json::from_str::<serde_json::Value>(content)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("task_id")
+                                        .and_then(|task_id| task_id.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        });
+
+                    if let Some(child_task_id) = child_task_id {
+                        self.child_task_id = Some(child_task_id.clone());
+                        if !self.child_sessions.iter().any(|id| id == &child_task_id) {
+                            self.child_sessions.push(child_task_id.clone());
+                        }
+                        self.update_state(WorkflowState::AwaitingChildTask).await?;
+                    }
+                }
+            }
+        }
+
         // 1. Finish Task Early Return
         if name == TOOL_FINISH_TASK {
             return Ok(ReinforcedResult {
@@ -2902,6 +2999,7 @@ impl WorkflowExecutor {
             WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
                 Some(WaitReason::Approval)
             }
+            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
             _ => None,
         };
 
@@ -2981,6 +3079,7 @@ impl WorkflowExecutor {
                 | WorkflowState::AwaitingUser
                 | WorkflowState::AwaitingApproval
                 | WorkflowState::AwaitingAutoApproval
+                | WorkflowState::AwaitingChildTask
                 | WorkflowState::Completed
                 | WorkflowState::Error
                 | WorkflowState::Cancelled
@@ -3212,6 +3311,152 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    fn parse_allowed_paths_from_signal(&self, sig_json: &Value) -> Vec<PathBuf> {
+        let mut unique_paths = HashSet::new();
+        sig_json
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .map(PathBuf::from)
+            .filter_map(|p| {
+                let abs_p = if p.is_absolute() {
+                    p
+                } else {
+                    std::env::current_dir().unwrap_or_default().join(p)
+                };
+                if abs_p.exists() && abs_p.is_dir() {
+                    abs_p.canonicalize().ok().or(Some(abs_p))
+                } else {
+                    log::warn!(
+                        "WorkflowExecutor {}: Invalid path ignored: {:?}",
+                        self.session_id,
+                        abs_p
+                    );
+                    None
+                }
+            })
+            .filter(|p| unique_paths.insert(p.clone()))
+            .collect()
+    }
+
+    async fn handle_runtime_config_signal(
+        &mut self,
+        sig_json: &Value,
+        sig_type_enum: Option<SignalType>,
+    ) -> Result<bool, WorkflowEngineError> {
+        if sig_type_enum == Some(SignalType::UpdateAllowedPaths) {
+            let paths = self.parse_allowed_paths_from_signal(sig_json);
+            log::info!(
+                "WorkflowExecutor {}: Updating allowed paths to {:?}",
+                self.session_id,
+                paths
+            );
+            if let Ok(mut guard) = self.path_guard.write() {
+                guard.update_allowed_roots(paths);
+            }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateModelConfig) {
+            if let Some(configs) = sig_json.get("configs") {
+                log::info!(
+                    "WorkflowExecutor {}: Updating model configuration",
+                    self.session_id
+                );
+                if let Ok(store) = self.context.main_store.write() {
+                    if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                        let mut agent_config: serde_json::Value = snapshot
+                            .workflow
+                            .agent_config
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or(serde_json::json!({}));
+                        agent_config["models"] = configs.clone();
+                        if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                            let _ =
+                                store.update_workflow_agent_config(&self.session_id, &config_str);
+                        }
+                    }
+                }
+                if let Ok(models) =
+                    serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
+                {
+                    self.agent_config.models = Some(models);
+                }
+            }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateApprovalLevel) {
+            let level_str = sig_json
+                .get("approvalLevel")
+                .and_then(|v| v.as_str())
+                .or_else(|| sig_json.get("level").and_then(|v| v.as_str()))
+                .or_else(|| sig_json.get("approval_level").and_then(|v| v.as_str()));
+            if let Some(level_str) = level_str {
+                log::info!(
+                    "WorkflowExecutor {}: Updating approval level to {}",
+                    self.session_id,
+                    level_str
+                );
+                use std::str::FromStr;
+                if let Ok(level) = crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
+                {
+                    self.policy.approval_level = level;
+                    if let Ok(store) = self.context.main_store.write() {
+                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                            let mut agent_config: serde_json::Value = snapshot
+                                .workflow
+                                .agent_config
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or(serde_json::json!({}));
+                            agent_config["approval_level"] = serde_json::json!(level_str);
+                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                let _ =
+                                    store.update_workflow_agent_config(&self.session_id, &config_str);
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateFinalAudit) {
+            let audit = sig_json
+                .get("finalAudit")
+                .and_then(|v| v.as_bool())
+                .or_else(|| sig_json.get("audit").and_then(|v| v.as_bool()))
+                .or_else(|| sig_json.get("final_audit").and_then(|v| v.as_bool()));
+            if let Some(audit) = audit {
+                log::info!(
+                    "WorkflowExecutor {}: Updating final audit to {}",
+                    self.session_id,
+                    audit
+                );
+                self.agent_config.final_audit = Some(audit);
+                if let Ok(store) = self.context.main_store.write() {
+                    if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                        let mut agent_config: serde_json::Value = snapshot
+                            .workflow
+                            .agent_config
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or(serde_json::json!({}));
+                        agent_config["final_audit"] = serde_json::json!(audit);
+                        if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                            let _ =
+                                store.update_workflow_agent_config(&self.session_id, &config_str);
+                        }
+                    }
+                }
+            }
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     /// Checks if a stop signal is pending in the channel
     async fn check_stop_signal(
         &mut self,
@@ -3240,134 +3485,11 @@ impl WorkflowExecutor {
                 RuntimeSignal::Other => {}
             }
 
-            if sig_type_enum == Some(SignalType::UpdateAllowedPaths) {
-                if let Some(paths_arr) = sig_json.get("paths").and_then(|v| v.as_array()) {
-                    let mut unique_paths = HashSet::new();
-                    let paths: Vec<PathBuf> = paths_arr
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .map(PathBuf::from)
-                        .filter_map(|p| {
-                            let abs_p = if p.is_absolute() {
-                                p
-                            } else {
-                                std::env::current_dir().unwrap_or_default().join(p)
-                            };
-                            // Validate that the path exists and is a directory
-                            if abs_p.exists() && abs_p.is_dir() {
-                                abs_p.canonicalize().ok().or(Some(abs_p))
-                            } else {
-                                log::warn!(
-                                    "WorkflowExecutor {}: Invalid path ignored: {:?}",
-                                    self.session_id,
-                                    abs_p
-                                );
-                                None
-                            }
-                        })
-                        .filter(|p| unique_paths.insert(p.clone()))
-                        .collect();
-                    log::info!(
-                        "WorkflowExecutor {}: Updating allowed paths to {:?}",
-                        self.session_id,
-                        paths
-                    );
-                    if let Ok(mut guard) = self.path_guard.write() {
-                        guard.update_allowed_roots(paths);
-                    }
-                }
-            } else if sig_type_enum == Some(SignalType::UpdateModelConfig) {
-                // Update model configuration for the running workflow
-                if let Some(configs) = sig_json.get("configs") {
-                    log::info!(
-                        "WorkflowExecutor {}: Updating model configuration",
-                        self.session_id
-                    );
-                    // Update agent_config.models
-                    if let Ok(store) = self.context.main_store.write() {
-                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                            let mut agent_config: serde_json::Value = snapshot
-                                .workflow
-                                .agent_config
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            agent_config["models"] = configs.clone();
-                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store
-                                    .update_workflow_agent_config(&self.session_id, &config_str);
-                            }
-                        }
-                    }
-                    // Update the in-memory agent_config
-                    if let Ok(models) =
-                        serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
-                    {
-                        self.agent_config.models = Some(models);
-                    }
-                }
-            } else if sig_type_enum == Some(SignalType::UpdateApprovalLevel) {
-                let level_str = sig_json
-                    .get("approvalLevel")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| sig_json.get("level").and_then(|v| v.as_str()));
-                if let Some(level_str) = level_str {
-                    log::info!(
-                        "WorkflowExecutor {}: Updating approval level to {}",
-                        self.session_id,
-                        level_str
-                    );
-                    use std::str::FromStr;
-                    if let Ok(level) =
-                        crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
-                    {
-                        self.policy.approval_level = level;
-                        // Also update agent_config in DB for persistence
-                        if let Ok(store) = self.context.main_store.write() {
-                            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                                let mut agent_config: serde_json::Value = snapshot
-                                    .workflow
-                                    .agent_config
-                                    .and_then(|s| serde_json::from_str(&s).ok())
-                                    .unwrap_or(serde_json::json!({}));
-                                agent_config["approval_level"] = serde_json::json!(level_str);
-                                if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                    let _ = store.update_workflow_agent_config(
-                                        &self.session_id,
-                                        &config_str,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if sig_type_enum == Some(SignalType::UpdateFinalAudit) {
-                let audit = sig_json
-                    .get("finalAudit")
-                    .and_then(|v| v.as_bool())
-                    .or_else(|| sig_json.get("audit").and_then(|v| v.as_bool()));
-                if let Some(audit) = audit {
-                    log::info!(
-                        "WorkflowExecutor {}: Updating final audit to {}",
-                        self.session_id,
-                        audit
-                    );
-                    self.agent_config.final_audit = Some(audit);
-                    // Update agent_config in DB
-                    if let Ok(store) = self.context.main_store.write() {
-                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                            let mut agent_config: serde_json::Value = snapshot
-                                .workflow
-                                .agent_config
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            agent_config["final_audit"] = serde_json::json!(audit);
-                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store
-                                    .update_workflow_agent_config(&self.session_id, &config_str);
-                            }
-                        }
-                    }
-                }
+            if self
+                .handle_runtime_config_signal(&sig_json, sig_type_enum)
+                .await?
+            {
+                continue;
             }
         }
 
@@ -3537,6 +3659,7 @@ impl WorkflowExecutor {
             WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
                 Some(WaitReason::Approval)
             }
+            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
             _ => None,
         };
 
@@ -3577,8 +3700,8 @@ impl WorkflowExecutor {
                 .map(|s| s.to_string()),
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_task_id: None,
-            child_sessions: Vec::new(),
+            waiting_on_task_id: self.child_task_id.clone(),
+            child_sessions: self.child_sessions.clone(),
         }
     }
 

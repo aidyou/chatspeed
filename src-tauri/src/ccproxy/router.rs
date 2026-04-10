@@ -855,9 +855,7 @@ pub async fn routes(
     let unauthenticated_router = Router::new()
         .route(
             "/",
-            get(|| async {
-                axum::response::Html(include_str!("router_welcome.html"))
-            }),
+            get(|| async { axum::response::Html(include_str!("router_welcome.html")) }),
         )
         .route(
             "/favicon.ico",

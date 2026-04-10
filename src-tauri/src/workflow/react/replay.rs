@@ -73,6 +73,8 @@ pub struct EventReducer {
     pending_tools: Vec<PendingTool>,
     last_action_summary: Option<String>,
     last_event_id: Option<i64>,
+    waiting_on_task_id: Option<String>,
+    child_sessions: Vec<String>,
 }
 
 impl EventReducer {
@@ -85,6 +87,8 @@ impl EventReducer {
             pending_tools: Vec::new(),
             last_action_summary: None,
             last_event_id: None,
+            waiting_on_task_id: None,
+            child_sessions: Vec::new(),
         }
     }
 
@@ -256,8 +260,8 @@ impl EventReducer {
             last_action_summary: self.last_action_summary,
             last_event_id: self.last_event_id,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_task_id: None,
-            child_sessions: Vec::new(),
+            waiting_on_task_id: self.waiting_on_task_id,
+            child_sessions: self.child_sessions,
         }
     }
 }
@@ -284,6 +288,7 @@ fn parse_wait_reason(s: &str) -> Option<WaitReason> {
         "confirmation" => Some(WaitReason::Confirmation),
         "user_input" => Some(WaitReason::UserInput),
         "approval" => Some(WaitReason::Approval),
+        "child_task" => Some(WaitReason::ChildTask),
         _ => {
             log::warn!("Unknown wait reason '{}' parsing to None", s);
             None
@@ -782,6 +787,7 @@ mod tests {
         );
         assert_eq!(parse_wait_reason("user_input"), Some(WaitReason::UserInput));
         assert_eq!(parse_wait_reason("approval"), Some(WaitReason::Approval));
+        assert_eq!(parse_wait_reason("child_task"), Some(WaitReason::ChildTask));
         assert_eq!(parse_wait_reason("unknown"), None);
     }
 

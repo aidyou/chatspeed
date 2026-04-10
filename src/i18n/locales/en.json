@@ -149,8 +149,8 @@
   "menu": {
     "about": "About",
     "assistant": "Assistant",
-    "workflow": "Workflow",
     "agent": "Agent",
+    "chat": "Chat",
     "mcp": "MCP",
     "model": "AI Engine",
     "note": "Note",
@@ -159,7 +159,8 @@
     "quit": "Quit",
     "scraperTest": "Scraper Test",
     "setting": "Settings",
-    "skill": "Skill"
+    "skill": "Skill",
+    "workflow": "Workflow"
   },
   "note": {
     "searchNotePlaceholder": "Search Notes"
@@ -200,11 +201,16 @@
       "name": "Agent Name",
       "nameRequired": "Please enter agent name",
       "noAgents": "No agents found",
+      "parentAgent": "Parent Agent",
+      "parentAgentRequired": "Please select a parent agent",
       "planModel": "Planning Model",
       "planningMode": "Planning Mode",
       "planningPrompt": "Planning Prompt",
       "planningPromptPlaceholder": "Leave blank to use system default planning logic. If customizing, guide the model to output a clear task list.",
       "reorderFailed": "Failed to reorder agent: {error}",
+      "role": "Agent Role",
+      "roleChild": "Child Agent",
+      "rolePrimary": "Primary Agent",
       "saveFailed": "Failed to save agent: {error}",
       "security": "Security Policy",
       "selectAutoApproveTools": "Select Auto-Approve Tools",

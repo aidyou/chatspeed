@@ -103,11 +103,16 @@ impl UpdateManager {
         let current_version_str = self.app.package_info().version.to_string();
         let new_version_str = &version_info.version;
 
-        let new_version = Version::parse(new_version_str).map_err(|e| {
-            UpdateError::VersionParseError { version: new_version_str.to_string(), error: e.to_string() }
-        })?;
-        let current_version = Version::parse(&current_version_str)
-            .map_err(|e| UpdateError::VersionParseError { version: current_version_str, error: e.to_string() })?;
+        let new_version =
+            Version::parse(new_version_str).map_err(|e| UpdateError::VersionParseError {
+                version: new_version_str.to_string(),
+                error: e.to_string(),
+            })?;
+        let current_version =
+            Version::parse(&current_version_str).map_err(|e| UpdateError::VersionParseError {
+                version: current_version_str,
+                error: e.to_string(),
+            })?;
 
         Ok(new_version > current_version)
     }
@@ -147,9 +152,10 @@ async fn download_update_to_file(
         .await
         .map_err(|e| UpdateError::DownloadError(e.to_string()))?;
 
-    let cache_dir = app.path().app_cache_dir().map_err(|e| {
-        UpdateError::IoError(e.to_string())
-    })?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| UpdateError::IoError(e.to_string()))?;
     if !cache_dir.exists() {
         tokio::fs::create_dir_all(&cache_dir).await?;
     }

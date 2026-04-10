@@ -1,6 +1,6 @@
 <template>
   <div class="workflow-layout">
-    <Titlebar>
+    <Titlebar :show-menu-button="settingStore.settings.showMenuButton">
       <template #left>
         <el-tooltip :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)" placement="right"
           :hide-after="0" :enterable="false">
@@ -49,7 +49,8 @@
         <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
           :has-live-session="hasLiveSession" :wait-reason="waitReason"
           :current-workflow="currentWorkflow"
-          :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :active-model-name="activeModelName"
+          :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :can-edit-agent="canEditCurrentWorkflowAgent"
+          :active-model-name="activeModelName"
           :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
           :agents="agentStore.agents" :active-ask-user="activeAskUser" :show-skill-suggestions="showSkillSuggestions"
           :show-file-suggestions="showFileSuggestions" :filtered-system-skills="filteredSystemSkills"
@@ -59,7 +60,8 @@
           :on-skill-select="onSkillSelect" :on-file-select="onFileSelect" @send-message="onSendMessage"
           @continue="onContinue" @stop="onStop" @approve-plan="onApprovePlan"
           @toggle-planning-mode="planningMode = !planningMode" @toggle-final-audit-mode="toggleFinalAuditMode"
-          @update-approval-level="approvalLevel = $event" @create-new-workflow="createNewWorkflow"
+          @update-approval-level="approvalLevel = $event" @update-selected-agent="onSelectedAgentChange"
+          @create-new-workflow="createNewWorkflow"
           @open-model-selector="openModelSelector" />
       </el-container>
     </div>
@@ -363,6 +365,45 @@ const filteredWorkflows = computed(() => {
   )
 })
 
+const canEditCurrentWorkflowAgent = computed(() => {
+  if (!currentWorkflowId.value || !currentWorkflow.value) {
+    return true
+  }
+
+  const hasQuery = !!currentWorkflow.value.userQuery?.trim()
+  const hasMessages = workflowStore.messages.length > 0
+  return !hasLiveSession.value && !hasQuery && !hasMessages
+})
+
+const onSelectedAgentChange = async (agent) => {
+  selectedAgent.value = agent
+
+  if (!currentWorkflowId.value || !canEditCurrentWorkflowAgent.value || !agent) {
+    return
+  }
+
+  try {
+    await invokeWrapper('update_workflow_agent_id', {
+      sessionId: currentWorkflowId.value,
+      agentId: agent.id
+    })
+
+    if (workflowStore.currentWorkflow) {
+      workflowStore.currentWorkflow.agentId = agent.id
+      workflowStore.currentWorkflow.agentConfig = {
+        ...(workflowStore.currentWorkflow.agentConfig || {}),
+        models: agent.models || null,
+        allowedPaths: agent.allowedPaths || [],
+        shellPolicy: agent.shellPolicy || [],
+        approvalLevel: agent.approvalLevel || 'default',
+        finalAudit: false
+      }
+    }
+  } catch (error) {
+    console.error('Failed to update workflow agent:', error)
+  }
+}
+
 const isAskUserPromptMessage = (msg) => {
   if (!msg || msg.role !== 'tool') return false
   const meta = msg.metadata || {}
@@ -473,8 +514,8 @@ onMounted(async () => {
   await agentStore.fetchAgents()
   await fetchSystemSkills()
 
-  if (agentStore.agents.length > 0) {
-    selectedAgent.value = agentStore.agents[0]
+  if (agentStore.primaryAgents.length > 0) {
+    selectedAgent.value = agentStore.primaryAgents[0]
   }
 
   // Load the last workflow if available

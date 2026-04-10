@@ -129,7 +129,8 @@ impl OpenAIChat {
                                 if token_usage.tokens_per_second == 0.0 {
                                     let completion_tokens = token_usage.completion_tokens as f64;
                                     let duration = start_time.elapsed();
-                                    token_usage.tokens_per_second = if duration.as_secs_f64() > 0.1 {
+                                    token_usage.tokens_per_second = if duration.as_secs_f64() > 0.1
+                                    {
                                         completion_tokens / duration.as_secs_f64()
                                     } else {
                                         0.0
@@ -651,7 +652,10 @@ impl AiChatTrait for OpenAIChat {
 
         if stream_enabled {
             if let Some(obj) = payload.as_object_mut() {
-                obj.insert("stream_options".to_string(), json!({ "include_usage": true }));
+                obj.insert(
+                    "stream_options".to_string(),
+                    json!({ "include_usage": true }),
+                );
             }
         }
 

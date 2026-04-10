@@ -1,12 +1,12 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
+use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
-use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::signals::SignalType;
-use crate::workflow::react::types::StepType;
+use crate::workflow::react::types::{StepType, WorkflowState};
 use chrono::{DateTime, Local};
 use glob::glob;
 use regex::Regex;
@@ -59,7 +59,10 @@ fn get_file_metadata_info(path: &Path) -> String {
         .map(|n| format!("{} lines", n))
         .unwrap_or_else(|| "Unknown lines".to_string());
 
-    format!("Size: {}, Lines: {}, Modified: {}", size_str, lines_str, modified)
+    format!(
+        "Size: {}, Lines: {}, Modified: {}",
+        size_str, lines_str, modified
+    )
 }
 
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
@@ -246,7 +249,7 @@ pub async fn create_workflow(
 
     // Always use TSID for new workflow sessions
     let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
-    
+
     log::info!(
         "[Workflow][session={}][phase=create] Creating workflow for agent_id={}",
         session_id,
@@ -258,6 +261,10 @@ pub async fn create_workflow(
         .get_agent(&request.agent_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
+
+    if agent.role.as_deref() == Some("child") {
+        return Err("Child agents cannot be used as top-level workflow agents".to_string());
+    }
 
     // Build agent config from agent defaults
     let mut config = AgentConfig::default();
@@ -388,27 +395,35 @@ pub async fn get_workflow_snapshot(
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<Value, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
-    
-    // Phase 0-3 UI State Reconciliation: Add hasLiveSession field
-    // This tells frontend whether there's an active executor in memory
-    let has_live_session = workflow_manager.has_session(&session_id);
-    
+    let snapshot = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
+    // Reconcile terminal executors first so the frontend does not keep seeing
+    // zombie runtime sessions after a turn has already finished.
+    let has_live_session = has_reconciled_live_session(
+        &workflow_manager.inner().clone(),
+        &session_id,
+        "snapshot",
+    )
+    .await;
+
     // Convert snapshot to JSON and inject hasLiveSession
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     if let Some(obj) = snapshot_json.as_object_mut() {
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
     }
-    
+
     log::debug!(
         "[Workflow][session={}][command=get_workflow_snapshot] hasLiveSession={}",
         session_id,
         has_live_session
     );
-    
+
     Ok(snapshot_json)
 }
 
@@ -468,6 +483,52 @@ pub async fn update_workflow_status(
 // 3. ReAct Runtime Control Commands
 // ==========================================
 
+async fn has_reconciled_live_session(
+    workflow_manager: &Arc<WorkflowManager>,
+    session_id: &str,
+    phase: &str,
+) -> bool {
+    if !workflow_manager.has_session(session_id) {
+        return false;
+    }
+
+    let Some(executor) = workflow_manager.get_executor(session_id) else {
+        log::warn!(
+            "[Workflow][session={}][phase={}] Manager had session entry without executor, removing stale entry",
+            session_id,
+            phase
+        );
+        workflow_manager.remove_session(session_id);
+        return false;
+    };
+
+    let Ok(executor_guard) = executor.try_lock() else {
+        log::debug!(
+            "[Workflow][session={}][phase={}] Session exists and executor is busy; treating as live",
+            session_id,
+            phase
+        );
+        return true;
+    };
+
+    let executor_state = executor_guard.state();
+    if matches!(
+        executor_state,
+        WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
+    ) {
+        log::warn!(
+            "[Workflow][session={}][phase={}] Found stale live session in terminal state={}, removing before command handling",
+            session_id,
+            phase,
+            executor_state
+        );
+        workflow_manager.remove_session(session_id);
+        return false;
+    }
+
+    true
+}
+
 #[tauri::command]
 pub async fn workflow_start(
     app: tauri::AppHandle,
@@ -488,7 +549,7 @@ pub async fn workflow_start(
         agent_id,
         planning_mode.unwrap_or(false)
     );
-    
+
     let main_store_arc = state.inner().clone();
     let chat_state_arc = chat_state.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
@@ -498,9 +559,9 @@ pub async fn workflow_start(
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
 
-    // Early check: If session already exists in manager, reject immediately
-    // This prevents signal channel replacement which would break the existing executor
-    if workflow_manager_arc.has_session(&session_id) {
+    // Reject only truly live sessions. A terminal executor may still exist in
+    // memory for a short window while cleanup races the next user action.
+    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
         log::warn!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
@@ -694,13 +755,13 @@ pub async fn workflow_start(
             } else {
                 Some(attached_context)
             };
-            
+
             // Check if message already exists to avoid duplicates
             let messages = executor.messages();
-            let is_duplicate = messages.iter().any(|m| {
-                m.role == "user" && m.message == clean_prompt
-            });
-            
+            let is_duplicate = messages
+                .iter()
+                .any(|m| m.role == "user" && m.message == clean_prompt);
+
             if !is_duplicate {
                 executor
                     .add_message_and_notify(
@@ -734,13 +795,13 @@ pub async fn workflow_start(
         );
         return Err(format!("Failed to register workflow session: {}", e));
     }
-    
+
     // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
         session_id.clone(),
         BackgroundTask::SubAgent(shared_executor.clone()),
     );
-    
+
     log::info!(
         "[Workflow][session={}][phase=start] Executor registered to WorkflowManager (primary) and BACKGROUND_TASKS (compat), spawning run_loop",
         session_id
@@ -1067,30 +1128,36 @@ pub async fn workflow_signal(
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
-    let workflow_signal = crate::workflow::react::types::WorkflowSignal::parse(&signal);
-    let signal_type = workflow_signal
-        .as_ref()
-        .map(|s| s.type_name())
-        .unwrap_or("unknown");
-    
+    let signal_type = serde_json::from_str::<serde_json::Value>(&signal)
+        .ok()
+        .and_then(|value| {
+            let raw_type = value["type"].as_str()?;
+            Some(
+                SignalType::from_str(raw_type)
+                    .map(|signal_type| signal_type.as_str().to_string())
+                    .unwrap_or_else(|| raw_type.to_string()),
+            )
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
     log::info!(
         "[Workflow][session={}][phase=signal] Signal received, type={}",
         session_id,
         signal_type
     );
-    
+
     let workflow_manager_arc = workflow_manager.inner().clone();
     let gateway_arc = gateway.inner().clone();
 
     // Phase 1: Check manager first (primary path)
-    if workflow_manager_arc.has_session(&session_id) {
+    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "signal").await {
         log::info!(
             "[WorkflowManager][session={}][event=session_lookup_hit] Session exists in manager",
             session_id
         );
-        
+
         // Route signal through manager
-        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type.to_string()) {
+        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
             log::warn!(
                 "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
                 session_id,
@@ -1099,13 +1166,13 @@ pub async fn workflow_signal(
             );
             return Err(format!("Signal rejected: {}", e));
         }
-        
+
         log::info!(
             "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
             session_id,
             signal_type
         );
-        
+
         // Now inject through gateway
         match gateway_arc.inject_input(&session_id, signal.clone()).await {
             Ok(_) => {
@@ -1115,7 +1182,7 @@ pub async fn workflow_signal(
                     signal_type
                 );
                 Ok("Signal injected".to_string())
-            },
+            }
             Err(e) => {
                 log::warn!(
                     "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
@@ -1132,15 +1199,14 @@ pub async fn workflow_signal(
             "[WorkflowManager][session={}][event=session_lookup_miss] Session not found in manager, entering recovery",
             session_id
         );
-        
+
         // Session not in manager - enter recovery logic
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
             let signal_type = val["type"].as_str().unwrap_or("unknown");
             let signal_type_enum = SignalType::from_str(signal_type);
-            let normalized_signal_type = signal_type_enum
-                .map(|s| s.as_str())
-                .unwrap_or(signal_type);
-            
+            let normalized_signal_type =
+                signal_type_enum.map(|s| s.as_str()).unwrap_or(signal_type);
+
             // Handle user_message signal (Phase 3 unified signal type)
             // Also support legacy user_input for backward compatibility
             if matches!(
@@ -1154,18 +1220,22 @@ pub async fn workflow_signal(
                             .get_workflow_snapshot(&session_id)
                             .map_err(|e| e.to_string())?
                     };
-                    
+
                     let status_lower = snapshot.workflow.status.to_lowercase();
-                    
+
                     // Allow resumption for terminal/pending states and awaiting_user.
                     // This covers orphan awaiting_user sessions (e.g. after refresh/restart)
                     // where manager session is missing but user input should still resume workflow.
                     let is_resumable = matches!(
                         status_lower.as_str(),
-                        "pending" | "completed" | "cancelled" | "error" | "failed"
+                        "pending"
+                            | "completed"
+                            | "cancelled"
+                            | "error"
+                            | "failed"
                             | "awaiting_user"
                     );
-                    
+
                     if !is_resumable {
                         log::warn!(
                             "[Workflow] Session {} is in '{}' state, cannot resume with user message",
@@ -1177,7 +1247,7 @@ pub async fn workflow_signal(
                             snapshot.workflow.status
                         ));
                     }
-                    
+
                     log::info!(
                         "[Workflow] Session {} is in resumable state ({}), resuming with signal={}",
                         session_id,
@@ -1202,7 +1272,9 @@ pub async fn workflow_signal(
 
                     return Ok("Workflow resumed with input".to_string());
                 }
-            } else if signal_type == "rebroadcast_pending" || signal_type == "request_confirm_broadcast" {
+            } else if signal_type == "rebroadcast_pending"
+                || signal_type == "request_confirm_broadcast"
+            {
                 let snapshot = {
                     let store = state.read().map_err(|e| e.to_string())?;
                     store
@@ -1257,7 +1329,10 @@ pub async fn workflow_signal(
                         snapshot.workflow.status,
                         val["type"]
                     );
-                    return Ok(format!("Workflow is not paused, ignoring {} signal", val["type"]));
+                    return Ok(format!(
+                        "Workflow is not paused, ignoring {} signal",
+                        val["type"]
+                    ));
                 }
 
                 log::info!(
@@ -1287,19 +1362,31 @@ pub async fn workflow_signal(
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     match gateway_arc.inject_input(&session_id, signal.clone()).await {
                         Ok(_) => {
-                            log::info!("[Workflow] {} signal injected successfully after retry", val["type"]);
+                            log::info!(
+                                "[Workflow] {} signal injected successfully after retry",
+                                val["type"]
+                            );
                             break;
                         }
                         Err(e) => {
                             last_error = Some(e);
                             retries -= 1;
-                            log::warn!("[Workflow] Failed to inject {} signal, retries left: {}", val["type"], retries);
+                            log::warn!(
+                                "[Workflow] Failed to inject {} signal, retries left: {}",
+                                val["type"],
+                                retries
+                            );
                         }
                     }
                 }
                 if retries == 0 {
-                    let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!("Failed to inject {} after resuming: {}", val["type"], err_msg));
+                    let err_msg = last_error
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "Unknown error".into());
+                    return Err(format!(
+                        "Failed to inject {} after resuming: {}",
+                        val["type"], err_msg
+                    ));
                 }
 
                 return Ok(format!("Workflow resumed and {} processed", val["type"]));
@@ -1345,19 +1432,29 @@ pub async fn workflow_signal(
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     match gateway_arc.inject_input(&session_id, signal.clone()).await {
                         Ok(_) => {
-                            log::info!("[Workflow] Approval signal injected successfully after retry");
+                            log::info!(
+                                "[Workflow] Approval signal injected successfully after retry"
+                            );
                             break;
                         }
                         Err(e) => {
                             last_error = Some(e);
                             retries -= 1;
-                            log::warn!("[Workflow] Failed to inject approval signal, retries left: {}", retries);
+                            log::warn!(
+                                "[Workflow] Failed to inject approval signal, retries left: {}",
+                                retries
+                            );
                         }
                     }
                 }
                 if retries == 0 {
-                    let err_msg = last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!("Failed to inject approval after resuming: {}", err_msg));
+                    let err_msg = last_error
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "Unknown error".into());
+                    return Err(format!(
+                        "Failed to inject approval after resuming: {}",
+                        err_msg
+                    ));
                 }
 
                 return Ok("Workflow resumed and approval processed".to_string());
@@ -1679,6 +1776,45 @@ pub async fn update_workflow_agent_config(
     store
         .update_workflow_agent_config(&session_id, &agent_config)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_agent_id(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    agent_id: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+
+    store
+        .get_agent(&agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+
+    let snapshot = store
+        .get_workflow_snapshot(&session_id)
+        .map_err(|e| e.to_string())?;
+
+    if workflow_manager.has_session(&session_id) {
+        return Err("Cannot change workflow agent after the session has started".to_string());
+    }
+
+    if !snapshot.messages.is_empty() || !snapshot.workflow.user_query.trim().is_empty() {
+        return Err("Cannot change workflow agent after the workflow has user input".to_string());
+    }
+
+    log::info!(
+        "[Workflow][session={}][phase=update_agent] Updating workflow agent_id to {}",
+        session_id,
+        agent_id
+    );
+
+    store
+        .update_workflow_agent_id(&session_id, &agent_id)
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 

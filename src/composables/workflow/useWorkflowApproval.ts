@@ -45,6 +45,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
         sessionId: currentWorkflowId.value,
         signal
       })
+      workflowStore.markToolApprovedRunning(approvalRequestId.value)
       approvalVisible.value = false
     } catch (error) {
       console.error('Failed to approve action:', error)
@@ -83,6 +84,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
         sessionId: currentWorkflowId.value,
         signal
       })
+      workflowStore.markToolApprovedRunning(approvalRequestId.value)
       approvalVisible.value = false
     } catch (error) {
       console.error('Failed to approve all actions:', error)

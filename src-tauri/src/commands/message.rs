@@ -34,11 +34,11 @@ use std::{
 };
 use tauri::{command, Emitter, Manager, State};
 
+use crate::constants::CFG_INTERFACE_LANGUAGE;
 use crate::db::{Conversation, MainStore};
 use crate::error::{AppError, Result};
-use crate::sensitive::manager::{FilterManager, SensitiveConfig};
-use crate::constants::CFG_INTERFACE_LANGUAGE;
 use crate::libs::lang::lang_to_iso_639_1;
+use crate::sensitive::manager::{FilterManager, SensitiveConfig};
 use whatlang::detect;
 
 /// Get all conversations

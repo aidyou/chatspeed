@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::tool_manager::ToolManager;
-use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError, ToolScope};
+use crate::tools::{
+    NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError, ToolScope,
+};
 use std::sync::Arc;
 
 /// MCP Tool Loader
@@ -63,7 +65,10 @@ impl ToolDefinition for McpToolLoad {
             .as_str()
             .ok_or_else(|| ToolError::InvalidParams("tool_name is required".to_string()))?;
 
-        let declaration = self.tool_manager.get_mcp_tool_declaration(tool_name).await?;
+        let declaration = self
+            .tool_manager
+            .get_mcp_tool_declaration(tool_name)
+            .await?;
 
         Ok(ToolCallResult::success(
             None,
