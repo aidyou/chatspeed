@@ -190,7 +190,7 @@ impl Gateway for TauriGateway {
         if let Some(tx) = senders.get(session_id) {
             tx.send(input)
                 .await
-                .map_err(|e| WorkflowEngineError::Gateway(e.to_string()))?;
+                .map_err(|_| WorkflowEngineError::GatewayInputChannelClosed)?;
             log::debug!(
                 "[Workflow][session={}][phase=gateway] Signal injected successfully, type={}",
                 session_id,
@@ -202,10 +202,7 @@ impl Gateway for TauriGateway {
                 "[Workflow][session={}][phase=gateway] No input channel found for session",
                 session_id
             );
-            Err(WorkflowEngineError::Gateway(format!(
-                "No input channel for session {}",
-                session_id
-            )))
+            Err(WorkflowEngineError::GatewayInputChannelMissing)
         }
     }
 

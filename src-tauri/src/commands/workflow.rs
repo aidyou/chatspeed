@@ -29,6 +29,85 @@ use tauri::{AppHandle, Manager, State};
 // 0. Helper Functions for @mentions
 // ==========================================
 
+fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessage> {
+    let mut latest_tool_message_index = std::collections::HashMap::<String, usize>::new();
+
+    for (idx, message) in messages.iter().enumerate() {
+        let Some(meta) = message.metadata.as_ref() else {
+            continue;
+        };
+        let Some(tool_call_id) = meta.get("tool_call_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+
+        if message.role == "tool" || (message.role == "user" && message.step_type.as_deref() == Some("observe")) {
+            latest_tool_message_index.insert(tool_call_id.to_string(), idx);
+        }
+    }
+
+    let mut merged = Vec::with_capacity(messages.len());
+
+    for (idx, message) in messages.iter().enumerate() {
+        let mut next_message = message.clone();
+
+        if let Some(meta) = next_message.metadata.as_ref() {
+            if let Some(tool_call_id) = meta.get("tool_call_id").and_then(|v| v.as_str()) {
+                if (next_message.role == "tool"
+                    || (next_message.role == "user"
+                        && next_message.step_type.as_deref() == Some("observe")))
+                    && latest_tool_message_index
+                        .get(tool_call_id)
+                        .is_some_and(|latest_idx| *latest_idx != idx)
+                {
+                    continue;
+                }
+            }
+        }
+
+        if next_message.role == "assistant" {
+            if let Some(meta) = next_message.metadata.as_mut() {
+                if let Some(tool_calls) = meta.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                    tool_calls.retain(|call| {
+                        let call_id = call
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| call.get("tool_call_id").and_then(|v| v.as_str()));
+
+                        match call_id {
+                            Some(id) => !latest_tool_message_index.contains_key(id),
+                            None => true,
+                        }
+                    });
+
+                    if tool_calls.is_empty() {
+                        meta.as_object_mut().map(|obj| obj.remove("tool_calls"));
+                    }
+                }
+            }
+
+            let has_text = !next_message.message.trim().is_empty()
+                || next_message
+                    .reasoning
+                    .as_ref()
+                    .is_some_and(|reasoning| !reasoning.trim().is_empty());
+            let has_tool_calls = next_message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_calls"))
+                .and_then(|v| v.as_array())
+                .is_some_and(|calls| !calls.is_empty());
+
+            if !has_text && !has_tool_calls {
+                continue;
+            }
+        }
+
+        merged.push(next_message);
+    }
+
+    merged
+}
+
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{}B", bytes)
@@ -420,6 +499,7 @@ pub async fn get_workflow_snapshot(
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
     };
+    let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
     let execution_context = restore_context_for_signal(main_store, &session_id);
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
@@ -432,6 +512,7 @@ pub async fn get_workflow_snapshot(
     // Convert snapshot to JSON and inject hasLiveSession
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     if let Some(obj) = snapshot_json.as_object_mut() {
+        obj.insert("messages".to_string(), json!(merged_messages));
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
         obj.insert("executionContext".to_string(), json!(execution_context));
     }
@@ -561,6 +642,16 @@ async fn has_reconciled_live_session(
     }
 
     true
+}
+
+fn is_stale_gateway_injection_error(
+    error: &crate::workflow::react::error::WorkflowEngineError,
+) -> bool {
+    matches!(
+        error,
+        crate::workflow::react::error::WorkflowEngineError::GatewayInputChannelClosed
+            | crate::workflow::react::error::WorkflowEngineError::GatewayInputChannelMissing
+    )
 }
 
 async fn interrupt_openai_session(chat_state: &Arc<ChatState>, session_id: &str) {
@@ -1347,7 +1438,9 @@ pub async fn workflow_signal(
     let recovery_context = restore_context_for_signal(main_store_arc, &session_id);
 
     // Phase 1: Check manager first (primary path)
-    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "signal").await {
+    let has_live_session =
+        has_reconciled_live_session(&workflow_manager_arc, &session_id, "signal").await;
+    let should_enter_recovery = if has_live_session {
         log::info!(
             "[WorkflowManager][session={}][event=session_lookup_hit] Session exists in manager",
             session_id
@@ -1378,17 +1471,26 @@ pub async fn workflow_signal(
                     session_id,
                     signal_type
                 );
-                Ok("Signal injected".to_string())
+                return Ok("Signal injected".to_string());
             }
             Err(e) => {
-                log::warn!(
-                    "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
-                    session_id,
-                    e
-                );
-                // Session exists in manager but gateway failed - still return error
-                // This shouldn't normally happen if session is properly registered
-                Err(format!("Gateway injection failed: {}", e))
+                if is_stale_gateway_injection_error(&e) {
+                    log::warn!(
+                        "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
+                        session_id,
+                        e
+                    );
+                    workflow_manager_arc.remove_session(&session_id);
+                    gateway_arc.unregister_session(&session_id).await;
+                    true
+                } else {
+                    log::warn!(
+                        "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
+                        session_id,
+                        e
+                    );
+                    return Err(format!("Gateway injection failed: {}", e));
+                }
             }
         }
     } else {
@@ -1396,7 +1498,10 @@ pub async fn workflow_signal(
             "[WorkflowManager][session={}][event=session_lookup_miss] Session not found in manager, entering recovery",
             session_id
         );
+        true
+    };
 
+    if should_enter_recovery {
         // Session not in manager - enter recovery logic
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal) {
             let signal_type = val["type"].as_str().unwrap_or("unknown");
@@ -1704,11 +1809,12 @@ pub async fn workflow_signal(
                 return Ok("Workflow resumed and child task completion processed".to_string());
             }
         }
-        Err(format!(
-            "Failed to send signal: No active session for {}",
-            session_id
-        ))
     }
+
+    Err(format!(
+        "Failed to send signal: No active session for {}",
+        session_id
+    ))
 }
 
 #[tauri::command]

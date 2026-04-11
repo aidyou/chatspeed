@@ -823,11 +823,17 @@
     "startFailed": "启动工作流失败: {error}",
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "statusPanel": {
+      "childAgents": "子代理",
+      "childRunning": "运行中",
       "contextUsage": "上下文使用率",
       "empty": "暂无任务",
+      "mainAgent": "主代理",
+      "noSubAgents": "暂无子代理",
       "progress": "任务进度",
       "recentOps": "最近操作",
+      "subAgents": "子代理",
       "todos": "待办事项",
+      "totalCalls": "总调用",
       "title": "状态面板"
     },
     "todoList": {

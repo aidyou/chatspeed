@@ -43,6 +43,44 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "idx_workflow_messages_session_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_messages_session_id ON workflow_messages(session_id)"
     ),
+    // Workflow snapshots table for ExecutionContext recovery
+    (
+        "workflow_snapshots",
+        "CREATE TABLE IF NOT EXISTS workflow_snapshots (
+            session_id TEXT PRIMARY KEY,
+            context_json TEXT NOT NULL,
+            version TEXT NOT NULL,
+            state TEXT,
+            wait_reason TEXT,
+            waiting_on_task_id TEXT,
+            child_sessions TEXT DEFAULT '[]',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
+    (
+        "idx_workflow_snapshots_updated_at",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_updated_at ON workflow_snapshots(updated_at DESC)"
+    ),
+    (
+        "idx_workflow_snapshots_waiting_on_task_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_waiting_on_task_id ON workflow_snapshots(waiting_on_task_id)"
+    ),
+    // Workflow events table for structured event auditing
+    (
+        "workflow_events",
+        "CREATE TABLE IF NOT EXISTS workflow_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_version TEXT NOT NULL,
+            event_data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
+    (
+        "idx_workflow_events_session_id_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_events_session_id_id ON workflow_events(session_id, id)"
+    ),
     // Add unified models JSON column to agents
     (
         "agents_v5_models",
@@ -81,43 +119,5 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "idx_agents_parent_agent_id",
         "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)"
-    ),
-    // Workflow snapshots table for ExecutionContext recovery
-    (
-        "workflow_snapshots",
-        "CREATE TABLE IF NOT EXISTS workflow_snapshots (
-            session_id TEXT PRIMARY KEY,
-            context_json TEXT NOT NULL,
-            version TEXT NOT NULL,
-            state TEXT,
-            wait_reason TEXT,
-            waiting_on_task_id TEXT,
-            child_sessions TEXT DEFAULT '[]',
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )"
-    ),
-    (
-        "idx_workflow_snapshots_updated_at",
-        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_updated_at ON workflow_snapshots(updated_at DESC)"
-    ),
-    (
-        "idx_workflow_snapshots_waiting_on_task_id",
-        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_waiting_on_task_id ON workflow_snapshots(waiting_on_task_id)"
-    ),
-    // Workflow events table for structured event auditing
-    (
-        "workflow_events",
-        "CREATE TABLE IF NOT EXISTS workflow_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            event_version TEXT NOT NULL,
-            event_data TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )"
-    ),
-    (
-        "idx_workflow_events_session_id_id",
-        "CREATE INDEX IF NOT EXISTS idx_workflow_events_session_id_id ON workflow_events(session_id, id)"
     ),
 ];

@@ -26,6 +26,12 @@ pub enum WorkflowEngineError {
     #[error("Gateway error: {0}")]
     Gateway(String),
 
+    #[error("Gateway input channel closed")]
+    GatewayInputChannelClosed,
+
+    #[error("Gateway input channel missing")]
+    GatewayInputChannelMissing,
+
     #[error("General error: {0}")]
     General(String),
 

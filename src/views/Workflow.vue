@@ -40,11 +40,12 @@
           :is-message-expanded="isMessageExpanded" :is-reasoning-expanded="isReasoningExpanded"
           :remove-system-reminder="removeSystemReminder" :get-diff-markdown="getDiffMarkdown"
           :parse-choice-content="parseChoiceContent" :get-parsed-message="getParsedMessage"
-          :get-reasoning-preview="getReasoningPreview" @toggle-expand="toggleMessageExpand"
+          :get-reasoning-preview="getReasoningPreview" :should-show-tool-raw-content="shouldShowToolRawContent"
+          @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand" @send-choice="sendUserChoice" />
 
-        <!-- Status Panel (Floating) -->
-        <StatusPanel />
+      <!-- Status Panel (Floating) -->
+      <StatusPanel />
 
         <!-- Input Area -->
         <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
@@ -81,7 +82,7 @@
       </template>
     </el-dialog>
 
-    <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails"
+    <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails" :display-type="approvalDisplayType"
       :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction"
       @reject="onRejectAction" @stop="onStop" />
 
@@ -124,9 +125,9 @@ const agentStore = useAgentStore()
 const settingStore = useSettingStore()
 const windowStore = useWindowStore()
 
-// Component refs
-const messageListRef = ref(null)
-const inputAreaRef = ref(null)
+  // Component refs
+  const messageListRef = ref(null)
+  const inputAreaRef = ref(null)
 
 // Unlisten refs
 const unlistenFocusInput = ref(null)
@@ -197,7 +198,8 @@ const {
   removeSystemReminder,
   getDiffMarkdown,
   parseChoiceContent,
-  getParsedMessage
+  getParsedMessage,
+  shouldShowToolRawContent
 } = useWorkflowMessages()
 
 // Approval composable
@@ -205,6 +207,7 @@ const {
   approvalVisible,
   approvalAction,
   approvalDetails,
+  approvalDisplayType,
   approvalRequestId,
   approvalLoading,
   onApproveAction,
@@ -269,6 +272,7 @@ const core = useWorkflowCore({
   approvalRequestId,
   approvalAction,
   approvalDetails,
+  approvalDisplayType,
   enhancedMessages,
   isCompressing,
   compressionMessage,
@@ -442,9 +446,16 @@ const activeAskUser = computed(() => {
   return null
 })
 
-const sendUserChoice = (option) => {
-  inputMessage.value = option
-}
+  // 错误边界处理
+  const onErrorCaptured = (err, instance, info) => {
+    console.warn('[Workflow] UI error captured:', err.message, info)
+    // 返回 false 阻止错误继续传播
+    return false
+  }
+
+  const sendUserChoice = (option) => {
+    inputMessage.value = option
+  }
 
 const onPin = () => {
   windowStore.toggleWorkflowWindowAlwaysOnTop()
@@ -523,6 +534,9 @@ onMounted(async () => {
   if (workflowStore.workflows.length > 0) {
     await selectWorkflow(workflowStore.workflows[0].id)
     // Approval dialog will be shown via request_confirm_broadcast in selectWorkflow
+  } else {
+    // First launch bootstrap: create one empty workflow so sending messages never hits "no session".
+    await coreCreateNewWorkflow()
   }
 
   windowStore.initWorkflowWindowAlwaysOnTop()

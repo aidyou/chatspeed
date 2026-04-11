@@ -25,6 +25,25 @@
 
       <!-- Expanded content -->
       <div v-if="!isCollapsed" class="panel-body">
+        <div class="panel-tabs">
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'main' }"
+            @click="activeTab = 'main'"
+          >
+            {{ t('workflow.statusPanel.mainAgent') || 'Main' }}
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'sub' }"
+            @click="activeTab = 'sub'"
+          >
+            {{ t('workflow.statusPanel.subAgents') || 'Sub Agents' }}
+            <span v-if="childAgentSummaries.length > 0" class="tab-badge">{{ childAgentSummaries.length }}</span>
+          </button>
+        </div>
+
+        <template v-if="activeTab === 'main'">
         <!-- Context Usage section -->
         <div class="section progress-section">
           <div class="section-header">
@@ -82,6 +101,7 @@
           <div class="section-header">
             <cs name="tool" size="14px" />
             <span>{{ t('workflow.statusPanel.recentOps') }}</span>
+            <span class="section-meta">{{ t('workflow.statusPanel.totalCalls') || 'Total' }}: {{ totalToolCalls }}</span>
           </div>
           <ul class="operations-list">
             <li v-for="(op, index) in recentOperations" :key="index" :class="['op-item', op.status, op.toolType]">
@@ -95,9 +115,40 @@
             </li>
           </ul>
         </div>
+        </template>
+
+        <!-- Sub agents tab -->
+        <div v-if="activeTab === 'sub' && childAgentSummaries.length > 0" class="section">
+          <div class="section-header">
+            <cs name="agent" size="14px" />
+            <span>{{ t('workflow.statusPanel.childAgents') || 'Child Agents' }}</span>
+            <span class="section-meta">{{ childAgentSummaries.length }}</span>
+          </div>
+          <ul class="child-agent-list">
+            <li v-for="child in childAgentSummaries" :key="child.id" class="child-agent-item" :class="child.status">
+              <div class="child-main">
+                <span class="child-title" :title="child.title">{{ child.title }}</span>
+                <span class="child-id" :title="child.id">{{ child.shortId }}</span>
+                <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
+              </div>
+              <div class="child-right">
+                <span class="child-tools">{{ child.toolCalls }}</span>
+                <cs v-if="child.status === 'running'" name="loading" size="12px" class="cs-spin child-status" />
+                <cs v-else-if="child.status === 'success'" name="check" size="12px" class="child-status success" />
+                <cs v-else-if="child.status === 'failed'" name="error" size="12px" class="child-status error" />
+                <cs v-else name="clock" size="12px" class="child-status" />
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="activeTab === 'sub' && childAgentSummaries.length === 0" class="empty-state">
+          <cs name="agent" size="28px" />
+          <span>{{ t('workflow.statusPanel.noSubAgents') || 'No sub agents yet' }}</span>
+        </div>
 
         <!-- Empty state -->
-        <div v-if="todoList.length === 0 && recentOperations.length === 0" class="empty-state">
+        <div v-if="activeTab === 'main' && todoList.length === 0 && recentOperations.length === 0" class="empty-state">
           <cs name="file" size="32px" />
           <span>{{ t('workflow.statusPanel.empty') }}</span>
         </div>
@@ -130,6 +181,7 @@ const isVisible = ref(true)
 const isCollapsed = ref(false)
 const isDragging = ref(false)
 const isTodoExpanded = ref(false)
+const activeTab = ref('main')
 
 // Position: use left/top for unified storage
 const position = ref({ x: 0, y: 0 })
@@ -272,12 +324,18 @@ const getToolInfo = (name, metadata = {}) => {
   }
 }
 
+const toolMessagesAll = computed(() => {
+  return messages.value.filter((m) => {
+    if (m.role !== 'tool') return false
+    const name = (m.metadata?.tool_name || m.metadata?.tool_call?.name || '').toLowerCase()
+    if (name === 'finish_task' || name === 'answer_user') return false
+    return true
+  })
+})
+
 // Calculate recent operations
 const recentOperations = computed(() => {
-  const toolMessages = messages.value
-    .filter(m => m.role === 'tool')
-    .slice(-3)
-    .reverse()
+  const toolMessages = toolMessagesAll.value.slice(-3).reverse()
 
   return toolMessages.map(m => {
     const meta = m.metadata || {}
@@ -307,9 +365,76 @@ const recentOperations = computed(() => {
   })
 })
 
+const totalToolCalls = computed(() => toolMessagesAll.value.length)
+
+const childSessionIds = computed(() => {
+  const ctx = workflowStore.currentWorkflow?.executionContext || {}
+  const sessionsFromContext = ctx.childSessions || ctx.child_sessions || []
+  const sessionsFromMessages = messages.value
+    .map((m) => m?.metadata?.child_task_id || m?.metadata?.childTaskId)
+    .filter(Boolean)
+
+  return Array.from(new Set([...(Array.isArray(sessionsFromContext) ? sessionsFromContext : []), ...sessionsFromMessages]))
+})
+
+const childAgentSummaries = computed(() => {
+  const ids = childSessionIds.value
+  if (!ids.length) return []
+
+  return ids.map((id) => {
+    const childWorkflow = workflowStore.workflows.find((w) => w.id === id)
+    const related = messages.value.filter((m) => {
+      const meta = m.metadata || {}
+      return meta.child_task_id === id || meta.childTaskId === id
+    })
+    const last = related[related.length - 1]
+    let status = 'running'
+    let summary = t('workflow.statusPanel.childRunning') || 'Running'
+    let toolCalls = 0
+
+    if (last) {
+      const content = removeSystemReminder(last.message || '').trim()
+      if (content) {
+        summary = content.length > 60 ? `${content.slice(0, 60)}...` : content
+      }
+      const lower = `${last.errorType || ''} ${last.message || ''}`.toLowerCase()
+      if (last.isError || lower.includes('failed') || lower.includes('cancel')) {
+        status = 'failed'
+      } else if (last.metadata?.result || last.role === 'tool') {
+        status = 'success'
+      }
+      const resultObj = last.metadata?.result
+      if (resultObj && typeof resultObj === 'object') {
+        toolCalls =
+          resultObj.tool_calls_count ||
+          resultObj.toolCallsCount ||
+          resultObj.tool_calls ||
+          resultObj.toolCalls ||
+          0
+      }
+    }
+
+    if (childWorkflow?.status) {
+      const s = String(childWorkflow.status).toLowerCase()
+      if (s === 'completed') status = 'success'
+      if (s === 'error' || s === 'failed' || s === 'cancelled') status = 'failed'
+    }
+
+    return {
+      id,
+      shortId: id.length > 14 ? `${id.slice(0, 7)}...${id.slice(-4)}` : id,
+      title: childWorkflow?.title || childWorkflow?.userQuery || id,
+      status,
+      summary,
+      toolCalls,
+      waitReason: childWorkflow?.waitReason || null
+    }
+  })
+})
+
 // Hide panel when there's no data to show
 const hasData = computed(() => {
-  return todoList.value.length > 0 || recentOperations.value.length > 0
+  return todoList.value.length > 0 || recentOperations.value.length > 0 || childAgentSummaries.value.length > 0
 })
 
 const getStatusIcon = (status) => {
@@ -675,6 +800,7 @@ watch(() => workflowStore.currentWorkflowId, (newId) => {
   if (newId && isCollapsed.value) {
     isCollapsed.value = false
   }
+  activeTab.value = 'main'
 })
 
 watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
@@ -799,6 +925,44 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
   padding: 12px;
 }
 
+.panel-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+
+  .tab-btn {
+    border: 1px solid var(--cs-border-color);
+    background: var(--cs-bg-color-light);
+    color: var(--cs-text-color-secondary);
+    border-radius: var(--cs-border-radius);
+    padding: 4px 10px;
+    font-size: var(--cs-font-size-xs);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+
+    &.active {
+      color: var(--el-color-primary);
+      border-color: var(--el-color-primary-light-5);
+      background: var(--el-color-primary-light-9);
+    }
+  }
+
+  .tab-badge {
+    min-width: 16px;
+    height: 16px;
+    border-radius: 10px;
+    background: var(--el-color-primary);
+    color: #fff;
+    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+  }
+}
+
 .section {
   margin-bottom: 16px;
 
@@ -819,6 +983,97 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
 
     .cs {
       color: var(--el-color-primary);
+    }
+
+    .section-meta {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--cs-text-color-placeholder);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+  }
+}
+
+.child-agent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  .child-agent-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: var(--cs-font-size-xs);
+    background: var(--cs-bg-color-light);
+    border-radius: var(--cs-border-radius-sm);
+    margin-bottom: 4px;
+    border-left: 2px solid var(--cs-border-color);
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    &.running {
+      border-left-color: var(--el-color-primary);
+    }
+    &.success {
+      border-left-color: var(--el-color-success);
+    }
+    &.failed {
+      border-left-color: var(--el-color-danger);
+    }
+
+    .child-main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+    }
+
+    .child-title {
+      font-size: var(--cs-font-size-xs);
+      color: var(--cs-text-color-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .child-id {
+      font-family: var(--cs-font-family-mono, monospace);
+      color: var(--cs-text-color-secondary);
+      white-space: nowrap;
+    }
+
+    .child-summary {
+      color: var(--cs-text-color-regular);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .child-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .child-tools {
+      font-family: var(--cs-font-family-mono, monospace);
+      color: var(--cs-text-color-placeholder);
+      min-width: 14px;
+      text-align: right;
+    }
+
+    .child-status.success {
+      color: var(--el-color-success);
+    }
+    .child-status.error {
+      color: var(--el-color-danger);
     }
   }
 }

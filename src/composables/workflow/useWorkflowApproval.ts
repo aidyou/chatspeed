@@ -16,6 +16,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
   const approvalVisible = ref(false)
   const approvalAction = ref('')
   const approvalDetails = ref('')
+  const approvalDisplayType = ref('')
   const approvalRequestId = ref('')
   const approvalLoading = ref(false)
 
@@ -24,6 +25,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalRequestId.value = payload.id
     approvalAction.value = payload.action
     approvalDetails.value = payload.details
+    approvalDisplayType.value = payload.displayType || ''
     approvalVisible.value = true
   }
 
@@ -150,6 +152,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalVisible,
     approvalAction,
     approvalDetails,
+    approvalDisplayType,
     approvalRequestId,
     approvalLoading,
     showApproval,

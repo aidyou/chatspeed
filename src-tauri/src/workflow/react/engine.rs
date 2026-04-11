@@ -507,16 +507,22 @@ impl WorkflowExecutor {
                                 let info_with_details = json!({
                                     "name": tool.tool_name.clone(),
                                     "arguments": tool.arguments.clone(),
-                                    "details": tool.details.clone().unwrap_or_default()
+                                    "details": tool.details.clone().unwrap_or_default(),
+                                    "display_type": tool.display_type.clone().unwrap_or_else(|| "text".to_string())
                                 });
                                 self.pending_approvals
                                     .insert(tool.tool_call_id.clone(), info_with_details);
 
+                                let details_value = tool
+                                    .details
+                                    .as_ref()
+                                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                    .unwrap_or(serde_json::Value::Null);
                                 let _ = self
                                     .dispatch_ui_payload(GatewayPayload::Confirm {
                                         id: tool.tool_call_id.clone(),
                                         action: tool.tool_name.clone(),
-                                        details: tool.details.clone().unwrap_or_default(),
+                                        details: details_value,
                                     })
                                     .await;
                             }
@@ -1153,10 +1159,16 @@ impl WorkflowExecutor {
                                     .map(|r| (r.key().clone(), r.value().clone()))
                                     .collect();
                                 for (id, info) in items {
-                                    let details = info
+                                    let details_value = info
                                         .get("details")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("{}");
+                                        .and_then(|v| {
+                                            if let Some(s) = v.as_str() {
+                                                serde_json::from_str::<serde_json::Value>(s).ok()
+                                            } else {
+                                                Some(v.clone())
+                                            }
+                                        })
+                                        .unwrap_or(serde_json::Value::Null);
                                     let _ = self
                                         .dispatch_ui_payload(GatewayPayload::Confirm {
                                             id,
@@ -1164,7 +1176,7 @@ impl WorkflowExecutor {
                                                 .as_str()
                                                 .unwrap_or("unknown")
                                                 .to_string(),
-                                            details: details.to_string(),
+                                            details: details_value,
                                         })
                                         .await;
                                 }
@@ -1553,13 +1565,21 @@ impl WorkflowExecutor {
                             .map(|r| (r.key().clone(), r.value().clone()))
                             .collect();
                         for (id, info) in items {
-                            let details =
-                                info.get("details").and_then(|v| v.as_str()).unwrap_or("{}");
+                            let details_value = info
+                                .get("details")
+                                .and_then(|v| {
+                                    if let Some(s) = v.as_str() {
+                                        serde_json::from_str::<serde_json::Value>(s).ok()
+                                    } else {
+                                        Some(v.clone())
+                                    }
+                                })
+                                .unwrap_or(serde_json::Value::Null);
                             let _ = self
                                 .dispatch_ui_payload(GatewayPayload::Confirm {
                                     id,
                                     action: info["name"].as_str().unwrap_or("unknown").to_string(),
-                                    details: details.to_string(),
+                                    details: details_value,
                                 })
                                 .await;
                         }
@@ -3003,6 +3023,9 @@ impl WorkflowExecutor {
                         serde_json::json!({
                             "tool_call_id": entry.key(),
                             "tool_name": info["name"].as_str().unwrap_or("unknown"),
+                            "arguments": info.get("arguments").cloned().unwrap_or(serde_json::json!({})),
+                            "details": info.get("details").and_then(|v| v.as_str()).unwrap_or_default(),
+                            "display_type": info.get("display_type").and_then(|v| v.as_str()),
                         })
                     })
                     .collect();
@@ -3668,6 +3691,10 @@ impl WorkflowExecutor {
                     arguments: value.get("arguments").cloned().unwrap_or(json!({})),
                     details: value
                         .get("details")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    display_type: value
+                        .get("display_type")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string()),
                 }

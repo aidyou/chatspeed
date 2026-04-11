@@ -841,10 +841,16 @@
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
     "historyTab": "Conversation",
     "statusPanel": {
+      "childAgents": "Child Agents",
+      "childRunning": "Running",
       "title": "Status",
+      "mainAgent": "Main Agent",
+      "noSubAgents": "No sub agents yet",
       "progress": "Progress",
       "todos": "Tasks",
       "recentOps": "Recent Operations",
+      "subAgents": "Sub Agents",
+      "totalCalls": "Total calls",
       "empty": "Empty",
       "contextUsage": "Context Usage"
     },

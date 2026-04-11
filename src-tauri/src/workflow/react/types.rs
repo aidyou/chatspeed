@@ -58,7 +58,7 @@ pub enum GatewayPayload {
     Confirm {
         id: String,
         action: String,
-        details: String,
+        details: serde_json::Value,
     },
     SyncTodo {
         todo_list: serde_json::Value,
@@ -247,6 +247,8 @@ pub struct PendingTool {
     pub tool_name: String,
     pub arguments: serde_json::Value,
     pub details: Option<String>,
+    #[serde(default)]
+    pub display_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -317,6 +319,7 @@ mod tests {
             tool_name: "bash".to_string(),
             arguments: serde_json::json!({"command": "ls"}),
             details: Some("List files".to_string()),
+            display_type: Some("text".to_string()),
         });
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -332,6 +335,7 @@ mod tests {
             tool_name: "write_file".to_string(),
             arguments: serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
             details: Some("Write test file".to_string()),
+            display_type: Some("diff".to_string()),
         };
 
         let json = serde_json::to_string(&tool).unwrap();
@@ -392,6 +396,7 @@ mod tests {
                 tool_name: format!("tool_{}", i),
                 arguments: serde_json::json!({"arg": i}),
                 details: Some(format!("Details for tool {}", i)),
+                display_type: Some("text".to_string()),
             });
         }
 

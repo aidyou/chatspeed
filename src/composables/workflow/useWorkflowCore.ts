@@ -14,10 +14,13 @@ import {
     WORKFLOW_STATUSES,
     WORKFLOW_WAIT_REASONS
 } from '@/composables/workflow/signalTypes'
+import { safeExecute } from './useErrorBoundary'
 
-/**wo
+/**
  * Composable for core workflow operations
  * Handles CRUD, start/stop/continue, and event handling
+ * 
+ * Phase 9: Add error boundaries to ensure UI exceptions don't block workflow execution
  */
 export function useWorkflowCore({
     selectedAgent,
@@ -33,6 +36,7 @@ export function useWorkflowCore({
     approvalRequestId,
     approvalAction,
     approvalDetails,
+    approvalDisplayType,
     enhancedMessages,
     isCompressing,
     compressionMessage,
@@ -234,7 +238,17 @@ export function useWorkflowCore({
         }
     }
 
+    // Track the current session ID for event isolation
+    const currentSessionId = ref<string | null>(null)
+
+    /**
+     * Setup workflow event listeners with error boundary
+     * Phase 9: UI exceptions must be degradable, cannot block workflow execution
+     */
     const setupWorkflowEvents = async (sessionId) => {
+        // Update current session ID for event isolation
+        currentSessionId.value = sessionId
+
         if (unlistenWorkflowEvents.value) {
             unlistenWorkflowEvents.value()
             unlistenWorkflowEvents.value = null
@@ -242,114 +256,139 @@ export function useWorkflowCore({
 
         const eventName = `workflow://event/${sessionId}`
         unlistenWorkflowEvents.value = await listen(eventName, (event) => {
-            const payload = event.payload
-
-            // Any event from this channel means the session is live on backend.
-            if (workflowStore.currentWorkflowId === sessionId) {
-                workflowStore.setHasLiveSession(true)
+            // Phase 9: Session isolation check - ignore events from non-current sessions
+            if (currentSessionId.value !== sessionId) {
+                console.warn(`[Workflow] Ignoring event from non-active session: ${sessionId}`)
+                return
             }
 
-            if (payload.type === 'state') {
-                const prevState = workflowStore.currentWorkflow?.status
-                const prevWaitReason = workflowStore.waitReason
-                workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
-                
-                const isWaiting = WAITING_STATUSES.includes(payload.state)
-                console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
+            // Phase 9: Error boundary - capture UI update exceptions
+            safeExecute(() => {
+                const payload = event.payload
 
-                if (TERMINAL_STATUSES.includes((payload.state || '').toLowerCase())) {
-                    workflowStore.setHasLiveSession(false)
+                // Any event from this channel means the session is live on backend.
+                if (workflowStore.currentWorkflowId === sessionId) {
+                    workflowStore.setHasLiveSession(true)
                 }
 
-                // Check for confirmation waiting
-                if (payload.state === WORKFLOW_STATUSES.PAUSED && payload.wait_reason === WORKFLOW_WAIT_REASONS.CONFIRMATION) {
-                    showConfirmationDialog()
-                }
+                if (payload.type === 'state') {
+                    const prevState = workflowStore.currentWorkflow?.status
+                    const prevWaitReason = workflowStore.waitReason
+                    workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
+                    
+                    const isWaiting = WAITING_STATUSES.includes(payload.state)
+                    console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
 
-                // If we move out of Thinking/Executing, reset the parser
-                // Use a small timeout to allow final rendering of streaming buffers
-                if (payload.state !== WORKFLOW_STATUSES.THINKING && payload.state !== WORKFLOW_STATUSES.EXECUTING) {
-                    setTimeout(() => {
-                        resetChatState()
-                    }, 500)
-                }
+                    if (TERMINAL_STATUSES.includes((payload.state || '').toLowerCase())) {
+                        workflowStore.setHasLiveSession(false)
+                    }
 
-                const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
-                if (!isApprovalWaiting) {
-                    flushDeferredQueuedMessages().catch((error) => {
-                        console.warn('Failed to flush deferred queue after state update:', error)
+                    // Check for confirmation waiting
+                    if (payload.state === WORKFLOW_STATUSES.PAUSED && payload.wait_reason === WORKFLOW_WAIT_REASONS.CONFIRMATION) {
+                        showConfirmationDialog()
+                    }
+
+                    // If we move out of Thinking/Executing, reset the parser
+                    if (payload.state !== WORKFLOW_STATUSES.THINKING && payload.state !== WORKFLOW_STATUSES.EXECUTING) {
+                        setTimeout(() => {
+                            safeExecute(() => resetChatState(), undefined, 'resetChatState')
+                        }, 500)
+                    }
+
+                    const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
+                    if (!isApprovalWaiting) {
+                        flushDeferredQueuedMessages().catch((error) => {
+                            console.warn('Failed to flush deferred queue after state update:', error)
+                        })
+                    }
+                } else if (payload.type === 'chunk') {
+                    // Direct text chunk from LLM or StreamParser
+                    processChunk(payload.content)
+                    scrollToBottom()
+                } else if (payload.type === 'reasoning_chunk') {
+                    // Thinking chunk
+                    processReasoningChunk(payload.content)
+                    scrollToBottom()
+                } else if (payload.type === 'message') {
+                    // ReAct engine sends incremental messages or chunks
+                    workflowStore.addMessage({
+                        sessionId: sessionId,
+                        role: payload.role,
+                        message: payload.content,
+                        reasoning: payload.reasoning,
+                        stepType: payload.step_type,
+                        stepIndex: payload.step_index,
+                        isError: payload.is_error,
+                        errorType: payload.error_type,
+                        metadata: payload.metadata
                     })
-                }
-            } else if (payload.type === 'chunk') {
-                // Direct text chunk from LLM or StreamParser
-                processChunk(payload.content)
-                scrollToBottom()
-            } else if (payload.type === 'reasoning_chunk') {
-                // Thinking chunk
-                processReasoningChunk(payload.content)
-                scrollToBottom()
-            } else if (payload.type === 'message') {
-                // ReAct engine sends incremental messages or chunks
-                workflowStore.addMessage({
-                    sessionId: sessionId,
-                    role: payload.role,
-                    message: payload.content,
-                    reasoning: payload.reasoning,
-                    stepType: payload.step_type,
-                    stepIndex: payload.step_index,
-                    isError: payload.is_error,
-                    errorType: payload.error_type,
-                    metadata: payload.metadata
-                })
 
-                // Clear tool stream when tool message is finalized
-                if (payload.role === 'tool' && payload.metadata?.tool_call_id) {
-                    workflowStore.clearToolStream(payload.metadata.tool_call_id)
-                }
+                    // Message finalized, clear chatting buffer (including reasoning)
+                    resetChatState()
 
-                // Message finalized, clear chatting buffer (including reasoning)
-                resetChatState()
-
-                // Force scroll for new full messages
-                scrollToBottom(true)
-            } else if (payload.type === 'confirm') {
-                approvalRequestId.value = payload.id
-                approvalAction.value = payload.action
-                approvalDetails.value = payload.details
-                approvalVisible.value = true
-            } else if (payload.type === 'retry_status') {
-                // Handle 429 retry status
-                setRetryStatus(payload)
-            } else if (payload.type === 'sync_todo') {
-                workflowStore.setTodoList(payload.todo_list)
-            } else if (payload.type === 'compression_status') {
-                // Handle context compression status
-                setCompressionStatus(payload.is_compressing, payload.message)
-                if (payload.is_compressing) {
+                    // Force scroll for new full messages
                     scrollToBottom(true)
+                } else if (payload.type === 'confirm') {
+                    approvalRequestId.value = payload.id
+                    approvalAction.value = payload.action
+                    approvalDetails.value = payload.details || ''
+                    approvalDisplayType.value = payload.display_type || ''
+                    approvalVisible.value = true
+                } else if (payload.type === 'retry_status') {
+                    // Handle 429 retry status
+                    setRetryStatus(payload)
+                } else if (payload.type === 'sync_todo') {
+                    workflowStore.setTodoList(payload.todo_list)
+                } else if (payload.type === 'compression_status') {
+                    // Handle context compression status
+                    setCompressionStatus(payload.is_compressing, payload.message)
+                    if (payload.is_compressing) {
+                        scrollToBottom(true)
+                    }
+                } else if (payload.type === 'notification') {
+                    workflowStore.setNotification(payload.message, payload.category)
+                } else if (payload.type === 'auto_approved_tools_updated') {
+                    workflowStore.setAutoApprovedTools(payload.tools)
+                } else if (payload.type === 'shell_policy_updated') {
+                    workflowStore.setShellPolicy(payload.policy)
+                } else if (payload.type === 'tool_stream') {
+                    // Handle tool streaming output
+                    const { tool_id, output } = payload
+                    workflowStore.appendToolStream(tool_id, output)
                 }
-            } else if (payload.type === 'notification') {
-                workflowStore.setNotification(payload.message, payload.category)
-            } else if (payload.type === 'auto_approved_tools_updated') {
-                workflowStore.setAutoApprovedTools(payload.tools)
-            } else if (payload.type === 'shell_policy_updated') {
-                workflowStore.setShellPolicy(payload.policy)
-            } else if (payload.type === 'tool_stream') {
-                // Handle tool streaming output
-                const { tool_id, output } = payload
-                workflowStore.appendToolStream(tool_id, output)
-            }
+            }, undefined, `workflowEvent:${event.payload?.type || 'unknown'}`)
         })
     }
 
+    /**
+     * Select workflow with session isolation
+     * Phase 9: Multi-session switching doesn't cross-contaminate, UI rendering exceptions don't affect workflow execution
+     */
     const selectWorkflow = async (id) => {
         if (!canSwitchWorkflow.value) {
             console.warn('Cannot switch workflow while another is running')
             return
         }
 
-        // Select the workflow in store
-        await workflowStore.selectWorkflow(id)
+        // Phase 9: Update session ID for event isolation
+        currentSessionId.value = id
+
+        // Phase 9: Clear previous session's UI state
+        safeExecute(() => {
+            // Reset chat state
+            resetChatState()
+            // Reset retry timer
+            clearRetryTimer()
+        }, undefined, 'cleanupPreviousSession')
+
+        // Select the workflow in store (includes Task Ledger rebuild)
+        try {
+            await workflowStore.selectWorkflow(id)
+        } catch (error) {
+            console.error('[Workflow] selectWorkflow failed:', error)
+            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            return
+        }
         
         console.log('[Workflow] selectWorkflow completed, currentWorkflow:', workflowStore.currentWorkflow?.id, 'status:', workflowStore.currentWorkflow?.status)
 
@@ -382,6 +421,7 @@ export function useWorkflowCore({
                         approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
                         approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
                         approvalDetails.value = pendingApprovalRequest?.details || ''
+                        approvalDisplayType.value = pendingApprovalRequest?.displayType || ''
                         approvalVisible.value = true
                     }
                 } else {
@@ -389,6 +429,7 @@ export function useWorkflowCore({
                     approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
                     approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
                     approvalDetails.value = pendingApprovalRequest?.details || ''
+                    approvalDisplayType.value = pendingApprovalRequest?.displayType || ''
                     approvalVisible.value = true
                 }
             } else if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
@@ -1065,6 +1106,7 @@ export function useWorkflowCore({
 
     return {
         unlistenWorkflowEvents,
+        currentSessionId,
         modelSelectorVisible,
         modelSelectorTab,
         modelSelectorMode,

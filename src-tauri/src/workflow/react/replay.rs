@@ -168,6 +168,7 @@ impl EventReducer {
                                 tool_name: tool_name.to_string(),
                                 arguments: tool["arguments"].clone(),
                                 details: tool["details"].as_str().map(|s| s.to_string()),
+                                display_type: tool["display_type"].as_str().map(|s| s.to_string()),
                             });
                         }
                     }
@@ -202,8 +203,15 @@ impl EventReducer {
                     self.pending_tools.push(PendingTool {
                         tool_call_id: tool_call_id.to_string(),
                         tool_name: tool_name.to_string(),
-                        arguments: serde_json::Value::Null,
-                        details: None,
+                        arguments: event
+                            .event_data
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        details: event.event_data["details"].as_str().map(|s| s.to_string()),
+                        display_type: event.event_data["display_type"]
+                            .as_str()
+                            .map(|s| s.to_string()),
                     });
                 }
             }
@@ -996,6 +1004,7 @@ mod tests {
                 tool_name: "bash".to_string(),
                 arguments: serde_json::json!({"command": "ls"}),
                 details: Some("List files".to_string()),
+                display_type: Some("text".to_string()),
             });
 
             {
@@ -1294,6 +1303,9 @@ mod tests {
                     session_id.to_string(),
                     "call_2".to_string(),
                     "write_file".to_string(),
+                    serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
+                    Some("{\"path\":\"/tmp/test.txt\",\"content\":\"hello\"}".to_string()),
+                    Some("diff".to_string()),
                 );
                 s.append_workflow_event(&e4).unwrap();
 

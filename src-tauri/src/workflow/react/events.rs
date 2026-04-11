@@ -93,11 +93,24 @@ impl WorkflowEvent {
         )
     }
 
-    pub fn approval_requested(session_id: String, tool_call_id: String, tool_name: String) -> Self {
+    pub fn approval_requested(
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: Value,
+        details: Option<String>,
+        display_type: Option<String>,
+    ) -> Self {
         Self::new(
             WorkflowEventType::ApprovalRequested,
             session_id,
-            serde_json::json!({ "tool_call_id": tool_call_id, "tool_name": tool_name }),
+            serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "details": details,
+                "display_type": display_type
+            }),
         )
     }
 
@@ -242,6 +255,9 @@ mod tests {
             "test-session".to_string(),
             "call_123".to_string(),
             "bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            Some("List files".to_string()),
+            Some("text".to_string()),
         );
         assert_eq!(requested.event_type, WorkflowEventType::ApprovalRequested);
         assert_eq!(requested.event_data["tool_call_id"], "call_123");

@@ -49,9 +49,9 @@
                   </div>
                 </div>
                 <!-- Final Result -->
-                <MarkdownSimple v-if="message.toolDisplay.displayType === 'diff'"
+                <MarkdownSimple v-if="shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'diff'"
                   :content="getDiffMarkdown(removeSystemReminder(message.message))" />
-                <div v-else-if="message.toolDisplay.displayType === 'choice'" class="choice-container">
+                <div v-else-if="shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'choice'" class="choice-container">
                   <div class="choice-question">{{
                     parseChoiceContent(removeSystemReminder(message.message)).question
                   }}
@@ -63,7 +63,7 @@
                     </el-button>
                   </div>
                 </div>
-                <pre v-else class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
+                <pre v-else-if="shouldShowToolRawContent(message)" class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
               </div>
             </template>
           </div>
@@ -241,6 +241,10 @@ defineProps({
     required: true
   },
   getParsedMessage: {
+    type: Function,
+    required: true
+  },
+  shouldShowToolRawContent: {
     type: Function,
     required: true
   },

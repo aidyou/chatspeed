@@ -378,8 +378,8 @@ impl WorkflowExecutor {
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // 1. Determine what to show the user in the UI (Generate Diffs for File Ops)
         let mut display_type = "text".to_string();
-        let content = if let Some(custom) = display_content {
-            custom
+        let (content_str, details_value) = if let Some(custom) = display_content {
+            (custom.clone(), serde_json::json!(custom))
         } else {
             match name {
                 TOOL_EDIT_FILE | TOOL_WRITE_FILE => {
@@ -422,13 +422,20 @@ impl WorkflowExecutor {
                         }
                     }
 
-                    serde_json::to_string(&preview_args).unwrap_or_default()
+                    // content_str for storing in messages, details_value for UI payload
+                    (
+                        serde_json::to_string(&preview_args).unwrap_or_default(),
+                        preview_args,
+                    )
                 }
-                _ => format!(
-                    "Tool: {}\nArguments: {}",
-                    name,
-                    serde_json::to_string_pretty(args).unwrap_or_default()
-                ),
+                _ => {
+                    let msg = format!(
+                        "Tool: {}\nArguments: {}",
+                        name,
+                        serde_json::to_string_pretty(args).unwrap_or_default()
+                    );
+                    (msg.clone(), serde_json::json!(msg))
+                }
             }
         };
 
@@ -436,7 +443,7 @@ impl WorkflowExecutor {
         let stash_obj = json!({
             "name": name,
             "arguments": args,
-            "details": content.clone()
+            "details": content_str.clone()
         });
         self.pending_approvals.insert(id.to_string(), stash_obj);
 
@@ -446,6 +453,9 @@ impl WorkflowExecutor {
             self.session_id.clone(),
             id.to_string(),
             name.to_string(),
+            args.clone(),
+            Some(content_str.clone()),
+            Some(display_type.clone()),
         );
         if let Err(e) = self.append_event(&event) {
             log::error!(
@@ -461,7 +471,7 @@ impl WorkflowExecutor {
                 GatewayPayload::Confirm {
                     id: id.to_string(),
                     action: name.to_string(),
-                    details: content.clone(),
+                    details: details_value,
                 },
             )
             .await?;
@@ -479,7 +489,7 @@ impl WorkflowExecutor {
         };
 
         Ok(Some(ReinforcedResult {
-            content,
+            content: content_str,
             title: pretty_title,
             summary: rust_i18n::t!("workflow.awaiting_approval").to_string(),
             is_error: false,

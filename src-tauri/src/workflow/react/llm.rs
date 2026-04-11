@@ -13,7 +13,7 @@ use crate::workflow::react::signals::{parse_runtime_signal, stash_user_message, 
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -452,10 +452,52 @@ impl LlmProcessor {
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
 
+        // If a tool call has both an approval preview (pending) and a later final observation
+        // (approved/executed), keep only the final one in LLM context to avoid duplicate tool
+        // observations for the same action.
+        let resolved_tool_call_ids: HashSet<String> = raw_history
+            .iter()
+            .filter_map(|m| {
+                if m.role != "tool" {
+                    return None;
+                }
+                let meta = m.metadata.as_ref()?;
+                let tool_call_id = meta.get("tool_call_id")?.as_str()?;
+                let approval_status = meta
+                    .get("approval_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if approval_status != "pending" {
+                    Some(tool_call_id.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         for m in raw_history {
             // As part of defensive programming, filter out system messages
             if m.role == "system" {
                 continue;
+            }
+
+            if m.role == "tool" {
+                if let Some(meta) = &m.metadata {
+                    let approval_status = meta
+                        .get("approval_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let tool_call_id = meta.get("tool_call_id").and_then(|v| v.as_str());
+
+                    if approval_status == "pending"
+                        && tool_call_id
+                            .map(|id| resolved_tool_call_ids.contains(id))
+                            .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                }
             }
 
             let role = m.role.clone();
@@ -504,17 +546,16 @@ impl LlmProcessor {
                 content = format!("{}\n\n{}", content, reminder);
             }
 
-            // Keep provider compatibility (single user message after merge),
-            // while preserving semantic boundaries between observation vs real input.
+            // Preserve observation boundaries, but avoid adding an extra wrapper for normal
+            // user input because the initial workflow query is already tagged as <user_query>.
             if role == "user" && !content.trim().is_empty() {
                 let is_observation = step_type.eq_ignore_ascii_case("observe");
-                let (open_tag, close_tag) = if is_observation {
-                    ("<queued_observation>", "</queued_observation>")
-                } else {
-                    ("<latest_user_input>", "</latest_user_input>")
-                };
-                if !content.trim_start().starts_with(open_tag) {
-                    content = format!("{open_tag}\n{content}\n{close_tag}");
+                if is_observation {
+                    let open_tag = "<queued_observation>";
+                    let close_tag = "</queued_observation>";
+                    if !content.trim_start().starts_with(open_tag) {
+                        content = format!("{open_tag}\n{content}\n{close_tag}");
+                    }
                 }
             }
 

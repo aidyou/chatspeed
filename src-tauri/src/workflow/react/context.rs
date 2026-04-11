@@ -206,6 +206,7 @@ impl ContextManager {
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
         let mut llm_messages = self.messages.clone();
+        let mut wrapped_initial_user_query = false;
 
         for msg in llm_messages.iter_mut() {
             if let Some(att) = &msg.attached_context {
@@ -213,9 +214,15 @@ impl ContextManager {
                     msg.message = format!("{}\n\n{}", msg.message, att);
                 }
             }
-            // 1. Wrap the initial user query
-            if msg.role == "user" && !msg.message.starts_with("<user_query>") {
+
+            // Only the first real user request should be treated as the workflow's user_query.
+            if msg.role == "user"
+                && msg.step_type.as_deref() != Some("observe")
+                && !wrapped_initial_user_query
+                && !msg.message.starts_with("<user_query>")
+            {
                 msg.message = format!("<user_query>\n{}\n</user_query>", msg.message);
+                wrapped_initial_user_query = true;
             }
 
             // 2. Wrap Approved Plan components if metadata exists

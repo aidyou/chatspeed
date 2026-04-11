@@ -41,16 +41,26 @@ export function useWorkflowMessages() {
             if (hasToolCallId) {
                 const id = meta.tool_call_id
                 const approvalStatus = meta.approval_status || ''
-                const summary = (meta.summary || '').toLowerCase()
+                const executionStatus = meta.execution_status || ''
 
                 // Use approval_status as the primary indicator
-                if (approvalStatus === 'pending') {
+                if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
                     toolHasWaitingMsg.add(id)
-                } else if (approvalStatus === 'rejected' || approvalStatus === 'approved') {
-                    // Final states
-                    const isRejected = approvalStatus === 'rejected'
-                    const isError = m.isError || m.is_error || meta.is_error || false
+                } else if (
+                    executionStatus === 'completed' ||
+                    executionStatus === 'failed' ||
+                    executionStatus === 'rejected'
+                ) {
+                    const isRejected = executionStatus === 'rejected'
+                    const isError = executionStatus === 'failed' || m.isError || m.is_error || meta.is_error || false
                     toolStates.set(id, { isFinal: true, isRejected, hasError: isError })
+                } else if (approvalStatus === 'rejected') {
+                    // Final states
+                    const isError = m.isError || m.is_error || meta.is_error || false
+                    toolStates.set(id, { isFinal: true, isRejected: true, hasError: isError })
+                } else if (approvalStatus === 'approved' && executionStatus !== 'running') {
+                    const isError = m.isError || m.is_error || meta.is_error || false
+                    toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
                 } else if (m.role === 'tool') {
                     // Fallback: normal tool execution result (no approval flow)
                     const isError = m.isError || m.is_error || meta.is_error || false
@@ -93,8 +103,11 @@ export function useWorkflowMessages() {
 
                 // Check approval status from metadata (preferred method)
                 const approvalStatus = message.metadata?.approval_status
-                if (approvalStatus === 'rejected') {
+                const executionStatus = message.metadata?.execution_status
+                if (approvalStatus === 'rejected' || executionStatus === 'rejected') {
                     isRejected = true
+                } else if (executionStatus === 'running') {
+                    isApproved = false
                 } else if (approvalStatus === 'approved') {
                     isApproved = true
                 } else if (message.metadata?.tool_call_id) {
@@ -158,6 +171,9 @@ export function useWorkflowMessages() {
                         m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
                     if (name === 'answer_user' || name === 'finish_task') return false
                     if (m.metadata?.approval_status === 'rejected') return false
+                    if (m.metadata?.execution_status === 'running' && !workflowStore.getToolStream(m.metadata?.tool_call_id).length) {
+                        return true
+                    }
                     return true
                 }
                 if (m.role === 'assistant') {
@@ -376,6 +392,9 @@ export function useWorkflowMessages() {
         // 1. Try to extract tool call info
         const toolCall = meta.tool_call || {}
         const func = toolCall.function || toolCall
+        const toolCallId = meta.tool_call_id || toolCall.id || func.id
+        const executionStatus = meta.execution_status || ''
+        const hasStreamOutput = toolCallId ? workflowStore.getToolStream(toolCallId).length > 0 : false
         const name = func.name || ''
         const rawArgs = func.arguments || func.input || {}
 
@@ -418,8 +437,18 @@ export function useWorkflowMessages() {
             icon: finalIcon,
             toolType: finalToolType,
             action: finalAction,
-            target: finalTarget
+            target: finalTarget,
+            hasStreamOutput,
+            executionStatus
         }
+    }
+
+    const shouldShowToolRawContent = (message) => {
+        const meta = message.metadata || {}
+        const content = removeSystemReminder(message.message || '')
+        if (!content) return false
+        if (meta.hide_approval_details && meta.execution_status === 'running') return false
+        return true
     }
 
     // Get diff markdown for file edits
@@ -583,6 +612,7 @@ export function useWorkflowMessages() {
         getToolDisplayInfo,
         getDiffMarkdown,
         parseChoiceContent,
-        getParsedMessage
+        getParsedMessage,
+        shouldShowToolRawContent
     }
 }

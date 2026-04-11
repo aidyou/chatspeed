@@ -553,3 +553,23 @@
     }
   }
 }
+
+// Phase 9: Task Ledger highlight message style
+.highlight-message {
+  animation: highlight-pulse 2s ease-in-out;
+}
+
+@keyframes highlight-pulse {
+  0% {
+    background-color: transparent;
+  }
+  20% {
+    background-color: var(--el-color-primary-light-9);
+  }
+  80% {
+    background-color: var(--el-color-primary-light-9);
+  }
+  100% {
+    background-color: transparent;
+  }
+}

@@ -25,7 +25,7 @@
             </div>
           </div>
         </div>
-        <pre v-else class="details-text">{{ details }}</pre>
+        <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
       </div>
     </div>
     <template #footer>
@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
 
@@ -66,6 +66,9 @@ const parseDetailsObject = (value) => {
   if (!value || typeof value !== 'string') return null
   try {
     const parsed = JSON.parse(value)
+    if (Array.isArray(parsed)) {
+      return parsed.length > 0 ? parsed[0] : null
+    }
     return parsed && typeof parsed === 'object' ? parsed : null
   } catch (e) {
     return null
@@ -88,7 +91,8 @@ const isFileChangePayload = computed(() => {
 })
 
 const isEditAction = computed(() => {
-  if (normalizedAction.value.includes('edit_file') || normalizedAction.value.includes('write_file')) {
+  const action = normalizedAction.value
+  if (action.includes('edit_file') || action.includes('write_file')) {
     return true
   }
   return isFileChangePayload.value
@@ -114,7 +118,6 @@ const diffLines = computed(() => {
     ]
   }
 
-  // edit_file has old_string/new_string, write_file has content only
   const oldStr = data.old_string ?? ''
   const newStr = data.new_string ?? data.content ?? ''
   const startLine = data.start_line || 1
