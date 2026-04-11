@@ -488,6 +488,32 @@
       }
     }
   }
+
+  .queued-list {
+    margin: 8px 0 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .queued-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--cs-text-color-secondary);
+      font-size: 12px;
+      padding-left: 8px;
+      border-left: 2px solid var(--cs-border-color);
+
+      .queued-icon {
+        color: var(--el-color-warning);
+      }
+
+      .queued-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    }
+  }
 }
 
 // Retry status alert

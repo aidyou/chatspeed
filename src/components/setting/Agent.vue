@@ -87,9 +87,7 @@
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
           <div class="models-layout">
-            <el-row :gutter="12">
-              <el-col :span="modelRoles.length === 1 ? 24 : 12" v-for="role in modelRoles" :key="role.key">
-                <div class="model-item-compact">
+            <div class="model-item-compact" v-for="role in modelRoles" :key="role.key">
                   <div class="header">
                     <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
                     <el-radio-group v-model="modelModes[role.key]" size="small">
@@ -101,7 +99,7 @@
                     <div class="selectors-row">
                       <template v-if="modelModes[role.key] === 'provider'">
                         <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
-                          @change="onModelIdChange(role.key)" style="width: 100px">
+                          @change="onModelIdChange(role.key)" style="flex: 1">
                           <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
                             :label="provider.name" :value="provider.id" />
                         </el-select>
@@ -113,7 +111,7 @@
                       </template>
                       <template v-else>
                         <el-select v-model="proxyGroups[role.key]" size="small" filterable
-                          @change="onProxyGroupChange(role.key)" style="width: 100px">
+                          @change="onProxyGroupChange(role.key)" style="flex: 1">
                           <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
                             :value="group.name" />
                         </el-select>
@@ -137,18 +135,16 @@
                       <div class="param-item">
                         <span class="param-label">{{ $t('settings.model.contextSize') }}</span>
                         <el-input-number v-model="agentForm[role.key + 'Model'].contextSize" :min="1024" :max="2000000" :step="1024"
-                          size="small" controls-position="right" style="width: 80px" />
+                          size="small" controls-position="right" style="width: 120px" />
                       </div>
                       <div class="param-item">
                         <span class="param-label">{{ $t('settings.model.maxTokens') }}</span>
                         <el-input-number v-model="agentForm[role.key + 'Model'].maxTokens" :min="0" :max="128000" :step="1024"
-                          size="small" controls-position="right" style="width: 80px" />
+                          size="small" controls-position="right" style="width: 120px" />
                       </div>
                     </div>
                   </div>
-                </div>
-              </el-col>
-            </el-row>
+            </div>
           </div>
         </el-tab-pane>
 

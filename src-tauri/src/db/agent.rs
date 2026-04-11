@@ -437,26 +437,6 @@ impl MainStore {
         Ok(agents)
     }
 
-    /// Gets all primary agents.
-    pub fn get_primary_agents(&self) -> Result<Vec<Agent>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT * FROM agents
-             WHERE COALESCE(role, agent_type, 'primary') = 'primary'
-             ORDER BY name",
-        )?;
-
-        let agents = stmt
-            .query_map(params![], |row| Ok(Agent::from(row)))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(agents)
-    }
-
     /// Gets child agents owned by the specified primary agent.
     pub fn get_child_agents(&self, parent_agent_id: &str) -> Result<Vec<Agent>, StoreError> {
         let conn = self

@@ -174,6 +174,7 @@ impl Sink for DBSink {
 
 /// A sink that can be configured to fail for testing purposes.
 #[cfg(test)]
+#[allow(dead_code)]
 pub struct FailableSink {
     name: String,
     should_fail: std::sync::atomic::AtomicBool,
@@ -181,6 +182,7 @@ pub struct FailableSink {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 impl FailableSink {
     pub fn new(name: &str) -> Self {
         Self {
@@ -220,6 +222,7 @@ impl Sink for FailableSink {
 
 /// A sink that introduces artificial delay for testing.
 #[cfg(test)]
+#[allow(dead_code)]
 pub struct SlowSink {
     name: String,
     delay_ms: u64,
@@ -227,6 +230,7 @@ pub struct SlowSink {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 impl SlowSink {
     pub fn new(name: &str, delay_ms: u64) -> Self {
         Self {

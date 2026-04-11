@@ -1,10 +1,14 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
+use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
-use crate::workflow::react::orchestrator::{BackgroundTask, SubAgentFactory, BACKGROUND_TASKS};
+use crate::workflow::react::orchestrator::{
+    list_background_task_ids_for_owner, stop_background_task, BackgroundTask, SubAgentFactory,
+    BACKGROUND_TASKS,
+};
 use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
@@ -383,8 +387,19 @@ pub async fn list_workflows(
 #[tauri::command]
 pub async fn delete_workflow(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
+    cleanup_workflow_resources(
+        &session_id,
+        chat_state.inner(),
+        gateway.inner(),
+        workflow_manager.inner(),
+    )
+    .await;
+
     let store = state.read().map_err(|e| e.to_string())?;
     store
         .delete_workflow(&session_id)
@@ -548,6 +563,69 @@ async fn has_reconciled_live_session(
     true
 }
 
+async fn interrupt_openai_session(chat_state: &Arc<ChatState>, session_id: &str) {
+    let mut chats = chat_state.chats.lock().await;
+    if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
+        if let Some(chat) = protocol_chats.get_mut(session_id) {
+            chat.set_stop_flag(true).await;
+            log::info!(
+                "[Workflow][session={}][phase=cleanup] Set chat stop_flag=true",
+                session_id
+            );
+        }
+    }
+}
+
+async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &Arc<ChatState>) {
+    let registry = get_child_task_registry();
+    let mut visited = std::collections::HashSet::new();
+    let mut pending_task_ids = registry.list_child_tasks_for_parent(root_session_id);
+    pending_task_ids.extend(list_background_task_ids_for_owner(root_session_id));
+
+    while let Some(task_id) = pending_task_ids.pop() {
+        if !visited.insert(task_id.clone()) {
+            continue;
+        }
+
+        pending_task_ids.extend(registry.list_child_tasks_for_parent(&task_id));
+        pending_task_ids.extend(list_background_task_ids_for_owner(&task_id));
+
+        interrupt_openai_session(chat_state, &task_id).await;
+        if stop_background_task(&task_id, Some(chat_state)).await {
+            WorkflowManager::unregister_session_signal_tx(&task_id);
+            log::info!(
+                "[Workflow][session={}][phase=cleanup] Reclaimed owned background task {}",
+                root_session_id,
+                task_id
+            );
+        }
+    }
+}
+
+async fn cleanup_workflow_resources(
+    session_id: &str,
+    chat_state: &Arc<ChatState>,
+    gateway: &Arc<TauriGateway>,
+    workflow_manager: &Arc<WorkflowManager>,
+) {
+    interrupt_openai_session(chat_state, session_id).await;
+    cleanup_owned_background_resources(session_id, chat_state).await;
+    let _ = gateway
+        .inject_input(session_id, "{\"type\": \"stop\"}".to_string())
+        .await;
+
+    if let Some(executor) = workflow_manager.get_executor(session_id) {
+        let mut guard = executor.lock().await;
+        guard.set_state(WorkflowState::Cancelled);
+    }
+
+    let _ = workflow_manager.update_session_status(session_id, ManagedSessionStatus::Cancelled);
+    BACKGROUND_TASKS.remove(session_id);
+    workflow_manager.remove_session(session_id);
+    WorkflowManager::unregister_session_signal_tx(session_id);
+    gateway.unregister_session(session_id).await;
+}
+
 fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
     match status.to_lowercase().as_str() {
         "paused" => Some(WaitReason::Confirmation),
@@ -569,11 +647,18 @@ fn restore_context_for_signal(
             Some(context)
         }
         RecoveryResult::SafeFailed { error, .. } => {
-            log::warn!(
-                "[Workflow][session={}][phase=signal] Recovery context unavailable: {}",
-                session_id,
-                error
-            );
+            if error.is_empty_replay_history() {
+                log::info!(
+                    "[Workflow][session={}][phase=signal] Recovery context not available yet: workflow has no execution snapshot or events",
+                    session_id
+                );
+            } else {
+                log::warn!(
+                    "[Workflow][session={}][phase=signal] Recovery context unavailable: {}",
+                    session_id,
+                    error
+                );
+            }
             None
         }
     }
@@ -710,8 +795,9 @@ pub async fn workflow_start(
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
-        .register_session_tx(session_id.clone(), signal_tx)
+        .register_session_tx(session_id.clone(), signal_tx.clone())
         .await;
+    WorkflowManager::register_session_signal_tx(session_id.clone(), signal_tx);
 
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
@@ -863,7 +949,10 @@ pub async fn workflow_start(
     // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
         session_id.clone(),
-        BackgroundTask::SubAgent(shared_executor.clone()),
+        BackgroundTask::SubAgent {
+            owner_session_id: None,
+            executor: shared_executor.clone(),
+        },
     );
 
     log::info!(
@@ -885,6 +974,10 @@ pub async fn workflow_start(
                     session_id_for_spawn
                 );
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+                gateway_for_spawn
+                    .unregister_session(&session_id_for_spawn)
+                    .await;
                 manager_for_spawn.remove_session(&session_id_for_spawn);
                 return;
             }
@@ -932,6 +1025,10 @@ pub async fn workflow_start(
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
+        WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+        gateway_for_spawn
+            .unregister_session(&session_id_for_spawn)
+            .await;
         manager_for_spawn.remove_session(&session_id_for_spawn);
     });
 
@@ -1007,8 +1104,9 @@ pub async fn workflow_approve_plan(
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
-        .register_session_tx(session_id.clone(), signal_tx)
+        .register_session_tx(session_id.clone(), signal_tx.clone())
         .await;
+    WorkflowManager::register_session_signal_tx(session_id.clone(), signal_tx);
 
     let allowed_paths = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -1126,7 +1224,10 @@ pub async fn workflow_approve_plan(
     // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
         session_id.clone(),
-        BackgroundTask::SubAgent(shared_executor.clone()),
+        BackgroundTask::SubAgent {
+            owner_session_id: None,
+            executor: shared_executor.clone(),
+        },
     );
 
     let session_id_for_spawn = session_id.clone();
@@ -1144,6 +1245,10 @@ pub async fn workflow_approve_plan(
                 );
                 manager_for_spawn.remove_session(&session_id_for_spawn);
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+                gateway_for_spawn
+                    .unregister_session(&session_id_for_spawn)
+                    .await;
                 return;
             }
 
@@ -1191,6 +1296,10 @@ pub async fn workflow_approve_plan(
         }
         manager_for_spawn.remove_session(&session_id_for_spawn);
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
+        WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+        gateway_for_spawn
+            .unregister_session(&session_id_for_spawn)
+            .await;
     });
 
     Ok(())
@@ -1606,29 +1715,35 @@ pub async fn workflow_signal(
 pub async fn workflow_stop(
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
-    // 1) Best-effort immediate stream interruption for the in-flight model call.
-    // Workflow runtime uses OpenAI protocol wrapper with chat_id=session_id.
-    {
-        let mut chats = chat_state.chats.lock().await;
-        if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
-            if let Some(chat) = protocol_chats.get_mut(&session_id) {
-                chat.set_stop_flag(true).await;
-                log::info!(
-                    "[Workflow][session={}][phase=stop] Set chat stop_flag=true for immediate stream interruption",
-                    session_id
-                );
-            }
-        }
-    }
+    interrupt_openai_session(chat_state.inner(), &session_id).await;
+    cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
 
     // 2) Keep unified workflow-level stop signal for state machine cancellation.
     let gateway_arc = gateway.inner().clone();
-    gateway_arc
+    let inject_result = gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
-        .await
-        .map_err(|e| e.to_string())
+        .await;
+
+    cleanup_workflow_resources(
+        &session_id,
+        chat_state.inner(),
+        gateway.inner(),
+        workflow_manager.inner(),
+    )
+    .await;
+
+    if let Err(error) = inject_result {
+        log::info!(
+            "[Workflow][session={}][phase=stop] Stop signal injection skipped during cleanup: {}",
+            session_id,
+            error
+        );
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

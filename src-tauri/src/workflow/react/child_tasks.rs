@@ -5,15 +5,19 @@
 
 use dashmap::DashMap;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Global registry for tracking parent-child task relationships
 pub struct ChildTaskRegistry {
     /// Maps child task ID to parent session info
     parent_mapping: DashMap<String, ParentSessionInfo>,
+    /// Reverse index of parent session ID to its child task IDs
+    child_mapping: DashMap<String, HashSet<String>>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ParentSessionInfo {
     pub parent_session_id: String,
     pub child_task_id: String,
@@ -23,33 +27,56 @@ impl ChildTaskRegistry {
     pub fn new() -> Self {
         Self {
             parent_mapping: DashMap::new(),
+            child_mapping: DashMap::new(),
         }
     }
 
     /// Register a child task with its parent
     pub fn register_child_task(&self, child_task_id: String, parent_session_id: String) {
+        let child_task_id_for_reverse = child_task_id.clone();
         self.parent_mapping.insert(
             child_task_id.clone(),
             ParentSessionInfo {
-                parent_session_id,
+                parent_session_id: parent_session_id.clone(),
                 child_task_id,
             },
         );
+        let mut entry = self.child_mapping.entry(parent_session_id).or_default();
+        entry.insert(child_task_id_for_reverse);
     }
 
     /// Unregister a child task (when it completes or fails)
     pub fn unregister_child_task(&self, child_task_id: &str) -> Option<ParentSessionInfo> {
-        self.parent_mapping.remove(child_task_id).map(|(_, v)| v)
+        self.parent_mapping.remove(child_task_id).map(|(_, v)| {
+            if let Some(mut children) = self.child_mapping.get_mut(&v.parent_session_id) {
+                children.remove(child_task_id);
+                if children.is_empty() {
+                    drop(children);
+                    self.child_mapping.remove(&v.parent_session_id);
+                }
+            }
+            v
+        })
     }
 
     /// Get parent session info for a child task
+    #[cfg(test)]
     pub fn get_parent_info(&self, child_task_id: &str) -> Option<ParentSessionInfo> {
         self.parent_mapping.get(child_task_id).map(|v| v.clone())
     }
 
     /// Check if a task is a child task
+    #[cfg(test)]
     pub fn is_child_task(&self, task_id: &str) -> bool {
         self.parent_mapping.contains_key(task_id)
+    }
+
+    /// List all child task IDs currently owned by the given parent session.
+    pub fn list_child_tasks_for_parent(&self, parent_session_id: &str) -> Vec<String> {
+        self.child_mapping
+            .get(parent_session_id)
+            .map(|children| children.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -66,18 +93,6 @@ pub fn get_child_task_registry() -> Arc<ChildTaskRegistry> {
     REGISTRY
         .get_or_init(|| Arc::new(ChildTaskRegistry::new()))
         .clone()
-}
-
-/// Result returned when a child task is spawned in Call mode
-#[derive(Debug, Clone)]
-pub enum TaskCallResult {
-    /// Task completed synchronously with result
-    Completed { result: Value },
-    /// Task spawned and parent should wait
-    Waiting {
-        child_task_id: String,
-        message: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,6 +157,7 @@ mod tests {
         let removed = registry.unregister_child_task("child_1").unwrap();
         assert_eq!(removed.parent_session_id, "parent_1");
         assert!(!registry.is_child_task("child_1"));
+        assert!(registry.list_child_tasks_for_parent("parent_1").is_empty());
     }
 
     #[test]
@@ -156,12 +172,7 @@ mod tests {
         assert!(registry.is_child_task("child_2"));
         assert!(registry.is_child_task("child_3"));
 
-        let parent_1_children: Vec<_> = registry
-            .parent_mapping
-            .iter()
-            .filter(|v| v.parent_session_id == "parent_1")
-            .map(|v| v.child_task_id.clone())
-            .collect();
+        let parent_1_children = registry.list_child_tasks_for_parent("parent_1");
 
         assert_eq!(parent_1_children.len(), 2);
         assert!(parent_1_children.contains(&"child_1".to_string()));

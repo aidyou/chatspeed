@@ -460,6 +460,7 @@ impl LlmProcessor {
 
             let role = m.role.clone();
             let mut content = m.message.clone();
+            let step_type = m.step_type.clone().unwrap_or_default();
             let tool_calls = m
                 .metadata
                 .as_ref()
@@ -501,6 +502,20 @@ impl LlmProcessor {
 
                 let reminder = generate_error_reminder(error_type, tool_name, &content);
                 content = format!("{}\n\n{}", content, reminder);
+            }
+
+            // Keep provider compatibility (single user message after merge),
+            // while preserving semantic boundaries between observation vs real input.
+            if role == "user" && !content.trim().is_empty() {
+                let is_observation = step_type.eq_ignore_ascii_case("observe");
+                let (open_tag, close_tag) = if is_observation {
+                    ("<queued_observation>", "</queued_observation>")
+                } else {
+                    ("<latest_user_input>", "</latest_user_input>")
+                };
+                if !content.trim_start().starts_with(open_tag) {
+                    content = format!("{open_tag}\n{content}\n{close_tag}");
+                }
             }
 
             if let Some(last) = history.last_mut() {

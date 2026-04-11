@@ -186,6 +186,11 @@ fn test_child_task_registry_multiple_children() {
             .parent_session_id,
         "parent_2"
     );
+
+    let parent_1_children = registry.list_child_tasks_for_parent("parent_1");
+    assert_eq!(parent_1_children.len(), 2);
+    assert!(parent_1_children.contains(&"child_1".to_string()));
+    assert!(parent_1_children.contains(&"child_2".to_string()));
 }
 
 #[test]
@@ -196,6 +201,10 @@ fn test_global_child_task_registry_singleton() {
     registry1.register_child_task("test_child".to_string(), "test_parent".to_string());
 
     assert!(registry2.is_child_task("test_child"));
+    assert_eq!(
+        registry2.list_child_tasks_for_parent("test_parent"),
+        vec!["test_child".to_string()]
+    );
 
     registry1.unregister_child_task("test_child");
 }

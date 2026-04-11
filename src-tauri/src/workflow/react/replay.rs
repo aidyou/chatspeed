@@ -10,8 +10,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum RecoveryError {
+    #[allow(dead_code)]
     #[error("Snapshot version mismatch: expected {expected}, got {actual}")]
     VersionMismatch { expected: String, actual: String },
+
+    #[error("Event replay skipped: workflow has no persisted events yet")]
+    EmptyReplayHistory,
 
     #[error("Event replay failed: {reason}")]
     ReplayFailed { reason: String },
@@ -19,6 +23,7 @@ pub enum RecoveryError {
     #[error("Missing required event data for {event_type}: {field}")]
     MissingEventData { event_type: String, field: String },
 
+    #[allow(dead_code)]
     #[error("Invalid event sequence: {reason}")]
     InvalidSequence { reason: String },
 
@@ -26,6 +31,7 @@ pub enum RecoveryError {
     DatabaseError(#[from] crate::db::error::StoreError),
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RecoveryResult {
     SnapshotHit {
@@ -40,6 +46,7 @@ pub enum RecoveryResult {
     },
 }
 
+#[allow(dead_code)]
 impl RecoveryResult {
     pub fn is_success(&self) -> bool {
         matches!(
@@ -62,6 +69,12 @@ impl RecoveryResult {
             RecoveryResult::ReplayFallback { context } => Some(context),
             RecoveryResult::SafeFailed { .. } => None,
         }
+    }
+}
+
+impl RecoveryError {
+    pub fn is_empty_replay_history(&self) -> bool {
+        matches!(self, RecoveryError::EmptyReplayHistory)
     }
 }
 
@@ -418,15 +431,13 @@ fn replay_from_events(
     };
 
     if events.is_empty() {
-        log::warn!(
-            "[Workflow][session={}] workflow.replay.no_events - no events found for replay",
+        log::info!(
+            "[Workflow][session={}] workflow.replay.no_events - no events found for replay yet; treating as empty workflow history",
             session_id
         );
         return RecoveryResult::SafeFailed {
             session_id: session_id.to_string(),
-            error: RecoveryError::ReplayFailed {
-                reason: "No events found for replay".to_string(),
-            },
+            error: RecoveryError::EmptyReplayHistory,
         };
     }
 
@@ -463,7 +474,6 @@ fn replay_from_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::react::events::WorkflowEvent;
 
     #[test]
     fn test_reducer_workflow_started() {
@@ -1154,10 +1164,8 @@ mod tests {
                 } => {
                     assert_eq!(sid, session_id);
                     match error {
-                        RecoveryError::ReplayFailed { reason } => {
-                            assert!(reason.contains("No events"));
-                        }
-                        _ => panic!("Expected ReplayFailed error"),
+                        RecoveryError::EmptyReplayHistory => {}
+                        _ => panic!("Expected EmptyReplayHistory error"),
                     }
                 }
                 _ => panic!("Expected SafeFailed, got {:?}", result),

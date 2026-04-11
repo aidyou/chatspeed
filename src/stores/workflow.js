@@ -336,6 +336,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const selectWorkflow = async (workflowId) => {
     console.log('workflowStore: selecting workflow', workflowId);
     currentWorkflowId.value = workflowId;
+    messageQueue.value = [];
     error.value = null;
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
@@ -440,7 +441,34 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const addMessageToQueue = (message) => {
-    messageQueue.value.push(message);
+    messageQueue.value.push({
+      id: message.id || `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      content: message.content || '',
+      status: message.status || 'queued',
+      sent: !!message.sent,
+      createdAt: message.createdAt || Date.now(),
+    });
+  };
+
+  const markQueuedMessageSent = (id) => {
+    if (!id) return;
+    const index = messageQueue.value.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    messageQueue.value[index] = {
+      ...messageQueue.value[index],
+      sent: true,
+      status: 'queued',
+    };
+  };
+
+  const removeQueuedMessage = (id) => {
+    if (!id) return;
+    messageQueue.value = messageQueue.value.filter((item) => item.id !== id);
+  };
+
+  const shiftQueuedMessage = () => {
+    if (!messageQueue.value.length) return;
+    messageQueue.value.shift();
   };
 
   const setRunning = (running) => {
@@ -482,6 +510,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
       messages.value[index] = { ...messages.value[index], ...message };
     } else {
       messages.value.push(message);
+    }
+
+    // Resolve frontend local queue when backend acknowledges queued/applied user input.
+    if (message.role === 'user') {
+      const queueStatus = message.metadata?.queue_status;
+      if (queueStatus === 'queued' || queueStatus === 'applied') {
+        shiftQueuedMessage();
+      }
     }
   };
 
@@ -568,6 +604,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     hasLiveSession.value = false;
     autoApprovedTools.value = [];
     shellPolicy.value = [];
+    messageQueue.value = [];
   };
 
   return {
@@ -610,6 +647,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     createWorkflow,
     addMessage,
     addMessageToQueue,
+    markQueuedMessageSent,
+    removeQueuedMessage,
+    shiftQueuedMessage,
     setRunning,
     setHasLiveSession,
     updateWorkflowStatus,

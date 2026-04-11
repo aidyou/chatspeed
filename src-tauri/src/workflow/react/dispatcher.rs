@@ -429,6 +429,7 @@ impl Dispatcher {
     }
 
     /// Dispatch an audit event (convenience method).
+    #[cfg(test)]
     pub async fn dispatch_audit(&self, event: WorkflowEvent) -> Result<(), WorkflowEngineError> {
         self.dispatch(DispatchEvent::Audit { event }).await
     }

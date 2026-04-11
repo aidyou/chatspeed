@@ -149,6 +149,11 @@ impl TauriGateway {
         senders.insert(session_id.to_string(), tx.clone());
         tx
     }
+
+    pub async fn unregister_session(&self, session_id: &str) {
+        self.input_senders.lock().await.remove(session_id);
+        self.event_senders.lock().await.remove(session_id);
+    }
 }
 
 #[async_trait]

@@ -55,11 +55,10 @@ pub fn console_log_formatter(
     let reset = "\x1B[0m";
 
     out.finish(format_args!(
-        "{}{}[{}] {} - {}:{} {}{}",
+        "{}{}[{}] {}:{} {}{}",
         level_color,
         chrono::Local::now().format("%H:%M:%S.%3f "),
         get_level(level),
-        record.target(),
         simplify_file_path(record.file().unwrap_or("")),
         record.line().unwrap_or(0),
         replace_sensitive_info(message.to_string().as_str()),

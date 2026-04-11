@@ -16,6 +16,7 @@ pub enum ManagedSessionStatus {
     Cancelled,
 }
 
+#[allow(dead_code)]
 pub struct ManagedSession {
     pub session_id: String,
     pub executor: Arc<Mutex<dyn ReActExecutor>>,
@@ -52,13 +53,6 @@ pub enum WorkflowManagerError {
 
     #[error("Session not found: {session_id}")]
     SessionNotFound { session_id: String },
-
-    #[error("Invalid session state for {session_id}: expected {expected}, got {actual}")]
-    InvalidState {
-        session_id: String,
-        expected: String,
-        actual: String,
-    },
 
     #[error("Signal rejected for session {session_id}: {reason}")]
     SignalRejected { session_id: String, reason: String },
@@ -139,6 +133,7 @@ impl WorkflowManager {
         exists
     }
 
+    #[cfg(test)]
     pub fn get_session_status(&self, session_id: &str) -> Option<ManagedSessionStatus> {
         self.sessions.get(session_id).map(|s| s.status.clone())
     }
@@ -231,13 +226,7 @@ impl WorkflowManager {
         }
     }
 
-    pub fn get_all_session_ids(&self) -> Vec<String> {
-        self.sessions
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
-    }
-
+    #[cfg(test)]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }

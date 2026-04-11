@@ -270,6 +270,7 @@ pub struct ExecutionContext {
 impl ExecutionContext {
     pub const CURRENT_VERSION: &'static str = "1.1.0";
 
+    #[cfg(test)]
     pub fn new(session_id: String) -> Self {
         Self {
             session_id,

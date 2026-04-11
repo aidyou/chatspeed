@@ -357,11 +357,6 @@ impl WorkflowExecutor {
         executor
     }
 
-    pub fn set_dispatcher(&mut self, dispatcher: Arc<Dispatcher>) {
-        Dispatcher::register_session_dispatcher(self.session_id.clone(), dispatcher.clone());
-        self.dispatcher = Some(dispatcher);
-    }
-
     async fn dispatch_ui_payload(
         &self,
         payload: GatewayPayload,

@@ -12,25 +12,91 @@ use dashmap::DashMap;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 
 /// Represents different types of background tasks for unified management
 pub enum BackgroundTask {
     /// An autonomous sub-agent running its own ReAct loop
-    SubAgent(Arc<Mutex<dyn ReActExecutor>>),
+    SubAgent {
+        owner_session_id: Option<String>,
+        executor: Arc<Mutex<dyn ReActExecutor>>,
+    },
     /// A raw shell command running in the background
     ShellCommand {
+        owner_session_id: Option<String>,
         command: String,
         stdout: Arc<Mutex<String>>,
         stderr: Arc<Mutex<String>>,
         status: Arc<Mutex<String>>, // "Running", "Completed", "Error"
+        stop_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     },
+}
+
+impl BackgroundTask {
+    pub fn owner_session_id(&self) -> Option<&str> {
+        match self {
+            BackgroundTask::SubAgent {
+                owner_session_id, ..
+            }
+            | BackgroundTask::ShellCommand {
+                owner_session_id, ..
+            } => owner_session_id.as_deref(),
+        }
+    }
 }
 
 lazy_static::lazy_static! {
     /// Global registry for all background tasks (Sub-agents and Shell commands)
     /// This allows different tools to share the same task_id namespace.
     pub static ref BACKGROUND_TASKS: Arc<DashMap<String, BackgroundTask>> = Arc::new(DashMap::new());
+}
+
+pub fn list_background_task_ids_for_owner(owner_session_id: &str) -> Vec<String> {
+    BACKGROUND_TASKS
+        .iter()
+        .filter_map(|entry| {
+            if entry.value().owner_session_id() == Some(owner_session_id) {
+                Some(entry.key().clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatState>>) -> bool {
+    let Some((_, task)) = BACKGROUND_TASKS.remove(task_id) else {
+        return false;
+    };
+
+    match task {
+        BackgroundTask::SubAgent { executor, .. } => {
+            if let Some(chat_state) = chat_state {
+                let mut chats = chat_state.chats.lock().await;
+                if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
+                    if let Some(chat) = protocol_chats.get_mut(task_id) {
+                        chat.set_stop_flag(true).await;
+                    }
+                }
+            }
+
+            let mut guard = executor.lock().await;
+            guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
+            get_child_task_registry().unregister_child_task(task_id);
+            true
+        }
+        BackgroundTask::ShellCommand {
+            status, stop_tx, ..
+        } => {
+            if let Some(tx) = stop_tx.lock().await.take() {
+                let _ = tx.send(());
+            }
+            *status.lock().await = "Stopped".to_string();
+            get_child_task_registry().unregister_child_task(task_id);
+            true
+        }
+    }
 }
 
 #[async_trait]
@@ -257,12 +323,10 @@ impl ToolDefinition for TaskTool {
             ))?;
         let execution_mode = params["execution_mode"].as_str().unwrap_or("call");
         if !matches!(execution_mode, "call" | "background") {
-            return Err(ToolError::InvalidParams(
-                format!(
-                    "execution_mode must be either 'call' or 'background', got '{}'",
-                    execution_mode
-                ),
-            ));
+            return Err(ToolError::InvalidParams(format!(
+                "execution_mode must be either 'call' or 'background', got '{}'",
+                execution_mode
+            )));
         }
 
         let child_agent = self
@@ -304,7 +368,13 @@ impl ToolDefinition for TaskTool {
 
         if execution_mode == "background" {
             let exec_clone = sub_executor.clone();
-            BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
+            BACKGROUND_TASKS.insert(
+                task_id.clone(),
+                BackgroundTask::SubAgent {
+                    owner_session_id: self.parent_session_id.clone(),
+                    executor: sub_executor,
+                },
+            );
 
             tokio::spawn(async move {
                 let mut guard = exec_clone.lock().await;
@@ -333,7 +403,13 @@ impl ToolDefinition for TaskTool {
         get_child_task_registry().register_child_task(task_id.clone(), parent_id.clone());
 
         let exec_clone = sub_executor.clone();
-        BACKGROUND_TASKS.insert(task_id.clone(), BackgroundTask::SubAgent(sub_executor));
+        BACKGROUND_TASKS.insert(
+            task_id.clone(),
+            BackgroundTask::SubAgent {
+                owner_session_id: Some(parent_id.clone()),
+                executor: sub_executor,
+            },
+        );
 
         let parent_id = parent_id.clone();
         let task_id_clone = task_id.clone();
@@ -352,13 +428,12 @@ impl ToolDefinition for TaskTool {
                             break;
                         }
                     }
-                    let status = if final_state
-                        == crate::workflow::react::types::WorkflowState::Cancelled
-                    {
-                        "cancelled"
-                    } else {
-                        "completed"
-                    };
+                    let status =
+                        if final_state == crate::workflow::react::types::WorkflowState::Cancelled {
+                            "cancelled"
+                        } else {
+                            "completed"
+                        };
                     json!({
                         "status": status,
                         "task_id": task_id_clone,
@@ -460,8 +535,8 @@ impl ToolDefinition for TaskOutputTool {
         })?;
 
         match task.value() {
-            BackgroundTask::SubAgent(exec_arc) => {
-                let guard = exec_arc.lock().await;
+            BackgroundTask::SubAgent { executor, .. } => {
+                let guard = executor.lock().await;
                 // Simplified: return latest assistant message or state
                 let mut result = format!("Status: {:?}. ", guard.state());
                 if let Some(last_msg) = guard
@@ -544,11 +619,16 @@ impl ToolDefinition for TaskStopTool {
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
         if let Some((_, task)) = BACKGROUND_TASKS.remove(task_id) {
             match task {
-                BackgroundTask::SubAgent(exec_arc) => {
-                    let mut guard = exec_arc.lock().await;
-                    guard.set_state(crate::workflow::react::types::WorkflowState::Completed);
+                BackgroundTask::SubAgent { executor, .. } => {
+                    let mut guard = executor.lock().await;
+                    guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
                 }
-                BackgroundTask::ShellCommand { status, .. } => {
+                BackgroundTask::ShellCommand {
+                    status, stop_tx, ..
+                } => {
+                    if let Some(tx) = stop_tx.lock().await.take() {
+                        let _ = tx.send(());
+                    }
                     *status.lock().await = "Stopped".to_string();
                 }
             }

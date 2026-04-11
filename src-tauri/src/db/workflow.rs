@@ -468,22 +468,6 @@ impl MainStore {
         Ok(())
     }
 
-    pub fn delete_execution_context(&self, session_id: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        conn.execute(
-            "DELETE FROM workflow_snapshots WHERE session_id = ?1",
-            params![session_id],
-        )?;
-
-        log::info!("[Workflow][session={}] snapshot.deleted", session_id);
-
-        Ok(())
-    }
-
     // Workflow Event Operations
 
     pub fn append_workflow_event(&self, event: &WorkflowEvent) -> Result<i64, StoreError> {

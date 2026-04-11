@@ -34,6 +34,7 @@
       <!-- Main container -->
       <el-container class="main-container">
         <WorkflowMessageList ref="messageListRef" :messages="enhancedMessages" :is-running="isRunning"
+          :queued-messages="workflowStore.messageQueue"
           :is-chatting="isChatting" :chat-state="chatState" :is-compressing="isCompressing"
           :compression-message="compressionMessage" :last-assistant-message="lastAssistantMessage"
           :is-message-expanded="isMessageExpanded" :is-reasoning-expanded="isReasoningExpanded"

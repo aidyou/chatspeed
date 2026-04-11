@@ -515,43 +515,72 @@ impl ToolDefinition for ShellExecute {
             let stdout_arc = Arc::new(Mutex::new(String::new()));
             let stderr_arc = Arc::new(Mutex::new(String::new()));
             let status_arc = Arc::new(Mutex::new("Running".to_string()));
+            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+            let stop_tx = Arc::new(Mutex::new(Some(stop_tx)));
 
             use crate::workflow::react::orchestrator::{BackgroundTask, BACKGROUND_TASKS};
             BACKGROUND_TASKS.insert(
                 task_id.clone(),
                 BackgroundTask::ShellCommand {
+                    owner_session_id: self.session_id.clone(),
                     command: cmd_to_run.clone(),
                     stdout: stdout_arc.clone(),
                     stderr: stderr_arc.clone(),
                     status: status_arc.clone(),
+                    stop_tx: stop_tx.clone(),
                 },
             );
 
             tokio::spawn(async move {
-                let cmd_future = if cfg!(target_os = "windows") {
-                    Command::new("cmd").args(["/C", &cmd_to_run]).output()
+                let spawn_result = if cfg!(target_os = "windows") {
+                    let mut command = Command::new("cmd");
+                    command.args(["/C", &cmd_to_run]);
+                    command.kill_on_drop(true);
+                    command.spawn()
                 } else {
-                    Command::new("sh").args(["-c", &cmd_to_run]).output()
+                    let mut command = Command::new("sh");
+                    command.args(["-c", &cmd_to_run]);
+                    command.kill_on_drop(true);
+                    command.spawn()
                 };
 
-                match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
-                    Ok(Ok(out)) => {
-                        *stdout_arc.lock().await = String::from_utf8_lossy(&out.stdout).to_string();
-                        *stderr_arc.lock().await = String::from_utf8_lossy(&out.stderr).to_string();
-                        *status_arc.lock().await = if out.status.success() {
-                            "Completed".into()
-                        } else {
-                            "Error".into()
-                        };
-                    }
-                    Ok(Err(e)) => {
+                let child = match spawn_result {
+                    Ok(child) => child,
+                    Err(e) => {
                         *stderr_arc.lock().await = format!("Failed to spawn: {}", e);
                         *status_arc.lock().await = "Error".into();
+                        return;
                     }
-                    Err(_) => {
+                };
+
+                let cmd_future =
+                    timeout(Duration::from_millis(timeout_ms), child.wait_with_output());
+
+                tokio::select! {
+                    res = cmd_future => match res {
+                        Ok(Ok(out)) => {
+                            *stdout_arc.lock().await = String::from_utf8_lossy(&out.stdout).to_string();
+                            *stderr_arc.lock().await = String::from_utf8_lossy(&out.stderr).to_string();
+                            *status_arc.lock().await = if out.status.success() {
+                                "Completed".into()
+                            } else {
+                                "Error".into()
+                            };
+                        }
+                        Ok(Err(e)) => {
+                            *stderr_arc.lock().await = format!("Failed to wait for command: {}", e);
+                            *status_arc.lock().await = "Error".into();
+                        }
+                        Err(_) => {
+                            *stderr_arc.lock().await =
+                                format!("Command timed out after {}ms", timeout_ms);
+                            *status_arc.lock().await = "Error".into();
+                        }
+                    },
+                    _ = stop_rx => {
                         *stderr_arc.lock().await =
-                            format!("Command timed out after {}ms", timeout_ms);
-                        *status_arc.lock().await = "Error".into();
+                            "Command stopped by workflow cleanup".to_string();
+                        *status_arc.lock().await = "Stopped".into();
                     }
                 }
             });

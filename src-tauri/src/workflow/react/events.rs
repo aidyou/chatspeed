@@ -118,6 +118,7 @@ impl WorkflowEvent {
         )
     }
 
+    #[cfg(test)]
     pub fn tool_started(
         session_id: String,
         tool_call_id: String,
@@ -135,6 +136,8 @@ impl WorkflowEvent {
         )
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn tool_completed(
         session_id: String,
         tool_call_id: String,
@@ -152,6 +155,8 @@ impl WorkflowEvent {
         )
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn tool_failed(
         session_id: String,
         tool_call_id: String,

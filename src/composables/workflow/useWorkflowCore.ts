@@ -209,6 +209,31 @@ export function useWorkflowCore({
         }
     )
 
+    const sendUserMessageSignal = async (sessionId, content) => {
+        const signal = JSON.stringify({
+            type: SIGNAL_TYPES.USER_MESSAGE,
+            content
+        })
+        return invokeWrapper('workflow_signal', { sessionId, signal })
+    }
+
+    const flushDeferredQueuedMessages = async () => {
+        if (!currentWorkflowId.value) return
+        if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) return
+        if (!workflowStore.messageQueue?.length) return
+
+        const deferred = workflowStore.messageQueue.filter((item) => !item.sent)
+        for (const item of deferred) {
+            try {
+                await sendUserMessageSignal(currentWorkflowId.value, item.content)
+                workflowStore.markQueuedMessageSent(item.id)
+            } catch (error) {
+                console.warn('Failed to flush deferred queued message:', error)
+                break
+            }
+        }
+    }
+
     const setupWorkflowEvents = async (sessionId) => {
         if (unlistenWorkflowEvents.value) {
             unlistenWorkflowEvents.value()
@@ -247,6 +272,13 @@ export function useWorkflowCore({
                     setTimeout(() => {
                         resetChatState()
                     }, 500)
+                }
+
+                const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
+                if (!isApprovalWaiting) {
+                    flushDeferredQueuedMessages().catch((error) => {
+                        console.warn('Failed to flush deferred queue after state update:', error)
+                    })
                 }
             } else if (payload.type === 'chunk') {
                 // Direct text chunk from LLM or StreamParser
@@ -582,13 +614,30 @@ export function useWorkflowCore({
             // Phase 3: Use unified waiting check - all waiting states should send signal
             // Backend will validate signal type based on wait_reason
             if (isRunning.value || isWaiting.value) {
+                // Approval waiting: keep input in frontend queue, send after approval resumes.
+                if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) {
+                    workflowStore.addMessageToQueue({
+                        content: message,
+                        status: 'pending_approval',
+                        sent: false
+                    })
+                    return
+                }
+
+                // Running: send signal and keep a local queue placeholder until backend ack arrives.
+                let queuedId = null
+                if (isRunning.value) {
+                    queuedId = `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                    workflowStore.addMessageToQueue({
+                        id: queuedId,
+                        content: message,
+                        status: 'queued',
+                        sent: false
+                    })
+                }
+
                 // Just send signal to the running loop
                 try {
-                    const signal = JSON.stringify({
-                        type: SIGNAL_TYPES.USER_MESSAGE,
-                        content: message
-                    })
-
                     // Optimistic update only for states that accept user_input signal
                     // Do NOT update for approval waiting - backend will reject user_input signal
                     const shouldOptimisticUpdate =
@@ -598,17 +647,16 @@ export function useWorkflowCore({
                         workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.THINKING)
                     }
 
-                    const res = await invokeWrapper('workflow_signal', {
-                        sessionId: currentWorkflowId.value,
-                        signal: signal
-                    })
+                    const res = await sendUserMessageSignal(currentWorkflowId.value, message)
                     console.log('Signal sent successfully:', res)
-                    
-                    // Log rejection for approval waiting (backend should reject)
-                    if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) {
-                        console.log('[Workflow][phase=signal] user_input signal sent during approval waiting - backend should reject')
+
+                    if (queuedId) {
+                        workflowStore.markQueuedMessageSent(queuedId)
                     }
                 } catch (error) {
+                    if (queuedId) {
+                        workflowStore.removeQueuedMessage(queuedId)
+                    }
                     console.error('Failed to send signal:', error)
                 }
             } else {
@@ -630,13 +678,7 @@ export function useWorkflowCore({
                     if (errorText.includes('Session already exists')) {
                         try {
                             workflowStore.setHasLiveSession(true)
-                            await invokeWrapper('workflow_signal', {
-                                sessionId: currentWorkflowId.value,
-                                signal: JSON.stringify({
-                                    type: SIGNAL_TYPES.USER_MESSAGE,
-                                    content: message
-                                })
-                            })
+                            await sendUserMessageSignal(currentWorkflowId.value, message)
                             return
                         } catch (signalError) {
                             console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)

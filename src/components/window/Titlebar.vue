@@ -1,7 +1,7 @@
 <template>
   <el-header class="header" :class="{ 'reverse-layout': !isMacOS }" v-show="showTitlebar">
     <!-- window controls -->
-    <div class="window-controls upperLayer">
+    <div class="window-controls upperLayer" v-if="isMacOS">
       <div class="control-icon close" @click="closeWindow" type="text" v-if="showCloseButtons">
         <cs name="close" size="9px" />
       </div>
@@ -12,6 +12,20 @@
         <cs :name="isFullscreen ? 'fullscreen' : 'fullscreen-off'" size="10px" />
       </div>
     </div>
+    <div class="window-controls upperLayer" v-else>
+      <div class="control-icon close" @click="closeWindow" type="text" v-if="showCloseButtons">
+        <cs name="close" size="9px" />
+      </div>
+      <div class="control-icon maximize" @click="toggleMaximize" v-if="showMaximizeButton">
+        <cs :name="isFullscreen ? 'fullscreen' : 'fullscreen-off'" size="10px" />
+      </div>
+
+      <div class="control-icon minimize" @click="minimizeWindow" v-if="showMinimizeButton">
+        <cs name="minimize" size="10px" />
+      </div>
+
+    </div>
+
 
     <!-- main content wrapper -->
     <div class="titlebar-content-wrapper">

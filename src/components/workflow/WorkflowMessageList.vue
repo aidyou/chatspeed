@@ -164,6 +164,14 @@
         <span class="compression-text">{{ compressionMessage }}</span>
       </div>
     </div>
+
+    <!-- Frontend queued user messages -->
+    <div v-if="queuedMessages.length > 0" class="queued-list">
+      <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
+        <cs name="clock" size="12px" class="queued-icon" />
+        <span class="queued-text">{{ item.content }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -176,6 +184,10 @@ const workflowStore = useWorkflowStore()
 
 defineProps({
   messages: {
+    type: Array,
+    default: () => []
+  },
+  queuedMessages: {
     type: Array,
     default: () => []
   },
