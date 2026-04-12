@@ -1,13 +1,13 @@
 /**
- * 消息到任务账本状态映射收敛
- * 
- * 核心职责：将 workflow messages 收敛到统一的 ToolViewState
- * 消除多条消息对同一 tool_call_id 的冲突展示
+ * Message to Task Ledger State Mapping Convergence
+ *
+ * Core responsibility: Converge workflow messages to unified ToolViewState
+ * Eliminate conflicting displays for the same tool_call_id
  */
 
 import type { ToolViewState, ToolViewStatus } from './useTaskLedger'
 
-/** 原始消息接口 */
+/** Raw message interface */
 export interface RawMessage {
   id?: string | number
   role: 'user' | 'assistant' | 'tool' | 'system'
@@ -20,7 +20,7 @@ export interface RawMessage {
   stepIndex?: number
 }
 
-/** 消息元数据接口 */
+/** Message metadata interface */
 export interface MessageMetadata {
   tool_call_id?: string
   tool_call?: ToolCallInfo
@@ -38,7 +38,7 @@ export interface MessageMetadata {
   queue_status?: string
 }
 
-/** 工具调用信息 */
+/** Tool call information */
 export interface ToolCallInfo {
   id?: string
   name?: string
@@ -49,7 +49,7 @@ export interface ToolCallInfo {
   arguments?: string | Record<string, any>
 }
 
-/** 流式输出映射 */
+/** Tool stream output map */
 export interface ToolStreamMap {
   get(toolId: string): string[] | undefined
 }
@@ -81,38 +81,38 @@ function safeParseArguments(raw: unknown): Record<string, any> {
 }
 
 /**
- * 从消息中提取工具调用ID
+ * Extract tool call ID from message
  */
 function extractToolCallId(message: RawMessage): string | null {
   const meta = message.metadata
   if (!meta) return null
 
-  // 直接指定
+  // Directly specified
   if (meta.tool_call_id) return meta.tool_call_id
 
-  // 从 tool_call 提取
+  // Extract from tool_call
   if (meta.tool_call?.id) return meta.tool_call.id
 
   return null
 }
 
 /**
- * 从消息中提取工具名称
+ * Extract tool name from message
  */
 function extractToolName(message: RawMessage): string {
   const meta = message.metadata
   if (!meta) return 'unknown'
 
-  // 直接指定
+  // Directly specified
   if (meta.tool_name) return meta.tool_name
 
-  // 从 tool_call 提取
+  // Extract from tool_call
   const toolCall = meta.tool_call
   if (toolCall) {
     return toolCall.name || toolCall.function?.name || 'unknown'
   }
 
-  // 从 title 推断
+  // Infer from title
   if (meta.title) {
     const title = meta.title.toLowerCase()
     if (title.includes('read')) return 'read_file'
@@ -130,7 +130,7 @@ function extractToolName(message: RawMessage): string {
 }
 
 /**
- * 从消息中提取参数
+ * Extract arguments from message
  */
 function extractArguments(message: RawMessage): Record<string, any> | undefined {
   const meta = message.metadata
@@ -151,9 +151,9 @@ function extractArguments(message: RawMessage): Record<string, any> | undefined 
 }
 
 /**
- * 确定消息对应的状态
- * 
- * 状态优先级：final_error > final_success > rejected > approved_running > pending
+ * Determine the status for a message
+ *
+ * Status priority: final_error > final_success > rejected > approved_running > pending
  */
 function determineStatus(message: RawMessage): ToolViewStatus | null {
   const meta = message.metadata
@@ -170,10 +170,10 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
   if (executionStatus === 'failed') return 'final_error'
   if (executionStatus === 'completed') return 'final_success'
 
-  // 检查审批状态
+  // Check approval status
   const approvalStatus = meta.approval_status
 
-  // 如果是 tool 角色消息（执行结果）
+  // If tool role message (execution result)
   if (message.role === 'tool') {
     if (approvalStatus === 'pending') return 'pending'
     if (approvalStatus === 'rejected') return 'rejected'
@@ -182,13 +182,13 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
     return 'final_success'
   }
 
-  // 如果是 assistant 消息的 tool_calls
+  // If assistant message with tool_calls
   if (message.role === 'assistant' && meta.tool_calls?.length) {
     // Pending tool calls
     return 'pending'
   }
 
-  // 根据审批状态判断
+  // Determine by approval status
   if (approvalStatus === 'pending') return 'pending'
   if (approvalStatus === 'approved') return 'approved_running'
   if (approvalStatus === 'rejected') return 'rejected'
@@ -197,7 +197,7 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
 }
 
 /**
- * 生成工具显示标题
+ * Generate tool display title
  */
 function generateTitle(toolName: string, args?: Record<string, any>): string {
   const formatters: Record<string, (args: Record<string, any>) => string> = {
@@ -225,12 +225,12 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
 }
 
 /**
- * 核心函数：从消息列表推导任务账本状态
- * 
- * 收敛规则：
- * 1. 同一 tool_call_id 只保留一个状态
- * 2. 优先级：final_error > final_success > rejected > approved_running > pending
- * 3. stream 输出合并到对应工具状态
+ * Derive tool view state from messages
+ *
+ * Convergence rules:
+ * 1. Same tool_call_id only keeps one state
+ * 2. Priority: final_error > final_success > rejected > approved_running > pending
+ * 3. Stream output merged to corresponding tool state
  */
 export function deriveToolViewState(
   messages: RawMessage[],
@@ -240,11 +240,9 @@ export function deriveToolViewState(
   const result = new Map<string, ToolViewState>()
   const now = Date.now()
 
-  // 第一遍扫描：收集所有工具相关信息
   for (const message of messages) {
     const toolCallId = extractToolCallId(message)
     if (!toolCallId) {
-      // 检查是否是包含 tool_calls 的 assistant 消息
       if (message.role === 'assistant' && message.metadata?.tool_calls?.length) {
         for (const call of message.metadata.tool_calls) {
           const id = call.id
@@ -285,7 +283,7 @@ export function deriveToolViewState(
 
     const existing = result.get(toolCallId)
 
-    // 状态优先级
+    // Status priority
     const priority: Record<ToolViewStatus, number> = {
       'final_error': 4,
       'final_success': 4,
@@ -297,7 +295,7 @@ export function deriveToolViewState(
     const newPriority = priority[status]
     const existingPriority = existing ? priority[existing.status] : 0
 
-    // 只有当新状态优先级 >= 现有状态时，才更新
+    // Update only when new status priority >= existing priority
     if (!existing || newPriority >= existingPriority) {
       const title = meta.title || generateTitle(toolName, args)
       const summary = meta.summary || (status === 'rejected' ? 'User rejected' : 'Executing...')
@@ -321,12 +319,12 @@ export function deriveToolViewState(
     }
   }
 
-  // 第二遍：合并流式输出
+  // Second pass: merge stream output
   for (const [toolCallId, state] of result) {
     const streamLines = toolStreams.get(toolCallId)
     if (streamLines && streamLines.length > 0) {
       state.streamOutput = streamLines
-      // 更新摘要为最后一条流式输出
+      // Update summary with last stream line
       const lastLine = streamLines[streamLines.length - 1]?.trim()
       if (lastLine && state.status === 'approved_running') {
         state.summary = lastLine.substring(0, 100)
@@ -337,10 +335,6 @@ export function deriveToolViewState(
   return result
 }
 
-/**
- * 状态收敛断言（用于测试）
- * 验证同一 tool_call_id 不会产生冲突状态
- */
 export function assertNoConflictingStates(
   tools: Map<string, ToolViewState>,
   toolCallId: string
@@ -368,9 +362,6 @@ export function assertNoConflictingStates(
   }
 }
 
-/**
- * 检查工具列表中是否存在状态冲突
- */
 export function checkForConflicts(
   tools: Map<string, ToolViewState>
 ): { hasConflict: boolean; conflicts: string[] } {
