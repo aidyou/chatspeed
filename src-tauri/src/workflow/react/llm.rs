@@ -355,6 +355,16 @@ impl LlmProcessor {
                             .to_string();
                     }
 
+                    let _ = gateway
+                        .send(
+                            &self.session_id,
+                            GatewayPayload::Notification {
+                                message: String::new(),
+                                category: Some("info".to_string()),
+                            },
+                        )
+                        .await;
+
                     return Ok((plain_text, tool_calls_json, full_reasoning, final_metadata));
                 }
                 Err(e) => {

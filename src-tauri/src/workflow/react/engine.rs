@@ -92,6 +92,7 @@ pub struct WorkflowExecutor {
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub subagent_type: Option<String>,
     pub last_compression_step: usize,
+    pub last_compression_boundary_id: Option<i64>,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Memory manager for reading/writing memory files
@@ -316,6 +317,7 @@ impl WorkflowExecutor {
             tsid_generator,
             subagent_type,
             last_compression_step: 0,
+            last_compression_boundary_id: None,
             policy,
             memory_manager: {
                 let project_root = allowed_paths.first().cloned();
@@ -523,6 +525,7 @@ impl WorkflowExecutor {
                                         id: tool.tool_call_id.clone(),
                                         action: tool.tool_name.clone(),
                                         details: details_value,
+                                        display_type: tool.display_type.clone(),
                                     })
                                     .await;
                             }
@@ -614,6 +617,13 @@ impl WorkflowExecutor {
         }
 
         Ok(())
+    }
+
+    async fn dispatch_context_usage(&self) -> Result<(), WorkflowEngineError> {
+        self.dispatch_ui_payload(GatewayPayload::ContextUsage {
+            total_tokens: self.context.current_token_estimate(),
+        })
+        .await
     }
 
     async fn register_foundation_tools(&self) -> Result<(), WorkflowEngineError> {
@@ -1177,6 +1187,10 @@ impl WorkflowExecutor {
                                                 .unwrap_or("unknown")
                                                 .to_string(),
                                             details: details_value,
+                                            display_type: info
+                                                .get("display_type")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
                                         })
                                         .await;
                                 }
@@ -1580,6 +1594,10 @@ impl WorkflowExecutor {
                                     id,
                                     action: info["name"].as_str().unwrap_or("unknown").to_string(),
                                     details: details_value,
+                                    display_type: info
+                                        .get("display_type")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
                                 })
                                 .await;
                         }
@@ -2358,40 +2376,87 @@ impl WorkflowExecutor {
             // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
             // Cooldown: at least 3 steps since last compression to prevent infinite loops
             if needs_compression && self.current_step > self.last_compression_step + 3 {
-                // Notify frontend: compression starting
-                self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                    is_compressing: true,
-                    message: t!("workflow.compression_in_progress").to_string(),
-                })
-                .await?;
+                if let Some((compression_candidate, compressed_until_message_id)) =
+                    self.context.build_compression_candidate()
+                {
+                    if self.last_compression_boundary_id == Some(compressed_until_message_id) {
+                        log::info!(
+                            "[Workflow][session={}][phase=compression] Skip compression because boundary {} was already compressed",
+                            self.session_id,
+                            compressed_until_message_id
+                        );
+                        continue;
+                    }
 
-                self.dispatch_ui_payload(GatewayPayload::Notification {
-                    message: t!("workflow.compression_in_progress").to_string(),
-                    category: Some("info".to_string()),
-                })
-                .await?;
+                    self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                        is_compressing: true,
+                        message: t!("workflow.compression_in_progress").to_string(),
+                    })
+                    .await?;
 
-                let compression_result = self.compressor.compress(&self.context.messages).await;
+                    self.dispatch_ui_payload(GatewayPayload::Notification {
+                        message: t!("workflow.compression_in_progress").to_string(),
+                        category: Some("info".to_string()),
+                    })
+                    .await?;
 
-                // Notify frontend: compression ended
-                self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                    is_compressing: false,
-                    message: String::new(),
-                })
-                .await?;
+                    let compression_result = self.compressor.compress(&compression_candidate).await;
 
-                self.dispatch_ui_payload(GatewayPayload::Notification {
-                    message: String::new(),
-                    category: Some("info".to_string()),
-                })
-                .await?;
+                    self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                        is_compressing: false,
+                        message: String::new(),
+                    })
+                    .await?;
 
-                if let Ok(summary) = compression_result {
-                    let _ = self
-                        .context
-                        .compress(summary, self.current_step as i32)
-                        .await;
-                    self.last_compression_step = self.current_step;
+                    self.dispatch_ui_payload(GatewayPayload::Notification {
+                        message: String::new(),
+                        category: Some("info".to_string()),
+                    })
+                    .await?;
+
+                    match compression_result {
+                        Ok(summary) => match self
+                            .context
+                            .compress(
+                                summary,
+                                self.current_step as i32,
+                                compressed_until_message_id,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                self.last_compression_step = self.current_step;
+                                self.last_compression_boundary_id =
+                                    Some(compressed_until_message_id);
+                                log::info!(
+                                    "[Workflow][session={}][phase=compression] Persisted summary through boundary {}. current_context_tokens={}",
+                                    self.session_id,
+                                    compressed_until_message_id,
+                                    self.context.current_token_estimate()
+                                );
+                                self.dispatch_context_usage().await?;
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "[Workflow][session={}][phase=compression] Failed to persist compressed context: {}",
+                                    self.session_id,
+                                    err
+                                );
+                            }
+                        },
+                        Err(err) => {
+                            log::warn!(
+                                "[Workflow][session={}][phase=compression] Compression request failed: {}",
+                                self.session_id,
+                                err
+                            );
+                        }
+                    }
+                } else {
+                    log::info!(
+                        "[Workflow][session={}][phase=compression] Skip compression because no completed finish_task segment is available",
+                        self.session_id
+                    );
                 }
             }
 
@@ -2491,6 +2556,39 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    fn normalize_tool_arguments_value(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::String(raw) => {
+                let cleaned = crate::libs::util::format_json_str(&raw);
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                    return parsed;
+                }
+
+                let start = cleaned
+                    .char_indices()
+                    .find(|(_, ch)| *ch == '{' || *ch == '[')
+                    .map(|(idx, _)| idx);
+
+                if let Some(start_idx) = start {
+                    let candidate = &cleaned[start_idx..];
+                    for (idx, ch) in candidate.char_indices().rev() {
+                        if ch != '}' && ch != ']' {
+                            continue;
+                        }
+
+                        let slice = &candidate[..=idx];
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(slice) {
+                            return parsed;
+                        }
+                    }
+                }
+
+                serde_json::Value::String(raw)
+            }
+            other => other,
+        }
+    }
+
     async fn execute_tools(
         &mut self,
         text_part: String,
@@ -2579,11 +2677,7 @@ impl WorkflowExecutor {
                 .cloned()
                 .or_else(|| func.get("input").cloned())
                 .unwrap_or(serde_json::json!({}));
-            let args = if let serde_json::Value::String(ref s) = args_raw {
-                serde_json::from_str(s).unwrap_or(args_raw)
-            } else {
-                args_raw
-            };
+            let args = Self::normalize_tool_arguments_value(args_raw);
 
             call_order.push(id.clone());
 
@@ -3259,6 +3353,8 @@ impl WorkflowExecutor {
         })
         .await?;
 
+        self.dispatch_context_usage().await?;
+
         // Summary messages should not trigger compression - they are the result of compression
         let is_summary = msg
             .metadata
@@ -3715,6 +3811,7 @@ impl WorkflowExecutor {
                 .and_then(|m| m.metadata.as_ref())
                 .and_then(|meta| meta.get("summary").and_then(|v| v.as_str()))
                 .map(|s| s.to_string()),
+            current_context_tokens: Some(self.context.current_token_estimate()),
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_task_id: self.child_task_id.clone(),

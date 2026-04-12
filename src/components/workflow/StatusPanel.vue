@@ -208,6 +208,7 @@ const displayedTodoList = computed(() => {
 })
 const messages = computed(() => workflowStore.messages)
 const isRunning = computed(() => workflowStore.isRunning)
+const toolLedger = computed(() => workflowStore.toolList || [])
 
 // Panel dimensions
 const PANEL_WIDTH = 280
@@ -247,6 +248,11 @@ const maxContexts = computed(() => {
 })
 
 const totalTokens = computed(() => {
+  const currentContextTokens = workflowStore.currentWorkflow?.executionContext?.currentContextTokens
+  if (typeof currentContextTokens === 'number' && currentContextTokens >= 0) {
+    return currentContextTokens
+  }
+
   // Find the most recent message with usage information
   const lastAssistantMsg = [...messages.value]
     .reverse()
@@ -333,22 +339,47 @@ const toolMessagesAll = computed(() => {
   })
 })
 
-// Calculate recent operations
-const recentOperations = computed(() => {
-  const toolMessages = toolMessagesAll.value.slice(-3).reverse()
+const ledgerStatusToPanelStatus = (status) => {
+  if (status === 'final_error' || status === 'rejected') return 'error'
+  if (status === 'final_success') return 'success'
+  if (status === 'approved_running' || status === 'pending') return 'running'
+  return 'success'
+}
 
-  return toolMessages.map(m => {
+// Calculate recent operations from the unified task ledger when available.
+const recentOperations = computed(() => {
+  if (toolLedger.value.length > 0) {
+    return toolLedger.value
+      .slice(-3)
+      .reverse()
+      .map((tool) => {
+        const meta = {
+          title: tool.title,
+          summary: tool.summary
+        }
+        const { icon, toolType, shortName } = getToolInfo(tool.toolName || 'Tool', meta)
+        return {
+          name: shortName,
+          fullText: removeSystemReminder(tool.summary || tool.toolName || ''),
+          icon,
+          toolType,
+          status: ledgerStatusToPanelStatus(tool.status),
+          raw: tool
+        }
+      })
+  }
+
+  return toolMessagesAll.value.slice(-3).reverse().map(m => {
     const meta = m.metadata || {}
     const toolCall = meta.tool_call || {}
-
-    // Robustly extract name (handling both ReAct and OpenAI styles)
     const func = toolCall.function || toolCall
-    const name = func.name || toolCall.name || 'Tool'
+    const name = func.name || toolCall.name || meta.tool_name || 'Tool'
+    const executionStatus = meta.execution_status || ''
 
     let status = 'success'
-    if (m.isError || meta.is_error) {
+    if (m.isError || meta.is_error || executionStatus === 'failed' || executionStatus === 'rejected') {
       status = 'error'
-    } else if (isRunning.value && m === toolMessages[0]) {
+    } else if (executionStatus === 'running' || executionStatus === 'pending_approval') {
       status = 'running'
     }
 
@@ -365,7 +396,9 @@ const recentOperations = computed(() => {
   })
 })
 
-const totalToolCalls = computed(() => toolMessagesAll.value.length)
+const totalToolCalls = computed(() => {
+  return toolLedger.value.length > 0 ? toolLedger.value.length : toolMessagesAll.value.length
+})
 
 const childSessionIds = computed(() => {
   const ctx = workflowStore.currentWorkflow?.executionContext || {}

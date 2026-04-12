@@ -176,14 +176,9 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
   // 如果是 tool 角色消息（执行结果）
   if (message.role === 'tool') {
     if (approvalStatus === 'pending') return 'pending'
-    if (approvalStatus === 'approved') return 'approved_running'
+    if (approvalStatus === 'rejected') return 'rejected'
     const isError = message.isError || message.is_error || meta.is_error
     if (isError) return 'final_error'
-
-    // 如果审批状态是 rejected，保留拒绝状态
-    if (approvalStatus === 'rejected') return 'rejected'
-
-    // 其他情况视为成功完成
     return 'final_success'
   }
 

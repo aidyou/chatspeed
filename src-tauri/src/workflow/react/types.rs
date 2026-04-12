@@ -59,6 +59,8 @@ pub enum GatewayPayload {
         id: String,
         action: String,
         details: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_type: Option<String>,
     },
     SyncTodo {
         todo_list: serde_json::Value,
@@ -73,6 +75,10 @@ pub enum GatewayPayload {
     CompressionStatus {
         is_compressing: bool,
         message: String,
+    },
+    /// Current runtime context token estimate after compaction/rebuild.
+    ContextUsage {
+        total_tokens: usize,
     },
     /// Generic notification message for the UI status bar
     Notification {
@@ -261,6 +267,8 @@ pub struct ExecutionContext {
     pub pending_tools: Vec<PendingTool>,
     pub last_action_summary: Option<String>,
     #[serde(default)]
+    pub current_context_tokens: Option<usize>,
+    #[serde(default)]
     pub last_event_id: Option<i64>,
     pub version: String,
     #[serde(default)]
@@ -282,6 +290,7 @@ impl ExecutionContext {
             max_steps: 100,
             pending_tools: Vec::new(),
             last_action_summary: None,
+            current_context_tokens: None,
             last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
             waiting_on_task_id: None,

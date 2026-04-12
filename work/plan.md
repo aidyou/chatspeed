@@ -978,6 +978,22 @@ pub enum WorkflowSignal {
 3. executor 只接受结构化 signal，而不是任意字符串 JSON。
 4. 统一 waiting 入口：
    - 进入 waiting 时写 snapshot
+
+### 10.6 上下文压缩下一步策略
+
+阶段十补做上下文压缩的任务边界化改造，避免当前压缩只按 token 阈值工作，导致正在执行的任务上下文被过早折叠。
+
+建议策略：
+
+1. 以成功的 `finish_task` 作为已完成任务段的硬边界。
+2. 若当前存在 summary，则只压缩该 summary 之后、最后一个成功 `finish_task` 之前的消息，并把结果增量合并回最新 summary。
+3. 若当前不存在 summary，则查找最近一个成功 `finish_task`，将其之前的消息生成首个 summary。
+4. 当前活动任务段（最后一个 `finish_task` 之后的消息）默认完整保留，不参与首轮压缩。
+5. 当单个活动任务段本身过大时，再引入第二层压缩：
+   - 优先压缩早期大体积 `observe` 消息
+   - 保留用户输入、审批消息、todo 变更、错误、最近关键工具结果
+6. summary 需要记录明确的压缩边界，例如 `compressed_until_message_id`，确保刷新或重启后可以从数据库正确重建运行时上下文。
+7. 数据库中的 `workflow_messages` 保留完整历史；压缩只影响运行时构建给 LLM 的消息集合，不物理删除历史消息。
    - 等待 signal
    - 校验 signal 是否匹配当前 `wait_reason`
    - 合法则恢复，不合法则忽略或记录错误

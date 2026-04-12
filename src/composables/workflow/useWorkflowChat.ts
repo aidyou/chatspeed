@@ -30,6 +30,7 @@ export function useWorkflowChat() {
       clearInterval(retryCountdownTimer)
       retryCountdownTimer = null
     }
+    chatState.value.retryInfo = null
   }
 
   // Get last sentence from text (split by punctuation)
@@ -58,6 +59,7 @@ export function useWorkflowChat() {
 
   // Handle retry status with countdown
   const setRetryStatus = (payload) => {
+    chatState.value.retryInfo = null
     chatState.value.retryInfo = {
       attempt: payload.attempt,
       total: payload.total_attempts,

@@ -472,6 +472,7 @@ impl WorkflowExecutor {
                     id: id.to_string(),
                     action: name.to_string(),
                     details: details_value,
+                    display_type: Some(display_type.clone()),
                 },
             )
             .await?;

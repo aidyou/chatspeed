@@ -54,7 +54,14 @@ import * as Diff from 'diff'
 const props = defineProps({
   modelValue: Boolean,
   action: String,
-  details: String,
+  details: {
+    type: [String, Object, Array],
+    default: ''
+  },
+  displayType: {
+    type: String,
+    default: ''
+  },
   loading: Boolean
 })
 
@@ -62,22 +69,45 @@ const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject'
 
 const { t } = useI18n()
 
-const parseDetailsObject = (value) => {
-  if (!value || typeof value !== 'string') return null
-  try {
-    const parsed = JSON.parse(value)
-    if (Array.isArray(parsed)) {
-      return parsed.length > 0 ? parsed[0] : null
-    }
-    return parsed && typeof parsed === 'object' ? parsed : null
-  } catch (e) {
-    return null
+const normalizeDetailsPayload = (value) => {
+  if (value == null || value === '') {
+    return { detailsObject: null, detailsText: '' }
   }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      const detailsObject = Array.isArray(parsed) ? (parsed[0] || null) : parsed
+      return {
+        detailsObject: detailsObject && typeof detailsObject === 'object' ? detailsObject : null,
+        detailsText: value
+      }
+    } catch {
+      return { detailsObject: null, detailsText: value }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    const first = value[0] || null
+    return {
+      detailsObject: first && typeof first === 'object' ? first : null,
+      detailsText: JSON.stringify(value, null, 2)
+    }
+  }
+
+  if (typeof value === 'object') {
+    return {
+      detailsObject: value,
+      detailsText: JSON.stringify(value, null, 2)
+    }
+  }
+
+  return { detailsObject: null, detailsText: String(value) }
 }
 
 const normalizedAction = computed(() => (props.action || '').toLowerCase().trim())
-
-const detailsObject = computed(() => parseDetailsObject(props.details))
+const detailPayload = computed(() => normalizeDetailsPayload(props.details))
+const detailsObject = computed(() => detailPayload.value.detailsObject)
 
 const isFileChangePayload = computed(() => {
   const data = detailsObject.value
@@ -91,6 +121,9 @@ const isFileChangePayload = computed(() => {
 })
 
 const isEditAction = computed(() => {
+  if (props.displayType === 'diff') {
+    return true
+  }
   const action = normalizedAction.value
   if (action.includes('edit_file') || action.includes('write_file')) {
     return true

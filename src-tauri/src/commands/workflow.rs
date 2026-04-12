@@ -1821,35 +1821,18 @@ pub async fn workflow_signal(
 pub async fn workflow_stop(
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
     interrupt_openai_session(chat_state.inner(), &session_id).await;
-    cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
 
-    // 2) Keep unified workflow-level stop signal for state machine cancellation.
+    // Keep stop as a runtime signal only.
+    // Terminal persistence and session cleanup should happen on the executor's
+    // normal shutdown path after it processes the stop signal.
     let gateway_arc = gateway.inner().clone();
-    let inject_result = gateway_arc
+    gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
-        .await;
-
-    cleanup_workflow_resources(
-        &session_id,
-        chat_state.inner(),
-        gateway.inner(),
-        workflow_manager.inner(),
-    )
-    .await;
-
-    if let Err(error) = inject_result {
-        log::info!(
-            "[Workflow][session={}][phase=stop] Stop signal injection skipped during cleanup: {}",
-            session_id,
-            error
-        );
-    }
-
-    Ok(())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

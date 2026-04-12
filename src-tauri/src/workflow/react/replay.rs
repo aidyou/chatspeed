@@ -279,6 +279,7 @@ impl EventReducer {
             max_steps: 100,
             pending_tools: self.pending_tools,
             last_action_summary: self.last_action_summary,
+            current_context_tokens: None,
             last_event_id: self.last_event_id,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_task_id: self.waiting_on_task_id,

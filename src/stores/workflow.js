@@ -166,6 +166,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return {
       ...ctx,
       waitReason: ctx.waitReason ?? ctx.wait_reason ?? null,
+      currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
       pendingTools: ctx.pendingTools ?? ctx.pending_tools ?? [],
       waitingOnTaskId: ctx.waitingOnTaskId ?? ctx.waiting_on_task_id ?? null,
       childSessions: ctx.childSessions ?? ctx.child_sessions ?? []
@@ -745,6 +746,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageQueue.value = messageQueue.value.filter((item) => item.id !== id);
   };
 
+  const acknowledgeQueuedMessage = (id) => {
+    if (!id) return;
+    messageQueue.value = messageQueue.value.filter((item) => item.id !== id);
+  };
+
   const shiftQueuedMessage = () => {
     if (!messageQueue.value.length) return;
     messageQueue.value.shift();
@@ -842,8 +848,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     if (message.role === 'user') {
+      const queuedId = message.metadata?.queued_user_message_id;
       const queueStatus = message.metadata?.queue_status;
-      if (queueStatus === 'queued' || queueStatus === 'applied') {
+      if (queuedId && (queueStatus === 'queued' || queueStatus === 'applied')) {
+        acknowledgeQueuedMessage(queuedId);
+      } else if (queueStatus === 'queued' || queueStatus === 'applied') {
         shiftQueuedMessage();
       }
     }
@@ -875,6 +884,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } catch (err) {
       await _handleError(err);
     }
+  };
+
+  const setCurrentContextTokens = (workflowId, totalTokens) => {
+    if (!workflowId) return;
+    const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+    if (workflowIndex === -1) return;
+
+    const workflow = workflows.value[workflowIndex];
+    const executionContext = normalizeExecutionContext(workflow.executionContext) || {};
+    workflows.value[workflowIndex].executionContext = {
+      ...executionContext,
+      currentContextTokens: typeof totalTokens === 'number' ? totalTokens : null
+    };
   };
 
   const updateWorkflowAllowedPaths = async (workflowId, allowedPaths) => {
@@ -1004,10 +1026,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     addMessageToQueue,
     markQueuedMessageSent,
     removeQueuedMessage,
+    acknowledgeQueuedMessage,
     shiftQueuedMessage,
     setRunning,
     setHasLiveSession,
     updateWorkflowStatus,
+    setCurrentContextTokens,
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,
     loadMessages,

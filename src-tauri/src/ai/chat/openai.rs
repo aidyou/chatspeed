@@ -61,10 +61,19 @@ impl OpenAIChat {
     ) -> Result<String, AiError> {
         // If not streaming, handle as non-streaming response
         if !is_stream {
+            let response_text = response.text().await.map_err(|e| {
+                let err = AiError::ApiRequestFailed {
+                    status_code: 500,
+                    provider: provider_name.clone(),
+                    details: format!("Failed to read response body: {}", e),
+                };
+                log::error!("{} response reading error: {}", provider_name, err);
+                err
+            })?;
             return self
                 .handle_non_stream_response(
                     chat_id,
-                    response,
+                    response_text,
                     callback,
                     metadata_option,
                     provider_name,
@@ -297,22 +306,11 @@ impl OpenAIChat {
     async fn handle_non_stream_response(
         &self,
         chat_id: String,
-        response: Response,
+        response_text: String,
         callback: impl Fn(Arc<ChatResponse>) + Send + 'static,
         metadata_option: Option<ChatMetadata>,
         provider_name: String,
     ) -> Result<String, AiError> {
-        // Read response body as text
-        let response_text = response.text().await.map_err(|e| {
-            let err = AiError::ApiRequestFailed {
-                status_code: 500,
-                provider: provider_name.clone(),
-                details: format!("Failed to read response body: {}", e),
-            };
-            log::error!("{} response reading error: {}", provider_name, err);
-            err
-        })?;
-
         // Parse the JSON response
         let parsed: Value = serde_json::from_str(&response_text).map_err(|e| {
             let err = AiError::ApiRequestFailed {
@@ -408,7 +406,11 @@ impl OpenAIChat {
         let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
             .iter()
             .map(|(idx, tcd)| {
-                let arguments_str = tcd.arguments.as_deref().unwrap_or_default();
+                let arguments_str = tcd
+                    .arguments
+                    .as_deref()
+                    .map(Self::normalize_tool_arguments)
+                    .unwrap_or_default();
                 json!({
                     "index": idx,
                     "id": tcd.id,
@@ -461,7 +463,7 @@ impl OpenAIChat {
         for tcd in accumulated_tool_calls.values() {
             let mut trimmed_tcd = tcd.clone();
             if let Some(args) = trimmed_tcd.arguments.as_mut() {
-                *args = args.trim().to_string();
+                *args = Self::normalize_tool_arguments(args);
             }
             match serde_json::to_string(&trimmed_tcd) {
                 Ok(serialized_tcd) => {
@@ -507,6 +509,41 @@ impl OpenAIChat {
             }
         }
         accumulated_tool_calls.clear();
+    }
+
+    fn normalize_tool_arguments(raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        let cleaned = crate::libs::util::format_json_str(trimmed);
+        if let Ok(parsed) = serde_json::from_str::<Value>(&cleaned) {
+            return serde_json::to_string(&parsed).unwrap_or(cleaned);
+        }
+
+        let start = cleaned
+            .char_indices()
+            .find(|(_, ch)| *ch == '{' || *ch == '[')
+            .map(|(idx, _)| idx);
+
+        let Some(start_idx) = start else {
+            return trimmed.to_string();
+        };
+
+        let candidate = &cleaned[start_idx..];
+        for (idx, ch) in candidate.char_indices().rev() {
+            if ch != '}' && ch != ']' {
+                continue;
+            }
+
+            let slice = &candidate[..=idx];
+            if let Ok(parsed) = serde_json::from_str::<Value>(slice) {
+                return serde_json::to_string(&parsed).unwrap_or_else(|_| slice.to_string());
+            }
+        }
+
+        trimmed.to_string()
     }
 
     /// Determines the appropriate API endpoint based on tools and function call settings
@@ -838,26 +875,14 @@ impl AiChatTrait for OpenAIChat {
             )
             .await
         } else {
-            let err = AiError::ApiRequestFailed {
-                status_code: 0,
-                provider: model_detail.name.clone(),
-                details: response.content.clone(),
-            };
-
-            let error_payload = JsonErrorPayload {
-                status: 500,
-                message: &err.to_string(),
-            };
-            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
-
-            callback(ChatResponse::new_with_arc(
+            self.handle_non_stream_response(
                 chat_id.clone(),
-                chunk,
-                MessageType::Error,
-                merged_metadata.to_value(),
-                Some(FinishReason::Error),
-            ));
-            return Err(err);
+                response.content,
+                callback,
+                Some(merged_metadata),
+                model_detail.name.clone(),
+            )
+            .await
         }
     }
 

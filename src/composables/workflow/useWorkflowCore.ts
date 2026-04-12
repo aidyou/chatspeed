@@ -345,6 +345,8 @@ export function useWorkflowCore({
                     if (payload.is_compressing) {
                         scrollToBottom(true)
                     }
+                } else if (payload.type === 'context_usage') {
+                    workflowStore.setCurrentContextTokens(sessionId, payload.total_tokens)
                 } else if (payload.type === 'notification') {
                     workflowStore.setNotification(payload.message, payload.category)
                 } else if (payload.type === 'auto_approved_tools_updated') {
