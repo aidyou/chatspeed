@@ -80,7 +80,7 @@ export async function safeExecuteAsync<T>(
 export function withFallback<T>(primary: () => T, fallback: () => T, context?: string): T {
   try {
     return primary()
-  } catch (err) {
+  } catch {
     console.warn(
       `[withFallback] Primary render failed for ${context || 'component'}, using fallback`
     )

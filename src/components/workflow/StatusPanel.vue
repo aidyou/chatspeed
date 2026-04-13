@@ -52,7 +52,7 @@
           </div>
           <div class="progress-bar-container">
             <div class="progress-bar">
-              <div class="progress-fill" :style="{ width: `${contextUsagePercent}%` }"
+              <div class="progress-fill context-progress" :style="{ width: `${contextUsagePercent}%` }"
                 :class="contextUsageStatusClass" />
             </div>
             <span class="progress-text">{{ contextUsagePercent }}%</span>
@@ -70,7 +70,7 @@
           </div>
           <div class="progress-bar-container">
             <div class="progress-bar">
-              <div class="progress-fill" :style="{ width: `${progressPercent}%` }" :class="progressStatusClass" />
+              <div class="progress-fill task-progress" :style="{ width: `${progressPercent}%` }" :class="progressStatusClass" />
             </div>
             <span class="progress-text">{{ progressPercent }}%</span>
           </div>
@@ -287,8 +287,8 @@ const contextUsagePercent = computed(() => {
 
 const contextUsageStatusClass = computed(() => {
   if (contextUsagePercent.value >= 90) return 'complete'
-  if (contextUsagePercent.value >= 70) return 'medium'
-  if (contextUsagePercent.value >= 40) return 'good'
+  if (contextUsagePercent.value >= 70) return 'good'
+  if (contextUsagePercent.value >= 40) return 'medium'
   return 'start'
 })
 
@@ -1130,20 +1130,42 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
         transition: width 0.3s ease, background-color 0.3s ease;
         background-color: var(--el-color-primary);
 
-        &.start {
-          background-color: var(--el-color-info);
+        // 任务进度条颜色（原来的）
+        &.task-progress {
+          &.start {
+            background-color: var(--el-color-info);
+          }
+
+          &.medium {
+            background-color: var(--el-color-primary);
+          }
+
+          &.good {
+            background-color: #67c23a;
+          }
+
+          &.complete {
+            background-color: var(--el-color-success);
+          }
         }
 
-        &.medium {
-          background-color: var(--el-color-primary);
-        }
+        // 上下文进度条颜色（新的）
+        &.context-progress {
+          &.start {
+            background-color: #67c23a;
+          }
 
-        &.good {
-          background-color: #67c23a;
-        }
+          &.medium {
+            background-color: var(--el-color-success);
+          }
 
-        &.complete {
-          background-color: var(--el-color-success);
+          &.good {
+            background-color: var(--el-color-warning);
+          }
+
+          &.complete {
+            background-color: var(--el-color-danger);
+          }
         }
       }
     }
