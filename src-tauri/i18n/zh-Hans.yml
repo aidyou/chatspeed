@@ -269,7 +269,7 @@ tools:
     function_already_exists: "函数已存在: %{name}"
     function_not_found: "函数未找到"
     initialization: "初始化错误"
-    invalid_params: "无效参数"
+    invalid_params: "无效参数：%{details}"
     io_error: "IO错误"
     mcp_server_not_found: "MCP服务器未找到"
     network_error: "网络错误"

@@ -269,7 +269,7 @@ tools:
     fatal: "Фатальная ошибка"
     function_not_found: "Функция не найдена"
     initialization: "Ошибка инициализации"
-    invalid_params: "Неверные параметры"
+    invalid_params: "Неверные параметры: %{details}"
     io_error: "Ошибка ввода/вывода"
     mcp_server_not_found: "MCP-сервер не найден"
     network_error: "Ошибка сети"

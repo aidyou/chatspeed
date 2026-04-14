@@ -1,7 +1,6 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use async_trait::async_trait;
-use chrono;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -110,9 +109,9 @@ impl ToolDefinition for WriteFile {
     fn description(&self) -> &str {
         "Writes a file to the local filesystem.\n\n\
         Usage:\n\
-        - This tool will overwrite the existing file if there is one at the provided path.\n\
-        - If this is an existing file, ensure you have viewed its full content (e.g., via `read_file` or user-provided context) before overwriting to avoid unintended data loss.\n\
-        - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
+        - This tool is only for creating brand-new files.\n\
+        - If a file already exists at the provided path, DO NOT use this tool. Use `edit_file` instead.\n\
+        - ALWAYS prefer editing existing files in the codebase. Only use this tool when you are creating a new file that does not already exist.\n\
         - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the user.\n\
         - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."
     }
@@ -152,33 +151,24 @@ impl ToolDefinition for WriteFile {
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
         let path = Path::new(path_str);
 
-        let mut message = "File written successfully.".to_string();
-
         if path.exists() {
-            // Safety: Create a timestamped backup before overwriting.
-            let old_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-            let mut bak_name = path.file_name().unwrap_or_default().to_os_string();
-            bak_name.push(".");
-            bak_name.push(timestamp);
-            bak_name.push(".bak");
-            let bak = path.with_file_name(bak_name);
+            return Err(ToolError::InvalidParams(format!(
+                "file_path already exists: {}. `write_file` can only create new files; use `edit_file` to modify existing files",
+                path.display()
+            )));
+        }
 
-            if let Ok(_) = fs::copy(path, &bak) {
-                message = format!("File overwritten successfully. Previous version ({} bytes) was backed up to {}.",
-                    old_size, bak.display());
-            }
-        } else {
-            // Ensure parent directories exist for new files
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).ok();
-            }
-            message = "New file created successfully.".to_string();
+        // Ensure parent directories exist for new files
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).ok();
         }
 
         fs::write(path, content).map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
-        Ok(ToolCallResult::success(Some(message), None))
+        Ok(ToolCallResult::success(
+            Some("New file created successfully.".to_string()),
+            None,
+        ))
     }
 }
 
@@ -585,7 +575,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_write_file_overwrite() {
+    async fn test_write_file_existing_file_rejected() {
         let tool = WriteFile;
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
@@ -600,30 +590,19 @@ mod tests {
             "content": new_content
         });
 
-        let result = tool.call(params).await.unwrap();
-        assert!(result
-            .content
-            .unwrap()
-            .contains("File overwritten successfully"));
-
-        // Verify backup was created (look for .bak extension with timestamp)
-        let dir = Path::new(&path).parent().unwrap();
-        let file_name = Path::new(&path).file_name().unwrap().to_str().unwrap();
-        let mut found_bak = false;
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().into_string().unwrap();
-            if name.starts_with(file_name) && name.ends_with(".bak") {
-                found_bak = true;
-                let backup_content = fs::read_to_string(entry.path()).unwrap();
-                assert_eq!(backup_content, "original content");
+        let result = tool.call(params).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::InvalidParams(msg) => {
+                assert!(msg.contains("file_path already exists"));
+                assert!(msg.contains("edit_file"));
             }
+            other => panic!("Expected InvalidParams error, got {:?}", other),
         }
-        assert!(found_bak);
 
-        // Verify new content
+        // Verify existing content is unchanged
         let actual_content = fs::read_to_string(&path).unwrap();
-        assert_eq!(actual_content, new_content);
+        assert_eq!(actual_content, "original content");
     }
 
     #[tokio::test]

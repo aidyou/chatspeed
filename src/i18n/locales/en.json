@@ -797,6 +797,8 @@
     "approval": {
       "action": "Pending Action",
       "details": "Action Details",
+      "rejectionMessageLabel": "Rejection Note",
+      "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why.",
       "title": "Security Approval",
       "warning": "This operation has potential risks. Please confirm whether to continue."
     },
@@ -807,6 +809,7 @@
     "noAutoApprovedItems": "No auto-approved items",
     "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
     "continue": "Continue",
+    "pause": "Pause",
     "stop": "Stop",
     "stepBudgetExhaustedTitle": "Step Budget Exhausted",
     "confirmationTitle": "Confirmation Required",

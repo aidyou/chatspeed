@@ -19,6 +19,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
   const approvalDisplayType = ref('')
   const approvalRequestId = ref('')
   const approvalLoading = ref(false)
+  const rejectionMessage = ref('')
 
   // Show approval dialog
   const showApproval = (payload) => {
@@ -26,11 +27,13 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalAction.value = payload.action
     approvalDetails.value = payload.details
     approvalDisplayType.value = payload.displayType || ''
+    rejectionMessage.value = ''
     approvalVisible.value = true
   }
 
   // Hide approval dialog
   const hideApproval = () => {
+    rejectionMessage.value = ''
     approvalVisible.value = false
   }
 
@@ -118,13 +121,16 @@ export function useWorkflowApproval({ currentWorkflowId }) {
         type: SIGNAL_TYPES.APPROVAL,
         approved: false,
         approve_all: false,
-        id: approvalRequestId.value
+        id: approvalRequestId.value,
+        rejection_message: rejectionMessage.value?.trim() || undefined
       })
       await invokeWrapper('workflow_signal', {
         sessionId: currentWorkflowId.value,
         signal
       })
+      workflowStore.markToolRejected(approvalRequestId.value)
       approvalVisible.value = false
+      rejectionMessage.value = ''
     } catch (error) {
       console.error('Failed to reject action:', error)
       if (
@@ -155,6 +161,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     approvalDisplayType,
     approvalRequestId,
     approvalLoading,
+    rejectionMessage,
     showApproval,
     hideApproval,
     onApproveAction,

@@ -270,7 +270,7 @@ tools:
     fatal: "致命的なエラー"
     function_not_found: "関数が見つかりません"
     initialization: "初期化エラー"
-    invalid_params: "無効なパラメータ"
+    invalid_params: "無効なパラメータ: %{details}"
     io_error: "I/O エラー"
     mcp_server_not_found: "MCP サーバーが見つかりません"
     network_error: "ネットワークエラー"

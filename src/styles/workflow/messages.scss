@@ -33,7 +33,7 @@
     .content-container {
       flex: 1;
       min-width: 0;
-      max-width: 90%;
+      padding-right: var(--cs-space)
     }
 
     &.user {
@@ -77,6 +77,14 @@
 
           table{
             max-width: 100%;
+          }
+
+          pre{
+              border:none;
+
+              code{
+                  background: none;
+              }
           }
         }
 
@@ -144,10 +152,10 @@
           .tool-line {
             display: flex;
             flex-direction: row; // Explicit horizontal
-            align-items: center;
+            align-items: flex-start;
             white-space: nowrap;
             width: 100%;
-            gap: var(--cs-space-xs);
+            gap: var(--cs-space-sm);
 
             &.title-wrap {
               user-select: none;
@@ -266,7 +274,7 @@
             padding: 12px;
             background-color: var(--cs-bg-color-light);
             border-radius: var(--cs-border-radius-sm);
-            border-left: 2px solid var(--cs-border-color);
+            /* border-left: 2px solid var(--cs-border-color); */
             font-family: var(--cs-font-family-mono, monospace);
 
             .choice-container {
@@ -289,6 +297,15 @@
               }
             }
 
+            .content{
+                padding: 0;
+
+                pre{
+                    padding:0;
+                    margin:0;
+                }
+            }
+
             .raw-content {
               margin: 0;
               white-space: pre-wrap;
@@ -305,10 +322,7 @@
             .tool-stream-output {
               margin-bottom: 12px;
               padding: 8px 12px;
-              background-color: var(--cs-bg-color);
-              border-radius: var(--cs-border-radius-sm);
-              border: 1px solid var(--cs-border-color-light);
-              max-height: 200px;
+              max-height: 600px;
               overflow-y: auto;
 
               .stream-line {
@@ -443,16 +457,8 @@
     }
 
     &.is-error {
-      background-color: var(--el-color-danger-light-9);
-      border: 1px solid var(--el-color-danger-light-8);
-      border-radius: var(--cs-border-radius-lg);
-      padding: 12px;
       margin: 12px 0;
-      box-shadow: 0 2px 8px rgba(var(--el-color-danger-rgb), 0.1);
 
-      .content-container {
-        max-width: 100%;
-      }
 
       .ai-content {
         background: transparent !important;
@@ -468,7 +474,7 @@
         }
       }
 
-      &::before {
+      /* &::before {
         content: "!";
         position: absolute;
         left: -10px;
@@ -485,7 +491,7 @@
         font-size: 12px;
         z-index: 10;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-      }
+      } */
     }
   }
 

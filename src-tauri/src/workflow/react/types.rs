@@ -152,7 +152,11 @@ pub enum WaitReason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkflowSignal {
     /// User provides text input (for AwaitingUser state)
-    UserMessage { content: String },
+    UserMessage {
+        content: String,
+        #[serde(default, alias = "queuedUserMessageId")]
+        queued_user_message_id: Option<String>,
+    },
     /// User approves or rejects a tool call (for AwaitingApproval state)
     /// Frontend legacy format uses "approval" as type and "id" as field.
     #[serde(rename = "approval")]
@@ -162,6 +166,8 @@ pub enum WorkflowSignal {
         approved: bool,
         #[serde(default)]
         approve_all: bool,
+        #[serde(default)]
+        rejection_message: Option<String>,
     },
     /// Resume execution (for Paused state)
     Continue,
@@ -269,6 +275,8 @@ pub struct ExecutionContext {
     #[serde(default)]
     pub current_context_tokens: Option<usize>,
     #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+    #[serde(default)]
     pub last_event_id: Option<i64>,
     pub version: String,
     #[serde(default)]
@@ -291,6 +299,7 @@ impl ExecutionContext {
             pending_tools: Vec::new(),
             last_action_summary: None,
             current_context_tokens: None,
+            max_context_tokens: None,
             last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
             waiting_on_task_id: None,
@@ -421,7 +430,9 @@ mod tests {
     fn test_workflow_signal_parse() {
         let json = r#"{"type":"user_message","content":"hello"}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
-        assert!(matches!(signal, WorkflowSignal::UserMessage { content } if content == "hello"));
+        assert!(
+            matches!(signal, WorkflowSignal::UserMessage { content, .. } if content == "hello")
+        );
 
         // Legacy frontend format: type="approval", field="id"
         let json = r#"{"type":"approval","id":"call_123","approved":true,"approve_all":false}"#;
@@ -449,6 +460,7 @@ mod tests {
         // UserMessage is only valid for UserInput waiting
         let user_msg = WorkflowSignal::UserMessage {
             content: "test".to_string(),
+            queued_user_message_id: None,
         };
         assert!(user_msg.is_valid_for(Some(&WaitReason::UserInput)));
         assert!(!user_msg.is_valid_for(Some(&WaitReason::Confirmation)));

@@ -11,6 +11,58 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-list_dir:before {
+  content: "\e67b";
+}
+
+.cs-web_fetch:before {
+  content: "\e946";
+}
+
+.cs-submit_plan:before {
+  content: "\e684";
+}
+
+.cs-ask_user:before {
+  content: "\e689";
+}
+
+.cs-task:before {
+  content: "\e732";
+}
+
+.cs-write_file:before {
+  content: "\e694";
+}
+
+.cs-glob:before {
+  content: "\e695";
+}
+
+.cs-bash:before {
+  content: "\e69f";
+}
+
+.cs-web_search:before {
+  content: "\e6ce";
+}
+
+.cs-read_file:before {
+  content: "\e6a0";
+}
+
+.cs-edit_file:before {
+  content: "\e6a3";
+}
+
+.cs-todo:before {
+  content: "\e7d4";
+}
+
+.cs-grep:before {
+  content: "\e6a6";
+}
+
 .cs-refresh:before {
   content: "\e71e";
 }

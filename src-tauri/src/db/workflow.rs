@@ -308,6 +308,18 @@ impl MainStore {
         Ok(())
     }
 
+    pub fn update_workflow_query(&self, id: &str, user_query: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        conn.execute(
+            "UPDATE workflows SET user_query = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![user_query, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_workflow_todo_list(&self, id: &str, todo_list: &str) -> Result<(), StoreError> {
         let conn = self
             .conn

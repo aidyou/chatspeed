@@ -133,7 +133,6 @@ impl WorkflowManager {
         exists
     }
 
-    #[cfg(test)]
     pub fn get_session_status(&self, session_id: &str) -> Option<ManagedSessionStatus> {
         self.sessions.get(session_id).map(|s| s.status.clone())
     }

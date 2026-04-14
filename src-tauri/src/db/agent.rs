@@ -80,7 +80,6 @@ pub struct ModelConfig {
 pub struct AgentModels {
     pub plan: Option<ModelConfig>,
     pub act: Option<ModelConfig>,
-    pub vision: Option<ModelConfig>,
 }
 
 /// Represents an AI agent for ReAct workflows

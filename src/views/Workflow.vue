@@ -82,7 +82,7 @@
       </template>
     </el-dialog>
 
-    <ApprovalDialog v-model="approvalVisible" :action="approvalAction" :details="approvalDetails" :display-type="approvalDisplayType"
+    <ApprovalDialog v-model="approvalVisible" v-model:rejection-message="rejectionMessage" :action="approvalAction" :details="approvalDetails" :display-type="approvalDisplayType"
       :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction"
       @reject="onRejectAction" @stop="onStop" />
 
@@ -210,6 +210,7 @@ const {
   approvalDisplayType,
   approvalRequestId,
   approvalLoading,
+  rejectionMessage,
   onApproveAction,
   onApproveAllAction,
   onRejectAction
@@ -427,6 +428,7 @@ const hasUserResponseAfter = (messages, fromIndex) => {
   for (let i = fromIndex + 1; i < messages.length; i++) {
     const msg = messages[i]
     if (msg?.role !== 'user') continue
+    if (msg?.metadata?.queue_status === 'queued') continue
     const content = (msg.message || '').trim()
     if (!content) continue
     if (content.includes('<SYSTEM_REMINDER>')) continue

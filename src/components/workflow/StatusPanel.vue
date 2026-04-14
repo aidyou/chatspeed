@@ -171,6 +171,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
+import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -240,7 +241,28 @@ const progressStatusClass = computed(() => {
 })
 
 // Calculate Context Usage
+const getModelContextSize = (modelConfig) => {
+  if (!modelConfig || typeof modelConfig !== 'object') return null
+  const rawValue = modelConfig.contextSize ?? modelConfig.context_size
+  return typeof rawValue === 'number' && rawValue > 0 ? rawValue : null
+}
+
 const maxContexts = computed(() => {
+  const runtimeMax = workflowStore.currentWorkflow?.executionContext?.maxContextTokens
+  if (typeof runtimeMax === 'number' && runtimeMax > 0) {
+    return runtimeMax
+  }
+
+  const workflowConfig = workflowStore.currentWorkflow?.agentConfig || {}
+  const workflowModels = workflowConfig.models || {}
+  const phase = String(workflowConfig.phase || '').toLowerCase()
+  const phaseModel = phase === 'planning' ? workflowModels.plan : workflowModels.act
+  const phaseLimit = getModelContextSize(phaseModel)
+  if (phaseLimit) return phaseLimit
+
+  const fallbackLimit = getModelContextSize(workflowModels.act) || getModelContextSize(workflowModels.plan)
+  if (fallbackLimit) return fallbackLimit
+
   const agentId = workflowStore.currentWorkflow?.agentId
   if (!agentId) return 128000
   const agent = agentStore.agents.find(a => a.id === agentId)
@@ -305,24 +327,24 @@ const removeSystemReminder = (content) => {
 
 const getToolInfo = (name, metadata = {}) => {
   const iconMap = {
-    'read_file': { icon: 'file', toolType: 'tool-file' },
-    'write_file': { icon: 'file', toolType: 'tool-file' },
-    'edit_file': { icon: 'edit', toolType: 'tool-file' },
-    'list_dir': { icon: 'folder', toolType: 'tool-file' },
-    'glob': { icon: 'search', toolType: 'tool-file' },
-    'grep': { icon: 'search', toolType: 'tool-file' },
-    'web_fetch': { icon: 'link', toolType: 'tool-network' },
-    'web_search': { icon: 'search', toolType: 'tool-network' },
-    'bash': { icon: 'terminal', toolType: 'tool-system' },
-    'todo_create': { icon: 'add', toolType: 'tool-todo' },
-    'todo_update': { icon: 'check', toolType: 'tool-todo' },
-    'todo_list': { icon: 'list', toolType: 'tool-todo' },
-    'todo_get': { icon: 'list', toolType: 'tool-todo' },
-    'submit_plan': { icon: 'skill-plan', toolType: 'tool-todo' },
+    'read_file': { icon: resolveWorkflowToolIcon('read_file', 'file'), toolType: 'tool-file' },
+    'write_file': { icon: resolveWorkflowToolIcon('write_file', 'file'), toolType: 'tool-file' },
+    'edit_file': { icon: resolveWorkflowToolIcon('edit_file', 'edit'), toolType: 'tool-file' },
+    'list_dir': { icon: resolveWorkflowToolIcon('list_dir', 'folder'), toolType: 'tool-file' },
+    'glob': { icon: resolveWorkflowToolIcon('glob', 'search'), toolType: 'tool-file' },
+    'grep': { icon: resolveWorkflowToolIcon('grep', 'search'), toolType: 'tool-file' },
+    'web_fetch': { icon: resolveWorkflowToolIcon('web_fetch', 'link'), toolType: 'tool-network' },
+    'web_search': { icon: resolveWorkflowToolIcon('web_search', 'search'), toolType: 'tool-network' },
+    'bash': { icon: resolveWorkflowToolIcon('bash', 'terminal'), toolType: 'tool-system' },
+    'todo_create': { icon: resolveWorkflowToolIcon('todo_create', 'add'), toolType: 'tool-todo' },
+    'todo_update': { icon: resolveWorkflowToolIcon('todo_update', 'check'), toolType: 'tool-todo' },
+    'todo_list': { icon: resolveWorkflowToolIcon('todo_list', 'list'), toolType: 'tool-todo' },
+    'todo_get': { icon: resolveWorkflowToolIcon('todo_get', 'list'), toolType: 'tool-todo' },
+    'submit_plan': { icon: resolveWorkflowToolIcon('submit_plan', 'skill-plan'), toolType: 'tool-todo' },
     'finish_task': { icon: 'check-circle', toolType: 'tool-todo' }
   }
 
-  const info = iconMap[name] || { icon: 'tool', toolType: 'tool-system' }
+  const info = iconMap[name] || { icon: resolveWorkflowToolIcon(name, 'tool'), toolType: 'tool-system' }
 
   return {
     ...info,

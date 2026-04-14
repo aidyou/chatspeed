@@ -1,6 +1,9 @@
 <template>
   <div class="messages" ref="messagesRef">
-    <div v-for="(message, index) in messages" :key="message.displayId" class="message"
+    <div
+      v-for="(message, index) in messages"
+      :key="message.displayId"
+      class="message"
       :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
@@ -11,13 +14,23 @@
         </div>
         <div v-else class="ai-content chat">
           <!-- CLI Style Tool Call (Results) -->
-          <div v-if="message.role === 'tool'" class="cli-tool-call"
-            :class="[message.toolDisplay.toolType || 'tool-system', message.toolDisplay.isError ? 'status-error' : 'status-success']">
+          <div
+            v-if="message.role === 'tool'"
+            class="cli-tool-call"
+            :class="[
+              message.toolDisplay.toolType || 'tool-system',
+              message.toolDisplay.isError ? 'status-error' : 'status-success'
+            ]">
             <!-- finish_task special display -->
             <template
-              v-if="message.toolDisplay?.action === $t('workflow.finishTask') || message.toolDisplay?.action?.includes('Finish')">
+              v-if="
+                message.toolDisplay?.action === $t('workflow.finishTask') ||
+                message.toolDisplay?.action?.includes('Finish')
+              ">
               <div class="tool-line finish-task-display">
-                <cs :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'" size="14px"
+                <cs
+                  :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
+                  size="14px"
                   class="tool-type-icon finish-icon" />
                 <span class="finish-text">{{ $t('workflow.finishTask') }}</span>
               </div>
@@ -25,15 +38,19 @@
 
             <!-- Normal tool call display -->
             <template v-else>
-              <div class="tool-line title-wrap expandable" :class="{ 'tool-rejected': message.isRejected }"
+              <div
+                class="tool-line title-wrap expandable"
+                :class="{ 'tool-rejected': message.isRejected }"
                 @click="$emit('toggle-expand', message.displayId)">
-                <cs :name="message.toolDisplay.icon || 'tool'" size="14px" class="tool-type-icon" />
+                <cs :name="message.toolDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
                 <span class="tool-name">{{ message.toolDisplay.action }}</span>
                 <span class="tool-target">{{ message.toolDisplay.target }}</span>
                 <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
               </div>
               <!-- Hide summary when expanded -->
-              <div class="tool-line summary expandable" v-if="!isMessageExpanded(message)"
+              <div
+                class="tool-line summary expandable"
+                v-if="!isMessageExpanded(message)"
                 @click="$emit('toggle-expand', message.displayId)">
                 <span class="corner-icon">⎿</span>
                 <span class="summary-text">{{ message.toolDisplay.summary }}</span>
@@ -41,29 +58,53 @@
               </div>
               <div v-if="isMessageExpanded(message)" class="tool-detail">
                 <!-- Tool Stream Output (for bash commands) -->
-                <div v-if="message.metadata?.tool_call_id && workflowStore.getToolStream(message.metadata.tool_call_id).length > 0"
+                <div
+                  v-if="
+                    message.metadata?.tool_call_id &&
+                    workflowStore.getToolStream(message.metadata.tool_call_id).length > 0
+                  "
                   class="tool-stream-output">
-                  <div v-for="(line, idx) in workflowStore.getToolStream(message.metadata.tool_call_id)"
-                    :key="idx" class="stream-line">
+                  <div
+                    v-for="(line, idx) in workflowStore.getToolStream(
+                      message.metadata.tool_call_id
+                    )"
+                    :key="idx"
+                    class="stream-line">
                     {{ line }}
                   </div>
                 </div>
                 <!-- Final Result -->
-                <MarkdownSimple v-if="shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'diff'"
+                <MarkdownSimple
+                  v-if="
+                    shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'diff'
+                  "
                   :content="getDiffMarkdown(removeSystemReminder(message.message))" />
-                <div v-else-if="shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'choice'" class="choice-container">
-                  <div class="choice-question">{{
-                    parseChoiceContent(removeSystemReminder(message.message)).question
-                  }}
+                <div
+                  v-else-if="
+                    shouldShowToolRawContent(message) &&
+                    message.toolDisplay.displayType === 'choice'
+                  "
+                  class="choice-container">
+                  <div class="choice-question">
+                    {{ parseChoiceContent(removeSystemReminder(message.message)).question }}
                   </div>
                   <div class="choice-options">
-                    <el-button v-for="opt in parseChoiceContent(removeSystemReminder(message.message)).options"
-                      :key="opt" size="small" plain round :disabled="isRunning" @click="$emit('send-choice', opt)">
+                    <el-button
+                      v-for="opt in parseChoiceContent(removeSystemReminder(message.message))
+                        .options"
+                      :key="opt"
+                      size="small"
+                      plain
+                      round
+                      :disabled="isRunning"
+                      @click="$emit('send-choice', opt)">
                       {{ opt }}
                     </el-button>
                   </div>
                 </div>
-                <pre v-else-if="shouldShowToolRawContent(message)" class="raw-content">{{ removeSystemReminder(message.message) }}</pre>
+                <pre v-else-if="shouldShowToolRawContent(message)" class="raw-content">{{
+                  removeSystemReminder(message.message)
+                }}</pre>
               </div>
             </template>
           </div>
@@ -71,21 +112,35 @@
           <!-- Regular Assistant Content -->
           <div v-else>
             <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
-            <div v-if="message.reasoning || message.stepType === 'Think'" class="reasoning-container">
+            <div
+              v-if="message.reasoning || message.stepType === 'Think'"
+              class="reasoning-container">
               <div class="reasoning-header" @click="$emit('toggle-reasoning', message.displayId)">
-                <cs name="reasoning" size="14px" class="reasoning-icon" :class="{
-                  rotating: isRunning && !getParsedMessage(message).content &&
-                    (message.metadata?.tool_calls?.length || 0) === 0 &&
-                    !isReasoningExpanded(message.displayId) &&
-                    message === lastAssistantMessage
-                }" />
-                <span class="reasoning-text" :class="{ expanded: isReasoningExpanded(message.displayId) }">
+                <cs
+                  name="reasoning"
+                  size="14px"
+                  class="reasoning-icon"
+                  :class="{
+                    rotating:
+                      isRunning &&
+                      !getParsedMessage(message).content &&
+                      (message.metadata?.tool_calls?.length || 0) === 0 &&
+                      !isReasoningExpanded(message.displayId) &&
+                      message === lastAssistantMessage
+                  }" />
+                <span
+                  class="reasoning-text"
+                  :class="{ expanded: isReasoningExpanded(message.displayId) }">
                   <template v-if="isReasoningExpanded(message.displayId)">
                     {{ $t('workflow.thinkingExpanded') || 'Thinking Process' }}
                   </template>
-                  <template v-else-if="isRunning && !getParsedMessage(message).content &&
-                    (message.metadata?.tool_calls?.length || 0) === 0 &&
-                    message === lastAssistantMessage">
+                  <template
+                    v-else-if="
+                      isRunning &&
+                      !getParsedMessage(message).content &&
+                      (message.metadata?.tool_calls?.length || 0) === 0 &&
+                      message === lastAssistantMessage
+                    ">
                     {{ getReasoningPreview(message.reasoning || message.message) }}
                   </template>
                   <template v-else>
@@ -100,12 +155,20 @@
                 {{ message.reasoning || message.message }}
               </div>
             </div>
-            <MarkdownSimple v-if="getParsedMessage(message).content" :content="getParsedMessage(message).content" />
+            <MarkdownSimple
+              v-if="getParsedMessage(message).content"
+              :content="getParsedMessage(message).content" />
 
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
             <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
-              <div v-for="call in message.pendingToolCalls" :key="call.id" class="cli-tool-call pending"
-                :class="[call.toolType || 'tool-system', call.isRejected ? 'status-error' : 'status-running']">
+              <div
+                v-for="call in message.pendingToolCalls"
+                :key="call.id"
+                class="cli-tool-call pending"
+                :class="[
+                  call.toolType || 'tool-system',
+                  call.isRejected ? 'status-error' : 'status-running'
+                ]">
                 <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
                   <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
                   <span class="tool-name">{{ call.action }}</span>
@@ -123,15 +186,24 @@
     </div>
 
     <!-- Streaming Chat State -->
-    <div v-if="isChatting && (chatState.content || chatState.reasoning)" class="message assistant chatting">
+    <div
+      v-if="isChatting && (chatState.content || chatState.reasoning)"
+      class="message assistant chatting">
       <div class="content-container">
         <div class="ai-content chat">
           <div v-if="chatState.reasoning" class="reasoning-container">
             <div class="reasoning-header">
-              <cs name="reasoning" size="14px" class="reasoning-icon" :class="{ rotating: !chatState.content }" />
+              <cs
+                name="reasoning"
+                size="14px"
+                class="reasoning-icon"
+                :class="{ rotating: !chatState.content }" />
               <span class="reasoning-text">
-                {{ chatState.content ? ($t('workflow.thoughtCompleted') || 'Thought Complete') :
-                  getReasoningPreview(chatState.reasoning) }}
+                {{
+                  chatState.content
+                    ? $t('workflow.thoughtCompleted') || 'Thought Complete'
+                    : getReasoningPreview(chatState.reasoning)
+                }}
               </span>
             </div>
           </div>
@@ -142,14 +214,18 @@
           </div>
 
           <!-- Retry Countdown... -->
-          <div v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0" class="retry-status-alert">
+          <div
+            v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0"
+            class="retry-status-alert">
             <el-alert type="warning" :closable="false" show-icon>
               <template #title>
-                {{ $t('workflow.retrying', {
-                  attempt: chatState.retryInfo.attempt,
-                  total: chatState.retryInfo.total,
-                  seconds: chatState.retryInfo.nextRetryIn
-                }) }}
+                {{
+                  $t('workflow.retrying', {
+                    attempt: chatState.retryInfo.attempt,
+                    total: chatState.retryInfo.total,
+                    seconds: chatState.retryInfo.nextRetryIn
+                  })
+                }}
               </template>
             </el-alert>
           </div>
@@ -254,12 +330,7 @@ defineProps({
   }
 })
 
-defineEmits([
-  'toggle-expand',
-  'toggle-reasoning',
-  'send-choice',
-  'scroll-bottom'
-])
+defineEmits(['toggle-expand', 'toggle-reasoning', 'send-choice', 'scroll-bottom'])
 
 const messagesRef = ref(null)
 

@@ -334,8 +334,7 @@ impl WorkflowExecutor {
                                 "WorkflowExecutor {}: Intercepting bash command for review in Smart mode: {}",
                                 self.session_id, reason
                             );
-                            let display_content =
-                                format!("Command: {}\nReason: {}", command_str, reason);
+                            let display_content = command_str.to_string();
                             return self
                                 .handle_approval_interception(
                                     id,
@@ -352,8 +351,7 @@ impl WorkflowExecutor {
                             reason
                         );
                         // Delegate to unified approval handler with descriptive command preview
-                        let display_content =
-                            format!("Command: {}\nReason: {}", command_str, reason);
+                        let display_content = command_str.to_string();
                         return self
                             .handle_approval_interception(
                                 id,

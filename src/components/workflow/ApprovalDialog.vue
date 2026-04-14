@@ -6,10 +6,11 @@
       <div class="action-info">
         <span class="label">{{ $t('workflow.approval.action') }}:</span>
         <el-tag type="warning">{{ action }}</el-tag>
+        <span v-if="isShellAction" class="warning-text">{{ $t('workflow.approval.warning') }}</span>
         <span v-if="isEditAction && filePath" class="file-path">{{ filePath }}</span>
       </div>
       <div class="details-box">
-        <div class="details-header">
+        <div v-if="!isShellAction" class="details-header">
           <span>{{ $t('workflow.approval.details') }}</span>
           <span class="warning-text">{{ $t('workflow.approval.warning') }}</span>
         </div>
@@ -25,14 +26,27 @@
             </div>
           </div>
         </div>
+        <div v-else-if="isShellAction" class="shell-view">
+          <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
+        </div>
         <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
+      </div>
+      <div class="rejection-note-box">
+        <div class="note-header">{{ $t('workflow.approval.rejectionMessageLabel') }}</div>
+        <el-input
+          :model-value="rejectionMessage"
+          type="textarea"
+          :rows="isEditAction ? 2 : 3"
+          resize="none"
+          :placeholder="$t('workflow.approval.rejectionMessagePlaceholder')"
+          @update:model-value="value => emit('update:rejectionMessage', value)"
+        />
       </div>
     </div>
     <template #footer>
       <div class="dialog-footer">
-        <el-button @click="onClose" round type="info" plain>关闭弹窗（临时测试用）</el-button>
         <el-button @click="onStop" :loading="loading" round type="danger">{{
-          $t('common.stop')
+          $t('workflow.pause')
         }}</el-button>
         <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
@@ -50,12 +64,17 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
+import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 
 const props = defineProps({
   modelValue: Boolean,
   action: String,
   details: {
     type: [String, Object, Array],
+    default: ''
+  },
+  rejectionMessage: {
+    type: String,
     default: ''
   },
   displayType: {
@@ -65,7 +84,7 @@ const props = defineProps({
   loading: Boolean
 })
 
-const emit = defineEmits(['update:modelValue', 'approve', 'approveAll', 'reject', 'stop', 'close'])
+const emit = defineEmits(['update:modelValue', 'update:rejectionMessage', 'approve', 'approveAll', 'reject', 'stop'])
 
 const { t } = useI18n()
 
@@ -130,6 +149,8 @@ const isEditAction = computed(() => {
   }
   return isFileChangePayload.value
 })
+
+const isShellAction = computed(() => normalizedAction.value === 'bash')
 
 const filePath = computed(() => {
   if (!isEditAction.value) return ''
@@ -220,6 +241,8 @@ const visible = computed({
 })
 
 const title = computed(() => t('workflow.approval.title'))
+const rejectionMessage = computed(() => props.rejectionMessage || '')
+const shellMarkdown = computed(() => `\`\`\`bash\n${detailPayload.value.detailsText || ''}\n\`\`\``)
 
 const dialogWidth = computed(() => {
   return isEditAction.value ? '90%' : '500px'
@@ -240,10 +263,6 @@ const onReject = () => {
 const onStop = () => {
   emit('stop')
 }
-
-const onClose = () => {
-  emit('update:modelValue', false)
-}
 </script>
 
 <style scoped lang="scss">
@@ -253,9 +272,7 @@ const onClose = () => {
     display: flex;
     align-items: center;
     gap: var(--cs-space-sm);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-wrap: wrap;
 
     .label {
       font-weight: bold;
@@ -274,6 +291,13 @@ const onClose = () => {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .warning-text {
+      font-size: var(--cs-font-size-xs);
+      color: var(--el-color-danger);
+      font-style: italic;
+      margin-left: auto;
     }
   }
 
@@ -308,9 +332,26 @@ const onClose = () => {
       font-family: var(--cs-font-family-mono);
       font-size: var(--cs-font-size-sm);
       color: var(--cs-text-color-primary);
-      max-height: 200px;
+      max-height: min(28vh, 260px);
       overflow-y: auto;
     }
+
+.shell-view {
+  max-height: min(36vh, 320px);
+  overflow: auto;
+
+  :deep(pre) {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  :deep(pre code.hljs) {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+}
 
     .diff-view {
       max-height: none;
@@ -327,7 +368,7 @@ const onClose = () => {
       }
 
       .diff-text {
-        max-height: none;
+        max-height: min(48vh, 520px);
         overflow: auto;
         background: var(--cs-bg-color-dark);
         border-radius: var(--cs-border-radius-sm);
@@ -390,10 +431,36 @@ const onClose = () => {
       }
     }
   }
+
+  .rejection-note-box {
+    margin-bottom: var(--cs-space-sm);
+
+    .note-header {
+      font-size: var(--cs-font-size-xs);
+      color: var(--cs-text-color-secondary);
+      margin-bottom: var(--cs-space-xs);
+      text-transform: uppercase;
+    }
+  }
 }
 </style>
 
 <style lang="scss">
+.approval-dialog.el-dialog {
+  max-height: calc(100vh - var(--cs-titlebar-height, 32px) - 24px);
+  display: flex;
+  flex-direction: column;
+
+  .el-dialog__body {
+    overflow: hidden;
+  }
+
+  .approval-content {
+    max-height: calc(100vh - var(--cs-titlebar-height, 32px) - 220px);
+    overflow: auto;
+  }
+}
+
 .diff-dialog-overlay.el-overlay {
   z-index: 2000 !important;
 }

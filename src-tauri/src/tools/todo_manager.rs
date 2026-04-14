@@ -53,7 +53,8 @@ impl ToolDefinition for TodoCreateTool {
         It also helps the user understand the progress of the task and overall progress of their requests.\n\n\
         ## Capabilities\n\
         - **Bulk Creation**: You can pass an array of tasks in the `tasks` field to initialize a complete plan in one call.\n\
-        - **Single Creation**: Alternatively, pass `subject` and `description` directly for a single task.\n\n\
+        - **Single Creation**: Alternatively, pass `subject` and `description` directly for a single task.\n\
+        - **Plan Reset**: Use `mode=\"replace\"` to clear the existing todo list and replace it with a new plan.\n\n\
         ## When to Use This Tool\n\
         Use this tool proactively in these scenarios:\n\
         - Complex multi-step tasks - When a task requires 3 or more distinct steps or actions\n\
@@ -63,6 +64,12 @@ impl ToolDefinition for TodoCreateTool {
         - After receiving new instructions - Immediately capture user requirements as tasks\n\
         - When you start working on a task - Mark it as in_progress BEFORE beginning work\n\
         - After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation\n\n\
+        ## Replace vs Append\n\
+        - Use `mode=\"replace\"` when you are starting a fresh execution plan for the current request or the old todo list is no longer the right plan.\n\
+        - Use `mode=\"replace\"` by default after the user changes scope, asks for a new investigation, requests a new implementation plan, or when you are rebuilding the task breakdown from scratch.\n\
+        - Use `mode=\"append\"` only when you are intentionally adding follow-up tasks to the current active plan.\n\
+        - Do not append new tasks onto a stale or superseded plan.\n\
+        - If you are unsure whether the old tasks are still valid, prefer `mode=\"replace\"`.\n\n\
         ## When NOT to Use This Tool\n\
         Skip using this tool when:\n\
         - There is only a single, straightforward task\n\
@@ -102,6 +109,12 @@ impl ToolDefinition for TodoCreateTool {
                         },
                         "description": "An array of tasks to create at once"
                     },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["append", "replace"],
+                        "default": "append",
+                        "description": "append: add to existing list; replace: clear the current todo list and reset it with the new tasks"
+                    },
                     "subject": { "type": "string", "description": "Brief title (if creating a single task)" },
                     "description": { "type": "string", "description": "Detailed description (if creating a single task)" }
                 },
@@ -114,7 +127,19 @@ impl ToolDefinition for TodoCreateTool {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
-        let mut list = get_db_todo_list(&self.main_store, &self.session_id).await?;
+        let mode = params["mode"].as_str().unwrap_or("append");
+        if !matches!(mode, "append" | "replace") {
+            return Err(ToolError::InvalidParams(format!(
+                "mode must be either 'append' or 'replace', got '{}'",
+                mode
+            )));
+        }
+
+        let mut list = if mode == "replace" {
+            Vec::new()
+        } else {
+            get_db_todo_list(&self.main_store, &self.session_id).await?
+        };
         let mut created_ids = Vec::new();
 
         // Determine if we are creating bulk or single
@@ -144,8 +169,9 @@ impl ToolDefinition for TodoCreateTool {
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         Ok(ToolCallResult::success(
             Some(format!(
-                "Successfully created {} todo item(s). IDs: {}",
+                "Successfully created {} todo item(s) in {} mode. IDs: {}",
                 created_ids.len(),
+                mode,
                 created_ids.join(", ")
             )),
             None,

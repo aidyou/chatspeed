@@ -7,7 +7,10 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeSignal {
     Stop,
-    UserMessage(String),
+    UserMessage {
+        content: String,
+        queued_user_message_id: Option<String>,
+    },
     Other,
 }
 
@@ -25,7 +28,13 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
         signal_type_enum,
         Some(SignalType::UserMessage | SignalType::LegacyUserInput)
     ) {
-        return RuntimeSignal::UserMessage(parsed["content"].as_str().unwrap_or("").to_string());
+        return RuntimeSignal::UserMessage {
+            content: parsed["content"].as_str().unwrap_or("").to_string(),
+            queued_user_message_id: parsed["queued_user_message_id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| parsed["queuedUserMessageId"].as_str().map(|s| s.to_string())),
+        };
     }
 
     RuntimeSignal::Other

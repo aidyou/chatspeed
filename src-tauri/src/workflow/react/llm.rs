@@ -40,6 +40,98 @@ pub struct LlmProcessor {
 }
 
 impl LlmProcessor {
+    fn normalize_and_validate_tool_calls(
+        raw: &str,
+        allowed_tool_names: &HashSet<String>,
+    ) -> Result<serde_json::Value, String> {
+        let mut tool_calls_val: serde_json::Value =
+            serde_json::from_str(raw).unwrap_or(serde_json::json!([]));
+
+        if let Some(tool_calls) = tool_calls_val.get("tool_calls").cloned() {
+            tool_calls_val = tool_calls;
+        }
+
+        let validate_name = |tool_name: Option<&str>| -> Result<(), String> {
+            let Some(name) = tool_name else {
+                return Err("LLM returned malformed tool call without tool name".to_string());
+            };
+
+            if !allowed_tool_names.contains(name) {
+                return Err(format!(
+                    "LLM returned unsupported tool call '{}'",
+                    name
+                ));
+            }
+
+            Ok(())
+        };
+
+        if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
+            for (i, tool_call) in tool_calls_array.iter_mut().enumerate() {
+                let Some(tool_call_obj) = tool_call.as_object_mut() else {
+                    return Err("LLM returned malformed tool call entry".to_string());
+                };
+
+                let tool_name = tool_call_obj
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| tool_call_obj.get("name").and_then(|v| v.as_str()));
+                validate_name(tool_name)?;
+
+                let existing_id = tool_call_obj.get("id").and_then(|v| v.as_str());
+                if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                    tool_call_obj.insert(
+                        "id".to_string(),
+                        serde_json::json!(crate::ccproxy::get_tool_id()),
+                    );
+                }
+                tool_call_obj.insert("index".to_string(), serde_json::json!(i));
+            }
+        } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
+            let Some(tool_obj) = tool_wrapper.as_object_mut() else {
+                return Err("LLM returned malformed wrapped tool call".to_string());
+            };
+            let tool_name = tool_obj
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .or_else(|| tool_obj.get("name").and_then(|v| v.as_str()));
+            validate_name(tool_name)?;
+
+            let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                tool_obj.insert(
+                    "id".to_string(),
+                    serde_json::json!(crate::ccproxy::get_tool_id()),
+                );
+            }
+            tool_obj.insert("index".to_string(), serde_json::json!(0));
+        } else if tool_calls_val.is_object() {
+            let Some(tool_obj) = tool_calls_val.as_object_mut() else {
+                return Err("LLM returned malformed tool call object".to_string());
+            };
+
+            let tool_name = tool_obj
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .or_else(|| tool_obj.get("name").and_then(|v| v.as_str()));
+            validate_name(tool_name)?;
+
+            let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
+            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
+                tool_obj.insert(
+                    "id".to_string(),
+                    serde_json::json!(crate::ccproxy::get_tool_id()),
+                );
+            }
+            tool_obj.insert("index".to_string(), serde_json::json!(0));
+        }
+
+        Ok(tool_calls_val)
+    }
+
     pub fn new(
         session_id: String,
         agent_config: Agent,
@@ -112,7 +204,7 @@ impl LlmProcessor {
             policy,
         );
 
-        // 2. Retry Loop for 429 (Rate Limiting) with Exponential Backoff
+        // 2. Retry Loop for transient LLM failures with exponential backoff
         let mut retry_count = 0;
         let max_retries = 10;
         let mut last_error = None;
@@ -121,6 +213,8 @@ impl LlmProcessor {
             let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
             let session_id_for_rx = self.session_id.clone();
             let gateway_for_rx = gateway.clone();
+            let allowed_tool_names: HashSet<String> =
+                tools.iter().map(|tool| tool.name.clone()).collect();
 
             // Task to process streaming chunks
             let rx_processor = tokio::spawn(async move {
@@ -128,6 +222,7 @@ impl LlmProcessor {
                 let mut tool_calls_json = String::new();
                 let mut full_reasoning = String::new();
                 let mut final_metadata = None;
+                let mut invalid_tool_call_error = None::<String>;
 
                 while let Some(chunk) = rx.recv().await {
                     match chunk.r#type {
@@ -154,48 +249,19 @@ impl LlmProcessor {
                             full_reasoning.push_str(&chunk.chunk);
                         }
                         MessageType::ToolCalls => {
-                            let mut tool_calls_val: serde_json::Value =
-                                serde_json::from_str(&chunk.chunk).unwrap_or(serde_json::json!([]));
-
-                            if let Some(tool_calls_array) = tool_calls_val.as_array_mut() {
-                                for tool_call in tool_calls_array {
-                                    if let Some(tool_call_obj) = tool_call.as_object_mut() {
-                                        // Only overwrite if ID is missing or not our own generated ID
-                                        let existing_id =
-                                            tool_call_obj.get("id").and_then(|v| v.as_str());
-                                        if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                            tool_call_obj.insert(
-                                                "id".to_string(),
-                                                serde_json::json!(crate::ccproxy::get_tool_id()),
-                                            );
-                                        }
-                                    }
+                            match Self::normalize_and_validate_tool_calls(
+                                &chunk.chunk,
+                                &allowed_tool_names,
+                            ) {
+                                Ok(tool_calls_val) => {
+                                    tool_calls_json = serde_json::to_string(&tool_calls_val)
+                                        .unwrap_or(chunk.chunk.clone());
                                 }
-                            } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
-                                if let Some(tool_obj) = tool_wrapper.as_object_mut() {
-                                    let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
-                                    if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                        tool_obj.insert(
-                                            "id".to_string(),
-                                            serde_json::json!(crate::ccproxy::get_tool_id()),
-                                        );
-                                    }
-                                }
-                            } else if tool_calls_val.is_object()
-                                && tool_calls_val.get("name").is_some()
-                            {
-                                if let Some(tool_obj) = tool_calls_val.as_object_mut() {
-                                    let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
-                                    if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                                        tool_obj.insert(
-                                            "id".to_string(),
-                                            serde_json::json!(crate::ccproxy::get_tool_id()),
-                                        );
-                                    }
+                                Err(error) => {
+                                    invalid_tool_call_error = Some(error);
+                                    tool_calls_json.clear();
                                 }
                             }
-                            tool_calls_json = serde_json::to_string(&tool_calls_val)
-                                .unwrap_or(chunk.chunk.clone());
                         }
                         MessageType::Finished => {
                             final_metadata = chunk.metadata.clone();
@@ -206,6 +272,12 @@ impl LlmProcessor {
                         _ => {}
                     }
                 }
+                if let Some(error) = invalid_tool_call_error {
+                    let mut meta = final_metadata.unwrap_or_else(|| serde_json::json!({}));
+                    meta["invalid_tool_call_error"] = serde_json::json!(error);
+                    final_metadata = Some(meta);
+                }
+
                 Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>((
                     plain_text,
                     tool_calls_json,
@@ -222,20 +294,14 @@ impl LlmProcessor {
                 value: "0".to_string(),
             }];
 
-            // Extract model parameters (temperature, max_tokens) from agent config
+            // Extract model parameters (temperature, max_tokens) from agent config.
+            // Negative temperature is the project-wide sentinel for "unset/off".
             let mut temperature = None;
             let mut max_tokens = None;
 
-            // Search through all model roles to find the one matching active_model_name
+            // Search through configured workflow model roles to find the active model.
             if let Some(ref models) = self.agent_config.models {
-                for model_config in [
-                    models.plan.as_ref(),
-                    models.act.as_ref(),
-                    models.vision.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                {
+                for model_config in [models.plan.as_ref(), models.act.as_ref()].into_iter().flatten() {
                     if model_config.model == self.active_model_name {
                         // Temperature: any value < 0 is treated as "Off/Unset"
                         if let Some(temp) = model_config.temperature {
@@ -281,11 +347,11 @@ impl LlmProcessor {
 
             drop(tx); // Close channel
 
-            match chat_res {
-                Ok(_) => {
-                    let (mut plain_text, tool_calls_json, mut full_reasoning, final_metadata) =
-                        rx_processor.await.map_err(|e| {
-                            WorkflowEngineError::General(format!("RX task failed: {}", e))
+	            match chat_res {
+	                Ok(_) => {
+	                    let (mut plain_text, tool_calls_json, mut full_reasoning, final_metadata) =
+	                        rx_processor.await.map_err(|e| {
+	                            WorkflowEngineError::General(format!("RX task failed: {}", e))
                         })??;
 
                     // --- Post-processing: Extract model-native <think> or <thought> blocks ---
@@ -342,8 +408,8 @@ impl LlmProcessor {
                         }
 
                         // Final cleanup: remove all variants of thinking tags from plain_text
-                        plain_text = cleaned_content
-                            .replace("<think>", "")
+	                        plain_text = cleaned_content
+	                            .replace("<think>", "")
                             .replace("</think>", "")
                             .replace("<THINK>", "")
                             .replace("</THINK>", "")
@@ -351,12 +417,99 @@ impl LlmProcessor {
                             .replace("</thought>", "")
                             .replace("<THOUGHT>", "")
                             .replace("</THOUGHT>", "")
-                            .trim()
-                            .to_string();
-                    }
+	                            .trim()
+	                            .to_string();
+	                    }
 
-                    let _ = gateway
-                        .send(
+	                    if plain_text.trim().is_empty() && tool_calls_json.trim().is_empty() {
+	                        let e = WorkflowEngineError::General(
+	                            "LLM returned empty content and no tool calls".to_string(),
+	                        );
+	                        if retry_count < max_retries {
+	                            retry_count += 1;
+	                            let wait_secs = 2u32.pow(retry_count - 1);
+
+	                            log::warn!(
+	                                "WorkflowExecutor {}: Empty LLM response encountered. Retrying in {}s (attempt {}/{})",
+	                                self.session_id,
+	                                wait_secs,
+	                                retry_count,
+	                                max_retries
+	                            );
+
+	                            gateway
+	                                .send(
+	                                    &self.session_id,
+	                                    GatewayPayload::RetryStatus {
+	                                        attempt: retry_count,
+	                                        total_attempts: max_retries,
+	                                        next_retry_in_seconds: wait_secs,
+	                                    },
+	                                )
+	                                .await?;
+
+	                            gateway
+	                                .send(
+	                                    &self.session_id,
+	                                    GatewayPayload::Notification {
+	                                        message: format!(
+	                                            "AI server returned an empty response. Retrying in {}s (Attempt {}/{})",
+	                                            wait_secs, retry_count, max_retries
+	                                        ),
+	                                        category: Some("warning".to_string()),
+	                                    },
+	                                )
+	                                .await?;
+
+	                            tokio::select! {
+	                                _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
+	                                sig = signal_rx.recv() => {
+	                                    if let Some(sig_str) = sig {
+	                                        match parse_runtime_signal(&sig_str) {
+	                                            RuntimeSignal::Stop => {
+	                                                log::info!(
+	                                                    "WorkflowExecutor {}: Stop signal received during empty-response retry backoff",
+	                                                    self.session_id
+	                                                );
+	                                                return Err(WorkflowEngineError::Cancelled(
+	                                                    "Stopped during empty-response retry backoff".into(),
+	                                                ));
+	                                            }
+	                                            RuntimeSignal::UserMessage { content, queued_user_message_id } => {
+	                                                let queued_id = queued_user_message_id.unwrap_or_else(|| {
+	                                                    format!("queued_{}", crate::ccproxy::get_tool_id())
+	                                                });
+	                                                stash_user_message(&self.session_id, queued_id.clone(), content.clone());
+	                                                let _ = gateway.send(
+	                                                    &self.session_id,
+	                                                    GatewayPayload::Message {
+	                                                        role: "user".to_string(),
+	                                                        content,
+	                                                        reasoning: None,
+	                                                        step_type: None,
+	                                                        step_index: 0,
+	                                                        is_error: false,
+	                                                        error_type: None,
+	                                                        metadata: Some(serde_json::json!({
+	                                                            "queued_user_message_id": queued_id,
+	                                                            "queue_status": "queued"
+	                                                        })),
+	                                                    },
+	                                                ).await;
+	                                            }
+	                                            RuntimeSignal::Other => {}
+	                                        }
+	                                    }
+	                                }
+	                            }
+
+	                            continue;
+	                        }
+	                        return Err(e);
+	                    }
+	
+	                    let _ = gateway
+	                        .send(
                             &self.session_id,
                             GatewayPayload::Notification {
                                 message: String::new(),
@@ -370,8 +523,10 @@ impl LlmProcessor {
                 Err(e) => {
                     let should_retry = match &e {
                         AiError::ApiRequestFailed { status_code, .. } => {
-                            // Do NOT retry on auth errors or permanent client errors
-                            !matches!(*status_code, 400 | 401 | 403 | 404)
+                            // Do NOT retry on auth/not-found errors.
+                            // Some providers return transient upstream/runtime issues as HTTP 400,
+                            // so 400 must still get bounded retries instead of crashing the workflow.
+                            !matches!(*status_code, 401 | 403 | 404)
                         }
                         // Retry on stream errors, network timeouts, etc.
                         _ => true,
@@ -420,10 +575,14 @@ impl LlmProcessor {
                                                 "WorkflowExecutor {}: Stop signal received during retry backoff",
                                                 self.session_id
                                             );
-                                            return Err(WorkflowEngineError::General("Stopped during retry backoff".into()));
+                                            return Err(WorkflowEngineError::Cancelled(
+                                                "Stopped during retry backoff".into(),
+                                            ));
                                         }
-                                        RuntimeSignal::UserMessage(content) => {
-                                            let queued_id = format!("queued_{}", crate::ccproxy::get_tool_id());
+                                        RuntimeSignal::UserMessage { content, queued_user_message_id } => {
+                                            let queued_id = queued_user_message_id.unwrap_or_else(|| {
+                                                format!("queued_{}", crate::ccproxy::get_tool_id())
+                                            });
                                             stash_user_message(&self.session_id, queued_id.clone(), content.clone());
                                             let _ = gateway.send(
                                                 &self.session_id,
@@ -512,8 +671,7 @@ impl LlmProcessor {
 
             let role = m.role.clone();
             let mut content = m.message.clone();
-            let step_type = m.step_type.clone().unwrap_or_default();
-            let tool_calls = m
+	            let tool_calls = m
                 .metadata
                 .as_ref()
                 .and_then(|meta| meta.get("tool_calls").cloned());
@@ -556,21 +714,8 @@ impl LlmProcessor {
                 content = format!("{}\n\n{}", content, reminder);
             }
 
-            // Preserve observation boundaries, but avoid adding an extra wrapper for normal
-            // user input because the initial workflow query is already tagged as <user_query>.
-            if role == "user" && !content.trim().is_empty() {
-                let is_observation = step_type.eq_ignore_ascii_case("observe");
-                if is_observation {
-                    let open_tag = "<queued_observation>";
-                    let close_tag = "</queued_observation>";
-                    if !content.trim_start().starts_with(open_tag) {
-                        content = format!("{open_tag}\n{content}\n{close_tag}");
-                    }
-                }
-            }
-
-            if let Some(last) = history.last_mut() {
-                if last["role"] == role && role != "tool" && role != "system" {
+	            if let Some(last) = history.last_mut() {
+	                if last["role"] == role && role != "tool" && role != "system" {
                     let last_content = last["content"].as_str().unwrap_or("");
                     if !content.is_empty() {
                         last["content"] =
@@ -602,11 +747,18 @@ impl LlmProcessor {
                 }
             }
 
-            if role == "user" && content.trim().is_empty() {
-                continue;
-            }
+	            if role == "user" && content.trim().is_empty() {
+	                continue;
+	            }
 
-            let mut msg =
+	            if role == "assistant"
+	                && content.trim().is_empty()
+	                && tool_calls.is_none()
+	            {
+	                continue;
+	            }
+
+	            let mut msg =
                 if role == "assistant" && tool_calls.is_some() && content.trim().is_empty() {
                     serde_json::json!({ "role": role, "content": serde_json::Value::Null })
                 } else {
@@ -620,6 +772,23 @@ impl LlmProcessor {
             }
             history.push(msg);
         }
+
+        // Defensive pass: normalize tool_calls[].index to match array position
+        // for all assistant messages. Some providers stream chunks with indices
+        // that do not align with the final array order, causing strict providers
+        // (e.g., minimax) to reject the replayed history with a 500 error.
+        for msg in &mut history {
+            if msg["role"] == "assistant" {
+                if let Some(tool_calls) = msg["tool_calls"].as_array_mut() {
+                    for (i, tc) in tool_calls.iter_mut().enumerate() {
+                        if let Some(obj) = tc.as_object_mut() {
+                            obj.insert("index".to_string(), serde_json::json!(i));
+                        }
+                    }
+                }
+            }
+        }
+
         history
     }
 

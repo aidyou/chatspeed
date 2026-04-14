@@ -7,6 +7,7 @@ use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
 
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 /// IntelligenceManager handles high-level AI decision making tasks
 /// like content summarization and quality auditing.
@@ -18,6 +19,51 @@ pub struct IntelligenceManager {
 }
 
 impl IntelligenceManager {
+    fn sanitize_generated_title(raw: &str) -> String {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(content) = value.get("content").and_then(|v| v.as_str()) {
+                return content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .trim()
+                    .to_string();
+            }
+        }
+
+        trimmed
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string()
+    }
+
+    fn fallback_workflow_title(user_query: &str) -> String {
+        let trimmed = user_query.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        let max_chars = 50;
+        let mut title: String = trimmed.chars().take(max_chars).collect();
+        if trimmed.chars().count() > max_chars {
+            title.push_str("...");
+        }
+        title
+    }
+
     pub fn new(
         session_id: String,
         chat_state: Arc<ChatState>,
@@ -415,11 +461,13 @@ impl IntelligenceManager {
             }
         };
 
-        let system_prompt = "You are a helpful assistant that generates extremely concise, descriptive titles for chat conversations. \
-                             Your title must be under 10 words, preferably 3-5 words. Do not use quotes or special formatting. \
-                             IMPORTANT: Generate the title in the same language as the user's input (Chinese for Chinese input, English for English input, etc.).";
+        let system_prompt = "You generate concise titles for workflow tasks, not chat conversations. \
+                             Focus on the concrete task being worked on: the target module/file/system, the main issue, bug, feature, investigation, or fix. \
+                             Prefer titles that describe the actual work item rather than the discussion. \
+                             Keep the title under 10 words, preferably 3-5 words. Use the same language as the user's input. \
+                             Return only the title text with no explanation, no reasoning, no JSON, and no quotes.";
         let user_prompt = format!(
-            "Generate a title for a workflow with the following initial request:\n\n\"{}\"",
+            "Generate a workflow task title for this initial request. Emphasize the main task or issue being handled.\n\n{}",
             user_query
         );
 
@@ -438,35 +486,67 @@ impl IntelligenceManager {
                 .clone()
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
-        let session_id_title = self.session_id.clone() + "_title_gen";
+        let mut generated_title = String::new();
+        let mut last_error: Option<WorkflowEngineError> = None;
 
-        tokio::spawn(async move {
-            let _ = chat_interface
+        for attempt in 0..=1 {
+            if attempt > 0 {
+                sleep(Duration::from_secs(2)).await;
+            }
+            let session_id_title = format!("{}_title_gen_{}", self.session_id, attempt + 1);
+            match chat_interface
                 .chat(
                     provider_id,
                     &model_name,
                     session_id_title,
-                    messages,
+                    messages.clone(),
                     None,
                     None,
-                    move |chunk| {
-                        let _ = tx.try_send(chunk);
-                    },
+                    move |_chunk| {},
                 )
-                .await;
-        });
+                .await
+            {
+                Ok(title) => {
+                    generated_title = Self::sanitize_generated_title(&title);
+                    if !generated_title.is_empty() {
+                        break;
+                    }
 
-        let mut title = String::new();
-        while let Some(chunk) = rx.recv().await {
-            if chunk.r#type == MessageType::Text {
-                title.push_str(&chunk.chunk);
-            } else if chunk.r#type == MessageType::Finished {
-                break;
+                    log::warn!(
+                        "[Workflow][session={}][title] Empty title generated on attempt {}/2",
+                        self.session_id,
+                        attempt + 1
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[Workflow][session={}][title] Title generation failed on attempt {}/2: {}",
+                        self.session_id,
+                        attempt + 1,
+                        error
+                    );
+                    last_error = Some(WorkflowEngineError::Ai(error));
+                }
             }
         }
 
-        let final_title = title.trim().trim_matches('"').to_string();
+        let final_title = if generated_title.is_empty() {
+            let fallback_title = Self::fallback_workflow_title(user_query);
+            if !fallback_title.is_empty() {
+                log::warn!(
+                    "[Workflow][session={}][title] Falling back to truncated user query after title generation failure",
+                    self.session_id
+                );
+                fallback_title
+            } else if let Some(error) = last_error {
+                return Err(error);
+            } else {
+                String::new()
+            }
+        } else {
+            generated_title
+        };
+
         if !final_title.is_empty() {
             let store = self
                 .chat_state

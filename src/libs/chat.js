@@ -567,6 +567,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
         lang = 'text'
         break
       case 'vue':
+      case 'html':
         lang = 'html'
         break
     }

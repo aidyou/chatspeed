@@ -800,6 +800,8 @@
     "approval": {
       "action": "待执行操作",
       "details": "操作详情",
+      "rejectionMessageLabel": "拒绝说明",
+      "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。",
       "title": "安全审批",
       "warning": "该操作具有潜在风险，请确认是否继续执行。"
     },
@@ -810,6 +812,7 @@
     "noAutoApprovedItems": "没有自动审批的项目",
     "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
     "continue": "继续执行",
+    "pause": "暂停",
     "stop": "停止",
     "stepBudgetExhaustedTitle": "步数耗尽",
     "confirmationTitle": "需要确认",

@@ -396,24 +396,26 @@ pub async fn create_workflow(
             // Validate and merge models
             if let Some(models) = &inherited_config.models {
                 let mut validated_models = models.clone();
-                // Validate temperature and context_size for each model
+                // Preserve per-role model parameters from the inherited config.
+                // `temperature < 0` and `max_tokens <= 0` are valid sentinels in this
+                // codebase for "off/unset", so do not erase them during merge.
                 for model in [
                     &mut validated_models.plan,
                     &mut validated_models.act,
-                    &mut validated_models.vision,
                 ] {
                     if let Some(m) = model {
                         if let Some(temp) = m.temperature {
-                            if temp < 0.0 {
-                                m.temperature = None;
+                            m.temperature = Some(if temp < 0.0 {
+                                -0.1
                             } else {
-                                m.temperature = Some(temp.clamp(0.0, 2.0));
-                            }
+                                temp.clamp(0.0, 2.0)
+                            });
                         }
                         if let Some(ctx) = m.context_size {
-                            // Keep inherited context window in a sane range instead of
-                            // accidentally shrinking it to <=100.
                             m.context_size = Some(ctx.clamp(1024, 2_000_000));
+                        }
+                        if let Some(max_tokens) = m.max_tokens {
+                            m.max_tokens = Some(max_tokens.max(0));
                         }
                     }
                 }
@@ -566,6 +568,19 @@ pub async fn update_workflow_title_and_query(
 }
 
 #[tauri::command]
+pub async fn update_workflow_query(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    user_query: String,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_workflow_query(&session_id, &user_query)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_workflow_status(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     session_id: String,
@@ -589,6 +604,24 @@ async fn has_reconciled_live_session(
 ) -> bool {
     if !workflow_manager.has_session(session_id) {
         return false;
+    }
+
+    if let Some(status) = workflow_manager.get_session_status(session_id) {
+        if matches!(
+            status,
+            ManagedSessionStatus::Completed
+                | ManagedSessionStatus::Failed
+                | ManagedSessionStatus::Cancelled
+        ) {
+            log::warn!(
+                "[Workflow][session={}][phase={}] Found stale live session in terminal managed status {:?}, removing before command handling",
+                session_id,
+                phase,
+                status
+            );
+            workflow_manager.remove_session(session_id);
+            return false;
+        }
     }
 
     let Some(executor) = workflow_manager.get_executor(session_id) else {
@@ -835,12 +868,7 @@ pub async fn workflow_start(
                 "[Workflow] First message detected for session {}, updating user_query",
                 session_id
             );
-            let title = if prompt.chars().count() > 30 {
-                format!("{}...", prompt.chars().take(27).collect::<String>())
-            } else {
-                prompt.clone()
-            };
-            let _ = store.update_workflow_title_and_query(&session_id, &title, &prompt);
+            let _ = store.update_workflow_query(&session_id, &prompt);
         }
 
         let (p, att) = if initial_prompt.is_some() {
@@ -1446,50 +1474,70 @@ pub async fn workflow_signal(
             session_id
         );
 
+        let signal_type_enum = serde_json::from_str::<serde_json::Value>(&signal)
+            .ok()
+            .and_then(|value| value["type"].as_str().map(SignalType::from_str))
+            .flatten();
+
         // Route signal through manager
         if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
-            log::warn!(
-                "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
-                session_id,
-                signal_type,
-                e
+            let allow_recovery_for_terminal_user_message = matches!(
+                signal_type_enum,
+                Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             );
-            return Err(format!("Signal rejected: {}", e));
-        }
-
-        log::info!(
-            "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
-            session_id,
-            signal_type
-        );
-
-        // Now inject through gateway
-        match gateway_arc.inject_input(&session_id, signal.clone()).await {
-            Ok(_) => {
-                log::info!(
-                    "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
+            if allow_recovery_for_terminal_user_message {
+                log::warn!(
+                    "[Workflow][session={}][phase=signal] Live session rejected user message with '{}'. Treating as stale terminal session and entering recovery.",
                     session_id,
-                    signal_type
+                    e
                 );
-                return Ok("Signal injected".to_string());
+                workflow_manager_arc.remove_session(&session_id);
+                gateway_arc.unregister_session(&session_id).await;
+                true
+            } else {
+                log::warn!(
+                    "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
+                    session_id,
+                    signal_type,
+                    e
+                );
+                return Err(format!("Signal rejected: {}", e));
             }
-            Err(e) => {
-                if is_stale_gateway_injection_error(&e) {
-                    log::warn!(
-                        "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
+        } else {
+            log::info!(
+                "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
+                session_id,
+                signal_type
+            );
+
+            // Now inject through gateway
+            match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                Ok(_) => {
+                    log::info!(
+                        "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
                         session_id,
-                        e
+                        signal_type
                     );
-                    workflow_manager_arc.remove_session(&session_id);
-                    gateway_arc.unregister_session(&session_id).await;
-                    true
-                } else {
-                    log::warn!(
-                        "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
-                        session_id,
-                        e
-                    );
-                    return Err(format!("Gateway injection failed: {}", e));
+                    return Ok("Signal injected".to_string());
+                }
+                Err(e) => {
+                    if is_stale_gateway_injection_error(&e) {
+                        log::warn!(
+                            "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
+                            session_id,
+                            e
+                        );
+                        workflow_manager_arc.remove_session(&session_id);
+                        gateway_arc.unregister_session(&session_id).await;
+                        true
+                    } else {
+                        log::warn!(
+                            "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
+                            session_id,
+                            e
+                        );
+                        return Err(format!("Gateway injection failed: {}", e));
+                    }
                 }
             }
         }

@@ -269,7 +269,7 @@ tools:
     fatal: "Error fatal"
     function_not_found: "Función no encontrada"
     initialization: "Error de inicialización"
-    invalid_params: "Parámetros inválidos"
+    invalid_params: "Parámetros inválidos: %{details}"
     io_error: "Error de E/S"
     mcp_server_not_found: "Servidor MCP no encontrado"
     network_error: "Error de red"

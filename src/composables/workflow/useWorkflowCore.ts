@@ -1,4 +1,4 @@
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { invokeWrapper } from '@/libs/tauri'
@@ -55,6 +55,7 @@ export function useWorkflowCore({
     const modelStore = useModelStore()
 
     const unlistenWorkflowEvents = ref(null)
+    const backgroundStateListeners = new Map<string, () => void>()
     const modelSelectorVisible = ref(false)
     const modelSelectorTab = ref('act')
     const modelSelectorMode = ref('provider')
@@ -213,23 +214,27 @@ export function useWorkflowCore({
         }
     )
 
-    const sendUserMessageSignal = async (sessionId, content) => {
-        const signal = JSON.stringify({
+    const sendUserMessageSignal = async (sessionId, content, queuedUserMessageId = null) => {
+        const signalPayload = {
             type: SIGNAL_TYPES.USER_MESSAGE,
             content
-        })
+        }
+        if (queuedUserMessageId) {
+            signalPayload.queued_user_message_id = queuedUserMessageId
+        }
+        const signal = JSON.stringify(signalPayload)
         return invokeWrapper('workflow_signal', { sessionId, signal })
     }
 
     const flushDeferredQueuedMessages = async () => {
         if (!currentWorkflowId.value) return
-        if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) return
+        if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) return
         if (!workflowStore.messageQueue?.length) return
 
         const deferred = workflowStore.messageQueue.filter((item) => !item.sent)
         for (const item of deferred) {
             try {
-                await sendUserMessageSignal(currentWorkflowId.value, item.content)
+                await sendUserMessageSignal(currentWorkflowId.value, item.content, item.id)
                 workflowStore.markQueuedMessageSent(item.id)
             } catch (error) {
                 console.warn('Failed to flush deferred queued message:', error)
@@ -240,6 +245,74 @@ export function useWorkflowCore({
 
     // Track the current session ID for event isolation
     const currentSessionId = ref<string | null>(null)
+
+    const teardownBackgroundStateListeners = () => {
+        for (const unlisten of backgroundStateListeners.values()) {
+            try {
+                unlisten()
+            } catch (error) {
+                console.warn('[Workflow] Failed to unlisten background workflow state listener:', error)
+            }
+        }
+        backgroundStateListeners.clear()
+    }
+
+    const syncBackgroundStateListeners = async () => {
+        const activeSessionId = currentWorkflowId.value || currentSessionId.value
+        const backgroundWorkflowIds = new Set(
+            workflows.value
+                .filter((workflow) => {
+                    if (!workflow?.id) return false
+                    if (workflow.id === activeSessionId) return false
+                    const status = String(workflow.status || '').toLowerCase()
+                    return status && !TERMINAL_STATUSES.includes(status)
+                })
+                .map((workflow) => workflow.id)
+        )
+
+        for (const [sessionId, unlisten] of backgroundStateListeners.entries()) {
+            if (!backgroundWorkflowIds.has(sessionId)) {
+                try {
+                    unlisten()
+                } catch (error) {
+                    console.warn(`[Workflow] Failed to unlisten background session ${sessionId}:`, error)
+                }
+                backgroundStateListeners.delete(sessionId)
+            }
+        }
+
+        for (const sessionId of backgroundWorkflowIds) {
+            if (backgroundStateListeners.has(sessionId)) continue
+
+            const eventName = `workflow://event/${sessionId}`
+            const unlisten = await listen(eventName, (event) => {
+                safeExecute(() => {
+                    const payload = event.payload
+                    if (payload?.type !== 'state') return
+
+                    workflowStore.updateWorkflowStatus(
+                        sessionId,
+                        payload.state,
+                        payload.wait_reason || null
+                    )
+
+                    const statusLower = String(payload.state || '').toLowerCase()
+                    if (TERMINAL_STATUSES.includes(statusLower)) {
+                        workflowStore.loadWorkflows().catch((error) => {
+                            console.warn('[Workflow] Failed to refresh workflows after background terminal state:', error)
+                        })
+                        const cleanup = backgroundStateListeners.get(sessionId)
+                        if (cleanup) {
+                            cleanup()
+                            backgroundStateListeners.delete(sessionId)
+                        }
+                    }
+                }, undefined, `backgroundWorkflowState:${sessionId}`)
+            })
+
+            backgroundStateListeners.set(sessionId, unlisten)
+        }
+    }
 
     /**
      * Setup workflow event listeners with error boundary
@@ -281,6 +354,9 @@ export function useWorkflowCore({
 
                     if (TERMINAL_STATUSES.includes((payload.state || '').toLowerCase())) {
                         workflowStore.setHasLiveSession(false)
+                        workflowStore.loadWorkflows().catch((error) => {
+                            console.warn('[Workflow] Failed to refresh workflows after terminal state:', error)
+                        })
                     }
 
                     // Check for confirmation waiting
@@ -360,6 +436,8 @@ export function useWorkflowCore({
                 }
             }, undefined, `workflowEvent:${event.payload?.type || 'unknown'}`)
         })
+
+        await syncBackgroundStateListeners()
     }
 
     /**
@@ -531,10 +609,9 @@ export function useWorkflowCore({
                     // We have an empty workflow, update it with the query and start
                     console.log('Using existing empty workflow:', currentWorkflowId.value)
 
-                    // Update workflow title and user_query in backend
-                    await invokeWrapper('update_workflow_title_and_query', {
+                    // Update workflow user_query in backend. Title should be generated by AI.
+                    await invokeWrapper('update_workflow_query', {
                         sessionId: currentWorkflowId.value,
-                        title: prompt.substring(0, 50),
                         userQuery: prompt
                     })
 
@@ -690,7 +767,7 @@ export function useWorkflowCore({
                         workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.THINKING)
                     }
 
-                    const res = await sendUserMessageSignal(currentWorkflowId.value, message)
+                    const res = await sendUserMessageSignal(currentWorkflowId.value, message, queuedId)
                     console.log('Signal sent successfully:', res)
 
                     if (queuedId) {
@@ -725,6 +802,7 @@ export function useWorkflowCore({
                             return
                         } catch (signalError) {
                             console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)
+                            showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
                         }
                     }
                     console.error('Failed to resume workflow:', error)
@@ -1104,6 +1182,23 @@ export function useWorkflowCore({
     watch(finalAuditMode, async (newVal) => {
         if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('finalAudit', newVal === 'on')
+    })
+
+    watch(
+        () => [
+            currentWorkflowId.value,
+            ...workflows.value.map((workflow) => `${workflow.id}:${String(workflow.status || '').toLowerCase()}`)
+        ],
+        () => {
+            syncBackgroundStateListeners().catch((error) => {
+                console.warn('[Workflow] Failed to sync background workflow listeners:', error)
+            })
+        },
+        { immediate: true }
+    )
+
+    onBeforeUnmount(() => {
+        teardownBackgroundStateListeners()
     })
 
     return {

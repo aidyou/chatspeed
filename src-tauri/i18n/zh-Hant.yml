@@ -269,7 +269,7 @@ tools:
     function_already_exists: "函數已存在：%{name}"
     function_not_found: "函數未找到"
     initialization: "初始化錯誤"
-    invalid_params: "無效參數"
+    invalid_params: "無效參數：%{details}"
     io_error: "IO 錯誤"
     mcp_server_not_found: "MCP 伺服器未找到"
     network_error: "網路錯誤"

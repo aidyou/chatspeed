@@ -115,6 +115,73 @@ pub struct WorkflowExecutor {
     pub child_sessions: Vec<String>,
 }
 
+impl WorkflowExecutor {
+    fn build_rejection_observation(tool_name: &str, rejection_message: Option<&str>) -> String {
+        let user_prefix = rejection_message
+            .map(str::trim)
+            .filter(|msg| !msg.is_empty())
+            .map(|msg| format!("{}\n", msg))
+            .unwrap_or_default();
+
+        format!(
+            "{}<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
+            user_prefix,
+            tool_name
+        )
+    }
+
+    fn sanitize_assistant_metadata_for_storage(
+        metadata: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut sanitized = serde_json::json!({});
+
+        if let Some(meta) = metadata {
+            if let Some(tokens) = meta.get("tokens") {
+                sanitized["tokens"] = tokens.clone();
+            }
+        }
+
+        sanitized
+    }
+
+    fn phase_model_context_limit(agent_config: &Agent, phase: &ExecutionPhase) -> Option<usize> {
+        let models = agent_config.models.as_ref()?;
+        let selected_model = match phase {
+            ExecutionPhase::Planning => models.plan.as_ref(),
+            ExecutionPhase::Implementation | ExecutionPhase::Standard => models.act.as_ref(),
+        }?;
+
+        selected_model
+            .context_size
+            .filter(|value| *value > 0)
+            .map(|value| value as usize)
+    }
+
+    fn effective_context_limit(agent_config: &Agent, phase: &ExecutionPhase) -> usize {
+        Self::phase_model_context_limit(agent_config, phase)
+            .or_else(|| {
+                agent_config
+                    .max_contexts
+                    .filter(|value| *value > 0)
+                    .map(|value| value as usize)
+            })
+            .unwrap_or(128000)
+    }
+
+    fn effective_max_steps(agent_config: &Agent, phase: &ExecutionPhase) -> usize {
+        if *phase == ExecutionPhase::Planning {
+            10
+        } else {
+            (Self::effective_context_limit(agent_config, phase) / 2000).clamp(20, 200)
+        }
+    }
+
+    fn sync_runtime_limits(&mut self) {
+        self.context.max_tokens = Self::effective_context_limit(&self.agent_config, &self.policy.phase);
+        self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
+    }
+}
+
 #[async_trait]
 impl ReActExecutor for WorkflowExecutor {
     async fn init(&mut self) -> Result<(), WorkflowEngineError> {
@@ -221,15 +288,8 @@ impl WorkflowExecutor {
         )));
         let path_guard_clone = path_guard.clone();
 
-        let max_contexts = agent_config.max_contexts.unwrap_or(128000);
-        let max_steps = if policy.phase == ExecutionPhase::Planning {
-            10
-        } else {
-            agent_config
-                .max_contexts
-                .map(|ctx| ((ctx as usize) / 2000).clamp(20, 200))
-                .unwrap_or(DEFAULT_MAX_STEPS)
-        };
+        let max_contexts = Self::effective_context_limit(&agent_config, &policy.phase);
+        let max_steps = Self::effective_max_steps(&agent_config, &policy.phase);
 
         let mut auto_approve = HashSet::new();
         if let Some(s) = &agent_config.auto_approve {
@@ -267,7 +327,7 @@ impl WorkflowExecutor {
             context: ContextManager::new(
                 session_id_clone,
                 main_store.clone(),
-                max_contexts as usize,
+                max_contexts,
                 tsid_generator.clone(),
             ),
             tool_manager: Arc::new(ToolManager::new()),
@@ -580,7 +640,7 @@ impl WorkflowExecutor {
                 .get_workflow_snapshot(&self.session_id)
                 .ok()
                 .and_then(|snapshot| snapshot.workflow.title)
-                .map_or(true, |t| t.trim().is_empty())
+                .map_or(true, |title| title.trim().is_empty())
         };
 
         if should_generate_title {
@@ -1201,6 +1261,7 @@ impl WorkflowExecutor {
                             tool_call_id,
                             approved,
                             approve_all,
+                            rejection_message,
                         } => {
                             let event = WorkflowEvent::approval_resolved(
                                 self.session_id.clone(),
@@ -1414,6 +1475,7 @@ impl WorkflowExecutor {
                                         "tool_name": tool_name,
                                         "title": reinforced.title,
                                         "summary": reinforced.summary,
+                                        "execution_status": if reinforced.is_error { "failed" } else { "completed" },
                                         "is_error": reinforced.is_error,
                                         "error_type": reinforced.error_type,
                                         "display_type": reinforced.display_type,
@@ -1446,9 +1508,9 @@ impl WorkflowExecutor {
                                     None,
                                     None,
                                 );
-                                let observation = format!(
-                                    "<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
-                                    tool_name
+                                let observation = Self::build_rejection_observation(
+                                    &tool_name,
+                                    rejection_message.as_deref(),
                                 );
 
                                 self.add_message_and_notify_internal(
@@ -1464,6 +1526,7 @@ impl WorkflowExecutor {
                                         "tool_name": tool_name,
                                         "title": pretty_title,
                                         "summary": "User rejected",
+                                        "execution_status": "rejected",
                                         "is_error": true,
                                         "error_type": "UserRejected",
                                         "approval_status": "rejected"
@@ -1487,7 +1550,7 @@ impl WorkflowExecutor {
                             self.update_state(WorkflowState::Thinking).await?;
                             continue;
                         }
-                        WorkflowSignal::UserMessage { content } => {
+                        WorkflowSignal::UserMessage { content, .. } => {
                             let user_content = content.clone();
                             self.add_message_and_notify_internal(
                                 "user".to_string(),
@@ -1609,6 +1672,9 @@ impl WorkflowExecutor {
                 if signal_type_enum == Some(SignalType::Approval) {
                     let approved = signal_json["approved"].as_bool().unwrap_or(false);
                     let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
+                    let rejection_message = signal_json["rejection_message"]
+                        .as_str()
+                        .map(|s| s.to_string());
                     let signal_id = signal_json["id"].as_str().unwrap_or("unknown");
 
                     if approved {
@@ -1800,6 +1866,7 @@ impl WorkflowExecutor {
                                 "tool_name": tool_name,
                                 "title": reinforced.title,
                                 "summary": reinforced.summary,
+                                "execution_status": if reinforced.is_error { "failed" } else { "completed" },
                                 "is_error": reinforced.is_error,
                                 "error_type": reinforced.error_type,
                                 "display_type": reinforced.display_type,
@@ -1846,9 +1913,9 @@ impl WorkflowExecutor {
                                 primary_root.as_deref(),
                             )
                         };
-                        let observation = format!(
-                            "<SYSTEM_REMINDER>\nThe user has declined the execution of the tool '{}'. No changes were applied.\n\nSince your proposed action was rejected, you should re-evaluate your strategy. Use the 'ask_user' tool to understand the reason for the rejection or to ask the user for alternative instructions before proceeding.\n</SYSTEM_REMINDER>",
-                            tool_name
+                        let observation = Self::build_rejection_observation(
+                            &tool_name,
+                            rejection_message.as_deref(),
                         );
 
                         self.add_message_and_notify_internal(
@@ -1864,6 +1931,7 @@ impl WorkflowExecutor {
                                 "tool_name": tool_name,
                                 "title": pretty_title,
                                 "summary": "User rejected",
+                                "execution_status": "rejected",
                                 "is_error": true,
                                 "error_type": "UserRejected",
                                 "approval_status": "rejected"
@@ -1893,7 +1961,7 @@ impl WorkflowExecutor {
                                 self.max_steps += DEFAULT_MAX_STEPS;
                                 self.update_state(WorkflowState::Thinking).await?;
                             }
-                            WorkflowSignal::UserMessage { content } => {
+                            WorkflowSignal::UserMessage { content, .. } => {
                                 let user_content = content.clone();
                                 self.add_message_and_notify_internal(
                                     "user".to_string(),
@@ -1988,6 +2056,7 @@ impl WorkflowExecutor {
                     let mut new_policy = ExecutionPolicy::implementation();
                     new_policy.approval_level = self.policy.approval_level.clone();
                     self.policy = new_policy;
+                    self.sync_runtime_limits();
 
                     // Persist phase change to database
                     if let Ok(store) = self.context.main_store.write() {
@@ -2111,22 +2180,12 @@ impl WorkflowExecutor {
             // Get model configs directly from AgentModels structure
             let act_model = agent_config.models.as_ref().and_then(|m| m.act.as_ref());
             let plan_model = agent_config.models.as_ref().and_then(|m| m.plan.as_ref());
-            let vision_model = agent_config.models.as_ref().and_then(|m| m.vision.as_ref());
-
-            let target_type = self
-                .subagent_type
-                .as_ref()
-                .cloned()
-                .unwrap_or_else(|| "General".to_string());
 
             // Select the appropriate model based on phase and subagent type
             let selected_model = if self.policy.phase == ExecutionPhase::Planning {
                 plan_model.or(act_model)
             } else {
-                match target_type.as_str() {
-                    "Vision" => vision_model.or(act_model),
-                    _ => act_model,
-                }
+                act_model
             };
 
             let _model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
@@ -2189,8 +2248,13 @@ impl WorkflowExecutor {
                 )
                 .await?;
 
+            let invalid_tool_call_error = usage
+                .as_ref()
+                .and_then(|meta| meta.get("invalid_tool_call_error").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
+
             let mut needs_compression = false;
-            let mut assistant_metadata = usage.unwrap_or_else(|| serde_json::json!({}));
+            let mut assistant_metadata = Self::sanitize_assistant_metadata_for_storage(usage);
             if !tool_calls_json.is_empty() {
                 if let Ok(tc_val) = serde_json::from_str::<serde_json::Value>(&tool_calls_json) {
                     // Extract strictly the array of tool calls to comply with OpenAI/Claude protocols.
@@ -2223,20 +2287,25 @@ impl WorkflowExecutor {
                 break;
             }
 
-            let compressed_signal = self
-                .add_message_and_notify_internal(
-                    "assistant".to_string(),
-                    full_response.clone(),
-                    None,
-                    Some(response_reasoning),
-                    Some(StepType::Think),
-                    false,
-                    None,
-                    Some(assistant_metadata),
-                )
-                .await?;
-            if compressed_signal {
-                needs_compression = true;
+            if !(full_response.trim().is_empty()
+                && tool_calls_json.is_empty()
+                && invalid_tool_call_error.is_some())
+            {
+                let compressed_signal = self
+                    .add_message_and_notify_internal(
+                        "assistant".to_string(),
+                        full_response.clone(),
+                        None,
+                        Some(response_reasoning),
+                        Some(StepType::Think),
+                        false,
+                        None,
+                        Some(assistant_metadata),
+                    )
+                    .await?;
+                if compressed_signal {
+                    needs_compression = true;
+                }
             }
 
             self.update_state(WorkflowState::Executing).await?;
@@ -2276,6 +2345,15 @@ impl WorkflowExecutor {
                     "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
                     "title": reinforced.title,
                     "summary": reinforced.summary,
+                    "execution_status": if reinforced.is_error {
+                        "failed"
+                    } else if reinforced.approval_status.as_deref() == Some("pending") {
+                        "pending_approval"
+                    } else if reinforced.approval_status.as_deref() == Some("rejected") {
+                        "rejected"
+                    } else {
+                        "completed"
+                    },
                     "is_error": reinforced.is_error,
                     "error_type": reinforced.error_type,
                     "display_type": reinforced.display_type
@@ -2314,7 +2392,12 @@ impl WorkflowExecutor {
                     self.session_id,
                     self.consecutive_no_tool_calls
                 );
-                let error_msg = if self.consecutive_no_tool_calls >= 3 {
+                let error_msg = if let Some(invalid_tool_call_error) = invalid_tool_call_error {
+                    format!(
+                        "<SYSTEM_REMINDER>Error: {}. You must call exactly one of the available tools exposed in this session. Re-read the tool list and try again with a valid tool name and valid arguments.</SYSTEM_REMINDER>",
+                        invalid_tool_call_error
+                    )
+                } else if self.consecutive_no_tool_calls >= 3 {
                     let remaining = self.max_steps.saturating_sub(self.current_step);
                     format!(
                         "<SYSTEM_REMINDER>NO TOOL CALLS DETECTED: You have not called any tools for {} consecutive responses. \
@@ -3584,12 +3667,15 @@ impl WorkflowExecutor {
                     self.update_state(WorkflowState::Cancelled).await?;
                     return Ok(true);
                 }
-                RuntimeSignal::UserMessage(content) => {
+                RuntimeSignal::UserMessage {
+                    content,
+                    queued_user_message_id,
+                } => {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Queueing user message during active execution",
                         self.session_id
                     );
-                    self.enqueue_user_message(content).await?;
+                    self.enqueue_user_message(content, queued_user_message_id).await?;
                 }
                 RuntimeSignal::Other => {}
             }
@@ -3610,11 +3696,16 @@ impl WorkflowExecutor {
         Ok(false)
     }
 
-    async fn enqueue_user_message(&mut self, content: String) -> Result<(), WorkflowEngineError> {
-        let queued_id = self
-            .tsid_generator
-            .generate()
-            .unwrap_or_else(|_| format!("queued_{}", crate::ccproxy::get_tool_id()));
+    async fn enqueue_user_message(
+        &mut self,
+        content: String,
+        queued_user_message_id: Option<String>,
+    ) -> Result<(), WorkflowEngineError> {
+        let queued_id = queued_user_message_id.unwrap_or_else(|| {
+            self.tsid_generator
+                .generate()
+                .unwrap_or_else(|_| format!("queued_{}", crate::ccproxy::get_tool_id()))
+        });
 
         self.queued_user_messages
             .push_back((queued_id.clone(), content.clone()));
@@ -3640,6 +3731,22 @@ impl WorkflowExecutor {
 
     async fn flush_queued_user_messages(&mut self) -> Result<bool, WorkflowEngineError> {
         if self.queued_user_messages.is_empty() {
+            return Ok(false);
+        }
+
+        if matches!(
+            self.state,
+            WorkflowState::Paused
+                | WorkflowState::AwaitingUser
+                | WorkflowState::AwaitingApproval
+                | WorkflowState::AwaitingAutoApproval
+                | WorkflowState::AwaitingChildTask
+        ) {
+            log::debug!(
+                "[Workflow][session={}][phase=queue] Skip flushing queued user messages while state={:?}",
+                self.session_id,
+                self.state
+            );
             return Ok(false);
         }
 
@@ -3812,6 +3919,7 @@ impl WorkflowExecutor {
                 .and_then(|meta| meta.get("summary").and_then(|v| v.as_str()))
                 .map(|s| s.to_string()),
             current_context_tokens: Some(self.context.current_token_estimate()),
+            max_context_tokens: Some(self.context.max_tokens),
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_task_id: self.child_task_id.clone(),

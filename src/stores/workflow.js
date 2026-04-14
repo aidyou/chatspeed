@@ -31,6 +31,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return typeof raw === 'object' ? raw : {};
   };
 
+  const hasStreamingOutput = (toolId) => {
+    if (!toolId) return false;
+    return (toolStreams.value.get(toolId) || []).length > 0;
+  };
+
   const removeAssistantToolCallPlaceholder = (toolCallId) => {
     if (!toolCallId) return;
 
@@ -167,6 +172,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       ...ctx,
       waitReason: ctx.waitReason ?? ctx.wait_reason ?? null,
       currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
+      maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
       pendingTools: ctx.pendingTools ?? ctx.pending_tools ?? [],
       waitingOnTaskId: ctx.waitingOnTaskId ?? ctx.waiting_on_task_id ?? null,
       childSessions: ctx.childSessions ?? ctx.child_sessions ?? []
@@ -441,6 +447,29 @@ export const useWorkflowStore = defineStore('workflow', () => {
         summary: meta.summary && meta.summary !== 'Awaiting approval'
           ? meta.summary
           : 'Executing...'
+      }
+    }));
+  };
+
+  const markToolRejected = (toolId) => {
+    if (!toolId) return;
+
+    if (taskLedgerEnabled.value) {
+      upsertToolViewState({
+        toolCallId: toolId,
+        status: 'rejected',
+        approvalStatus: 'rejected',
+        summary: 'User rejected'
+      });
+    }
+
+    patchToolMessage(toolId, (existing, meta) => ({
+      ...existing,
+      metadata: {
+        ...meta,
+        approval_status: 'rejected',
+        execution_status: 'rejected',
+        summary: 'User rejected'
       }
     }));
   };
@@ -771,15 +800,47 @@ export const useWorkflowStore = defineStore('workflow', () => {
       message.metadata = {};
     }
 
+    if (message.role === 'user') {
+      const queuedId = message.metadata?.queued_user_message_id;
+      const queueStatus = message.metadata?.queue_status;
+
+      if (queueStatus === 'queued') {
+        if (queuedId) {
+          const existing = messageQueue.value.find((item) => item.id === queuedId);
+          if (existing) {
+            markQueuedMessageSent(queuedId);
+          } else {
+            addMessageToQueue({
+              id: queuedId,
+              content: message.message || message.content || '',
+              status: 'queued',
+              sent: true,
+            });
+          }
+        }
+        return;
+      }
+
+      if (queueStatus === 'applied') {
+        if (queuedId) {
+          acknowledgeQueuedMessage(queuedId);
+        } else {
+          shiftQueuedMessage();
+        }
+      }
+    }
+
     if (message.role === 'tool' && message.metadata?.tool_call_id) {
+      const toolCallId = message.metadata.tool_call_id;
+      const hasStream = hasStreamingOutput(toolCallId);
+      const isError = message.isError || message.is_error || message.metadata?.is_error;
       message.metadata = {
         ...message.metadata,
         execution_status: inferFinalExecutionStatus(message, message.metadata),
         hide_approval_details: message.metadata?.approval_status === 'approved'
       };
 
-      if (message.metadata.tool_name === 'bash' || message.metadata.title?.toLowerCase?.().includes('bash')) {
-        const isError = message.isError || message.is_error || message.metadata?.is_error;
+      if (hasStream) {
         message.metadata.summary = isError ? 'Execution failed' : 'Execution completed';
       }
     }
@@ -823,7 +884,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           summary: message.metadata?.summary || (isError ? 'Failed' : 'Completed'),
           result: message.message,
           errorType: isError ? 'execution_error' : undefined,
-          approvalStatus: isError ? 'approved' : (status || 'approved')
+          approvalStatus: status || 'approved'
         });
       } else if (message.role === 'assistant' && message.metadata?.tool_calls?.length) {
         // 新的工具调用 - pending 状态
@@ -847,22 +908,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     }
 
-    if (message.role === 'user') {
-      const queuedId = message.metadata?.queued_user_message_id;
-      const queueStatus = message.metadata?.queue_status;
-      if (queuedId && (queueStatus === 'queued' || queueStatus === 'applied')) {
-        acknowledgeQueuedMessage(queuedId);
-      } else if (queueStatus === 'queued' || queueStatus === 'applied') {
-        shiftQueuedMessage();
-      }
-    }
   };
 
   const updateWorkflowStatus = async (workflowId, status, waitReasonValue = null) => {
     error.value = null;
     try {
-      waitReason.value = waitReasonValue;
-
       const statusLower = status.toLowerCase();
       const localUpdateStates = [
         ...RUNNING_STATUSES,
@@ -877,7 +927,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
           workflows.value[workflowIndex].waitReason = waitReasonValue;
         }
 
-        isRunning.value = RUNNING_STATUSES.includes(statusLower) && hasLiveSession.value;
+        if (workflowId === currentWorkflowId.value) {
+          waitReason.value = waitReasonValue;
+          isRunning.value = RUNNING_STATUSES.includes(statusLower) && hasLiveSession.value;
+        }
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
       }
@@ -1007,6 +1060,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setShellPolicy,
     removeShellPolicyItem,
     markToolApprovedRunning,
+    markToolRejected,
     appendToolStream,
     clearToolStream,
     getToolStream,

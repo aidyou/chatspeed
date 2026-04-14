@@ -1,6 +1,6 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::db::{Agent, MainStore};
+use crate::db::{Agent, AgentConfig, MainStore};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::engine::ReActExecutor;
@@ -108,6 +108,7 @@ pub trait SubAgentFactory: Send + Sync {
         session_id: &str,
         task: &str,
         subagent_type: &str,
+        parent_session_id: Option<&str>,
     ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError>;
 }
 
@@ -126,10 +127,11 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         &self,
         agent_id: &str,
         session_id: &str,
-        _task: &str,
+        task: &str,
         subagent_type: &str,
+        parent_session_id: Option<&str>,
     ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError> {
-        let agent_config = {
+        let mut agent_config = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
@@ -137,6 +139,61 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 WorkflowEngineError::General(format!("Agent config {} not found", agent_id))
             })?
         };
+
+        let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store
+                .get_workflow_snapshot(parent_session_id)
+                .ok()
+                .and_then(|snapshot| snapshot.workflow.agent_config)
+                .and_then(|config_json| AgentConfig::from_json(&config_json))
+                .and_then(|config| config.allowed_paths)
+        } else {
+            None
+        };
+
+        if let Some(paths) = inherited_allowed_paths.clone() {
+            agent_config.allowed_paths = serde_json::to_string(&paths).ok();
+        }
+
+        let workflow_config = AgentConfig {
+            allowed_paths: inherited_allowed_paths.or_else(|| {
+                agent_config
+                    .allowed_paths
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+            }),
+            shell_policy: agent_config
+                .shell_policy
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
+            approval_level: agent_config.approval_level.clone(),
+            auto_approve: agent_config
+                .auto_approve
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
+            available_tools: agent_config
+                .available_tools
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
+            final_audit: agent_config.final_audit,
+            models: agent_config.models.clone(),
+            max_contexts: agent_config.max_contexts,
+        };
+
+        {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.create_workflow(
+                session_id,
+                task,
+                &agent_config.id,
+                Some(workflow_config.to_json()),
+            )?;
+        }
 
         let (_signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
 
@@ -260,6 +317,11 @@ impl ToolDefinition for TaskTool {
             .iter()
             .map(|agent| agent.id.clone())
             .collect();
+        let child_agent_names: Vec<String> = self
+            .child_agents
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect();
         let child_agent_descriptions = self
             .child_agents
             .iter()
@@ -292,10 +354,15 @@ impl ToolDefinition for TaskTool {
                 "properties": {
                     "description": { "type": "string", "description": "A short (3-5 word) description of the task" },
                     "prompt": { "type": "string", "description": "A complete delegation brief for the child agent. Include the objective, exact scope, constraints, relevant context, and what the final output must contain." },
+                    "child_agent_name": {
+                        "type": "string",
+                        "enum": child_agent_names,
+                        "description": "Preferred selector. Use the exact displayed child agent name instead of manually copying an opaque id."
+                    },
                     "child_agent_id": {
                         "type": "string",
                         "enum": child_agent_ids,
-                        "description": "The pre-configured child agent to execute this task"
+                        "description": "Fallback selector. Use only if child_agent_name is unavailable."
                     },
                     "execution_mode": {
                         "type": "string",
@@ -303,7 +370,11 @@ impl ToolDefinition for TaskTool {
                         "description": "Execution mode for the child agent. Use 'call' to wait for child completion and resume the parent workflow with the child result. Use 'background' to continue asynchronously and inspect the child later via task_output."
                     }
                 },
-                "required": ["description", "prompt", "child_agent_id"]
+                "required": ["description", "prompt"],
+                "anyOf": [
+                    { "required": ["child_agent_name"] },
+                    { "required": ["child_agent_id"] }
+                ]
             }),
             output_schema: None,
             disabled: false,
@@ -316,11 +387,6 @@ impl ToolDefinition for TaskTool {
         let prompt = params["prompt"]
             .as_str()
             .ok_or(ToolError::InvalidParams("prompt is required".to_string()))?;
-        let child_agent_id = params["child_agent_id"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "child_agent_id is required".to_string(),
-            ))?;
         let execution_mode = params["execution_mode"].as_str().unwrap_or("call");
         if !matches!(execution_mode, "call" | "background") {
             return Err(ToolError::InvalidParams(format!(
@@ -329,17 +395,41 @@ impl ToolDefinition for TaskTool {
             )));
         }
 
-        let child_agent = self
+        let available_child_agents = self
             .child_agents
             .iter()
-            .find(|agent| agent.id == child_agent_id)
-            .cloned()
-            .ok_or_else(|| {
-                ToolError::InvalidParams(format!(
-                    "child_agent_id '{}' is not available to the current agent",
-                    child_agent_id
-                ))
-            })?;
+            .map(|agent| format!("{} ({})", agent.name, agent.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let child_agent = if let Some(child_agent_name) = params["child_agent_name"].as_str() {
+            self.child_agents
+                .iter()
+                .find(|agent| agent.name == child_agent_name)
+                .cloned()
+                .ok_or_else(|| {
+                    ToolError::InvalidParams(format!(
+                        "child_agent_name '{}' is not available to the current agent. Available child agents: {}",
+                        child_agent_name, available_child_agents
+                    ))
+                })?
+        } else if let Some(child_agent_id) = params["child_agent_id"].as_str() {
+            self.child_agents
+                .iter()
+                .find(|agent| agent.id == child_agent_id)
+                .cloned()
+                .ok_or_else(|| {
+                    ToolError::InvalidParams(format!(
+                        "child_agent_id '{}' is not available to the current agent. Available child agents: {}",
+                        child_agent_id, available_child_agents
+                    ))
+                })?
+        } else {
+            return Err(ToolError::InvalidParams(format!(
+                "Either child_agent_name or child_agent_id is required. Available child agents: {}",
+                available_child_agents
+            )));
+        };
 
         // Use TSID for unique time-sorted IDs
         let task_id = format!(
@@ -352,7 +442,13 @@ impl ToolDefinition for TaskTool {
 
         let sub_executor = self
             .executor_factory
-            .create_executor(&child_agent.id, &task_id, prompt, &child_agent.name)
+            .create_executor(
+                &child_agent.id,
+                &task_id,
+                prompt,
+                &child_agent.name,
+                self.parent_session_id.as_deref(),
+            )
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to create sub-executor: {}", e))
